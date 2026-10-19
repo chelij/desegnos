@@ -4,11 +4,11 @@ import { MenuButton } from './Menus';
 import type { Brief, Command, Decision, Project, Scope } from './types';
 
 export function scopeLabel(project: Project, scope: Scope) {
-  if (scope.kind === 'project') return 'Whole project';
+  if (scope.kind === 'project') return 'Whole site';
   if (scope.kind === 'page') return project.pages.find(page => page.id === scope.id)?.name ?? 'Missing page';
   for (const page of project.pages) {
     const index = page.regions.findIndex(region => region.id === scope.id);
-    if (index >= 0) return `${page.name} · Request ${index + 1}`;
+    if (index >= 0) return `${page.name} · Box ${index + 1}`;
   }
   return 'Missing request';
 }
@@ -22,9 +22,9 @@ function decodeScope(value: string): Scope {
 
 function ScopeSelect({ project, value, change, disabled = false }: { project: Project; value: Scope; change: (scope: Scope) => void; disabled?: boolean }) {
   return <label>Applies to<select value={encodeScope(value)} onChange={event => change(decodeScope(event.target.value))} disabled={disabled}>
-    <option value="project">Whole project</option>
+    <option value="project">Whole site</option>
     {project.pages.map(page => <optgroup key={page.id} label={page.name}><option value={`page:${page.id}`}>Page: {page.name}</option>
-      {page.regions.map((region, index) => <option key={region.id} value={`region:${region.id}`}>{page.name} · Request {index + 1}</option>)}
+      {page.regions.map((region, index) => <option key={region.id} value={`region:${region.id}`}>{page.name} · Box {index + 1}</option>)}
     </optgroup>)}
   </select></label>;
 }
@@ -36,7 +36,7 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
 }) {
   const [tab, setTab] = useState<DossierSection>(initialSection);
   const tabId = useId();
-  const sections = [{ id: 'overview', label: 'Overview' }, { id: 'brief', label: 'Brief' }, { id: 'decisions', label: 'Choices' }, { id: 'exceptions', label: 'Exceptions' }] as const;
+  const sections = [{ id: 'overview', label: 'Overview' }, { id: 'brief', label: 'Brief' }, { id: 'decisions', label: 'Rules' }, { id: 'exceptions', label: 'Exceptions' }] as const;
   const latest = project.latestGeneration;
   const [source, setSource] = useState('');
   const [sourceError, setSourceError] = useState('');
@@ -91,7 +91,7 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
       {latest ? <>
         <div className="record-heading"><h3>Latest generation</h3><span className="badge">{latest.applicationStatus === 'applied' ? 'On canvas' : latest.applicationStatus === 'undone' ? 'Undone' : 'Not applied'}</span></div>
         <p className="preserve-text">{latest.summary}</p>
-        {latest.applicationStatus === 'draft' && <p className="field-help">Suggested choices are saved when you accept them.</p>}
+        {latest.applicationStatus === 'draft' && <p className="field-help">Suggested rules are saved when you accept them.</p>}
         {reviewGeneration && <button onClick={reviewGeneration}>View generation details</button>}
         {latest.decisionProposals.length > 0 && <section className="dossier-generated"><h3>{latest.applicationStatus === 'draft' ? 'Suggested choices' : 'Generated choices'}</h3>
           <div className="record-list">{latest.decisionProposals.map((proposal, index) => <article className="note-record" key={`${proposal.topic}:${index}`}>
@@ -114,27 +114,27 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
     </div>}
     {tab === 'decisions' && <div className="notes-section">
       <p className="muted">Keep colors, type, names and facts consistent.</p>
-      <div className="record-list">{project.decisions.length === 0 ? <p className="empty-message">No saved choices yet.</p> : project.decisions.map(decision => <article className="note-record" key={decision.id}>
+      <div className="record-list">{project.decisions.length === 0 ? <p className="empty-message">No rules yet.</p> : project.decisions.map(decision => <article className="note-record" key={decision.id}>
         <div className="record-heading"><h3>{decision.topic}</h3>{decision.protected && <span className="badge">Fixed</span>}</div>
         <p className="preserve-text">{decision.value}</p><p className="small muted">{scopeLabel(project, decision.scope)}</p>
-        <div className="inline-actions"><button onClick={() => editDecision(decision)}>Edit choice</button><button className="subtle danger" onClick={() => { void apply({ type: 'remove_decision', decision_id: decision.id }).catch(() => {}); if (editing?.id === decision.id) resetDecision(); }}>Remove choice</button></div>
+        <div className="inline-actions"><button onClick={() => editDecision(decision)}>Edit rule</button><button className="subtle danger" onClick={() => { void apply({ type: 'remove_decision', decision_id: decision.id }).catch(() => {}); if (editing?.id === decision.id) resetDecision(); }}>Remove rule</button></div>
       </article>)}</div>
       <form className="notes-entry" onSubmit={saveDecision}><h3>{editing ? 'Edit choice' : 'Add a choice'}</h3>
         <label>Topic<input required maxLength={120} value={topic} onChange={event => setTopic(event.target.value)} disabled={!!editing} /></label>
-        <label>Choice<textarea required rows={3} maxLength={16384} value={value} onChange={event => setValue(event.target.value)} /></label>
+        <label>Rule<textarea required rows={3} maxLength={16384} value={value} onChange={event => setValue(event.target.value)} /></label>
         <ScopeSelect project={project} value={scope} change={setScope} disabled={!!editing} />
-        <label className="check-label"><input type="checkbox" checked={protectedDecision} onChange={event => setProtectedDecision(event.target.checked)} />Keep this choice fixed</label>
+        <label className="check-label"><input type="checkbox" checked={protectedDecision} onChange={event => setProtectedDecision(event.target.checked)} />Never change this rule</label>
         <div className="form-actions">{editing && <button type="button" disabled={busy} onClick={resetDecision}>Cancel editing</button>}<button className="primary" disabled={busy || !topic.trim() || !value.trim()}>{editing ? 'Save choice' : 'Add choice'}</button></div>
       </form>
     </div>}
     {tab === 'exceptions' && <div className="notes-section">
-      <p className="muted">Allow a deliberate exception to a saved choice.</p>
+      <p className="muted">Let one part of the site break a rule on purpose.</p>
       <div className="record-list">{project.exceptions.length === 0 ? <p className="empty-message">No exceptions yet.</p> : project.exceptions.map(exception => <article className="note-record" key={exception.id}>
         <h3>{exception.rule}</h3><p className="preserve-text">{exception.reason}</p><p className="small muted">{scopeLabel(project, exception.scope)}</p>
         <button className="subtle danger" onClick={() => { void apply({ type: 'remove_exception', exception_id: exception.id }).catch(() => {}); }}>Remove exception</button>
       </article>)}</div>
       <form className="notes-entry" onSubmit={saveException}><h3>Add an exception</h3>
-        <label>Choice or design concern<input required maxLength={120} value={rule} onChange={event => setRule(event.target.value)} /></label>
+        <label>Which rule?<input required maxLength={120} value={rule} onChange={event => setRule(event.target.value)} /></label>
         <label>Why make an exception?<textarea required rows={3} maxLength={16384} value={reason} onChange={event => setReason(event.target.value)} /></label>
         <ScopeSelect project={project} value={exceptionScope} change={setExceptionScope} />
         <button className="primary" disabled={busy || !rule.trim() || !reason.trim()}>Add exception</button>

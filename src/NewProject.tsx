@@ -113,10 +113,17 @@ export function NewProject({ busy, create, open, recentProjects = [], openRecent
   return <form className="new-project simple-new-project" onSubmit={submit}>
     <h1>{mode === 'identity' ? 'Use your existing brand' : mode === 'blank' ? 'Start with a blank website' : 'Create your website'}</h1>
     {!mode ? <>
-      <p className="new-project-intro">Describe what goes where, generate your website, then edit and export it.</p>
-      <div className="project-start-choices"><button type="button" aria-label="Blank website" disabled={locked} onClick={() => setMode('blank')}><strong>Blank website</strong><span>Start from an empty page.</span></button><button type="button" aria-label="Use my existing brand" disabled={locked} onClick={() => setMode('identity')}><strong>Use my existing brand</strong><span>Read colors, fonts and logos from a website or project.</span></button></div>
-      <button type="button" onClick={() => { void run(open); }} disabled={locked}>Open project</button>
-      {recentProjects.length > 0 && openRecent && <section className="recent-projects" aria-label="Recent projects"><h2>Recent projects</h2><ul>{recentProjects.map(project => <li key={project.path}><button type="button" disabled={locked} title={project.path} onClick={() => { void run(() => openRecent(project.path)); }}><strong>{project.name}</strong><span>{project.path}</span></button></li>)}</ul></section>}
+      <p className="new-project-intro">Place boxes where things go, describe them, generate your website with AI, then edit and export it.</p>
+      <div className="project-start-choices">
+        <button type="button" aria-label="Blank website" disabled={locked} onClick={() => setMode('blank')}><span className="start-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12" /></svg></span><strong>Blank website</strong><span>Start from an empty page and place your own boxes.</span></button>
+        <button type="button" aria-label="Use my existing brand" disabled={locked} onClick={() => setMode('identity')}><span className="start-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="6.5" /><path d="M10 3.5a6.5 6.5 0 0 1 0 13Z" fill="currentColor" /></svg></span><strong>Use my existing brand</strong><span>Read colors, fonts and logos from a website or project.</span></button>
+      </div>
+      {!connected && <p className="start-ai-note">You’ll connect an AI account before your first Generate. <button type="button" className="link-button" onClick={openSettings}>Connect now</button></p>}
+      <div className="start-open"><button type="button" className="link-button" onClick={() => { void run(open); }} disabled={locked}>Open project</button><span>a .desegnos file from your computer</span></div>
+      {recentProjects.length > 0 && openRecent && <section className="recent-projects" aria-label="Recent projects"><h2>Recent projects</h2><ul>{recentProjects.map(project => <li key={project.path}><button type="button" disabled={locked} title={project.path} onClick={() => { void run(() => openRecent(project.path)); }}>
+        <span className="recent-avatar" aria-hidden="true">{project.name.trim().charAt(0).toUpperCase() || '·'}</span>
+        <span className="recent-text"><strong>{project.name}</strong><span>{project.path.split(/[\\/]/).slice(-2, -1)[0] ?? project.path}</span></span>
+      </button></li>)}</ul></section>}
     </> : <>
       <label>Project name<input name="projectName" autoFocus required maxLength={120} value={name} onChange={event => setName(event.target.value)} autoComplete="off" disabled={locked} /></label>
       <fieldset disabled={locked}><legend>Screen guide</legend><div className="segmented">

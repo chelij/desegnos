@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -13,20 +13,27 @@ import { Notes, type DossierSection } from './Notes';
 import { MenuButton, type MenuItem } from './Menus';
 import './shell.css';
 import { editorShortcut, SHORTCUT_HELP } from './shortcuts';
-import { steppedZoom, ZOOM_LEVELS } from './canvasGeometry';
+import { steppedZoom } from './canvasGeometry';
 import { AiSettings } from './AiSettings';
 import { GenerationDialog, GenerationFeedback } from './Generation';
-import { PagePreview, SourceView } from './Preview';
+import { PagePreview } from './Preview';
+import { CodePane, type CodeView, type SourceMapView } from './CodePane';
+import { FirstRunTips } from './Onboarding';
+import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
+import { fingerprint, useHistory } from './useHistory';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AiSettingsView, Appearance, Brief, Command, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, NewProjectIdentity, Page, Project, Rect, RecoveryInfo, Region, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport } from './types';
+import type { AiSettingsView, Appearance, Brief, Command, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, NewProjectIdentity, Page, Project, Rect, RecoveryInfo, Region, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent } from './types';
 
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
 type Confirmation = { title: string; message: string; action: () => Promise<void> };
 
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : String(error); }
-function initialZoom(width: number, height = 900) { return [...ZOOM_LEVELS].reverse().find(zoom => zoom <= 1 && width * zoom <= window.innerWidth - 96 && (width > 600 || height * zoom <= window.innerHeight - 304)) ?? 0.1; }
+// Open each page fitted to the window: web pages by width, mobile pages by height.
+function initialZoom(width: number, height = 900) { const fit = width > 600 ? (window.innerWidth - 96) / width : (window.innerHeight - 240) / height; return Math.max(0.1, Math.min(1, fit)); }
 function readRulerUnit(): 'pixels' | 'percent' { try { return localStorage.getItem('desegnos.ruler-unit') === 'percent' ? 'percent' : 'pixels'; } catch { return 'pixels'; } }
+function readCodeWidth() { try { return Math.min(0.75, Math.max(0.2, Number(localStorage.getItem('desegnos.code-width')) || 0.42)); } catch { return 0.42; } }
+function readCodeView(projectId: string): CodeView { try { const value = localStorage.getItem(`desegnos.code-view.${projectId}`); return value === 'split' || value === 'code' ? value : 'design'; } catch { return 'design'; } }
 function readTheme(): Theme {
   try { const saved = localStorage.getItem('desegni.editor-theme'); return saved === 'light' || saved === 'dark' ? saved : 'system'; }
   catch { return 'system'; }
@@ -59,7 +66,11 @@ export default function App() {
   const [showNew, setShowNew] = useState(false);
   const [showNotes, setShowNotes] = useState<DossierSection | null>(null);
   const [showGridSettings, setShowGridSettings] = useState(false);
-  const [showSource, setShowSource] = useState(false);
+  const [codeView, setCodeView] = useState<CodeView>('design');
+  const [showCheck, setShowCheck] = useState(false);
+  const history = useHistory();
+  const [sourceMap, setSourceMap] = useState<SourceMapView | null>(null);
+  const [codeWidth, setCodeWidth] = useState(readCodeWidth);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [canvasView, setCanvasView] = useState<{ serial: number; kind: 'guide' | 'selection' | 'fit' }>({ serial: 0, kind: 'guide' });
   const [showRecovery, setShowRecovery] = useState(false);
@@ -140,6 +151,7 @@ export default function App() {
     finally { setLoading(false); }
   }, [accept]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { history.observe(view?.project ?? null); }, [view, history.observe]);
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const update = () => { document.documentElement.dataset.theme = theme === 'system' ? (media.matches ? 'dark' : 'light') : theme; };
@@ -256,7 +268,19 @@ export default function App() {
   async function travel(command: 'undo_project' | 'redo_project') {
     await canvas.current?.synchronize();
     await settle();
-    await queue(async () => { accept(await native<WorkspaceView>(command)); setNotice(command === 'undo_project' ? 'Change undone.' : 'Change redone.'); });
+    await queue(async () => { history.travelling(true); accept(await native<WorkspaceView>(command)); setNotice(command === 'undo_project' ? 'Change undone.' : 'Change redone.'); });
+  }
+  // Undo or redo until the project matches the chosen history entry.
+  async function jumpTo(index: number) {
+    const target = history.state.current.entries[index]; if (!target) return;
+    const backwards = index < history.state.current.position - 1;
+    for (let step = 0; step < 200; step += 1) {
+      const now = current.current;
+      if (!now?.project || fingerprint(now.project) === target.fingerprint) return;
+      if (backwards ? !now.canUndo : !now.canRedo) break;
+      await travel(backwards ? 'undo_project' : 'redo_project');
+    }
+    if (current.current?.project && fingerprint(current.current.project) !== target.fingerprint) setError('Couldn’t return to that point in the history.');
   }
   const getNotes = useCallback(() => queue(() => native<string>('get_project_notes')), [queue]);
   const changeBrief = useCallback((patch: Partial<Brief>) => mutate(project => ({ type: 'set_brief', brief: { ...project.brief, ...patch } }))
@@ -317,6 +341,17 @@ export default function App() {
   const page = project?.pages.find(page => page.id === pageId) ?? project?.pages.find(page => page.id === project.homePageId) ?? null;
   const region = page?.regions.find(region => region.id === selected) ?? null;
   const requestedAreas = project?.pages.reduce((count, page) => count + page.regions.filter(region => !region.completed && region.prompt.trim()).length, 0) ?? 0;
+  const checks = useMemo(() => project ? checkProject(project) : [], [project]);
+  const placeholderCount = checks.filter(item => item.kind === 'placeholder').length;
+  const fixCount = checks.filter(item => item.kind !== 'found').length;
+  // The native source map ties code ranges to canvas elements; it is only valid for the exact HTML it was built from.
+  const mapHtml = codeView !== 'design' ? page?.content?.html ?? null : null;
+  useEffect(() => {
+    if (!mapHtml || !project || !page) { setSourceMap(null); return; }
+    let active = true; const projectId = project.id, pageId = page.id, html = mapHtml;
+    const timer = setTimeout(() => { void native<{ ranges: SourceMapView['ranges'] }>('get_page_source_map', { projectId, pageId }).then(value => { if (active) setSourceMap({ html, ranges: value.ranges }); }, () => { if (active) setSourceMap(null); }); }, 150);
+    return () => { active = false; clearTimeout(timer); };
+  }, [mapHtml, project?.id, page?.id]);
   const activeProjectId = project?.id ?? null;
   const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' ? canvas.current?.synchronize(command === 'prepare_generation') : undefined).then(() => queue(async workspace => {
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
@@ -327,7 +362,7 @@ export default function App() {
         const account = settings.chatgpt.accounts.find(account => account.id === settings.chatgpt.activeAccountId);
         if (!account?.connected || !account.planEnabled) { setShowAiSettings(true); throw new Error('Connect a ChatGPT account with plan usage enabled in AI settings, then prepare the request again.'); }
         if (settings.chatgpt.models.length > 0 && !settings.catalogue.some(model => model.id === settings.settings.model)) { setShowAiSettings(true); throw new Error('Choose and save a supported model for this ChatGPT account, then prepare the request again.'); }
-      } else if (!settings.credential.configured) { setShowAiSettings(true); throw new Error('Add your OpenAI key in AI settings, then prepare the request again.'); }
+      } else if (!settings.credential.configured) { setShowAiSettings(true); throw new Error(`Add your ${settings.providers?.find(item => item.id === settings.provider)?.name ?? 'AI'} key in AI settings, then try again.`); }
       if (settings.configurationError) { setShowAiSettings(true); throw new Error('Review and save your AI settings, then prepare the request again.'); }
     }
     const result = await native<T>(command, args);
@@ -341,7 +376,17 @@ export default function App() {
   }), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
-  useEffect(() => { setResultReview(null); setExported(null); setTool('select'); }, [activeProjectId]);
+  useEffect(() => { setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
+  function changeCodeView(value: CodeView) { setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
+  function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
+    const host = event.currentTarget.parentElement; if (!host) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const bounds = host.getBoundingClientRect();
+    const moveTo = (x: number) => { const width = Math.min(0.75, Math.max(0.2, (bounds.right - x) / bounds.width)); setCodeWidth(width); try { localStorage.setItem('desegnos.code-width', String(width)); } catch {} };
+    const onMove = (next: PointerEvent) => moveTo(next.clientX);
+    const stop = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', stop); };
+    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', stop);
+  }
   useEffect(() => { if (resultReview && project?.revision !== resultReview.revision) setResultReview(null); }, [project?.revision, resultReview]);
   useEffect(() => { if (!highlightResult) return; const timer = setTimeout(() => setHighlightResult(false), 2000); return () => clearTimeout(timer); }, [highlightResult, resultReview?.jobId]);
   async function rejectResult(tryAgain = false) {
@@ -351,7 +396,7 @@ export default function App() {
     const undone = await queue(async workspace => {
       setResultReview(null);
       if (workspace?.project?.revision !== review.revision || workspace.project.latestGeneration?.jobId !== review.jobId) return false;
-      accept(await native<WorkspaceView>('undo_project')); setNotice('Generated changes undone.'); return true;
+      history.travelling(true); accept(await native<WorkspaceView>('undo_project')); setNotice('Generated changes undone.'); return true;
     });
     if (undone && tryAgain) await generation.prepare();
   }
@@ -475,6 +520,47 @@ export default function App() {
 
   const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
   const recenter = (kind: 'guide' | 'selection' | 'fit') => setCanvasView(value => ({ serial: value.serial + 1, kind }));
+  // Page check: select the item on the canvas, switching pages first and waiting for the page to render.
+  async function showCheckItem(item: CheckItem) {
+    if (page?.id !== item.pageId) await selectPage(item.pageId);
+    if (!item.selector || !item.tag) return null;
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const found = canvas.current?.focusElement(item.selector, item.tag);
+      if (found) return found;
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    setError('That item could not be found on the canvas. The page may have changed.'); return null;
+  }
+  function openFoundSource(pageId: string, target: ElementTarget) {
+    const projectId = current.current?.project?.id; if (!projectId) return;
+    void native('open_found_source', { projectId, pageId, target }).catch(error => setError(errorMessage(error)));
+  }
+  async function saveSource(language: keyof SiteContent, text: string, expected: string) {
+    const projectId = project?.id, pageId = page?.id;
+    await canvas.current?.synchronize(); await settle();
+    await queue(async workspace => {
+      const target = workspace?.project?.pages.find(item => item.id === pageId);
+      // Never write over code that changed elsewhere since this draft began.
+      if (!workspace?.project || workspace.project.id !== projectId || !target || (target.content?.[language] ?? '') !== expected) throw { conflict: true, message: 'This page changed elsewhere while you were editing.' };
+      accept(await native<WorkspaceView>('edit_page_source', { projectId, pageId, revision: workspace.project.revision, [language]: text }));
+    }, false);
+  }
+  async function fixCheckItem(item: CheckItem) {
+    const found = await showCheckItem(item);
+    const target = current.current?.project?.pages.find(entry => entry.id === item.pageId);
+    if (!target) return;
+    // Reuse an open request on the same element instead of stacking a second one.
+    const existing = found && target.regions.find(region => !region.completed && region.element?.sourceSha256 === found.element.sourceSha256 && region.element.selector === found.element.selector);
+    const before = new Set(target.regions.map(region => region.id));
+    const added = existing || await (found ? mutate({ type: 'add_element_region', page_id: target.id, ...found })
+      : mutate({ type: 'add_region', page_id: target.id, rect: { x: 0, y: 0, width: target.viewport.width, height: 120 } }))
+      .then(next => next.project!.pages.find(entry => entry.id === target.id)!.regions.find(region => !before.has(region.id)));
+    if (!added) return;
+    if (added.prompt.includes(item.fix)) { setSelected(added.id); return; }
+    await changeRegion(target.id, added.id, { prompt: added.prompt.trim() ? `${added.prompt.trim()}\n${item.fix}` : item.fix });
+    setSelected(added.id); setNotice('Added a request. Press Generate when you’re ready.');
+  }
+
   // Keep this menu short: only what someone building a website reaches for.
   // Canvas-level actions (copy, arrange, zoom) live on the canvas and its right-click menu.
   const menuItems: MenuItem[] = [
@@ -489,13 +575,13 @@ export default function App() {
     { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: removePage },
     { id: 'page-divider', label: '', separator: true },
     { id: 'preview', label: 'Preview website', disabled: !page?.content, action: () => setShowPreview(true) },
-    { id: 'site-source', label: 'View code', disabled: !page?.content, action: () => setShowSource(true) },
-    { id: 'edit-code', label: 'Edit code (coming soon)', disabled: true },
+    { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => changeCodeView(value) })) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
     { id: 'ai-divider', label: '', separator: true },
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
     { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible — small adjustments only' : 'Precise — follow placement closely', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
+    { id: 'page-check', label: fixCount ? `Check page (${fixCount})` : 'Check page', disabled: !project?.pages.some(item => item.content), action: () => setShowCheck(true) },
     { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
     { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
@@ -506,8 +592,10 @@ export default function App() {
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
       {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot">●</span>}</button>}
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
+      {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => changeCodeView(value)}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
-        {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo || pending > 0} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo || pending > 0} onClick={() => run(() => travel('redo_project'))}>Redo</button></>}
+        {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo || pending > 0} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo || pending > 0} onClick={() => run(() => travel('redo_project'))}>Redo</button>
+          <MenuButton label="History" className="history-menu" ariaLabel="Change history" title="Go back to an earlier point" items={history.entries.length > 1 ? history.entries.map((entry, index) => ({ id: `history-${index}`, label: `${entry.label}${index >= history.position ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: index === history.position - 1, disabled: pending > 0 || working, action: () => run(() => jumpTo(index)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
         {page?.content && <button onClick={() => setShowPreview(true)}>Preview</button>}
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
         {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
@@ -533,17 +621,31 @@ export default function App() {
             document.getElementById(`page-tab-${project.pages[next].id}`)?.focus(); run(() => selectPage(project.pages[next].id));
           }}><span>{item.name}</span>{!item.included && <span className="page-draft">Hidden</span>}</button>)}
       </div><button className="add-page-tab" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}>+</button></div>
-      {showGenerationStatus && <div className="generation-strip"><GenerationFeedback controller={generation} compact>
-        <button onClick={openGeneration}>{generation.job?.status === 'blocked' ? 'Finish draft' : 'Details'}</button>
-        {generation.job?.status === 'generating' && <button disabled={!!generation.operation} onClick={() => run(generation.cancel)}>Cancel generation</button>}
-        {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
-      </GenerationFeedback></div>}
-      {resultReview && <section className="result-review" aria-label="Generated changes"><strong>Website updated</strong><button className="primary" onClick={() => setResultReview(null)}>Keep</button><button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button><button disabled={pending > 0} title="Undo this result and generate a new version; this uses your AI account again" onClick={() => run(() => rejectResult(true))}>Try again</button><button onClick={openGeneration}>Details</button></section>}
-      <main className="workspace" id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined}>
-      {page && <Canvas projectImages={project.importedIdentity?.assets ?? []} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
+      <div className="design-pane">
+      {page && <Canvas projectImages={project.importedIdentity?.assets ?? []} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {(showGenerationStatus || resultReview) && <div className="canvas-pill" role="region" aria-label="Generation status">
+        {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
+          <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
+          <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => run(() => rejectResult(true))}>Try again</button>
+          <button className="pill-close" aria-label="Keep changes" title="Keep" onClick={() => setResultReview(null)}>×</button>
+        </> : <GenerationFeedback controller={generation} compact>
+          {generation.job?.status === 'generating' && <button disabled={!!generation.operation} onClick={() => run(generation.cancel)}>Cancel</button>}
+          {!working && generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status) && <button className="primary" disabled={requestedAreas === 0} onClick={generate}>{generation.job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
+          {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
+          {!working && <button onClick={openGeneration}>Details</button>}
+        </GenerationFeedback>}
+      </div>}
+      <FirstRunTips />
+      {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}
       <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
+      </div>
+      {codeView !== 'design' && <>
+        {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}
+        <CodePane key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={selector => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0]); }} />
+      </>}
       </main>
-      <footer className="status-bar"><span title={view.path ?? undefined}>{region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions"><button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
+      <footer className="status-bar"><span title={view.path ?? undefined}>{region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
     </>}
     {showShortcuts && <Modal title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><p className="field-help">Text selection, copy, paste and text undo keep their normal behavior inside prompts.</p><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></Modal>}
     {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} /></Modal>}
@@ -554,7 +656,6 @@ export default function App() {
       if (visible !== project.showGrid) await mutate({ type: 'set_grid', enabled: visible });
       await mutate({ type: 'set_grid_settings', settings }); setShowGridSettings(false);
     }} /></Modal>}
-    {showSource && page?.content && <Modal title="Site source" wide close={() => setShowSource(false)}><div className="accepted-preview"><SourceView content={page.content} label="Accepted" /></div></Modal>}
     {pageDialog && project && <Modal title={pageDialog === 'new' ? 'Add page' : 'Page settings'} close={() => setPageDialog(null)}>
       <DialogError error={error} dismiss={() => setError('')} /><PageForm paths={project.pages.map(item => item.path)} page={pageDialog === 'new' ? null : pageDialog} home={pageDialog !== 'new' && pageDialog.id === project.homePageId} busy={pending > 0} submit={async values => {
         if (pageDialog === 'new') {

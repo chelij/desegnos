@@ -1,6 +1,7 @@
 import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { useDraftText } from './DraftText';
+import { escapeHtml, imageFile } from './elementEditing';
 import { LayersPopover, LayerIcon } from './Layers';
 import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
@@ -38,11 +39,12 @@ type CanvasProps = {
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: Rect[]; highlighted?: Rect[];
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
+  openSource?: (target: ElementTarget) => void;
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>;
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect) => void; pickElement: (selection: ElementSelection) => void; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void;
 };
-export type CanvasHandle = { synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, changeZoom, select, add, pickElement, change, remove }, ref) {
+export type CanvasHandle = { focusElement: (selector: string, tag: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, change, remove }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
   const [context, setContext] = useState<CanvasContext | null>(null);
@@ -76,6 +78,31 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   const pageRef = useRef(page); pageRef.current = page;
   const nudge = useRef({ x: 0, y: 0, promise: null as Promise<void> | null });
   const syncing = useRef<Promise<void> | null>(null);
+  useEffect(() => {
+    const guard = (event: DragEvent) => { if (event.dataTransfer?.types.includes('Files')) event.preventDefault(); };
+    window.addEventListener('dragover', guard); window.addEventListener('drop', guard);
+    return () => { window.removeEventListener('dragover', guard); window.removeEventListener('drop', guard); };
+  }, []);
+  const [placeholders, setPlaceholders] = useState<ElementSelection[]>([]);
+  const [dropTarget, setDropTarget] = useState<Rect | null>(null);
+  const imagePicker = useRef<HTMLInputElement>(null);
+  const browseFor = useRef<ElementSelection | null>(null);
+  // Fill a picture from a file: dropped from the file manager, or chosen with Browse.
+  async function replaceImage(selection: ElementSelection, file: File) {
+    if (!file.type.startsWith('image/')) { setElementError('Choose a picture file (PNG, JPEG, WebP or GIF).'); return; }
+    try {
+      const src = await imageFile(file);
+      const details = await inspectElement(selection.element);
+      const alt = details.attributes.alt ?? '';
+      const description = /^image placeholder:?\s*/i.test(alt) ? alt.replace(/^image placeholder:?\s*/i, '') || file.name.replace(/\.[^.]+$/, '') : alt;
+      // A placeholder carries a marker that ordinary attribute edits can't remove, so swap in a fresh <img> with the same styling.
+      if (site.current?.placeholders().some(item => item.element.selector === selection.element.selector)) {
+        const css = document.createElement('div').style; css.cssText = details.inlineStyle;
+        await applyElement({ kind: 'replace', html: `<img src="${escapeHtml(src)}" alt="${escapeHtml(description)}" style="${escapeHtml(css.cssText)}">`, keepStyle: true }, selection);
+      } else await applyElement({ kind: 'update', texts: [], attributes: description === alt ? { src } : { src, alt: description }, style: null }, selection);
+    } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+  }
+  function browseImage(selection: ElementSelection | null) { browseFor.current = selection; imagePicker.current?.click(); }
   function storeElement(value: ElementSelection | null) { elementRef.current = value; setElement(value); selectionChanged(value?.element ?? null); }
   function deselectElement() { setContext(null); inlineTicket.current++; selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; storeElement(null); }
   useLayoutEffect(() => { deselectElement(); setElementDialog(null); setElementError(''); }, [page.id]);
@@ -513,7 +540,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     finally { setLayerBusy(false); }
   }
   function askAI() { const current = elementRef.current; if (current && !editingElement && !nudging) { setContext(null); pickElement(current); } }
-  useImperativeHandle(ref, () => ({ addRequest: addRequestInView, focusRequest: focusRegion, askAI, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
+  // Select a website element by its structural selector (used by Page check), if the page has rendered.
+  function focusElement(selector: string, tag: string) {
+    const sourceSha256 = site.current?.source(); if (!sourceSha256) return null;
+    const found = site.current?.find({ selector, tag, label: '', sourceSha256 }) ?? null;
+    if (found) { chooseElement(found); reveal(found.rect, false); }
+    return found;
+  }
+  useImperativeHandle(ref, () => ({ focusElement, addRequest: addRequestInView, focusRequest: focusRegion, askAI, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
     if (inlineSaving.current) await inlineSaving.current;
     const text = inlineTextRef.current;
     if (text) { const node = stage.current?.querySelector<HTMLElement>('.inline-text-editor'); await finishText(node?.innerText ?? text.text); }
@@ -586,6 +620,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   }
   function refreshElement() {
     refreshLayers();
+    setPlaceholders(page.content ? site.current?.placeholders() ?? [] : []);
     const current = elementRef.current;
     if (current) {
       const found = site.current?.find(current.element);
@@ -750,6 +785,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
 
   const editBusy = layerBusy || editingElement || nudging;
+  const foundUrl = element ? site.current?.foundSource(element.element) ?? null : null;
+  const foundHost = (() => { try { return foundUrl ? new URL(foundUrl).hostname.replace(/^www\./, '') : ''; } catch { return ''; } })();
   const arrangeItems: MenuItem[] = (['front', 'forward', 'backward', 'back'] as const).map((direction, index) => ({ id: direction, label: ['Bring to front', 'Bring forward', 'Send backward', 'Send to back'][index], disabled: editBusy, action: () => { void arrangeLayer(direction); } }));
   const contextItems: MenuItem[] = context ? [
     ...(context.kind === 'element' ? [
@@ -783,6 +820,25 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
         <div id="page-canvas" ref={stage} data-testid="canvas" data-world-left={bounds.left} data-world-top={bounds.top} data-zoom={zoom} className={`canvas ${page.appearance} ${overElement ? 'element-hover' : ''} ${elementDrag.current ? 'element-transforming' : ''}`} tabIndex={0} role="group" aria-label="Page workspace. Click to select, double-click text to edit. Double-click empty canvas to add a request. Drag selected elements to move; drag corners to resize." aria-describedby="canvas-keyboard-help"
           style={{ width: (bounds.right - bounds.left) * zoom, height: (bounds.bottom - bounds.top) * zoom }}
           onPointerDown={beginWorkspace} onPointerMove={move} onPointerUp={finish} onDoubleClick={activate} onContextMenu={contextMenu}
+          onDragOver={event => {
+            if (!event.dataTransfer.types.includes('Files')) return;
+            event.preventDefault();
+            const at = point({ x: event.clientX, y: event.clientY });
+            const hit = page.content && !editBusy ? site.current?.imageAt(at.x, at.y) ?? null : null;
+            event.dataTransfer.dropEffect = hit ? 'copy' : 'none';
+            setDropTarget(current => hit && current && sameRect(current, hit.rect) ? current : hit?.rect ?? null);
+          }}
+          onDragLeave={event => { if (!(event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget))) setDropTarget(null); }}
+          onDrop={event => {
+            if (!event.dataTransfer.files.length) return;
+            event.preventDefault(); setDropTarget(null);
+            const file = Array.from(event.dataTransfer.files).find(item => item.type.startsWith('image/'));
+            const at = point({ x: event.clientX, y: event.clientY });
+            const hit = page.content ? site.current?.imageAt(at.x, at.y) ?? null : null;
+            if (!file) setElementError('Drop a picture file (PNG, JPEG, WebP or GIF).');
+            else if (!hit) setElementError('Drop the picture onto an image on the page.');
+            else { chooseElement(hit); void replaceImage(hit, file); }
+          }}
           onPointerLeave={() => { if (!gesture.current) setCursor(null); }} onPointerCancel={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
           onLostPointerCapture={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
           onKeyDown={event => { if (event.target === event.currentTarget || event.key === 'Escape') keyboard(event); }}>
@@ -794,9 +850,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
           <div className={`screen-guide ${page.content ? 'has-preview' : ''}`} data-testid="screen-guide" style={positioned({ x: 0, y: 0, ...page.viewport })} aria-hidden="true">
             <span className="screen-guide-label">Screen · {page.viewport.width} × {page.viewport.height}</span>
           </div>
-          {grid && <div className="canvas-grid" aria-hidden="true" style={{ backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: `${(-bounds.left % displayStep.x) * zoom}px ${(-bounds.top % displayStep.y) * zoom}px` }} />}
+          {grid && <div className="canvas-grid" aria-hidden="true" style={{ ...positioned({ x: 0, y: 0, width: page.viewport.width, height: Math.max(page.viewport.height, page.content ? previewHeight : 0) }), backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: '0 0' }} />}
           {!page.content && !page.regions.some(region => !region.completed) && <div className="canvas-empty-hint" style={positioned({ x: 0, y: 0, ...page.viewport })}>
-            <p>Double-click anywhere to describe what goes here.</p><button type="button" onClick={addRequestInView}>Add request</button>
+            <strong>This page is empty</strong><p>Place a box where something should go, then describe it.</p><button type="button" className="primary" onClick={addRequestInView}>Add request</button><p className="empty-hint-small">or double-click anywhere on the page</p>
           </div>}
           {page.regions.map((region, index) => {
             if (region.completed) return null;
@@ -805,11 +861,15 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
               layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => change(region.id, patch)} />;
           })}
           {element && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
-            <span className="element-type-tag">{elementName(element.element.tag)}</span>
+            <span className="element-type-tag">{elementName(element.element.tag)}{foundUrl && <span className="found-tag" title={foundUrl}> · Found online · {foundHost}</span>}</span>
             {element.element.selector !== 'body' && (['nw','ne','sw','se'] as const).map(corner => <button key={corner} type="button" className={`element-resize-corner corner-${corner}`} data-corner={corner} aria-label={`Resize ${corner.includes('n') ? 'top' : 'bottom'}-${corner.includes('w') ? 'left' : 'right'}`} title="Drag to resize; press Enter for size settings" disabled={editingElement || nudging} onPointerDown={event => beginElementGesture(event, corner)} onClick={event => { if (event.detail === 0) setElementDialog('edit'); }} />)}
           </div>}
           {inlineText && <InlineTextEditor key={`${inlineText.selection.element.sourceSha256}:${inlineText.index}`} text={inlineText} origin={origin} zoom={zoom} layer={overlayLayer + 4} disabled={editingElement} finish={finishText} />}
           {changing.map((rect, index) => <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
+          {!editBusy && placeholders.map(item => <button key={item.element.selector} type="button" className="image-drop-target" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }}
+            onPointerDown={event => event.stopPropagation()} onClick={() => { chooseElement(item); browseImage(item); }} title="Drop a picture here, or click to choose one">
+            <strong>Drop a picture here</strong><span>or click to browse</span></button>)}
+          {dropTarget && <div className="image-drop-highlight" style={{ ...paintStyle(dropTarget, bounds, zoom), zIndex: overlayLayer + 3 }} aria-hidden="true"><span>Drop to use this picture</span></div>}
           {highlighted.map((rect, index) => <div key={index} className="generation-highlight" data-testid="generation-highlight" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
           {guides.x.map(x => <div key={`x${x}`} className="alignment-guide alignment-x" aria-hidden="true" style={{ left: (x - bounds.left) * zoom, zIndex: overlayLayer + 1 }} />)}
           {guides.y.map(y => <div key={`y${y}`} className="alignment-guide alignment-y" aria-hidden="true" style={{ top: (y - bounds.top) * zoom, zIndex: overlayLayer + 1 }} />)}
@@ -818,14 +878,21 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
       </div>
     </div>
     {toolbarRect && !inlineText && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
-      {element && <button className="ask-ai" title="Change text, links, images and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>}
-      {element && <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>}
+      {element?.element.tag === 'img' ? <>
+        <button className="ask-ai" title="Choose a picture from your computer, or drop one onto the image" disabled={editBusy} onClick={() => browseImage(elementRef.current)}>Replace image</button>
+        <button className="ask-ai" title="Describe the picture you want; the AI finds one online · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Find with AI</button>
+      </> : element && <>
+        <button className="ask-ai" title="Change text, links and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>
+        <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
+      </>}
+      {element && foundUrl && openSource && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
       <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) setElementDialog('remove'); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
     </div>}
     {context && <ContextMenu key={`${context.kind}:${context.point.x}:${context.point.y}`} label={context.kind === 'element' ? 'Element actions' : context.kind === 'request' ? 'Request actions' : 'Canvas actions'} point={context.point} close={closeContext} items={contextItems} />}
     <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element?.element.selector ?? null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady} anchor={toolbarPoint ? { x: toolbarPoint.x, y: toolbarPoint.y, height: toolbarSize.height } : null} contextElement={openElementContext} contextRequest={openRequestContext}
       chooseElement={item => { chooseElement(item); reveal(item.rect, false); }} chooseRequest={item => { deselectElement(); select(item.id); reveal(item.rect, false); }}
       arrange={direction => { void arrangeLayer(direction); }} copy={() => { void copyLayer(); }} paste={() => { void pasteLayer(); }} close={() => setLayersOpen(false)} />
+    <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void replaceImage(target, file); }} />
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
     {selectedRect && coordinate && measurementRect && gridSettings.rulers && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
@@ -871,10 +938,11 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
     setNaturalHeight(current => current === height ? current : height);
   }, [draft, promptRect.width, zoom]);
   const minimumHeight = promptRect.height * zoom;
-  const collapseHeight = Math.max(minimumHeight, maxHeight);
+  // Keep the box at its placement size; long text scrolls inside it instead of spilling over the page.
+  const collapseHeight = target ? Math.max(minimumHeight, maxHeight) : minimumHeight;
   const fullHeight = Math.max(minimumHeight, naturalHeight);
   const hasMore = fullHeight > collapseHeight;
-  useLayoutEffect(() => { if (hasMore && document.activeElement === text.current) setExpanded(true); }, [hasMore, draft]);
+  useLayoutEffect(() => { if (target && hasMore && document.activeElement === text.current) setExpanded(true); }, [target, hasMore, draft]);
   const displayHeight = expanded ? fullHeight : Math.min(collapseHeight, fullHeight);
   const shown = { ...promptRect, height: (displayHeight + (hasMore ? 30 : 0)) / zoom };
   // Bound the painted area while keeping the text and grips anchored to their
@@ -890,8 +958,9 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
     onPointerDown={event => { if (event.target === event.currentTarget) { event.preventDefault(); event.stopPropagation(); text.current?.focus({ preventScroll: true }); } }}
     onFocusCapture={select}>
     <div className="request-frame" aria-hidden="true" />
-    <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={target ? "Describe the change…" : "Describe what belongs here…"}
-      style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, background: 'transparent', outline: 'none' }} onFocus={() => { if (hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
+    {!target && <span className="request-number" aria-hidden="true">{number}</span>}
+    <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={region.element?.tag === 'img' ? 'Describe the picture you want; the AI will find one online…' : target ? 'Describe the change…' : 'Describe what goes here…'}
+      style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, background: 'transparent', outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
     {hasMore && <button type="button" className="request-expand" style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom + displayHeight, width: shown.width * zoom }} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
   </div>

@@ -327,3 +327,14 @@ p { margin-bottom: 12px; }
 .shortcut-help dl > div { padding: 9px 0; border-bottom: 1px solid var(--border-soft); }
 .shortcut-help dt { font-weight: 600; }
 .shortcut-help dd { margin: 3px 0 0; color: var(--muted); line-height: 1.5; }
+
+/* Device preview: the page renders at the real device width and is scaled down to fit. */
+.preview-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 14px; }
+.preview-toolbar .field-help { margin: 0; }
+.preview-toolbar .check-label { margin-left: auto; }
+.device-switch button { min-height: 30px; padding: 3px 14px; font-size: 12px; }
+.device-switch button[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); }
+.device-stage { position: relative; overflow: hidden; }
+.device-frame { position: absolute; top: 0; transform-origin: top left; }
+.device-frame .preview-frame iframe { height: var(--device-height); min-height: 0; }
+.device-frame.device-phone .preview-frame iframe, .device-frame.device-tablet .preview-frame iframe { border-radius: 14px; }

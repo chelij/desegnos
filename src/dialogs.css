@@ -7,3 +7,6 @@
 .ai-advanced > summary { cursor: pointer; font-weight: 600; }
 .ai-advanced .advanced-settings { margin-top: 14px; display: grid; gap: 14px; }
 .ai-save-actions { justify-content: flex-end; padding-top: 14px; border-top: 1px solid var(--border-soft); }
+.ai-more > summary, .key-storage > summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+.key-storage > summary { font-weight: 500; font-size: 13px; color: var(--muted); }
+.ai-more[open] > form, .key-storage[open] > fieldset { margin-top: 14px; }

@@ -44,12 +44,14 @@ export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevis
 export type ProviderSettings = { model: string; maxOutputTokens: number; reasoningEffort: string; spendingLimitUsd: number };
 export type CredentialInfo = { configured: boolean; storage: 'system' | 'session' | 'none'; maskedIdentifier: string | null; vaultError: string | null };
 export type AuthenticationMethod = 'apiKey' | 'chatgpt';
+export type ProviderId = 'openai' | 'anthropic' | 'google' | 'openrouter' | 'local';
+export type ProviderDescriptor = { id: ProviderId; name: string; available: boolean; signInSupported: boolean; capabilities: { webSearch: boolean; imageDownloads: number } };
 export type ChatgptAccount = { id: string; label: string; email: string | null; connected: boolean; planEnabled: boolean; storage: 'system' | 'session' | 'none'; storageRepairRequired: boolean };
 export type ChatgptView = { accounts: ChatgptAccount[]; activeAccountId: string | null;
   signIn: { status: 'idle' | 'awaitingBrowser' | 'complete' | 'cancelled' | 'failed'; message: string | null };
   models: { id: string; name: string }[]; modelsError: string | null; storageError: string | null; showWelcome: boolean; message: string | null };
 export type ModelInfo = { id: string; name: string; inputUsdPerMillion: number; outputUsdPerMillion: number; verifiedAt: string; sourceUrl: string; reasoningEfforts: string[] };
-export type AiSettingsView = { settings: ProviderSettings; credential: CredentialInfo; catalogue: ModelInfo[]; configurationError: string | null;
+export type AiSettingsView = { provider: ProviderId; providers: ProviderDescriptor[]; settings: ProviderSettings; credential: CredentialInfo; catalogue: ModelInfo[]; configurationError: string | null;
   authentication: AuthenticationMethod; chatgpt: ChatgptView };
 export type TokenUsage = { inputTokens: number; outputTokens: number; totalTokens: number };
 export type GenerationStatus = 'prepared' | 'generating' | 'ready' | 'blocked' | 'failed' | 'unknown' | 'cancelled' | 'discarded' | 'applying' | 'applied';
@@ -70,7 +72,7 @@ export type GenerationCandidate = {
 export type GenerationJobView = { jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; areas: { pageId: string; regionId: string; rect: Rect }[]; generationMode: GenerationMode;
   settings: ProviderSettings; status: GenerationStatus; estimateUsd: number; receivedBytes: number; message: string; candidate: GenerationCandidate | null;
   usage: TokenUsage | null; attempts: GenerationAttempt[]; acceptedDecisionIndices: number[]; recommendedDecisionIndices: number[];
-  authentication: AuthenticationMethod; chatgptAccountId: string | null; failureKind: string | null; dossierError: string | null; providerError: ProviderError | null };
+  provider?: ProviderId; authentication: AuthenticationMethod; chatgptAccountId: string | null; failureKind: string | null; dossierError: string | null; providerError: ProviderError | null };
 export type ResponseRejection = 'eventJson' | 'eventType' | 'eventName' | 'responseIdentity' | 'textLocation' | 'textIdentity' | 'textOrder' | 'textMismatch' | 'outputShape' | 'messageRole' | 'messageState' | 'messagePhase' | 'contentShape' | 'answerCount' | 'credentialEcho' | 'candidateJson' | 'candidateShape' | 'jobMismatch' | 'requirementsMismatch' | 'usage';
 export type ResponseCorrelation = {
   terminalOutput: 'notReceived' | 'absent' | 'null' | 'array' | 'invalid';

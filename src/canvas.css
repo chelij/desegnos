@@ -102,6 +102,8 @@
 .free-workspace .element-type-tag { position: absolute; right: 0; top: -21px; padding: 2px 5px; color: var(--text); background: var(--surface); border: 1px solid var(--annotation-focus); border-radius: 2px; font-size: 10px; line-height: 14px; white-space: nowrap; }
 .free-workspace .canvas-empty-hint { position: absolute; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 24px; text-align: center; pointer-events: none; z-index: 2; color: var(--muted); font-size: 14px; }
 .free-workspace .canvas-empty-hint p { margin: 0; max-width: 320px; }
+.free-workspace .canvas-empty-hint strong { font-size: 17px; color: var(--text); }
+.free-workspace .canvas-empty-hint .empty-hint-small { font-size: 12px; opacity: .8; }
 .free-workspace .canvas-empty-hint button { pointer-events: auto; }
 .free-workspace.tool-select .canvas { cursor: default; }
 .free-workspace.tool-select .canvas.element-hover { cursor: move; }
@@ -110,6 +112,9 @@
 .free-workspace.pan-ready .canvas, .free-workspace.pan-ready .canvas.element-hover { cursor: grab; }
 .free-workspace.panning .canvas, .free-workspace.panning .canvas.element-hover { cursor: grabbing; }
 .free-workspace .annotation textarea { overflow: hidden; }
+.free-workspace .annotation:focus-within textarea { overflow-y: auto; }
+.free-workspace .request-number { position: absolute; right: -1px; top: -20px; min-width: 18px; padding: 1px 5px; border-radius: 3px 3px 0 0; background: var(--annotation-border); color: var(--surface); font-size: 11px; line-height: 16px; text-align: center; pointer-events: none; }
+.free-workspace .annotation.selected .request-number { background: var(--annotation-focus); }
 .free-workspace .request-expand { display: block; width: 100%; min-height: 30px; height: 30px; padding: 3px 10px; text-align: left; border-top: 0; border-radius: 0 0 3px 3px; background: var(--annotation-surface); color: var(--annotation-text); border-color: var(--annotation-border); }
 .free-workspace .inline-text-editor { min-width: 24px; white-space: pre-wrap; overflow-wrap: break-word; cursor: text; background: var(--surface); outline: 2px solid var(--focus); outline-offset: 3px; border: 0; padding: 0; margin: 0; }
 
@@ -119,3 +124,13 @@
 
 .free-workspace .request-controls { position: absolute; pointer-events: none; }
 .free-workspace .request-controls > button { pointer-events: auto; }
+
+/* Image placeholders: drop a picture from the file manager, or click to browse. */
+.free-workspace .image-drop-target { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 0; padding: 6px; border: 2px dashed var(--annotation-focus); border-radius: 6px; background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--text); font-size: 13px; text-align: center; cursor: pointer; overflow: hidden; }
+.free-workspace .image-drop-target span { font-size: 11px; color: var(--muted); text-decoration: underline; }
+.free-workspace .image-drop-target:hover { background: color-mix(in srgb, var(--selected) 85%, transparent); }
+.free-workspace .image-drop-highlight { position: absolute; display: grid; place-items: center; pointer-events: none; outline: 3px solid var(--annotation-focus); outline-offset: -3px; background: color-mix(in srgb, var(--annotation-focus) 22%, transparent); }
+.free-workspace .image-drop-highlight span { padding: 4px 10px; border-radius: 999px; background: var(--annotation-focus); color: #fff; font-size: 12px; }
+.free-workspace .element-type-tag .found-tag { color: #1a7f37; font-weight: 600; white-space: nowrap; }
+:root[data-theme="dark"] .free-workspace .element-type-tag .found-tag { color: #7ee787; }
+.free-workspace .element-type-tag { white-space: nowrap; }

@@ -18,7 +18,7 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
 export type ElementMover = { preview: (x: number, y: number) => ElementSelection | null; style: (x: number, y: number) => string; cancel: () => void };
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
-export type CanvasPreviewHandle = { layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type CanvasPreviewHandle = { layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
@@ -211,6 +211,24 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       return { style, cancel:restore, preview(rect) { if (!findNode(target)) return null; set(style(rect)); return selected(node, false, true); } };
     },
     pick(x, y) { try { return selected(frame.current?.contentDocument?.elementFromPoint(x, y) ?? null, true); } catch { return null; } },
+    // The picture under a point, even inside a link or button, for dropping image files.
+    imageAt(x, y) {
+      try {
+        const node = frame.current?.contentDocument?.elementFromPoint(x, y) ?? null;
+        const image = node?.closest('img') ?? (node && node.querySelectorAll('img').length === 1 ? node.querySelector('img') : null);
+        return image ? selected(image, false, true) : null;
+      } catch { return null; }
+    },
+    // Content the AI found online carries its source URL (editor metadata, removed on export).
+    foundSource(target) { return findNode(target)?.getAttribute('data-desegnos-found') ?? null; },
+    found() {
+      const doc = frame.current?.contentDocument; if (!doc) return [];
+      return Array.from(doc.querySelectorAll('[data-desegnos-found]')).flatMap(node => { const hit = selected(node, false, true); return hit ? [hit] : []; });
+    },
+    placeholders() {
+      const doc = frame.current?.contentDocument; if (!doc) return [];
+      return Array.from(doc.querySelectorAll('img[data-desegnos-placeholder]')).flatMap(node => { const found = selected(node, false, true); return found ? [found] : []; });
+    },
     next(parent = false, target) {
       try {
         const doc = frame.current?.contentDocument;
@@ -301,10 +319,32 @@ export function SourceView({ content, label = 'Site' }: { content: SiteContent; 
   </section>;
 }
 
+const DEVICES = [{ id: 'desktop', label: 'Desktop', width: 1440, height: 900 }, { id: 'tablet', label: 'Tablet', width: 768, height: 1024 }, { id: 'phone', label: 'Phone', width: 390, height: 844 }] as const;
+
 export function PagePreview({ page, revision, jobId = null }: { page: Page; revision: number; jobId?: string | null }) {
   const [runScripts, setRunScripts] = useState(false);
-  return <section className="page-preview"><label className="check-label"><input type="checkbox" checked={runScripts} onChange={event => setRunScripts(event.target.checked)} />Enable interactions</label>
-    <p className="field-help">Turn on to try buttons and links.</p>
-    <PreviewFrame pageId={page.id} jobId={jobId} revision={revision} runScripts={runScripts} title={`${page.name} preview`} />
+  const [deviceId, setDeviceId] = useState<typeof DEVICES[number]['id']>(page.viewport.width < 600 ? 'phone' : 'desktop');
+  const stage = useRef<HTMLDivElement>(null);
+  const [available, setAvailable] = useState(0);
+  useLayoutEffect(() => {
+    const node = stage.current; if (!node) return;
+    const observer = new ResizeObserver(() => setAvailable(node.clientWidth)); observer.observe(node); setAvailable(node.clientWidth);
+    return () => observer.disconnect();
+  }, []);
+  const device = DEVICES.find(item => item.id === deviceId)!;
+  // Render at the real device width, then scale it down to fit, so layouts break exactly as on that device.
+  const height = Math.min(device.height, 620);
+  const scale = available ? Math.min(1, available / device.width) : 1;
+  return <section className="page-preview">
+    <div className="preview-toolbar">
+      <div className="segmented device-switch" role="group" aria-label="Preview device">{DEVICES.map(item => <button key={item.id} type="button" aria-pressed={deviceId === item.id} onClick={() => setDeviceId(item.id)}>{item.label}</button>)}</div>
+      <span className="field-help">{device.width} px wide{scale < 1 ? ` · shown at ${Math.round(scale * 100)}%` : ''}</span>
+      <label className="check-label"><input type="checkbox" checked={runScripts} onChange={event => setRunScripts(event.target.checked)} />Try buttons and links</label>
+    </div>
+    <div ref={stage} className="device-stage" style={{ height: height * scale }}>
+      <div className={`device-frame device-${device.id}`} style={{ width: device.width, '--device-height': `${height}px`, transform: `scale(${scale})`, left: Math.max(0, (available - device.width * scale) / 2) } as CSSProperties}>
+        <PreviewFrame pageId={page.id} jobId={jobId} revision={revision} runScripts={runScripts} title={`${page.name} preview on ${device.label}`} />
+      </div>
+    </div>
   </section>;
 }
