@@ -246,6 +246,8 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await selectSite(driver, physical, 'blue-card'); await arrange(driver, 'Send to back'); await previewReady(driver);
     current = await siteState(driver); sameLayout(current, baseline); assert.equal(current.outerHit, 'orange-card');
     await selectSite(driver, physical, 'blue-card');
+    await changedBy(driver, () => physical.keys('bracketright', 1, ['Control']), 'The trusted Bring forward shortcut did not arrange the selected layer'); await previewReady(driver);
+    current = await siteState(driver); sameLayout(current, baseline); assert.equal(current.outerHit, 'orange-card', 'One step from the back crosses the negative backdrop before Orange');
     await changedBy(driver, () => physical.keys('bracketright', 1, ['Control', 'Shift']), 'The trusted Bring to front shortcut did not arrange the selected layer'); await previewReady(driver);
     current = await siteState(driver); sameLayout(current, baseline); assert.equal(current.outerHit, 'blue-card');
     await changedBy(driver, () => physical.keys('bracketleft', 1, ['Control', 'Shift']), 'The trusted Send to back shortcut did not arrange the selected layer'); await previewReady(driver);
@@ -265,6 +267,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
   });
 
   await step('Copy and paste preserve current styling, CSS pseudo-elements, native controls and remapped SVG references', async () => {
+    await selectSite(driver, physical, 'blue-card'); await arrange(driver, 'Bring to front'); await previewReady(driver);
     await selectSite(driver, physical, 'blue-card'); copiedAppearance = await appearance(driver, 'blue-card');
     assert.match(copiedAppearance.before.content, /Copied badge/); assert.equal(copiedAppearance.after.width, '14px');
     assert.equal(copiedAppearance.marker.color, 'rgb(250, 220, 80)'); assert.equal(copiedAppearance.marker.fontSize, '19px');
@@ -324,7 +327,10 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await closeLayers(driver); await chooseFile(physical, () => driver.button('Save'), projectPath, output, 'layers-save');
     savedProject = (await savedState(driver, projectPath)).project;
     await verifyArchive(projectPath, savedProject, await driver.invoke('get_project_notes'));
-    await chooseFile(physical, () => driver.menu(['Project', 'Open project']), projectPath, output, 'layers-open');
+    await driver.menu(['Project', 'New project']); await driver.button('Blank website'); await driver.fill('Project name', 'Temporary Layers reopen check'); await driver.button('Create project');
+    await waitFor(async () => (await workspace(driver)).project?.id !== savedProject.id, 'The temporary blank project did not replace the saved layer project');
+    const unsaved = (await workspace(driver)).dirty;
+    await chooseFile(physical, async () => { await driver.menu(['Project', 'Open project']); if (unsaved) await driver.button('Discard and continue'); }, projectPath, output, 'layers-open');
     await waitFor(async () => (await workspace(driver)).project?.id === savedProject.id && (await workspace(driver)).path === projectPath, 'The saved layer project did not reopen');
     assert.deepEqual((await workspace(driver)).project, savedProject); await previewReady(driver); assert.deepEqual(await appearance(driver, copiedId), copiedAppearance);
     await physical.captureWindow(join(output, '07-reopened-layers.png'));
