@@ -52,10 +52,21 @@ pub struct WorkspaceView {
     dirty: bool,
     can_undo: bool,
     can_redo: bool,
+    history: Option<HistoryView>,
     recovery: Option<RecoveryInfo>,
     recoveries: Vec<RecoveryInfo>,
     recovery_error: Option<String>,
     migration_notice: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryView {
+    session_id: Uuid,
+    start: usize,
+    position: usize,
+    end: usize,
+    version: u64,
 }
 
 pub struct Workspace {
@@ -288,6 +299,16 @@ impl Workspace {
             }),
             can_undo: self.session.as_ref().is_some_and(Session::can_undo),
             can_redo: self.session.as_ref().is_some_and(Session::can_redo),
+            history: self.session.as_ref().map(|session| {
+                let (session_id, start, position, end, version) = session.history();
+                HistoryView {
+                    session_id,
+                    start,
+                    position,
+                    end,
+                    version,
+                }
+            }),
             recovery: self
                 .recoveries
                 .first()

@@ -37,7 +37,8 @@ export type RecoveryInfo = { projectId: string; name: string; revision: number }
 export type RecentProject = { path: string; name: string };
 export type RecentProjectsView = { projects: RecentProject[]; error: string | null };
 export type WebsiteExport = { path: string; indexPath: string; pageCount: number; fileCount: number; warnings: string[] };
-export type WorkspaceView = { project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
+export type HistoryView = { sessionId: string; start: number; position: number; end: number; version: number };
+export type WorkspaceView = { history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null; migrationNotice: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;
   regionCount: number; pageCount: number; dependencies: Record<string, string> };

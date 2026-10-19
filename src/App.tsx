@@ -20,7 +20,7 @@ import { PagePreview } from './Preview';
 import { CodePane, type CodeView, type SourceMapView } from './CodePane';
 import { FirstRunTips } from './Onboarding';
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
-import { fingerprint, useHistory } from './useHistory';
+import { useHistory } from './useHistory';
 import { activeGeneration, useGeneration } from './useGeneration';
 import type { AiSettingsView, Appearance, Brief, Command, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, NewProjectIdentity, Page, Project, Rect, RecoveryInfo, Region, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent } from './types';
 
@@ -151,7 +151,7 @@ export default function App() {
     finally { setLoading(false); }
   }, [accept]);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { history.observe(view?.project ?? null); }, [view, history.observe]);
+  useEffect(() => { history.observe(view); }, [view, history.observe]);
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const update = () => { document.documentElement.dataset.theme = theme === 'system' ? (media.matches ? 'dark' : 'light') : theme; };
@@ -268,19 +268,21 @@ export default function App() {
   async function travel(command: 'undo_project' | 'redo_project') {
     await canvas.current?.synchronize();
     await settle();
-    await queue(async () => { history.travelling(true); accept(await native<WorkspaceView>(command)); setNotice(command === 'undo_project' ? 'Change undone.' : 'Change redone.'); });
+    await queue(async () => { accept(await native<WorkspaceView>(command)); setNotice(command === 'undo_project' ? 'Change undone.' : 'Change redone.'); });
   }
-  // Undo or redo until the project matches the chosen history entry.
-  async function jumpTo(index: number) {
-    const target = history.state.current.entries[index]; if (!target) return;
-    const backwards = index < history.state.current.position - 1;
-    for (let step = 0; step < 200; step += 1) {
-      const now = current.current;
-      if (!now?.project || fingerprint(now.project) === target.fingerprint) return;
-      if (backwards ? !now.canUndo : !now.canRedo) break;
-      await travel(backwards ? 'undo_project' : 'redo_project');
-    }
-    if (current.current?.project && fingerprint(current.current.project) !== target.fingerprint) setError('Couldn’t return to that point in the history.');
+  // Hold the mutation queue while travelling so edits cannot interleave with the jump.
+  async function jumpTo(position: number) {
+    const sessionId = current.current?.history?.sessionId;
+    await canvas.current?.synchronize(); await settle();
+    await queue(async workspace => {
+      let next = workspace;
+      if (!next?.history || next.history.sessionId !== sessionId || position < next.history.start || position > next.history.end) throw new Error('That change is no longer available in this history.');
+      while (next.history!.position !== position) {
+        next = await native<WorkspaceView>(next.history!.position > position ? 'undo_project' : 'redo_project');
+        accept(next);
+      }
+      setNotice('Returned to the selected change.');
+    });
   }
   const getNotes = useCallback(() => queue(() => native<string>('get_project_notes')), [queue]);
   const changeBrief = useCallback((patch: Partial<Brief>) => mutate(project => ({ type: 'set_brief', brief: { ...project.brief, ...patch } }))
@@ -396,7 +398,7 @@ export default function App() {
     const undone = await queue(async workspace => {
       setResultReview(null);
       if (workspace?.project?.revision !== review.revision || workspace.project.latestGeneration?.jobId !== review.jobId) return false;
-      history.travelling(true); accept(await native<WorkspaceView>('undo_project')); setNotice('Generated changes undone.'); return true;
+      accept(await native<WorkspaceView>('undo_project')); setNotice('Generated changes undone.'); return true;
     });
     if (undone && tryAgain) await generation.prepare();
   }
@@ -595,7 +597,7 @@ export default function App() {
       {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => changeCodeView(value)}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
         {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo || pending > 0} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo || pending > 0} onClick={() => run(() => travel('redo_project'))}>Redo</button>
-          <MenuButton label="History" className="history-menu" ariaLabel="Change history" title="Go back to an earlier point" items={history.entries.length > 1 ? history.entries.map((entry, index) => ({ id: `history-${index}`, label: `${entry.label}${index >= history.position ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: index === history.position - 1, disabled: pending > 0 || working, action: () => run(() => jumpTo(index)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
+          <MenuButton label="History" className="history-menu" ariaLabel="Change history" title="Go back to an earlier point" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
         {page?.content && <button onClick={() => setShowPreview(true)}>Preview</button>}
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
         {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}

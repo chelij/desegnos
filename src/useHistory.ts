@@ -1,22 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
-import type { Project } from './types';
+import type { Project, WorkspaceView } from './types';
 
-export type HistoryEntry = { label: string; at: number; fingerprint: string };
-
-function hash(text: string) {
-  let value = 0x811c9dc5;
-  for (let index = 0; index < text.length; index += 1) { value ^= text.charCodeAt(index); value = Math.imul(value, 0x01000193); }
-  return (value >>> 0).toString(36) + text.length.toString(36);
-}
-
-// What the user would call "the project": pages, boxes, content and the brief.
-// Element bounds and bookkeeping (revision, job records) are left out so background refreshes don't count as changes.
-export function fingerprint(project: Project) {
-  return hash(JSON.stringify([project.name, project.brief, project.decisions, project.exceptions, project.pages.map(page => [
-    page.id, page.name, page.path, page.included, page.viewport, page.appearance, page.content,
-    page.regions.map(region => [region.id, region.prompt, region.completed, region.element ? region.element.selector : region.rect]),
-  ])]));
-}
+export type HistoryEntry = { label: string; at: number; position: number };
 
 function describe(before: Project, after: Project): string {
   if (after.appliedJobIds.some(id => !before.appliedJobIds.includes(id))) return 'AI built the page';
@@ -38,32 +23,28 @@ function describe(before: Project, after: Project): string {
   return 'Changed the project';
 }
 
-// A session list of changes mirroring Undo/Redo. Jumping matches project fingerprints, so it stays correct
-// even if the native undo stack holds steps this list didn't see.
+// Native positions distinguish identical edits and include steps the renderer did not observe.
 export function useHistory() {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
-  const [position, setPosition] = useState(0);
-  const state = useRef({ projectId: null as string | null, previous: null as Project | null, entries: [] as HistoryEntry[], position: 0, travelling: false });
-  const commit = (entries: HistoryEntry[], position: number) => { state.current.entries = entries; state.current.position = position; setEntries(entries); setPosition(position); };
-  const observe = useCallback((project: Project | null) => {
+  const state = useRef<{ sessionId: string | null; previous: Project | null; version: number; entries: HistoryEntry[] }>({ sessionId: null, previous: null, version: 0, entries: [] });
+  const observe = useCallback((workspace: WorkspaceView | null) => {
     const current = state.current;
-    if (!project) { current.projectId = null; current.previous = null; commit([], 0); return; }
-    const print = fingerprint(project);
-    if (project.id !== current.projectId) {
-      current.projectId = project.id; current.previous = project;
-      commit([{ label: 'Opened project', at: Date.now(), fingerprint: print }], 1); return;
+    const project = workspace?.project, history = workspace?.history;
+    if (!project || !history) { current.sessionId = null; current.previous = null; current.entries = []; setEntries([]); return; }
+    if (history.sessionId !== current.sessionId) {
+      current.entries = [{ label: 'Opened project', at: Date.now(), position: history.position }];
+    } else {
+      current.entries = current.entries.filter(entry => entry.position >= history.start && entry.position <= history.end);
+      if (history.version !== current.version) {
+        current.entries = current.entries.filter(entry => entry.position < history.position);
+        current.entries.push({ label: current.previous ? describe(current.previous, project) : 'Changed the project', at: Date.now(), position: history.position });
+      } else if (!current.entries.some(entry => entry.position === history.position)) {
+        current.entries.push({ label: 'Earlier change', at: Date.now(), position: history.position });
+        current.entries.sort((a, b) => a.position - b.position);
+      }
     }
-    const last = current.entries[current.position - 1];
-    if (last?.fingerprint === print) { current.previous = project; current.travelling = false; return; }
-    if (current.travelling) {
-      const index = current.entries.findIndex(entry => entry.fingerprint === print);
-      if (index >= 0) commit(current.entries, index + 1);
-      current.previous = project; current.travelling = false; return;
-    }
-    const entry = { label: current.previous ? describe(current.previous, project) : 'Changed the project', at: Date.now(), fingerprint: print };
-    commit([...current.entries.slice(0, current.position), entry].slice(-200), Math.min(200, current.position + 1));
-    current.previous = project;
+    current.sessionId = history.sessionId; current.previous = project; current.version = history.version;
+    setEntries(current.entries);
   }, []);
-  const travelling = useCallback((value: boolean) => { state.current.travelling = value; }, []);
-  return { entries, position, observe, travelling, state };
+  return { entries, observe };
 }

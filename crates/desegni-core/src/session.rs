@@ -8,6 +8,9 @@ pub struct Session {
     undo: Vec<Project>,
     redo: Vec<Project>,
     user_revision_floor: u64,
+    history_id: uuid::Uuid,
+    history_start: usize,
+    history_version: u64,
 }
 
 impl Session {
@@ -19,6 +22,9 @@ impl Session {
             undo: vec![],
             redo: vec![],
             user_revision_floor,
+            history_id: uuid::Uuid::new_v4(),
+            history_start: 0,
+            history_version: user_revision_floor,
         })
     }
     pub fn project(&self) -> &Project {
@@ -29,6 +35,18 @@ impl Session {
     }
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    /// Session-local undo coordinates. Equal project contents remain distinct edits.
+    pub fn history(&self) -> (uuid::Uuid, usize, usize, usize, u64) {
+        let position = self.history_start + self.undo.len();
+        (
+            self.history_id,
+            self.history_start,
+            position,
+            position + self.redo.len(),
+            self.history_version,
+        )
     }
 
     pub fn execute(
@@ -154,10 +172,12 @@ impl Session {
 
     fn commit(&mut self, candidate: Project) {
         self.user_revision_floor = candidate.revision;
+        self.history_version = candidate.revision;
         self.undo
             .push(std::mem::replace(&mut self.project, candidate));
         if self.undo.len() > 200 {
             self.undo.remove(0);
+            self.history_start += 1;
         }
         self.redo.clear();
     }

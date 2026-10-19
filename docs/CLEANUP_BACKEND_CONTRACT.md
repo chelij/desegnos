@@ -38,3 +38,7 @@ New generation packets use **format 9**. Format 8 was already released before th
 ## Frontend handoff
 
 The native interfaces are implemented and have focused core/storage/native checks. Claude still owns C5 badges, C9 editable CodeMirror/source-map wiring and C4's provider-list consumption. The current frontend snapshot keeps these pending controls disabled/read-only; backend availability is not a claim that those UI items are finished.
+
+## Exact History positions
+
+WorkspaceView.history is null without a project; otherwise it contains `{sessionId,start,position,end,version}`. Session IDs change on open/recover, including reopening the same project. Position is the native undo cursor; start advances only when the 200-step retained limit evicts an entry. Version changes only for a newly committed edit, so branching at the same depth is distinct from Redo. Background bounds/dossier refreshes do not create History steps. The frontend uses these coordinates instead of comparing content. History jumps hold the mutation queue and flush drafts first. These are session metadata and do not change project archives or requirements formats.

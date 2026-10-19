@@ -38,3 +38,7 @@ Rust tests continue to check fragmented and mislabeled event streams, completed-
 The separately guarded OS-vault test is opt-in (`pnpm test:vault`); ordinary runs never touch the user's system vault. Paid generation quality is a distinct owner-run benchmark gate, not established by fixture success.
 
 The cleanup search check used exactly one owner-authorized connected ChatGPT-plan generation. It is separate from native fixtures and the still-unverified 18-scenario quality gate; see [the cleanup record](../../docs/CLEANUP_CODEX.md).
+
+## Cleanup additions
+
+`--cleanup-extras-only` drives History with duplicate content, Undo/Redo, branching and settings; all three first-run tips and dismissal through a fresh process; cross-page Page check selection and request reuse; real native file-picker picture replacement and GTK/Xdnd drag/drop with trusted input; Desktop/Tablet/Phone layout widths and enabled preview interaction; Split/Code search, canvas selection, invalid draft preservation and valid source saving; archive reopen and crash recovery. File drags use a test-owned GTK source with the same text/uri-list format as file managers. Both source and destination PIDs/display/window bounds are checked before XTEST input. No paid inference is needed.

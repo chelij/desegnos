@@ -155,6 +155,17 @@ def main():
                 "transientFor": transient.value or None, "x": px.value, "y": py.value,
                 "width": attributes.width, "height": attributes.height}
 
+        source_pid = request.get("sourcePid")
+        if source_pid is not None:
+            source_dir = Path(f"/proc/{source_pid}")
+            if type(source_pid) is not int or source_pid < 1 or source_dir.stat().st_uid != os.getuid():
+                raise RuntimeError("An owned drag source PID is required")
+            source_env = source_dir.joinpath("environ").read_bytes().split(b"\0")
+            if f"DISPLAY={display_name}".encode() not in source_env or b"GDK_BACKEND=x11" not in source_env:
+                raise RuntimeError("The drag source must use the same isolated X11 display")
+            if request.get("action") != "drag":
+                raise RuntimeError("A second process is allowed only for file dragging")
+        sources = []
         pending = [(wid, 0) for wid in children(root)]
         owned = []
         visited = 0
@@ -164,6 +175,8 @@ def main():
             item = metadata(wid)
             if item and item["pid"] == pid and item["width"] > 100 and item["height"] > 100:
                 owned.append(item)
+            if item and item["pid"] == source_pid and item["width"] > 100 and item["height"] > 100:
+                sources.append(item)
             if depth < 6:
                 pending.extend((child, depth + 1) for child in children(wid))
         if not owned:
@@ -198,19 +211,25 @@ def main():
         if action not in ("move", "click", "drag", "wheel", "key", "text"):
             raise RuntimeError("Unsupported isolated native input action")
 
-        def point(value):
+        def point(value, bounds=target):
             if not isinstance(value, dict) or not all(type(value.get(axis)) in (int, float) and math.isfinite(value[axis]) for axis in ("x", "y")):
                 raise RuntimeError("A finite physical X11 point is required")
             px, py = round(value["x"]), round(value["y"])
-            if not (target["x"] <= px < target["x"] + target["width"] and target["y"] <= py < target["y"] + target["height"]):
+            if not (bounds["x"] <= px < bounds["x"] + bounds["width"] and bounds["y"] <= py < bounds["y"] + bounds["height"]):
                 raise RuntimeError(f"Refusing input outside the owned test window: {(px, py)}; {target}")
             if not (0 <= px < result["screen"]["width"] and 0 <= py < result["screen"]["height"]):
                 raise RuntimeError("Refusing input outside the isolated screen")
             return px, py
 
-        positions = [point(request["point"])] if action in ("move", "click", "wheel") else [point(request["from"]), point(request["to"])] if action == "drag" else []
+        if source_pid is not None and len(sources) != 1:
+            raise RuntimeError("File dragging requires one unambiguous mapped source window")
+        source_window = sources[0] if source_pid is not None else target
+        positions = [point(request["point"])] if action in ("move", "click", "wheel") else [point(request["from"], source_window), point(request["to"])] if action == "drag" else []
         raise_window(display, target["id"])
         set_focus(display, target["id"], 2, 0)
+        if source_pid is not None:
+            raise_window(display, source_window["id"])
+            set_focus(display, source_window["id"], 2, 0)
         sync(display, 0)
         if positions:
             if not motion(display, screen, *positions[0], 0):
@@ -241,13 +260,14 @@ def main():
                 sync(display, 0)
                 time.sleep(0.04)
                 if action == "drag":
-                    for index in range(1, 9):
-                        px = round(positions[0][0] + (positions[1][0] - positions[0][0]) * index / 8)
-                        py = round(positions[0][1] + (positions[1][1] - positions[0][1]) * index / 8)
+                    drag_steps = 24 if source_pid is not None else 8
+                    for index in range(1, drag_steps + 1):
+                        px = round(positions[0][0] + (positions[1][0] - positions[0][0]) * index / drag_steps)
+                        py = round(positions[0][1] + (positions[1][1] - positions[0][1]) * index / drag_steps)
                         if not motion(display, screen, px, py, 0):
                             raise RuntimeError("XTEST refused drag motion")
                         sync(display, 0)
-                        time.sleep(0.012)
+                        time.sleep(0.025 if source_pid is not None else 0.012)
                     if request.get("cancelDrag", False):
                         code = keysym_to_code(display, string_to_keysym(b"Escape"))
                         key(display, code, 1, 0); key(display, code, 0, 0); sync(display, 0)

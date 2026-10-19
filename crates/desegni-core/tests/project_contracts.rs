@@ -840,3 +840,78 @@ fn empty_selection_cleanup_is_durable_undoable_and_repeated_cleanup_is_a_noop() 
             .is_err()
     );
 }
+
+#[test]
+fn session_history_distinguishes_repeated_states_branches_and_retained_limits() {
+    let mut session = Session::new(project()).unwrap();
+    let initial = session.history();
+    assert_eq!((initial.1, initial.2, initial.3), (0, 0, 0));
+    for name in ["A", "B", "A"] {
+        session
+            .execute(
+                session.project().revision,
+                Command::RenameProject { name: name.into() },
+                |_| Ok(()),
+            )
+            .unwrap();
+    }
+    let last = session.history();
+    assert_eq!(last.2, 3);
+    for expected in [2, 1, 0] {
+        session.undo(|_| Ok(())).unwrap();
+        let history = session.history();
+        assert_eq!(
+            (history.0, history.2, history.3, history.4),
+            (initial.0, expected, 3, last.4)
+        );
+    }
+    for expected in [1, 2, 3] {
+        session.redo(|_| Ok(())).unwrap();
+        assert_eq!(session.history().2, expected);
+    }
+    session.undo(|_| Ok(())).unwrap();
+    let before_failure = session.history();
+    assert!(
+        session
+            .execute(
+                session.project().revision,
+                Command::SetGrid { enabled: false },
+                |_| Err(Error("disk full".into()))
+            )
+            .is_err()
+    );
+    assert_eq!(session.history(), before_failure);
+    session
+        .execute(
+            session.project().revision,
+            Command::SetGrid { enabled: false },
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(session.history().2, 3);
+    assert_eq!(session.history().3, 3);
+    assert!(session.history().4 > last.4);
+    assert!(!session.can_redo());
+    for index in 0..205 {
+        session
+            .execute(
+                session.project().revision,
+                Command::RenameProject {
+                    name: format!("Edit {index}"),
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+    }
+    let history = session.history();
+    assert_eq!((history.1, history.2, history.3), (8, 208, 208));
+    while session.can_undo() {
+        session.undo(|_| Ok(())).unwrap();
+    }
+    assert_eq!(session.history().2, history.1);
+    assert_eq!(session.history().3, history.3);
+    assert_ne!(
+        Session::new(session.project().clone()).unwrap().history().0,
+        history.0
+    );
+}
