@@ -25,6 +25,8 @@ fn main() {
             "redo_project",
             "open_project",
             "save_project",
+            "save_project_checked",
+            "resolve_save_conflict",
             "prepare_requirements",
             "save_requirements",
             "recover_project",

@@ -42,9 +42,57 @@ struct Manifest {
     files: BTreeMap<String, String>,
 }
 
+/// The identity and exact manifest bytes read from a validated archive, before migration.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileStamp {
+    pub project_id: Uuid,
+    pub revision: u64,
+    pub manifest_sha256: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SaveFailureKind {
+    Changed,
+    DifferentProject,
+    Unreadable,
+    InvalidProject,
+    Io,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveFailure {
+    pub kind: SaveFailureKind,
+    pub message: String,
+    pub expected: Option<FileStamp>,
+    pub actual: Option<FileStamp>,
+}
+
+impl std::fmt::Display for SaveFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SaveFailure {}
+
+impl SaveFailure {
+    fn new(kind: SaveFailureKind, message: impl Into<String>) -> Box<Self> {
+        Box::new(Self {
+            kind,
+            message: message.into(),
+            expected: None,
+            actual: None,
+        })
+    }
+}
+
 pub struct ProjectFile {
     path: PathBuf,
     _lock: File,
+    stamp: Mutex<Option<FileStamp>>,
 }
 
 impl ProjectFile {
@@ -99,39 +147,161 @@ impl ProjectFile {
         lock.try_lock().map_err(|_| {
             Error("This project is already open for writing in another window.".into())
         })?;
-        Ok(Self { path, _lock: lock })
+        Ok(Self {
+            path,
+            _lock: lock,
+            stamp: Mutex::new(None),
+        })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    pub fn stamp(&self) -> Result<Option<FileStamp>> {
+        Ok(self.stamp.lock().map_err(io)?.clone())
+    }
+
+    /// Ordinary saves only replace the exact validated archive this handle opened or saved.
     pub fn save(&self, project: &Project) -> Result<()> {
-        project.validate()?;
-        let json = serde_json::to_vec(project).map_err(io)?;
-        let markdown = project.project_markdown()?.into_bytes();
-        if json.len() as u64 + markdown.len() as u64 > MAX_MODEL_BYTES {
-            return Err(Error("The project exceeds the 128 MiB model limit.".into()));
+        self.save_checked(project)
+            .map_err(|error| Error(error.to_string()))
+    }
+
+    pub fn save_checked(&self, project: &Project) -> std::result::Result<(), Box<SaveFailure>> {
+        let mut stamp = self
+            .stamp
+            .lock()
+            .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))?;
+        let next = self.save_exact(project, stamp.as_ref(), false)?;
+        *stamp = Some(next);
+        Ok(())
+    }
+
+    /// Only call after an explicit user choice bound to this observed, validated stamp.
+    /// A second change on disk invalidates that choice, including a same-revision change.
+    pub fn save_replacing(
+        &self,
+        project: &Project,
+        observed: &FileStamp,
+        allow_different_project: bool,
+    ) -> std::result::Result<(), Box<SaveFailure>> {
+        let mut stamp = self
+            .stamp
+            .lock()
+            .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))?;
+        let next = self.save_exact(project, Some(observed), allow_different_project)?;
+        *stamp = Some(next);
+        Ok(())
+    }
+
+    fn check_disk(
+        &self,
+        project_id: Uuid,
+        expected: Option<&FileStamp>,
+        allow_different_project: bool,
+    ) -> std::result::Result<(), Box<SaveFailure>> {
+        let actual = match fs::symlink_metadata(&self.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && expected.is_none() => {
+                return Ok(());
+            }
+            Err(_) => {
+                return Err(SaveFailure::new(
+                    SaveFailureKind::Unreadable,
+                    "This file cannot be read. Save a copy with a new name.",
+                ));
+            }
+            Ok(metadata) => {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::MetadataExt;
+                    if metadata.nlink() > 1 {
+                        return Err(SaveFailure::new(
+                            SaveFailureKind::Unreadable,
+                            "This file has another linked name. Save a separate copy.",
+                        ));
+                    }
+                }
+                if !metadata.is_file() || metadata.file_type().is_symlink() {
+                    return Err(SaveFailure::new(
+                        SaveFailureKind::Unreadable,
+                        "This file cannot be safely replaced. Save a copy with a new name.",
+                    ));
+                }
+                read_project_document(&self.path).map_err(|_| SaveFailure::new(SaveFailureKind::Unreadable, "This file is not a readable Desegnos project. Choose a new name ending in .desegnos."))?.1
+            }
+        };
+        if actual.project_id != project_id && !allow_different_project {
+            return Err(Box::new(SaveFailure {
+                kind: SaveFailureKind::DifferentProject,
+                message: "This file is a different project. Save a copy with a new name.".into(),
+                expected: expected.cloned(),
+                actual: Some(actual),
+            }));
         }
-        let manifest = Manifest {
-            format: "desegni".into(),
-            schema_version: SCHEMA_VERSION,
+        if expected != Some(&actual) {
+            return Err(Box::new(SaveFailure {
+                kind: SaveFailureKind::Changed,
+                message: "This file changed since you opened it.".into(),
+                expected: expected.cloned(),
+                actual: Some(actual),
+            }));
+        }
+        Ok(())
+    }
+
+    fn save_exact(
+        &self,
+        project: &Project,
+        expected: Option<&FileStamp>,
+        allow_different_project: bool,
+    ) -> std::result::Result<FileStamp, Box<SaveFailure>> {
+        self.check_disk(project.id, expected, allow_different_project)?;
+        self.write_project(project, expected.is_some(), || {
+            self.check_disk(project.id, expected, allow_different_project)
+        })
+    }
+
+    fn write_project(
+        &self,
+        project: &Project,
+        replace_existing: bool,
+        check: impl Fn() -> std::result::Result<(), Box<SaveFailure>>,
+    ) -> std::result::Result<FileStamp, Box<SaveFailure>> {
+        let operation = || -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+            project.validate()?;
+            let json = serde_json::to_vec(project).map_err(io)?;
+            let markdown = project.project_markdown()?.into_bytes();
+            if json.len() as u64 + markdown.len() as u64 > MAX_MODEL_BYTES {
+                return Err(Error("The project exceeds the 128 MiB model limit.".into()));
+            }
+            let manifest = Manifest {
+                format: "desegni".into(),
+                schema_version: SCHEMA_VERSION,
+                project_id: project.id,
+                revision: project.revision,
+                files: BTreeMap::from([
+                    ("project.json".into(), digest(&json)),
+                    ("PROJECT.md".into(), digest(&markdown)),
+                ]),
+            };
+            let manifest = serde_json::to_vec(&manifest).map_err(io)?;
+            if json.len() as u64 + markdown.len() as u64 + manifest.len() as u64 > MAX_MODEL_BYTES {
+                return Err(Error("The project exceeds the 128 MiB model limit.".into()));
+            }
+            Ok((json, markdown, manifest))
+        };
+        let (json, markdown, manifest) = operation().map_err(|error| {
+            SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string())
+        })?;
+        let next = FileStamp {
             project_id: project.id,
             revision: project.revision,
-            files: BTreeMap::from([
-                ("project.json".into(), digest(&json)),
-                ("PROJECT.md".into(), digest(&markdown)),
-            ]),
+            manifest_sha256: digest(&manifest),
         };
-        let manifest = serde_json::to_vec(&manifest).map_err(io)?;
-        if json.len() as u64 + markdown.len() as u64 + manifest.len() as u64 > MAX_MODEL_BYTES {
-            return Err(Error("The project exceeds the 128 MiB model limit.".into()));
-        }
-        if self.path.exists() {
-            load_project(&self.path).map_err(|error| Error(format!("The existing project cannot be safely backed up: {error} Save to a new filename to preserve it.")))?;
-        }
-        atomic_write(
+        atomic_write_checked(
             &self.path,
+            replace_existing,
             |file| {
                 let mut archive = ZipWriter::new(file);
                 let options = SimpleFileOptions::default()
@@ -148,16 +318,30 @@ impl ProjectFile {
                 archive.finish().map_err(io)?;
                 Ok(())
             },
-            true,
-        )
+            check,
+        )?;
+        Ok(next)
     }
 
     pub fn load(&self) -> Result<Project> {
-        load_project(&self.path)
+        Ok(self.load_document()?.project)
     }
 
     pub fn load_document(&self) -> Result<DecodedProject> {
-        load_project_document(&self.path)
+        let mut stamp = self.stamp.lock().map_err(io)?;
+        let (document, observed) = read_project_document(&self.path)?;
+        *stamp = Some(observed);
+        Ok(document)
+    }
+
+    /// Read the recorded saved snapshot without accepting an external change as a new baseline.
+    pub fn saved_document(&self) -> Result<DecodedProject> {
+        let stamp = self.stamp.lock().map_err(io)?;
+        let (document, actual) = read_project_document(&self.path)?;
+        if stamp.as_ref() != Some(&actual) {
+            return Err(Error("The saved file changed before its recovery state could be recorded. The project remains unsaved.".into()));
+        }
+        Ok(document)
     }
 }
 
@@ -166,6 +350,10 @@ pub fn load_project(path: &Path) -> Result<Project> {
 }
 
 pub fn load_project_document(path: &Path) -> Result<DecodedProject> {
+    Ok(read_project_document(path)?.0)
+}
+
+fn read_project_document(path: &Path) -> Result<(DecodedProject, FileStamp)> {
     let file = File::open(path).map_err(io)?;
     if file.metadata().map_err(io)?.len() > MAX_ARCHIVE_BYTES {
         return Err(Error("The archive exceeds the 2 GiB input limit.".into()));
@@ -219,7 +407,7 @@ pub fn load_project_document(path: &Path) -> Result<DecodedProject> {
     }
     let manifest: Manifest = serde_json::from_slice(&entries["manifest.json"]).map_err(io)?;
     if manifest.format != "desegni"
-        || ![1, 2, 3, 4, 5, SCHEMA_VERSION].contains(&manifest.schema_version)
+        || ![1, 2, 3, 4, 5, 6, SCHEMA_VERSION].contains(&manifest.schema_version)
     {
         return Err(Error(
             "This project format is unsupported. The original has not been changed.".into(),
@@ -240,7 +428,12 @@ pub fn load_project_document(path: &Path) -> Result<DecodedProject> {
     {
         return Err(Error("The manifest and project disagree.".into()));
     }
-    Ok(document)
+    let stamp = FileStamp {
+        project_id: manifest.project_id,
+        revision: manifest.revision,
+        manifest_sha256: digest(&entries["manifest.json"]),
+    };
+    Ok((document, stamp))
 }
 
 pub struct Journal {
@@ -363,6 +556,69 @@ pub fn write_markdown(path: &Path, markdown: &str) -> Result<()> {
     )
 }
 
+fn atomic_write_checked(
+    path: &Path,
+    replace_existing: bool,
+    write: impl FnOnce(&mut File) -> Result<()>,
+    check: impl Fn() -> std::result::Result<(), Box<SaveFailure>>,
+) -> std::result::Result<(), Box<SaveFailure>> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let temporary = parent.join(format!(".desegni-{}.tmp", Uuid::new_v4()));
+    let io_failure = |error: Error| SaveFailure::new(SaveFailureKind::Io, error.to_string());
+    let operation = (|| {
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary).map_err(io).map_err(io_failure)?;
+        write(&mut file).map_err(io_failure)?;
+        file.sync_all().map_err(io).map_err(io_failure)?;
+        drop(file);
+        check()?;
+        if path.exists() {
+            backup_file(path).map_err(io_failure)?;
+        }
+        check()?;
+        let committed = if replace_existing {
+            fs::rename(&temporary, path).map_err(io)
+        } else {
+            commit_new_file(&temporary, path)
+        };
+        if let Err(error) = committed {
+            // In particular, a new destination may appear after the last check.
+            check()?;
+            return Err(io_failure(error));
+        }
+        sync_parent(path).map_err(io_failure)
+    })();
+    if operation.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    operation
+}
+
+fn commit_new_file(temporary: &Path, path: &Path) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::{CWD, RenameFlags, renameat_with};
+        renameat_with(CWD, temporary, CWD, path, RenameFlags::NOREPLACE).map_err(io)?;
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // Creating a hard link is atomic and refuses an existing destination.
+        // Both paths are in the same directory/filesystem, as required above.
+        fs::hard_link(temporary, path).map_err(io)?;
+        fs::remove_file(temporary).map_err(io)?;
+    }
+    Ok(())
+}
+
 fn atomic_write(
     path: &Path,
     write: impl FnOnce(&mut File) -> Result<()>,
@@ -431,3 +687,100 @@ fn sync_parent(path: &Path) -> Result<()> {
 
 pub mod website_export;
 pub use website_export::{WrittenWebsiteExport, write_website_export};
+
+#[cfg(test)]
+mod safe_write_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn a_new_destination_appearing_after_the_last_check_is_not_overwritten() {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-new-file-race-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("site.desegnos");
+        let checks = Cell::new(0);
+        let result = atomic_write_checked(
+            &path,
+            false,
+            |temporary| temporary.write_all(b"my project").map_err(io),
+            || {
+                checks.set(checks.get() + 1);
+                if checks.get() == 2 {
+                    fs::write(&path, b"new external document").unwrap();
+                }
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"new external document");
+        assert!(!path.with_file_name("site.desegnos.previous").exists());
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_change_during_compression_is_checked_before_the_backup_or_rename() {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-write-race-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("site.desegnos");
+        fs::write(&path, b"original").unwrap();
+        let result = atomic_write_checked(
+            &path,
+            true,
+            |temporary| {
+                temporary.write_all(b"my saved content").map_err(io)?;
+                fs::write(&path, b"external change").map_err(io)?;
+                Ok(())
+            },
+            || {
+                if fs::read(&path).unwrap() != b"original" {
+                    Err(SaveFailure::new(SaveFailureKind::Changed, "changed"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert_eq!(result.unwrap_err().kind, SaveFailureKind::Changed);
+        assert_eq!(fs::read(&path).unwrap(), b"external change");
+        assert!(!path.with_file_name("site.desegnos.previous").exists());
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_change_during_backup_is_checked_again_before_the_rename() {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-write-race-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let path = directory.join("site.desegnos");
+        fs::write(&path, b"original").unwrap();
+        let checks = Cell::new(0);
+        let result = atomic_write_checked(
+            &path,
+            true,
+            |temporary| temporary.write_all(b"my saved content").map_err(io),
+            || {
+                checks.set(checks.get() + 1);
+                if checks.get() == 2 {
+                    fs::write(&path, b"external change").unwrap();
+                }
+                if fs::read(&path).unwrap() != b"original" {
+                    Err(SaveFailure::new(SaveFailureKind::Changed, "changed"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        assert_eq!(checks.get(), 2);
+        assert_eq!(result.unwrap_err().kind, SaveFailureKind::Changed);
+        assert_eq!(fs::read(&path).unwrap(), b"external change");
+        assert_eq!(
+            fs::read(path.with_file_name("site.desegnos.previous")).unwrap(),
+            b"original"
+        );
+        assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

@@ -42,3 +42,39 @@ The native interfaces are implemented and have focused core/storage/native check
 ## Exact History positions
 
 WorkspaceView.history is null without a project; otherwise it contains `{sessionId,start,position,end,version}`. Session IDs change on open/recover, including reopening the same project. Position is the native undo cursor; start advances only when the 200-step retained limit evicts an entry. Version changes only for a newly committed edit, so branching at the same depth is distinct from Redo. Background bounds/dossier refreshes do not create History steps. The frontend uses these coordinates instead of comparing content. History jumps hold the mutation queue and flush drafts first. These are session metadata and do not change project archives or requirements formats.
+## Safe save and recovery (2026-10-20)
+
+The editor should use `save_project_checked({ saveAs: boolean })` rather than the older `save_project`. It opens the native Save dialog when requested or when no saved path exists. Both commands now refuse a changed archive; the older command reports a plain error and has no replacement bypass.
+
+The checked command resolves to one of:
+
+```ts
+type FileStamp = {
+  projectId: string;
+  revision: number;
+  manifestSha256: string;
+};
+type SaveProjectOutcome =
+  | { status: 'saved'; workspace: WorkspaceView }
+  | { status: 'cancelled' }
+  | { status: 'conflict'; conflict: {
+      token: string;
+      kind: 'changed' | 'differentProject' | 'unreadable';
+      path: string;
+      fileName: string;
+      message: string;
+      defaultChoice: 'copy' | 'cancel';
+      canReplace: boolean;
+      details: { expected: FileStamp | null; actual: FileStamp | null };
+    } };
+```
+
+Show `message` and the choices **Save as copy**, **Replace it** (only when `canReplace`), and **Cancel**. Keep stamp details behind **Show details**. A changed file defaults to copy. A different project defaults to Cancel; its message is `"<file> is a different project. Replace it?"` only after Save as. A different project encountered during ordinary Save, or any unreadable/non-project destination, is never replaceable. Invalid extensions and operational failures reject the command with a plain message.
+
+Call `resolve_save_conflict({ token, choice: 'copy' | 'replace' | 'cancel' })`; it returns the same outcome. Copy opens another native Save dialog suggesting `<stem>-copy.desegnos`. Cancelling either dialog leaves the full recovery journal and saved path intact. A copy that selects another existing project goes through the same additional in-app confirmation.
+
+Tokens are opaque, single-use, and bound in memory to the current project ID/revision, locked canonical destination, and exact observed manifest. Replace revalidates the disk stamp. If the file changed again, it returns a new conflict/token; render that new choice. If the project changed, Copy/Replace reject with a message to save again. Cancel still dismisses a matching token after a local edit. New save attempts and project switches invalidate old tokens. Never infer permission from an operating-system overwrite prompt or pass stamp details back as permission.
+
+`RecoveryInfo` adds `savedPath: string | null` and `editedAtMs: number` (Unix epoch milliseconds). `editedAtMs` is the full journal snapshot's filesystem modification time, with zero for unavailable timestamps. Display the draft's age and last saved filename; the full path may be shown in details. These fields appear in both `WorkspaceView.recovery` and `WorkspaceView.recoveries`.
+
+Storage records `FileStamp` from a fully validated archive's actual `manifest.json` bytes before migration, and after successful saves. It checks the recorded stamp before preparing a write, again before backup, and again immediately before atomic replacement. Explicit replacement preserves the exact observed archive in the existing `.previous` backup. New-file commits use an atomic no-replace operation (Linux rename, or a same-directory hard link on other platforms) so a destination that appears after the last check is never overwritten. The sidecar writer lock coordinates Desegnos windows; external programs do not necessarily honor it. Existing-file replacement has the filesystem's unavoidable check-to-rename interval against a non-cooperating writer; a manifest change at any preceding check is rejected, and no polling or silent merge is introduced. Recovery metadata verification never adopts a newly changed file as its baseline.

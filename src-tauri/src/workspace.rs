@@ -2,7 +2,9 @@ use desegni_core::{
     Appearance, Command, DecodedProject, GenerationCandidate, Project, RequirementsSnapshot,
     Session, Viewport,
 };
-use desegni_storage::{Journal, ProjectFile, write_markdown};
+use desegni_storage::{
+    FileStamp, Journal, ProjectFile, SaveFailure, SaveFailureKind, write_markdown,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
@@ -37,6 +39,8 @@ pub struct RecoveryInfo {
     project_id: Uuid,
     name: String,
     revision: u64,
+    saved_path: Option<String>,
+    edited_at_ms: u64,
 }
 
 struct RecoveryCandidate {
@@ -69,6 +73,57 @@ struct HistoryView {
     version: u64,
 }
 
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum SaveProjectOutcome {
+    Saved { workspace: Box<WorkspaceView> },
+    Cancelled,
+    Conflict { conflict: SaveConflict },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveConflict {
+    token: Uuid,
+    kind: SaveFailureKind,
+    path: String,
+    file_name: String,
+    message: String,
+    default_choice: &'static str,
+    can_replace: bool,
+    details: SaveConflictDetails,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveConflictDetails {
+    expected: Option<FileStamp>,
+    actual: Option<FileStamp>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SaveConflictChoice {
+    Copy,
+    Replace,
+    Cancel,
+}
+
+enum SaveDestination {
+    Current,
+    Chosen(ProjectFile),
+}
+
+struct PendingSaveConflict {
+    token: Uuid,
+    project_id: Uuid,
+    revision: u64,
+    destination: SaveDestination,
+    actual: Option<FileStamp>,
+    can_replace: bool,
+    save_as: bool,
+}
+
 pub struct Workspace {
     directory: PathBuf,
     session: Option<Session>,
@@ -82,6 +137,7 @@ pub struct Workspace {
     migration_notice: Option<String>,
     needs_migration_save: bool,
     recent_error: Option<String>,
+    pending_save: Option<PendingSaveConflict>,
 }
 
 impl Workspace {
@@ -149,6 +205,7 @@ impl Workspace {
             migration_notice: None,
             needs_migration_save: false,
             recent_error: None,
+            pending_save: None,
         };
         state.refresh_recoveries();
         Ok(state)
@@ -265,6 +322,16 @@ impl Workspace {
                             project_id,
                             name: document.project.name,
                             revision: document.project.revision,
+                            saved_path: pointer
+                                .project_path
+                                .as_ref()
+                                .map(|path| path.to_string_lossy().into_owned()),
+                            edited_at_ms: modified
+                                .duration_since(SystemTime::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                                .try_into()
+                                .unwrap_or(u64::MAX),
                         },
                         modified,
                     });
@@ -383,7 +450,7 @@ impl Workspace {
             }
             Some(ownership)
         };
-        self.activate(project, file, saved_revision, ownership)
+        self.activate(project, file, saved_revision, ownership, None)
     }
 
     fn activate(
@@ -392,6 +459,7 @@ impl Workspace {
         file: Option<ProjectFile>,
         saved_revision: Option<u64>,
         ownership: Option<File>,
+        last_saved_path: Option<PathBuf>,
     ) -> NativeResult<()> {
         let session = Session::new(project).map_err(message)?;
         let journal = Journal::new(&self.directory, session.project().id).map_err(message)?;
@@ -401,7 +469,9 @@ impl Workspace {
             &journal,
             file.as_ref(),
             saved_revision,
+            last_saved_path,
         )?;
+        self.pending_save = None;
         self.session = Some(session);
         self.file = file;
         self.journal = Some(journal);
@@ -422,6 +492,7 @@ impl Workspace {
         journal: &Journal,
         file: Option<&ProjectFile>,
         saved_revision: Option<u64>,
+        last_saved_path: Option<PathBuf>,
     ) -> NativeResult<()> {
         let pointer = RecoveryPointer {
             journal_file: journal
@@ -433,14 +504,14 @@ impl Workspace {
             saved_revision,
             saved_sha256: file
                 .map(|file| -> NativeResult<String> {
-                    let saved = file.load_document().map_err(message)?;
+                    let saved = file.saved_document().map_err(message)?;
                     if saved.project.id != project_id || Some(saved.project.revision) != saved_revision {
                         return Err("The saved file changed before its recovery state could be recorded. The project remains unsaved.".into());
                     }
                     Ok(saved.source_sha256)
                 })
                 .transpose()?,
-            project_path: file.map(|f| f.path().to_owned()),
+            project_path: file.map(|f| f.path().to_owned()).or(last_saved_path),
         };
         write_markdown(
             &self.pointer_path(project_id),
@@ -461,44 +532,49 @@ impl Workspace {
         Ok(())
     }
 
-    fn save_snapshot(&mut self, project: &Project, path: Option<PathBuf>) -> NativeResult<()> {
-        self.check_snapshot(project)?;
-        let staged_file = if let Some(path) = path {
-            let path = if path.extension().is_none() {
-                path.with_extension("desegni")
-            } else {
-                path
-            };
-            let current = self.file.as_ref().is_some_and(|file| {
-                file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
-            });
-            if current {
-                self.file
-                    .as_ref()
-                    .ok_or("The project was closed.")?
-                    .save(project)
-                    .map_err(message)?;
-                None
-            } else {
-                let file = ProjectFile::acquire(&path).map_err(message)?;
-                file.save(project).map_err(message)?;
-                Some(file)
-            }
-        } else {
-            self.file
-                .as_ref()
-                .ok_or("Choose a project file first.")?
-                .save(project)
-                .map_err(message)?;
-            None
+    fn save_destination(&self, path: Option<PathBuf>) -> NativeResult<SaveDestination> {
+        let Some(path) = path else {
+            return Ok(SaveDestination::Current);
         };
+        let path = if path.extension().is_none() {
+            path.with_extension("desegnos")
+        } else {
+            path
+        };
+        let current = self.file.as_ref().is_some_and(|file| {
+            file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
+        });
+        if current {
+            Ok(SaveDestination::Current)
+        } else {
+            Ok(SaveDestination::Chosen(
+                ProjectFile::acquire(&path).map_err(message)?,
+            ))
+        }
+    }
+
+    fn destination_file<'a>(
+        &'a self,
+        destination: &'a SaveDestination,
+    ) -> NativeResult<&'a ProjectFile> {
+        match destination {
+            SaveDestination::Current => self
+                .file
+                .as_ref()
+                .ok_or_else(|| "Choose a project file first.".into()),
+            SaveDestination::Chosen(file) => Ok(file),
+        }
+    }
+
+    fn finish_save(&mut self, project: &Project, destination: SaveDestination) -> NativeResult<()> {
         self.write_pointer(
             project.id,
             self.journal.as_ref().ok_or("Recovery is unavailable.")?,
-            staged_file.as_ref().or(self.file.as_ref()),
+            Some(self.destination_file(&destination)?),
             Some(project.revision),
+            None,
         )?;
-        if let Some(file) = staged_file {
+        if let SaveDestination::Chosen(file) = destination {
             self.file = Some(file);
         }
         self.saved_revision = Some(project.revision);
@@ -506,6 +582,152 @@ impl Workspace {
         self.needs_migration_save = false;
         self.remember_recent();
         Ok(())
+    }
+
+    fn save_snapshot(&mut self, project: &Project, path: Option<PathBuf>) -> NativeResult<()> {
+        self.check_snapshot(project)?;
+        self.pending_save = None;
+        let destination = self.save_destination(path)?;
+        self.destination_file(&destination)?
+            .save(project)
+            .map_err(message)?;
+        self.finish_save(project, destination)
+    }
+
+    fn save_conflict(
+        &mut self,
+        project: &Project,
+        destination: SaveDestination,
+        failure: SaveFailure,
+        save_as: bool,
+    ) -> NativeResult<SaveProjectOutcome> {
+        if !matches!(
+            failure.kind,
+            SaveFailureKind::Changed
+                | SaveFailureKind::DifferentProject
+                | SaveFailureKind::Unreadable
+        ) {
+            return Err(failure.message);
+        }
+        let file = self.destination_file(&destination)?;
+        let path = file.path().to_string_lossy().into_owned();
+        let file_name = file
+            .path()
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "website.desegnos".into());
+        let different = failure
+            .actual
+            .as_ref()
+            .is_some_and(|actual| actual.project_id != project.id);
+        let can_replace = failure.actual.is_some() && (!different || save_as);
+        let message = if different && save_as {
+            format!("{file_name} is a different project. Replace it?")
+        } else {
+            failure.message
+        };
+        let token = Uuid::new_v4();
+        let conflict = SaveConflict {
+            token,
+            kind: if different {
+                SaveFailureKind::DifferentProject
+            } else {
+                failure.kind
+            },
+            path,
+            file_name,
+            message,
+            default_choice: if different { "cancel" } else { "copy" },
+            can_replace,
+            details: SaveConflictDetails {
+                expected: failure.expected,
+                actual: failure.actual.clone(),
+            },
+        };
+        self.pending_save = Some(PendingSaveConflict {
+            token,
+            project_id: project.id,
+            revision: project.revision,
+            destination,
+            actual: failure.actual,
+            can_replace,
+            save_as,
+        });
+        Ok(SaveProjectOutcome::Conflict { conflict })
+    }
+
+    fn save_snapshot_checked(
+        &mut self,
+        project: &Project,
+        path: Option<PathBuf>,
+        save_as: bool,
+    ) -> NativeResult<SaveProjectOutcome> {
+        self.check_snapshot(project)?;
+        self.pending_save = None;
+        let destination = self.save_destination(path)?;
+        match self.destination_file(&destination)?.save_checked(project) {
+            Ok(()) => {
+                self.finish_save(project, destination)?;
+                Ok(SaveProjectOutcome::Saved {
+                    workspace: Box::new(self.view()),
+                })
+            }
+            Err(failure) => self.save_conflict(project, destination, *failure, save_as),
+        }
+    }
+
+    fn take_save_conflict(&mut self, token: Uuid) -> NativeResult<PendingSaveConflict> {
+        let pending = self
+            .pending_save
+            .as_ref()
+            .filter(|pending| pending.token == token)
+            .ok_or("This save choice expired. Save again.")?;
+        let current = self.project()?;
+        if current.id != pending.project_id || current.revision != pending.revision {
+            return Err("The project changed while this save choice was open. Save again.".into());
+        }
+        self.pending_save
+            .take()
+            .ok_or_else(|| "This save choice expired. Save again.".into())
+    }
+
+    fn cancel_save_conflict(&mut self, token: Uuid) -> NativeResult<()> {
+        if self
+            .pending_save
+            .as_ref()
+            .is_none_or(|pending| pending.token != token)
+        {
+            return Err("This save choice expired. Save again.".into());
+        }
+        self.pending_save = None;
+        Ok(())
+    }
+
+    fn replace_save_conflict(&mut self, token: Uuid) -> NativeResult<SaveProjectOutcome> {
+        let pending = self.take_save_conflict(token)?;
+        if !pending.can_replace {
+            return Err("This file cannot be replaced. Save a copy with a new name.".into());
+        }
+        let project = self.project()?.clone();
+        let observed = pending
+            .actual
+            .as_ref()
+            .ok_or("This file cannot be replaced. Save a copy with a new name.")?;
+        match self.destination_file(&pending.destination)?.save_replacing(
+            &project,
+            observed,
+            pending.save_as,
+        ) {
+            Ok(()) => {
+                self.finish_save(&project, pending.destination)?;
+                Ok(SaveProjectOutcome::Saved {
+                    workspace: Box::new(self.view()),
+                })
+            }
+            Err(failure) => {
+                self.save_conflict(&project, pending.destination, *failure, pending.save_as)
+            }
+        }
     }
 
     fn recover(&mut self, project_id: Option<Uuid>, discard: bool) -> NativeResult<()> {
@@ -548,7 +770,13 @@ impl Workspace {
             matches.then_some(file)
         });
         let saved_revision = file.as_ref().and(pointer.saved_revision);
-        self.activate(project, file, saved_revision, Some(ownership))?;
+        self.activate(
+            project,
+            file,
+            saved_revision,
+            Some(ownership),
+            pointer.project_path,
+        )?;
         if let Some(notice) = migration_notice {
             self.migration_notice = Some(notice.into());
             self.needs_migration_save = true;
@@ -1048,6 +1276,85 @@ pub async fn save_project(
     Ok(Some(state.view()))
 }
 
+async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Option<PathBuf>> {
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter(
+                "Desegnos website",
+                &desegni_storage::PROJECT_FILE_EXTENSIONS,
+            )
+            .set_file_name(suggested)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(message)?;
+    picked
+        .map(|picked| picked.into_path().map_err(message))
+        .transpose()
+}
+
+#[tauri::command]
+pub async fn save_project_checked(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+    save_as: bool,
+) -> NativeResult<SaveProjectOutcome> {
+    let (project, choose_path) = {
+        let mut state = state.lock().map_err(message)?;
+        state.pending_save = None;
+        (state.project()?.clone(), save_as || state.file.is_none())
+    };
+    let picked = if choose_path {
+        let Some(path) = choose_save_path(app, "website.desegnos".into()).await? else {
+            return Ok(SaveProjectOutcome::Cancelled);
+        };
+        Some(path)
+    } else {
+        None
+    };
+    state
+        .lock()
+        .map_err(message)?
+        .save_snapshot_checked(&project, picked, choose_path)
+}
+
+#[tauri::command]
+pub async fn resolve_save_conflict(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+    token: Uuid,
+    choice: SaveConflictChoice,
+) -> NativeResult<SaveProjectOutcome> {
+    match choice {
+        SaveConflictChoice::Replace => state.lock().map_err(message)?.replace_save_conflict(token),
+        SaveConflictChoice::Cancel => {
+            state.lock().map_err(message)?.cancel_save_conflict(token)?;
+            Ok(SaveProjectOutcome::Cancelled)
+        }
+        SaveConflictChoice::Copy => {
+            let (project, suggested) = {
+                let mut state = state.lock().map_err(message)?;
+                let pending = state.take_save_conflict(token)?;
+                let file = state.destination_file(&pending.destination)?;
+                let stem = file
+                    .path()
+                    .file_stem()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "website".into());
+                (state.project()?.clone(), format!("{stem}-copy.desegnos"))
+            };
+            let Some(path) = choose_save_path(app, suggested).await? else {
+                return Ok(SaveProjectOutcome::Cancelled);
+            };
+            state
+                .lock()
+                .map_err(message)?
+                .save_snapshot_checked(&project, Some(path), true)
+        }
+    }
+}
+
 #[tauri::command]
 pub fn prepare_requirements(state: WorkspaceState<'_>) -> NativeResult<RequirementsSnapshot> {
     let mut state = state.lock().map_err(message)?;
@@ -1464,7 +1771,12 @@ mod tests {
                 "corrupt" => fs::write(&path, b"Keep the damaged original").unwrap(),
                 "different" => {
                     let file = ProjectFile::acquire(&path).unwrap();
-                    file.save(&project("An unrelated actual project")).unwrap();
+                    let observed = {
+                        file.load_document().unwrap();
+                        file.stamp().unwrap().unwrap()
+                    };
+                    file.save_replacing(&project("An unrelated actual project"), &observed, true)
+                        .unwrap();
                 }
                 "changed" => {
                     let file = ProjectFile::acquire(&path).unwrap();
@@ -1476,12 +1788,14 @@ mod tests {
                             },
                         )
                         .unwrap();
+                    file.load_document().unwrap();
                     file.save(&external).unwrap();
                 }
                 "diverged" => {
                     let file = ProjectFile::acquire(&path).unwrap();
                     let mut external = original.clone();
                     external.name = "A divergent copy at the same revision".into();
+                    file.load_document().unwrap();
                     file.save(&external).unwrap();
                 }
                 _ => unreachable!(),
@@ -1582,6 +1896,249 @@ mod tests {
         assert!(restarted.session.as_ref().unwrap().project().show_grid);
         assert!(restarted.file.is_none());
         assert_eq!(fs::read(path).unwrap(), before);
+    }
+
+    fn external_project_file(
+        directory: &std::path::Path,
+        path: &std::path::Path,
+        project: &Project,
+    ) {
+        let source = directory.join(format!("external-{}.desegnos", Uuid::new_v4()));
+        let file = ProjectFile::acquire(&source).unwrap();
+        file.save(project).unwrap();
+        fs::copy(&source, path).unwrap();
+    }
+
+    fn conflict(outcome: SaveProjectOutcome) -> SaveConflict {
+        match outcome {
+            SaveProjectOutcome::Conflict { conflict } => conflict,
+            _ => panic!("expected a save conflict"),
+        }
+    }
+
+    #[test]
+    fn checked_save_requires_a_bound_choice_and_replaces_with_an_exact_backup() {
+        let temp = Temp::new();
+        let path = temp.0.join("site.desegnos");
+        let original = project("Original");
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.start(original.clone(), None, None).unwrap();
+        workspace
+            .save_snapshot(&original, Some(path.clone()))
+            .unwrap();
+        change_grid(&mut workspace);
+        let local = workspace.project().unwrap().clone();
+        let mut external = original.clone();
+        external.name = "External edit at the same revision".into();
+        external_project_file(&temp.0, &path, &external);
+        let bytes = fs::read(&path).unwrap();
+        let journal_bytes = fs::read(workspace.journal.as_ref().unwrap().path()).unwrap();
+        let choice = conflict(
+            workspace
+                .save_snapshot_checked(&local, None, false)
+                .unwrap(),
+        );
+        assert_eq!(choice.kind, SaveFailureKind::Changed);
+        assert_eq!(choice.default_choice, "copy");
+        assert!(choice.can_replace);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            fs::read(workspace.journal.as_ref().unwrap().path()).unwrap(),
+            journal_bytes
+        );
+        let shape = serde_json::to_value(&choice).unwrap();
+        assert_eq!(shape["fileName"], "site.desegnos");
+        assert!(shape["details"]["actual"]["manifestSha256"].is_string());
+        assert!(matches!(
+            workspace.replace_save_conflict(choice.token).unwrap(),
+            SaveProjectOutcome::Saved { .. }
+        ));
+        assert_eq!(desegni_storage::load_project(&path).unwrap(), local);
+        assert_eq!(
+            fs::read(path.with_file_name("site.desegnos.previous")).unwrap(),
+            bytes
+        );
+        assert!(!workspace.view().dirty);
+        assert!(workspace.replace_save_conflict(choice.token).is_err());
+    }
+
+    #[test]
+    fn changing_the_file_again_invalidates_the_replace_token_and_offers_a_new_choice() {
+        let temp = Temp::new();
+        let path = temp.0.join("site.desegnos");
+        let original = project("Original");
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.start(original.clone(), None, None).unwrap();
+        workspace
+            .save_snapshot(&original, Some(path.clone()))
+            .unwrap();
+        let mut external = original.clone();
+        external.name = "First external change".into();
+        external_project_file(&temp.0, &path, &external);
+        let first = conflict(
+            workspace
+                .save_snapshot_checked(&original, None, false)
+                .unwrap(),
+        );
+        external.name = "Second external change".into();
+        external_project_file(&temp.0, &path, &external);
+        let bytes = fs::read(&path).unwrap();
+        let second = conflict(workspace.replace_save_conflict(first.token).unwrap());
+        assert_ne!(first.token, second.token);
+        assert_ne!(first.details.actual, second.details.actual);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert!(workspace.replace_save_conflict(first.token).is_err());
+        workspace.cancel_save_conflict(second.token).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn save_as_into_a_different_project_requires_an_in_app_confirmation_but_save_never_allows_it() {
+        let temp = Temp::new();
+        let target = temp.0.join("someone-elses.desegnos");
+        let other = project("Different project");
+        external_project_file(&temp.0, &target, &other);
+        let bytes = fs::read(&target).unwrap();
+        let original = project("My project");
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.start(original.clone(), None, None).unwrap();
+        assert!(
+            workspace
+                .save_snapshot(&original, Some(target.clone()))
+                .is_err()
+        );
+        let choice = conflict(
+            workspace
+                .save_snapshot_checked(&original, Some(target.clone()), true)
+                .unwrap(),
+        );
+        assert_eq!(choice.kind, SaveFailureKind::DifferentProject);
+        assert_eq!(choice.default_choice, "cancel");
+        assert!(choice.can_replace);
+        assert_eq!(
+            choice.message,
+            "someone-elses.desegnos is a different project. Replace it?"
+        );
+        assert_eq!(fs::read(&target).unwrap(), bytes);
+        workspace.replace_save_conflict(choice.token).unwrap();
+        assert_eq!(workspace.file.as_ref().unwrap().path(), target);
+        assert_eq!(
+            fs::read(target.with_file_name("someone-elses.desegnos.previous")).unwrap(),
+            bytes
+        );
+        external_project_file(&temp.0, &target, &other);
+        let blocked = conflict(
+            workspace
+                .save_snapshot_checked(&original, None, false)
+                .unwrap(),
+        );
+        assert!(!blocked.can_replace);
+        assert!(workspace.replace_save_conflict(blocked.token).is_err());
+        assert_eq!(desegni_storage::load_project(&target).unwrap(), other);
+    }
+
+    #[test]
+    fn a_local_edit_expires_replace_but_cancel_and_copy_cancellation_preserve_recovery() {
+        let temp = Temp::new();
+        let path = temp.0.join("site.desegnos");
+        let original = project("Original");
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.start(original.clone(), None, None).unwrap();
+        workspace
+            .save_snapshot(&original, Some(path.clone()))
+            .unwrap();
+        change_grid(&mut workspace);
+        let local = workspace.project().unwrap().clone();
+        let mut external = original.clone();
+        external.name = "External change".into();
+        external_project_file(&temp.0, &path, &external);
+        let choice = conflict(
+            workspace
+                .save_snapshot_checked(&local, None, false)
+                .unwrap(),
+        );
+        change_grid(&mut workspace);
+        assert!(workspace.replace_save_conflict(choice.token).is_err());
+        workspace.cancel_save_conflict(choice.token).unwrap();
+        let current = workspace.project().unwrap().clone();
+        let choice = conflict(
+            workspace
+                .save_snapshot_checked(&current, None, false)
+                .unwrap(),
+        );
+        let journal_path = workspace.journal.as_ref().unwrap().path().to_owned();
+        let journal_bytes = fs::read(&journal_path).unwrap();
+        let pointer_bytes = fs::read(workspace.pointer_path(original.id)).unwrap();
+        // Copy consumes the pending choice, then a dismissed file dialog does nothing further.
+        workspace.take_save_conflict(choice.token).unwrap();
+        assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
+        assert_eq!(
+            fs::read(workspace.pointer_path(original.id)).unwrap(),
+            pointer_bytes
+        );
+        assert!(workspace.view().dirty);
+        drop(workspace);
+        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+        assert_eq!(restarted.recoveries.len(), 1);
+        assert_eq!(
+            restarted.recoveries[0].info.saved_path.as_deref(),
+            path.to_str()
+        );
+        assert!(restarted.recoveries[0].info.edited_at_ms > 0);
+        assert_eq!(
+            restarted
+                .read_recovery(original.id)
+                .unwrap()
+                .unwrap()
+                .0
+                .project,
+            current
+        );
+        let mut recovered = restarted;
+        recovered.recover(Some(original.id), false).unwrap();
+        assert!(recovered.file.is_none());
+        drop(recovered);
+        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+        assert_eq!(
+            restarted.recoveries[0].info.saved_path.as_deref(),
+            path.to_str()
+        );
+    }
+
+    #[test]
+    fn unreadable_destinations_are_not_replaceable_and_successful_copy_keeps_the_external_file() {
+        let temp = Temp::new();
+        let path = temp.0.join("not-a-project.desegnos");
+        fs::write(&path, b"Keep this original document").unwrap();
+        let original = project("My unsaved project");
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.start(original.clone(), None, None).unwrap();
+        let choice = conflict(
+            workspace
+                .save_snapshot_checked(&original, Some(path.clone()), true)
+                .unwrap(),
+        );
+        assert_eq!(choice.kind, SaveFailureKind::Unreadable);
+        assert!(!choice.can_replace);
+        assert_eq!(choice.default_choice, "copy");
+        workspace.take_save_conflict(choice.token).unwrap();
+        let copy = temp.0.join("my-copy.desegnos");
+        assert!(matches!(
+            workspace
+                .save_snapshot_checked(&original, Some(copy.clone()), true)
+                .unwrap(),
+            SaveProjectOutcome::Saved { .. }
+        ));
+        assert_eq!(fs::read(path).unwrap(), b"Keep this original document");
+        assert_eq!(desegni_storage::load_project(&copy).unwrap(), original);
+        assert!(!workspace.view().dirty);
+        drop(workspace);
+        assert!(
+            Workspace::from_directory(temp.0.clone())
+                .unwrap()
+                .recoveries
+                .is_empty()
+        );
     }
 
     const SCHEMA_ONE: &[u8] = include_bytes!(
