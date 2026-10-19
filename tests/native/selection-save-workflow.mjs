@@ -8,7 +8,11 @@ import {chooseFile, savedState, verifyArchive} from './file-dialog-workflow.mjs'
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const workspace=driver=>driver.invoke('get_workspace');
 async function ready(driver){await waitFor(()=>driver.execute(()=>document.querySelector('.static-preview')?.dataset.previewReady==='true'),'Canvas did not finish rendering');}
-async function point(driver,selector){return driver.execute(query=>{const f=document.querySelector('.static-preview iframe'),r=f.contentDocument.querySelector(query).getBoundingClientRect(),b=f.getBoundingClientRect(),z=Number(document.querySelector('[data-testid="canvas"]').dataset.zoom);return{x:b.x+(r.x+r.width/2)*z,y:b.y+(r.y+r.height/2)*z};},selector);}
+async function point(driver,selector){
+ await driver.executeAsync(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true)))));
+ let previous;
+ return waitFor(async()=>{const value=await driver.execute(query=>{const f=document.querySelector('.static-preview iframe'),r=f.contentDocument.querySelector(query).getBoundingClientRect(),b=f.getBoundingClientRect(),z=Number(document.querySelector('[data-testid="canvas"]').dataset.zoom);return{x:b.x+(r.x+r.width/2)*z,y:b.y+(r.y+r.height/2)*z};},selector);const stable=previous&&Math.abs(previous.x-value.x)<0.1&&Math.abs(previous.y-value.y)<0.1;previous=value;return stable&&value;},'Canvas did not settle before trusted selection');
+}
 async function select(driver,physical,selector,extra=false){await physical.raw({action:'click',point:physical.rootPoint(await point(driver,selector)),modifiers:extra?['Shift']:[]});}
 function externalArchive(path,indent,destination=path,different=false){
   const result=spawnSync('/usr/bin/python3',['-c',`import json,sys,uuid,zipfile,hashlib,os
@@ -90,7 +94,7 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
   await driver.click(`${stale} button:first-of-type`);await select(driver,physical,'#action');
   await waitFor(async()=>{const next=(await workspace(driver)).project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId);return next.elements.length===1&&next.elements[0].tag==='button';},'Pick again did not retarget the original request');
   assert.equal((await workspace(driver)).project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId).prompt,request.prompt);
-  await driver.button('Undo last change');await driver.ready(stale);await driver.click(`${stale} button:last-of-type`);
+  await driver.button('Undo last change');await driver.ready(stale);await driver.click(`${stale} button:last-of-type`);await driver.button('Remove');
   await waitFor(async()=>!(await workspace(driver)).project.pages.find(p=>p.id===about).regions.some(r=>r.id===multiId),'Remove request did not remove only the stale request');
   await driver.button('Undo last change');await driver.button('Undo last change');await ready(driver);
   assert.deepEqual((await workspace(driver)).project.pages,before.project.pages);
