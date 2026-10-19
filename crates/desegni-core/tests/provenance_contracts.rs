@@ -1,11 +1,15 @@
+mod support;
 use desegni_core::*;
+use support::without_editor_ids;
 fn project() -> Project {
-    serde_json::from_value(
+    let mut project: Project = serde_json::from_value(
         serde_json::from_str::<serde_json::Value>(include_str!("fixtures/requirements8.json"))
             .unwrap()["project"]
             .clone(),
     )
-    .unwrap()
+    .unwrap();
+    project.schema_version = SCHEMA_VERSION;
+    project
 }
 #[test]
 fn found_metadata_survives_generation_and_serialization_but_export_keeps_only_public_credits() {
@@ -41,14 +45,18 @@ fn found_metadata_survives_generation_and_serialization_but_export_keeps_only_pu
         .apply_generation(&snapshot, &candidate, &[])
         .unwrap();
     let restored: Project = serde_json::from_slice(&serde_json::to_vec(&applied).unwrap()).unwrap();
-    assert_eq!(restored.pages[0].content.as_ref().unwrap(), &content);
+    let restored_content = restored.pages[0].content.as_ref().unwrap();
+    assert_eq!(without_editor_ids(&restored_content.html), content.html);
+    assert_eq!(restored_content.css, content.css);
+    assert_eq!(restored_content.javascript, content.javascript);
     let found = content.found_sources().unwrap();
     assert_eq!(found.len(), 2);
     let target = ElementTarget {
+        id: String::new(),
         selector: found[0].selector.clone(),
         tag: "h1".into(),
         label: "A real place".into(),
-        source_sha256: content.sha256().unwrap(),
+        source_sha256: restored_content.sha256().unwrap(),
     };
     assert_eq!(
         restored
@@ -103,7 +111,7 @@ fn capabilities_are_frozen_without_granting_search_to_an_adapter_that_lacks_it()
             image_downloads: 8,
         })
         .unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 9);
+    assert_eq!(snapshot.format_version().unwrap(), 10);
     assert!(snapshot.markdown.contains("\"webSearch\": false"));
     assert!(
         !snapshot
@@ -148,6 +156,7 @@ fn local_replacements_clear_origin_metadata_while_style_only_edits_preserve_it()
         ),
     ] {
         let target = ElementTarget {
+            id: String::new(),
             selector: format!("body > main:nth-of-type(1) > {tag}:nth-of-type(1)"),
             tag: tag.into(),
             label: tag.into(),

@@ -33,6 +33,9 @@ impl DecodedProject {
             3 => Some(CANVAS_MIGRATION_NOTICE),
             4 => Some(ELEMENT_MIGRATION_NOTICE),
             5 => Some(IDENTITY_MIGRATION_NOTICE),
+            6 => Some(
+                "Your pages and requests are preserved. Element selections now stay attached while you edit. Save to upgrade this copy and keep the previous file as a backup.",
+            ),
             _ => None,
         }
     }
@@ -276,6 +279,8 @@ impl LegacyProject {
                             z_index: region.z_index,
                             prompt: region.prompt,
                             element: None,
+                            elements: vec![],
+                            allow_target_removal: false,
                             completed: false,
                         })
                         .collect(),
@@ -330,7 +335,7 @@ fn decode_source(
 ) -> Result<DecodedProject> {
     let header: SchemaHeader =
         serde_json::from_slice(bytes).map_err(|error| Error(error.to_string()))?;
-    match header.schema_version {
+    let mut decoded = match header.schema_version {
         1 => {
             let legacy: LegacyProject =
                 serde_json::from_slice(bytes).map_err(|error| Error(error.to_string()))?;
@@ -455,20 +460,22 @@ fn decode_source(
                 source_project_markdown,
             })
         }
-        SCHEMA_VERSION => {
-            let project: Project =
+        6 | SCHEMA_VERSION => {
+            let mut project: Project =
                 serde_json::from_slice(bytes).map_err(|error| Error(error.to_string()))?;
+            let source = project.clone();
+            project.schema_version = SCHEMA_VERSION;
             project.validate()?;
             let source_project_markdown = project.project_markdown()?;
             let source_sha256 = verify_source(
-                &project,
+                &source,
                 &source_project_markdown,
                 expected_sha256,
                 expected_notes,
             )?;
             Ok(DecodedProject {
                 project,
-                source_schema_version: SCHEMA_VERSION,
+                source_schema_version: header.schema_version,
                 source_sha256,
                 source_project_markdown,
             })
@@ -477,5 +484,10 @@ fn decode_source(
             "This project uses an unsupported schema version. The original has not been changed."
                 .into(),
         )),
+    }?;
+    if decoded.source_schema_version < SCHEMA_VERSION {
+        decoded.project.assign_stable_targets()?;
     }
+    decoded.project.validate()?;
+    Ok(decoded)
 }

@@ -382,7 +382,8 @@ pub(crate) fn apply_layer_styles(
             "Pseudo-element styles can only be supplied when copying a layer.",
         )?;
         ensure(
-            style.target.source_sha256 == target.source_sha256,
+            !style.target.id.is_empty() && !target.id.is_empty()
+                || style.target.source_sha256 == target.source_sha256,
             "A layer changed. Select it again.",
         )?;
         let node = locate(doc, &style.target)?;
@@ -636,7 +637,7 @@ impl Project {
                     .as_ref()
                     .ok_or_else(|| Error("This page has no site to copy.".into()))?;
                 ensure(
-                    source.sha256()? == target.source_sha256,
+                    !target.id.is_empty() || source.sha256()? == target.source_sha256,
                     "The page changed. Select this layer again.",
                 )?;
                 let doc = parse(&source.html)?;
@@ -657,7 +658,8 @@ impl Project {
                 let mut bytes = 0_usize;
                 for style in visual_styles {
                     ensure(
-                        style.target.source_sha256 == target.source_sha256,
+                        !style.target.id.is_empty() && !target.id.is_empty()
+                            || style.target.source_sha256 == target.source_sha256,
                         "The page changed while copying this layer. Select it again.",
                     )?;
                     let node = locate(&doc, &style.target)?;
@@ -763,6 +765,8 @@ impl Project {
                 prompt: prompt.clone(),
                 z_index: 0,
                 element: None,
+                elements: vec![],
+                allow_target_removal: false,
                 completed: false,
             });
             for (rank, index) in order.into_iter().enumerate() {
@@ -820,6 +824,10 @@ impl Project {
             .map(|hash| tracked(&doc, page, hash))
             .transpose()?
             .unwrap_or_default();
+        let copied_nodes: Vec<_> = std::iter::once(root).chain(root.descendants_it()).collect();
+        for node in copied_nodes {
+            node.remove_attr(crate::ELEMENT_ID_ATTRIBUTE);
+        }
         let replacements = rewrite_ids(root, &ids(&doc), visual_styles)?;
         let css = pseudo_stylesheet(
             root,

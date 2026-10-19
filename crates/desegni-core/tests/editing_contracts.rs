@@ -1,5 +1,7 @@
+mod support;
 use desegni_core::*;
 use std::collections::BTreeMap;
+use support::without_editor_ids;
 
 fn project(html: &str) -> Project {
     let mut p = Project::new(
@@ -20,6 +22,7 @@ fn project(html: &str) -> Project {
 }
 fn selected(p: &Project, path: &str, tag: &str) -> ElementTarget {
     ElementTarget {
+        id: String::new(),
         selector: path.into(),
         tag: tag.into(),
         label: "Selected".into(),
@@ -53,10 +56,10 @@ fn direct_text_preserves_nested_markup_other_elements_css_and_javascript() {
     let (next, t) = p.edit_element(0, p.home_page_id, &t, &change).unwrap();
     let c = next.pages[0].content.as_ref().unwrap();
     assert!(
-        c.html
+        without_editor_ids(&c.html)
             .contains("<span>Create &lt;this&gt; &amp; café</span><em>now</em>")
     );
-    assert!(c.html.contains("<p>Untouched</p>"));
+    assert!(without_editor_ids(&c.html).contains("<p>Untouched</p>"));
     assert_eq!(c.css, p.pages[0].content.as_ref().unwrap().css);
     assert_eq!(
         c.javascript,
@@ -115,11 +118,7 @@ fn replace_and_reorder_table_rows_use_the_actual_parent_context() {
         .unwrap();
     let t = t.unwrap();
     assert!(
-        p.pages[0]
-            .content
-            .as_ref()
-            .unwrap()
-            .html
+        without_editor_ids(&p.pages[0].content.as_ref().unwrap().html)
             .contains("<tbody><tr><td>Replacement</td></tr>")
     );
     let (p, t) = p
@@ -134,11 +133,7 @@ fn replace_and_reorder_table_rows_use_the_actual_parent_context() {
         .unwrap();
     assert!(t.unwrap().selector.ends_with("tr:nth-of-type(2)"));
     assert!(
-        p.pages[0]
-            .content
-            .as_ref()
-            .unwrap()
-            .html
+        without_editor_ids(&p.pages[0].content.as_ref().unwrap().html)
             .contains("<td>Second</td></tr><tr><td>Replacement</td>")
     );
 }
@@ -163,11 +158,7 @@ fn svg_replacement_retains_namespace_and_html_round_trip() {
         .unwrap();
     assert_eq!(t.unwrap().tag, "rect");
     assert!(
-        p.pages[0]
-            .content
-            .as_ref()
-            .unwrap()
-            .html
+        without_editor_ids(&p.pages[0].content.as_ref().unwrap().html)
             .contains("viewBox=\"0 0 100 100\"")
     );
 }
@@ -233,23 +224,14 @@ fn pending_filled_prompts_follow_their_actual_nodes_after_reorder() {
     let r = &p.pages[0].regions[0];
     assert_eq!(r.prompt, "Keep this written request");
     assert!(!r.completed);
-    assert!(
-        r.element
-            .as_ref()
-            .unwrap()
-            .selector
-            .ends_with("p:nth-of-type(2)")
-    );
+    assert!(r.targets()[0].selector.ends_with("p:nth-of-type(2)"));
     p.prepare_requirements().unwrap();
-    assert!(
-        p.edit_element(
-            p.revision,
-            page,
-            r.element.as_ref().unwrap(),
-            &ElementEdit::Remove
-        )
-        .is_err()
-    );
+    let removed = p
+        .edit_element(p.revision, page, r.targets()[0], &ElementEdit::Remove)
+        .unwrap()
+        .0;
+    assert!(removed.prepare_requirements().is_err());
+    assert_eq!(removed.pages[0].regions[0].prompt, r.prompt);
 }
 #[test]
 fn deletion_archives_empty_prompts_but_preserves_their_stable_records() {
@@ -392,7 +374,7 @@ fn derived_positions_are_durable_source_bound_and_do_not_add_undo_steps() {
     .unwrap();
     assert_eq!(s.project(), &measured);
     let mut stale = bounds.clone();
-    stale.target.source_sha256 = t.source_sha256;
+    stale.target.id = "000000000000".into();
     assert!(
         s.refresh_element_bounds(page, p.viewport, &[stale], |_| Ok(()))
             .is_err()

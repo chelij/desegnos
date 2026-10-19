@@ -134,6 +134,23 @@ impl Session {
         Ok(())
     }
 
+    pub fn refresh_element_target_bounds(
+        &mut self,
+        page_id: uuid::Uuid,
+        viewport: crate::Viewport,
+        bounds: &[crate::ElementTargetBounds],
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<()> {
+        let next = self
+            .project
+            .refresh_element_target_bounds(page_id, viewport, bounds)?;
+        if next.revision != self.project.revision {
+            durable(&next)?;
+            self.project = next;
+        }
+        Ok(())
+    }
+
     pub fn apply_generation(
         &mut self,
         snapshot: &RequirementsSnapshot,

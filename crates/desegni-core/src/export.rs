@@ -86,7 +86,7 @@ pub fn compile_website(project: &Project) -> Result<WebsiteExport> {
             for attribute in node.attrs() {
                 let name = attribute.name.local.to_string();
                 let value = attribute.value.to_string();
-                if name == crate::FOUND_CONTENT_ATTRIBUTE {
+                if name == crate::FOUND_CONTENT_ATTRIBUTE || name == crate::ELEMENT_ID_ATTRIBUTE {
                     node.remove_attr(&name);
                 } else if name == "style" {
                     node.set_attr(&name, &compiler.css(&value, &path, &page.path)?);

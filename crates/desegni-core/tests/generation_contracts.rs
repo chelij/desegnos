@@ -1,6 +1,8 @@
+mod support;
 use desegni_core::*;
 use serde_json::{Value, json};
 use std::cell::Cell;
+use support::without_editor_ids;
 use uuid::Uuid;
 
 fn source(label: &str) -> SiteContent {
@@ -365,7 +367,7 @@ fn conflicts_and_unavailable_components_never_become_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 9"));
+    assert!(snapshot.markdown.contains("Requirements format: 10"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -472,12 +474,28 @@ fn selected_decisions_and_source_commit_together_without_replacing_accepted_iden
         .unwrap();
     assert_eq!(next.revision, project.revision + 1);
     assert_eq!(
-        next.pages[0].content,
-        Some(candidate.pages[0].content.clone())
+        without_editor_ids(&next.pages[0].content.as_ref().unwrap().html),
+        candidate.pages[0].content.html
     );
     assert_eq!(
-        next.pages[1].content,
-        Some(candidate.pages[1].content.clone())
+        next.pages[0].content.as_ref().unwrap().css,
+        candidate.pages[0].content.css
+    );
+    assert_eq!(
+        next.pages[0].content.as_ref().unwrap().javascript,
+        candidate.pages[0].content.javascript
+    );
+    assert_eq!(
+        without_editor_ids(&next.pages[1].content.as_ref().unwrap().html),
+        candidate.pages[1].content.html
+    );
+    assert_eq!(
+        next.pages[1].content.as_ref().unwrap().css,
+        candidate.pages[1].content.css
+    );
+    assert_eq!(
+        next.pages[1].content.as_ref().unwrap().javascript,
+        candidate.pages[1].content.javascript
     );
     assert_eq!(next.pages[2], project.pages[2]);
     assert_eq!(next.extensions, project.extensions);
@@ -637,6 +655,8 @@ fn source_candidate_and_requirements_limits_fail_without_truncation() {
     excessive.pages[0].regions = (0..MAX_GENERATION_REGIONS + 1)
         .map(|_| Region {
             element: None,
+            elements: vec![],
+            allow_target_removal: false,
             completed: false,
             id: Uuid::new_v4(),
             rect: excessive.pages[0].regions[0].rect,
@@ -1179,6 +1199,7 @@ fn element_requests_freeze_exact_source_and_selector_and_reject_stale_targets() 
     }
     let home = project.home_page_id;
     let element = ElementTarget {
+        id: String::new(),
         selector: "body > main:nth-of-type(1) > button:nth-of-type(1)".into(),
         tag: "button".into(),
         label: "Existing home".into(),
@@ -1227,6 +1248,7 @@ fn selecting_another_element_archives_only_empty_selections_and_preserves_ids_fo
     let (mut project, _, _) = fixture();
     let page_id = project.home_page_id;
     let element = ElementTarget {
+        id: String::new(),
         selector: "body".into(),
         tag: "body".into(),
         label: String::new(),
@@ -1268,6 +1290,7 @@ fn direct_local_source_edits_invalidate_an_already_frozen_generation() {
     let (project, snapshot, candidate) = fixture();
     let page = &project.pages[0];
     let target = ElementTarget {
+        id: String::new(),
         selector: "body > main:nth-of-type(1)".into(),
         tag: "main".into(),
         label: "Existing home".into(),
@@ -1306,6 +1329,7 @@ fn selected_element_generation_preserves_surrounding_content_in_both_modes() {
             "<main><button>Existing home</button><footer data-desegnos-region='f19de1f2-ec4c-425c-8813-284f77ed31b1'>Keep this exact footer</footer></main>"
                 .into();
         let target = ElementTarget {
+            id: String::new(),
             selector: "body > main:nth-of-type(1) > button:nth-of-type(1)".into(),
             tag: "button".into(),
             label: "Existing home".into(),

@@ -131,7 +131,7 @@ impl Project {
             .as_ref()
             .ok_or_else(|| crate::Error("This page has no content yet.".into()))?;
         ensure(
-            content.sha256()? == target.source_sha256,
+            !target.id.is_empty() || content.sha256()? == target.source_sha256,
             "The selected item changed. Select it again before opening its source.",
         )?;
         let doc = editing::parse(&content.html)?;

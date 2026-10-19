@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 pub const MAX_PAGES: usize = 100;
 pub const MAX_PROMPT_CHARS: usize = 16_384;
 
@@ -118,9 +118,12 @@ impl Rect {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementTarget {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
     pub selector: String,
     pub tag: String,
     pub label: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source_sha256: String,
 }
 
@@ -128,12 +131,17 @@ impl ElementTarget {
     pub fn validate(&self) -> Result<()> {
         validate_text(&self.label, "Element label", 240, false)?;
         ensure(
-            self.source_sha256.len() == 64
-                && self
-                    .source_sha256
-                    .bytes()
-                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()),
+            !self.id.is_empty()
+                || (self.source_sha256.len() == 64
+                    && self
+                        .source_sha256
+                        .bytes()
+                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())),
             "The selected element has an invalid source fingerprint.",
+        )?;
+        ensure(
+            self.id.is_empty() || crate::stable_targets::valid_id(&self.id),
+            "The selected element has an invalid editor ID.",
         )?;
         let parts: Vec<_> = self.selector.split(" > ").collect();
         ensure(
@@ -186,8 +194,25 @@ pub struct Region {
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element: Option<ElementTarget>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<ElementTarget>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_target_removal: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub completed: bool,
+}
+
+impl Region {
+    pub fn targets(&self) -> Vec<&ElementTarget> {
+        if self.elements.is_empty() {
+            self.element.iter().collect()
+        } else {
+            self.elements.iter().collect()
+        }
+    }
+    pub fn has_targets(&self) -> bool {
+        !self.elements.is_empty() || self.element.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -317,6 +342,30 @@ pub enum Command {
         page_id: Uuid,
         rect: Rect,
         element: ElementTarget,
+    },
+    AddElementRegions {
+        page_id: Uuid,
+        elements: Vec<ElementTarget>,
+        bounds: Vec<crate::TargetBounds>,
+        #[serde(default)]
+        allow_target_removal: bool,
+    },
+    RetargetRegion {
+        page_id: Uuid,
+        region_id: Uuid,
+        elements: Vec<ElementTarget>,
+        bounds: Vec<crate::TargetBounds>,
+        #[serde(default)]
+        allow_target_removal: bool,
+    },
+    SetRegionTargetRemoval {
+        page_id: Uuid,
+        region_id: Uuid,
+        allow_target_removal: bool,
+    },
+    DeleteElements {
+        page_id: Uuid,
+        elements: Vec<ElementTarget>,
     },
     UpdateRegion {
         page_id: Uuid,
@@ -451,6 +500,7 @@ impl Project {
             page.viewport.validate()?;
             if let Some(content) = &page.content {
                 content.validate()?;
+                crate::stable_targets::validate_ids(&crate::editing::parse(&content.html)?)?;
                 source_bytes += content.byte_len();
                 ensure(
                     source_bytes <= MAX_PROJECT_SOURCE_BYTES,
@@ -460,8 +510,21 @@ impl Project {
             for region in &page.regions {
                 ensure(ids.insert(region.id), "Area identifiers must be unique.")?;
                 region.rect.validate(page.viewport)?;
-                if let Some(element) = &region.element {
+                ensure(
+                    region.elements.len() <= 8,
+                    "A request supports at most eight selected elements.",
+                )?;
+                ensure(
+                    region.elements.is_empty() || region.element.is_none(),
+                    "A request cannot mix legacy and stable targets.",
+                )?;
+                let mut target_ids = BTreeSet::new();
+                for element in region.targets() {
                     element.validate()?;
+                    ensure(
+                        element.id.is_empty() || target_ids.insert(&element.id),
+                        "A selected element was supplied twice.",
+                    )?;
                 }
                 validate_text(&region.prompt, "Area description", MAX_PROMPT_CHARS, false)?;
             }
@@ -702,6 +765,8 @@ impl Project {
                     z_index,
                     prompt: String::new(),
                     element: None,
+                    elements: vec![],
+                    allow_target_removal: false,
                     completed: false,
                 });
             }
@@ -711,17 +776,8 @@ impl Project {
                 element,
             } => {
                 next.dismiss_empty_regions(None);
-                element.validate()?;
+                let canonical = next.canonical_targets(page_id, std::slice::from_ref(&element))?;
                 let page = next.page_mut(page_id)?;
-                ensure(
-                    page.content
-                        .as_ref()
-                        .map(SiteContent::sha256)
-                        .transpose()?
-                        .as_deref()
-                        == Some(&element.source_sha256),
-                    "The page changed. Select the element again.",
-                )?;
                 let z_index = page
                     .regions
                     .iter()
@@ -734,9 +790,75 @@ impl Project {
                     rect,
                     z_index,
                     prompt: String::new(),
-                    element: Some(element),
+                    element: None,
+                    elements: canonical,
+                    allow_target_removal: false,
                     completed: false,
                 });
+            }
+            Command::AddElementRegions {
+                page_id,
+                elements,
+                bounds,
+                allow_target_removal,
+            } => {
+                let targets = next.canonical_targets(page_id, &elements)?;
+                let rect = next.target_bounds_union(page_id, &targets, &bounds)?;
+                next.dismiss_empty_regions(None);
+                let page = next.page_mut(page_id)?;
+                let z_index = page
+                    .regions
+                    .iter()
+                    .map(|r| r.z_index)
+                    .max()
+                    .unwrap_or(-1)
+                    .saturating_add(1);
+                page.regions.push(Region {
+                    id: Uuid::new_v4(),
+                    rect,
+                    z_index,
+                    prompt: String::new(),
+                    element: None,
+                    elements: targets,
+                    allow_target_removal,
+                    completed: false,
+                });
+            }
+            Command::RetargetRegion {
+                page_id,
+                region_id,
+                elements,
+                bounds,
+                allow_target_removal,
+            } => {
+                let targets = next.canonical_targets(page_id, &elements)?;
+                let rect = next.target_bounds_union(page_id, &targets, &bounds)?;
+                let region = next
+                    .page_mut(page_id)?
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.id == region_id && !r.completed)
+                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                region.elements = targets;
+                region.element = None;
+                region.rect = rect;
+                region.allow_target_removal = allow_target_removal;
+            }
+            Command::SetRegionTargetRemoval {
+                page_id,
+                region_id,
+                allow_target_removal,
+            } => {
+                let region = next
+                    .page_mut(page_id)?
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.id == region_id && !r.completed && r.has_targets())
+                    .ok_or_else(|| Error("Select a request for existing elements first.".into()))?;
+                region.allow_target_removal = allow_target_removal;
+            }
+            Command::DeleteElements { page_id, elements } => {
+                return self.delete_elements(expected_revision, page_id, &elements);
             }
             Command::UpdateRegion {
                 page_id,

@@ -51,8 +51,41 @@ impl GenerationCandidate {
             return Ok(());
         }
         let targets = snapshot.target_ids()?;
+        let stable = snapshot.format_version()? >= 10;
         for page in &self.pages {
             let original = project.page(page.page_id)?;
+            if stable {
+                let known = original
+                    .content
+                    .as_ref()
+                    .map(|content| crate::editing::parse(&content.html))
+                    .transpose()?;
+                let before_ids: BTreeSet<_> = known
+                    .as_ref()
+                    .map(|doc| {
+                        doc.select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+                            .nodes()
+                            .iter()
+                            .filter_map(|node| {
+                                node.attr(crate::ELEMENT_ID_ATTRIBUTE)
+                                    .map(|id| id.to_string())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let incoming = crate::editing::parse(&page.content.html)?;
+                crate::stable_targets::validate_ids(&incoming)?;
+                for node in incoming
+                    .select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+                    .nodes()
+                {
+                    ensure(
+                        node.attr(crate::ELEMENT_ID_ATTRIBUTE)
+                            .is_some_and(|id| before_ids.contains(id.as_ref())),
+                        "The AI assigned an editor ID to a new element. Your page is unchanged.",
+                    )?;
+                }
+            }
             let regions: Vec<_> = original
                 .regions
                 .iter()
@@ -60,7 +93,14 @@ impl GenerationCandidate {
                 .collect();
             // Rectangular requests on an existing page have no trustworthy mapping
             // to old DOM nodes. Do not invent one from labels or model claims.
-            let targeted = regions.iter().all(|region| region.element.is_some());
+            let targeted = regions.iter().all(|region| region.has_targets());
+            if stable
+                && regions.iter().any(|region| region.has_targets())
+                && original.content.is_some()
+            {
+                validate_stable_scope(original, &page.content, &regions)?;
+                continue;
+            }
             if original.content.is_some() && !targeted {
                 continue;
             }
@@ -131,4 +171,124 @@ impl GenerationCandidate {
         }
         Ok(())
     }
+}
+
+fn validate_stable_scope(
+    original: &crate::Page,
+    candidate: &crate::SiteContent,
+    regions: &[&crate::Region],
+) -> Result<()> {
+    let source = original.content.as_ref().expect("checked source");
+    ensure(
+        source.css == candidate.css && source.javascript == candidate.javascript,
+        "The AI changed shared styling or behavior outside the selected elements. Your page is unchanged.",
+    )?;
+    let before = crate::editing::parse(&source.html)?;
+    let after = crate::editing::parse(&candidate.html)?;
+    crate::stable_targets::validate_ids(&before)?;
+    crate::stable_targets::validate_ids(&after)?;
+    let new_areas: BTreeSet<_> = regions
+        .iter()
+        .filter(|region| !region.has_targets())
+        .map(|region| region.id)
+        .collect();
+    let mut area_roots = Vec::new();
+    let mut seen_areas = BTreeSet::new();
+    for node in after.select(&format!("[{MARKER}]")).nodes() {
+        if let Some(id) = node
+            .attr(MARKER)
+            .and_then(|value| Uuid::parse_str(&value).ok())
+            .filter(|id| new_areas.contains(id))
+        {
+            ensure(
+                seen_areas.insert(id),
+                "The AI repeated a requested area. Your page is unchanged.",
+            )?;
+            area_roots.push(*node);
+        }
+    }
+    ensure(
+        seen_areas == new_areas,
+        "The AI did not identify each requested area. Your page is unchanged.",
+    )?;
+    let targets: Vec<_> = regions
+        .iter()
+        .flat_map(|region| {
+            region
+                .targets()
+                .into_iter()
+                .map(|target| (target, region.allow_target_removal))
+        })
+        .collect();
+    let old_roots = targets
+        .iter()
+        .map(|(target, _)| crate::editing::locate(&before, target))
+        .collect::<Result<Vec<_>>>()?;
+    let new_roots = targets
+        .iter()
+        .map(
+            |(target, allowed)| match crate::editing::locate(&after, target) {
+                Ok(node) => Ok(Some(node)),
+                Err(_) if *allowed => Ok(None),
+                Err(_) => Err(crate::Error(
+                    "The AI removed a selected element. Your page is unchanged.".into(),
+                )),
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+    // Retained identities may not be smuggled in/out of another selected scope.
+    let before_ids: BTreeMap<_, _> = before
+        .select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+        .nodes()
+        .iter()
+        .filter_map(|node| {
+            node.attr(crate::ELEMENT_ID_ATTRIBUTE)
+                .map(|id| (id.to_string(), *node))
+        })
+        .collect();
+    for node in after
+        .select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+        .nodes()
+    {
+        let id = node
+            .attr(crate::ELEMENT_ID_ATTRIBUTE)
+            .expect("selected attr");
+        let previous = before_ids.get(id.as_ref()).ok_or_else(|| {
+            crate::Error(
+                "The AI assigned an editor ID to a new element. Your page is unchanged.".into(),
+            )
+        })?;
+        let old_scope = old_roots
+            .iter()
+            .position(|root| crate::stable_targets::contains(*root, *previous));
+        let new_scope = new_roots
+            .iter()
+            .position(|root| root.is_some_and(|root| crate::stable_targets::contains(root, *node)));
+        ensure(
+            old_scope == new_scope,
+            "The AI moved content outside its selected scope. Your page is unchanged.",
+        )?;
+    }
+    for area in &area_roots {
+        ensure(
+            !new_roots
+                .iter()
+                .flatten()
+                .any(|root| crate::stable_targets::contains(*area, *root)),
+            "The AI included a selected element inside a new area. Your page is unchanged.",
+        )?;
+    }
+    for root in old_roots {
+        root.remove_from_parent();
+    }
+    for root in new_roots.into_iter().flatten() {
+        root.remove_from_parent();
+    }
+    for root in area_roots {
+        root.remove_from_parent();
+    }
+    ensure(
+        canonical(crate::editing::body(&before)?) == canonical(crate::editing::body(&after)?),
+        "The AI changed content outside the selected elements. Your page is unchanged.",
+    )
 }

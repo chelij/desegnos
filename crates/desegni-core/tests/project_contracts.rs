@@ -447,7 +447,7 @@ fn one_global_generation_setting_controls_all_placement_hints_and_staleness() {
         "The contact form below the heading",
     );
     let fuzzy = p.prepare_requirements().unwrap();
-    assert!(fuzzy.markdown.contains("Requirements format: 9"));
+    assert!(fuzzy.markdown.contains("Requirements format: 10"));
     assert_eq!(fuzzy.markdown.matches("\"generationMode\"").count(), 1);
     assert_eq!(fuzzy.markdown.matches("\"placementHint\"").count(), 2);
     assert!(!fuzzy.markdown.contains("\"mode\""));

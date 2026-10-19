@@ -1,5 +1,7 @@
+mod support;
 use desegni_core::*;
 use std::cell::Cell;
+use support::without_editor_ids;
 fn project() -> Project {
     Project::new(
         "Typed website".into(),
@@ -24,7 +26,7 @@ fn source_edits_are_exact_atomic_one_step_and_no_ops_do_not_write() {
     let id = project.home_page_id;
     let mut session = Session::new(project.clone()).unwrap();
     let writes = Cell::new(0);
-    let change = edit(
+    let mut change = edit(
         "<main>\n  <h1 id='title'>Création 💡</h1>\n</main>\n",
         "h1 { color: blue; }",
         "document.querySelector('h1').title = 'Edited';",
@@ -43,9 +45,10 @@ fn source_edits_are_exact_atomic_one_step_and_no_ops_do_not_write() {
         .unwrap();
     let accepted = session.project().clone();
     assert_eq!(
-        accepted.pages[0].content.as_ref().unwrap().html,
+        without_editor_ids(&accepted.pages[0].content.as_ref().unwrap().html),
         change.html.clone().unwrap()
     );
+    change.html = Some(accepted.pages[0].content.as_ref().unwrap().html.clone());
     session
         .edit_page_source(accepted.revision, id, &change, |_| {
             writes.set(writes.get() + 1);
@@ -146,7 +149,10 @@ fn source_map_matches_nested_browser_selectors_and_utf16_columns_without_rewriti
         .edit_page_source(0, project.home_page_id, &edit(html, "", ""))
         .unwrap();
     let map = next.page_source_map(project.home_page_id).unwrap();
-    assert_eq!(map.html_sha256, digest(html.as_bytes()));
+    assert_eq!(
+        map.html_sha256,
+        digest(next.pages[0].content.as_ref().unwrap().html.as_bytes())
+    );
     let heading = map
         .ranges
         .iter()
@@ -163,7 +169,20 @@ fn source_map_matches_nested_browser_selectors_and_utf16_columns_without_rewriti
         .unwrap();
     assert_eq!(
         paragraph.start_column,
-        "  <h1>Création 💡</h1>".encode_utf16().count() + 1
+        next.pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split("<p")
+            .next()
+            .unwrap()
+            .encode_utf16()
+            .count()
+            + 1
     );
     assert!(map.ranges.iter().any(|range| {
         range
@@ -175,13 +194,17 @@ fn source_map_matches_nested_browser_selectors_and_utf16_columns_without_rewriti
             .selector
             .ends_with("g:nth-of-type(1) > path:nth-of-type(1)")
     }));
-    assert_eq!(next.pages[0].content.as_ref().unwrap().html, html);
+    assert_eq!(
+        without_editor_ids(&next.pages[0].content.as_ref().unwrap().html),
+        html
+    );
 }
 #[test]
 fn a_saved_format_eight_packet_still_validates_without_changing_its_bytes() {
     let golden: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/requirements8.json")).unwrap();
-    let project: Project = serde_json::from_value(golden["project"].clone()).unwrap();
+    let mut project: Project = serde_json::from_value(golden["project"].clone()).unwrap();
+    project.schema_version = SCHEMA_VERSION;
     let snapshot: RequirementsSnapshot =
         serde_json::from_value(golden["requirements"].clone()).unwrap();
     assert_eq!(snapshot.format_version().unwrap(), 8);
@@ -218,7 +241,10 @@ fn full_documents_comments_crlf_and_multiline_attributes_have_exact_ranges() {
         );
         assert_eq!(heading.end_line, heading.start_line + 1);
         assert!(!heading.implicit);
-        assert_eq!(next.pages[0].content.as_ref().unwrap().html, html);
+        assert_eq!(
+            without_editor_ids(&next.pages[0].content.as_ref().unwrap().html),
+            html
+        );
     }
     let p = project();
     let html = "<h1>Title</h1>\n<table>\n<tr><td>Cell</td></tr>\n</table>\n<footer>End</footer>";
@@ -236,7 +262,7 @@ fn full_documents_comments_crlf_and_multiline_attributes_have_exact_ranges() {
 }
 
 #[test]
-fn typed_source_remaps_identifiable_pending_requests_and_refuses_losing_written_prompts() {
+fn typed_source_preserves_stable_requests_and_removed_elements_become_stale() {
     let p = project();
     let home = p.home_page_id;
     let mut p = p
@@ -247,6 +273,7 @@ fn typed_source_remaps_identifiable_pending_requests_and_refuses_losing_written_
         )
         .unwrap();
     let target = ElementTarget {
+        id: String::new(),
         selector: "body > main:nth-of-type(1) > h1:nth-of-type(1)".into(),
         tag: "h1".into(),
         label: "Title".into(),
@@ -280,36 +307,33 @@ fn typed_source_remaps_identifiable_pending_requests_and_refuses_losing_written_
             },
         )
         .unwrap();
+    let previous = p.pages[0].content.as_ref().unwrap().html.clone();
+    let revised = previous
+        .replace("<h1", "<section><h1")
+        .replace("Title</h1>", "Revised</h1></section>");
     let next = p
-        .edit_page_source(
-            p.revision,
-            home,
-            &edit(
-                "<main><section><h1 id='title'>Revised</h1></section><p>Copy</p></main>",
-                "",
-                "",
-            ),
-        )
+        .edit_page_source(p.revision, home, &edit(&revised, "", ""))
         .unwrap();
     let remapped = &next.pages[0].regions[0];
     assert_eq!(remapped.prompt, "Keep this change request");
     assert!(
-        remapped
-            .element
-            .as_ref()
-            .unwrap()
+        remapped.targets()[0]
             .selector
             .contains("section:nth-of-type(1)")
     );
     assert_eq!(remapped.id, region_id);
-    assert!(
-        next.edit_page_source(
+    let removed = next
+        .edit_page_source(
             next.revision,
             home,
-            &edit("<main><p>Copy</p></main>", "", "")
+            &edit("<main><p>Copy</p></main>", "", ""),
         )
-        .is_err()
+        .unwrap();
+    assert_eq!(
+        removed.pages[0].regions[0].prompt,
+        "Keep this change request"
     );
+    assert!(removed.prepare_requirements().is_err());
     assert!(
         next.edit_page_source(
             next.revision,
@@ -323,4 +347,18 @@ fn typed_source_remaps_identifiable_pending_requests_and_refuses_losing_written_
         .is_err()
     );
     assert_eq!(next.pages[0].regions[0].prompt, "Keep this change request");
+}
+
+#[test]
+fn a_saved_format_nine_packet_reconstructs_without_changing_its_bytes() {
+    // Captured by the unmodified 19be5b4 core, before format 10 was introduced.
+    let golden: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/requirements9.json")).unwrap();
+    let mut project: Project = serde_json::from_value(golden["project"].clone()).unwrap();
+    project.schema_version = SCHEMA_VERSION;
+    let snapshot: RequirementsSnapshot =
+        serde_json::from_value(golden["requirements"].clone()).unwrap();
+    assert_eq!(snapshot.format_version().unwrap(), 9);
+    assert_eq!(snapshot.sha256, digest(snapshot.markdown.as_bytes()));
+    snapshot.validate_current(&project).unwrap();
 }

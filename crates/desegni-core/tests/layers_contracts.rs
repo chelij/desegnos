@@ -24,6 +24,7 @@ fn project(html: &str) -> Project {
 }
 fn selected(project: &Project, selector: &str, tag: &str) -> ElementTarget {
     ElementTarget {
+        id: String::new(),
         selector: selector.into(),
         tag: tag.into(),
         label: "Layer".into(),
@@ -113,6 +114,8 @@ fn request(
         z_index: rank,
         prompt: prompt.into(),
         element,
+        elements: vec![],
+        allow_target_removal: false,
         completed,
     });
     id
@@ -194,7 +197,7 @@ fn a_layer_style_batch_is_one_durable_edit_and_preserves_pending_element_targets
         after.pages[0].content.as_ref().unwrap().javascript,
         p.pages[0].content.as_ref().unwrap().javascript
     );
-    let tracked = after.pages[0].regions[0].element.as_ref().unwrap();
+    let tracked = after.pages[0].regions[0].targets()[0];
     assert_eq!(tracked.source_sha256, result.source_sha256);
     assert!(tracked.selector.ends_with("p:nth-of-type(2)"));
     assert_eq!(
@@ -773,7 +776,7 @@ fn element_paste_inserts_after_the_selected_sibling_and_remaps_existing_written_
             .ends_with("p:nth-of-type(2)")
     );
     let after = session.project().clone();
-    let tracked = after.pages[0].regions[0].element.as_ref().unwrap();
+    let tracked = after.pages[0].regions[0].targets()[0];
     assert!(tracked.selector.ends_with("p:nth-of-type(3)"));
     assert_eq!(
         after
@@ -1196,15 +1199,11 @@ fn copied_badges_decorations_and_markers_get_fresh_scoped_important_css_before_h
         .unwrap();
     let after = session.project().clone();
     let content = after.pages[0].content.as_ref().unwrap();
-    assert_eq!(selection.source_sha256, content.sha256().unwrap());
-    assert_eq!(
-        after.pages[0].regions[0]
-            .element
-            .as_ref()
-            .unwrap()
-            .source_sha256,
-        selection.source_sha256
-    );
+    assert!(!selection.id.is_empty());
+    after
+        .inspect_element(after.home_page_id, &selection)
+        .unwrap();
+    assert!(!after.pages[0].regions[0].targets()[0].id.is_empty());
     let doc = document(&after);
     let root_id = doc.select("section").attr("id").unwrap();
     let span_id = doc.select("span").attr("id").unwrap();
@@ -1253,10 +1252,7 @@ fn copied_badges_decorations_and_markers_get_fresh_scoped_important_css_before_h
     assert!(!rules.contains("#existing"));
     assert!(!rules.contains("url(#crop)"));
     after
-        .inspect_element(
-            after.home_page_id,
-            after.pages[0].regions[0].element.as_ref().unwrap(),
-        )
+        .inspect_element(after.home_page_id, after.pages[0].regions[0].targets()[0])
         .unwrap();
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().pages, destination.pages);

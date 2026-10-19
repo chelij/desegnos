@@ -21,6 +21,7 @@ fn main() {
             "cut_layer",
             "paste_layer",
             "refresh_element_bounds",
+            "refresh_element_target_bounds",
             "undo_project",
             "redo_project",
             "open_project",

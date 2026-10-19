@@ -480,7 +480,11 @@ impl Project {
                 .iter_mut()
                 .find(|existing| existing.id == page.page_id)
                 .ok_or_else(|| Error("A generated page no longer exists.".into()))?
-                .content = Some(page.content.clone());
+                .content = Some({
+                let mut content = page.content.clone();
+                content.html = crate::source::assign_editor_ids(&content.html)?;
+                content
+            });
         }
         for page in &mut next.pages {
             for region in &mut page.regions {
@@ -492,7 +496,7 @@ impl Project {
                         .pages
                         .iter()
                         .any(|target| target.page_id == page.id)
-                        && region.element.is_some()
+                        && region.has_targets()
                         && region.prompt.trim().is_empty())
                 {
                     region.completed = true;

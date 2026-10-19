@@ -1282,6 +1282,7 @@ fn direct_element_edits_survive_archive_reopen_recovery_and_exact_source_undo() 
     });
     let page = p.home_page_id;
     let target = ElementTarget {
+        id: String::new(),
         selector: "body > button:nth-of-type(1)".into(),
         tag: "button".into(),
         label: "Original".into(),
@@ -1424,6 +1425,7 @@ fn schema_five_integrity_notes_frozen_requirements_and_exact_backup_are_preserve
         javascript: String::new(),
     });
     let target = ElementTarget {
+        id: String::new(),
         selector: "body > h1:nth-of-type(1)".into(),
         tag: "h1".into(),
         label: "Existing site".into(),

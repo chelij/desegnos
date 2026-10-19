@@ -107,7 +107,24 @@ pub(crate) fn body(doc: &Document) -> Result<NodeRef<'_>> {
 }
 pub(crate) fn locate<'a>(doc: &'a Document, target: &ElementTarget) -> Result<NodeRef<'a>> {
     target.validate()?;
+    if !target.id.is_empty() {
+        let nodes = doc.select(&format!(
+            "[{}=\"{}\"]",
+            crate::ELEMENT_ID_ATTRIBUTE,
+            target.id
+        ));
+        ensure(nodes.nodes().len() == 1, "This element was removed.")?;
+        return Ok(nodes.nodes()[0]);
+    }
     let mut node = body(doc)?;
+    // Legacy positional targets are only meaningful on a page without editor identities.
+    ensure(
+        doc.select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+            .nodes()
+            .is_empty()
+            || target.source_sha256.len() == 64,
+        "This element was removed.",
+    )?;
     for part in target.selector.split(" > ").skip(1) {
         let (tag, index) = part
             .split_once(":nth-of-type(")
@@ -187,7 +204,12 @@ fn text_nodes(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
     result
 }
 pub(crate) fn target(node: NodeRef<'_>, body: NodeRef<'_>, hash: &str) -> Option<ElementTarget> {
+    let id = node
+        .attr(crate::ELEMENT_ID_ATTRIBUTE)
+        .map(|v| v.to_string())
+        .unwrap_or_default();
     let result = ElementTarget {
+        id: id.clone(),
         selector: selector(node, body)?,
         tag: node.node_name()?.to_string(),
         label: text_nodes(node)
@@ -201,7 +223,11 @@ pub(crate) fn target(node: NodeRef<'_>, body: NodeRef<'_>, hash: &str) -> Option
             .chars()
             .take(240)
             .collect(),
-        source_sha256: hash.into(),
+        source_sha256: if id.is_empty() {
+            hash.into()
+        } else {
+            String::new()
+        },
     };
     result.validate().ok()?;
     Some(result)
@@ -250,14 +276,10 @@ pub(crate) fn tracked<'a>(
 ) -> Result<Vec<(Uuid, NodeRef<'a>)>> {
     page.regions
         .iter()
-        .filter(|region| {
-            !region.completed
-                && region
-                    .element
-                    .as_ref()
-                    .is_some_and(|element| element.source_sha256 == hash)
-        })
-        .map(|region| Ok((region.id, locate(doc, region.element.as_ref().unwrap())?)))
+        .filter(|r| !r.completed)
+        .flat_map(|r| r.targets().into_iter().map(move |t| (r.id, t)))
+        .filter(|(_, target)| !target.id.is_empty() || target.source_sha256 == hash)
+        .filter_map(|(id, target)| locate(doc, target).ok().map(|node| Ok((id, node))))
         .collect()
 }
 
@@ -274,7 +296,7 @@ impl Project {
             .as_ref()
             .ok_or_else(|| Error("Generate a page before selecting its elements.".into()))?;
         ensure(
-            content.sha256()? == selected.source_sha256,
+            !selected.id.is_empty() || content.sha256()? == selected.source_sha256,
             "The page changed. Select this element again.",
         )?;
         let doc = parse(&content.html)?;
@@ -286,7 +308,8 @@ impl Project {
             .filter(|(_, node)| !node.text().trim().is_empty())
             .collect::<Vec<_>>();
         Ok(ElementDetails {
-            target: selected.clone(),
+            target: target(node, body(&doc)?, &content.sha256()?)
+                .ok_or_else(|| Error("This item cannot be selected.".into()))?,
             texts: editable
                 .iter()
                 .take(64)
@@ -335,7 +358,7 @@ impl Project {
             .as_ref()
             .ok_or_else(|| Error("This page has no site to edit.".into()))?;
         ensure(
-            original.sha256()? == selected.source_sha256,
+            !selected.id.is_empty() || original.sha256()? == selected.source_sha256,
             "The page changed. Select this element again.",
         )?;
         let doc = parse(&original.html)?;
@@ -458,6 +481,9 @@ impl Project {
                     "Replacement must contain exactly one element.",
                 )?;
                 let replacement = children[0];
+                if let Some(id) = node.attr(crate::ELEMENT_ID_ATTRIBUTE) {
+                    replacement.set_attr(crate::ELEMENT_ID_ATTRIBUTE, &id);
+                }
                 if *keep_style {
                     for name in ["id", "class", "style"] {
                         if !replacement.has_attr(name)
@@ -524,6 +550,7 @@ impl Project {
         css: Option<String>,
     ) -> Result<(Self, Option<ElementTarget>)> {
         bounded(doc)?;
+        crate::stable_targets::assign_document_ids(doc)?;
         let html = serialized(doc)?;
         ensure(
             serialized(&parse(&html)?)? == html,
@@ -554,21 +581,45 @@ impl Project {
             .find(|page| page.id == page_id)
             .unwrap();
         page.content = Some(content);
+        let mut refreshed = BTreeMap::<Uuid, Vec<ElementTarget>>::new();
         for (id, node) in tracked {
-            let region = page
-                .regions
-                .iter_mut()
-                .find(|region| region.id == id)
-                .unwrap();
             if let Some(target) = target(node, body, &hash) {
-                region.element = Some(target);
-            } else {
-                ensure(
-                    region.prompt.trim().is_empty(),
-                    "This edit would remove an item with a written request. Remove that request first, or keep the item.",
-                )?;
+                refreshed.entry(id).or_default().push(target);
+            }
+        }
+        for region in page
+            .regions
+            .iter_mut()
+            .filter(|r| !r.completed && r.has_targets())
+        {
+            let previous: Vec<_> = region.targets().into_iter().cloned().collect();
+            let actual = refreshed.remove(&region.id).unwrap_or_default();
+            let lost = actual.is_empty();
+            region.elements = previous
+                .into_iter()
+                .enumerate()
+                .map(|(index, old)| {
+                    if old.id.is_empty() {
+                        actual.get(index).cloned().unwrap_or(old)
+                    } else {
+                        actual
+                            .iter()
+                            .find(|new| old.id == new.id)
+                            .cloned()
+                            .unwrap_or(old)
+                    }
+                })
+                .collect();
+            if region.prompt.trim().is_empty()
+                && (lost
+                    || region
+                        .elements
+                        .iter()
+                        .all(|target| locate(doc, target).is_err()))
+            {
                 region.completed = true;
             }
+            region.element = None;
         }
         let selected = retained.and_then(|node| target(node, body, &hash));
         next.validate()?;
@@ -626,8 +677,9 @@ impl Project {
                 .ok_or_else(|| Error("This request no longer exists.".into()))?;
             ensure(
                 !region.completed
-                    && region.element.as_ref() == Some(&value.target)
-                    && value.target.source_sha256 == hash,
+                    && region.targets().len() == 1
+                    && region.targets()[0].id == value.target.id
+                    && (!value.target.id.is_empty() || value.target.source_sha256 == hash),
                 "The page changed before its element positions were recorded.",
             )?;
             if region.rect != value.rect {

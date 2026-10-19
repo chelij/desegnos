@@ -1,5 +1,7 @@
+mod support;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegni_core::*;
+use support::without_editor_ids;
 use uuid::Uuid;
 
 fn blank() -> Project {
@@ -202,7 +204,7 @@ fn requirements_reference_original_identity_images_without_transcribing_their_by
     assert!(markdown.contains(&imported.assets[0].id.to_string()));
     assert!(!markdown.contains("data:image/"));
     let snapshot = project.prepare_requirements().unwrap();
-    assert!(snapshot.markdown.contains("Requirements format: 9"));
+    assert!(snapshot.markdown.contains("Requirements format: 10"));
     assert!(!snapshot.markdown.contains(&imported.assets[0].data_uri));
     assert!(
         snapshot
@@ -240,7 +242,7 @@ fn requirements_reference_original_identity_images_without_transcribing_their_by
             .prepare_requirements()
             .unwrap()
             .markdown
-            .contains("Requirements format: 9")
+            .contains("Requirements format: 10")
     );
 }
 
@@ -428,7 +430,10 @@ fn stable_project_image_references_resolve_exactly_export_and_undo_without_trans
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().pages, project.pages);
     session.redo(|_| Ok(())).unwrap();
-    assert_eq!(session.project().pages[0].content.as_ref(), Some(&expected));
+    let restored = session.project().pages[0].content.as_ref().unwrap();
+    assert_eq!(without_editor_ids(&restored.html), expected.html);
+    assert_eq!(restored.css, expected.css);
+    assert_eq!(restored.javascript, expected.javascript);
 }
 
 #[test]

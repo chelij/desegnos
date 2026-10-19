@@ -1155,6 +1155,29 @@ pub fn refresh_element_bounds(
 }
 
 #[tauri::command]
+pub fn refresh_element_target_bounds(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    viewport: Viewport,
+    bounds: Vec<desegni_core::ElementTargetBounds>,
+) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let session = session.as_mut().ok_or("Open a project first.")?;
+    if session.project().id != project_id {
+        return Err("Return to the project that owns these requests.".into());
+    }
+    let journal = journal.as_ref().ok_or("Open a project first.")?;
+    session
+        .refresh_element_target_bounds(page_id, viewport, &bounds, |next| journal.append(next))
+        .map_err(message)?;
+    Ok(state.view())
+}
+
+#[tauri::command]
 pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {

@@ -98,6 +98,7 @@ fn main() {
             edit_project,
             inspect_element,
             refresh_element_bounds,
+            refresh_element_target_bounds,
             edit_element,
             edit_page_source,
             get_page_source_map,
