@@ -64,12 +64,16 @@ fn snapshot(project: &Project, selector: &str) -> Vec<ElementStyleEdit> {
     std::iter::once(root)
         .chain(root.descendants_it().filter(|node| node.is_element()))
         .map(|node| {
-            let mut style = "display: block; color: rgb(255, 0, 0); translate: none;".to_string();
+            // The browser snapshot promotes every measured property so copied
+            // appearance survives destination author rules.
+            let mut style =
+                "display: block !important; color: rgb(255, 0, 0) !important; translate: none !important;"
+                    .to_string();
             if node.attr("id").as_deref() == Some("panel") {
-                style.push_str("translate: 10px 20px;");
+                style.push_str("translate: 10px 20px !important;");
             }
             if node.attr("id").as_deref() == Some("shape") {
-                style.push_str("clip-path: url(#crop);");
+                style.push_str("clip-path: url(#crop) !important;");
             }
             ElementStyleEdit {
                 target: node_target(node, project),
@@ -512,6 +516,110 @@ fn a_request_clipboard_is_portable_fresh_and_does_not_copy_element_or_history_me
     assert_eq!(session.project().pages, destination.pages);
     session.redo(|_| Ok(())).unwrap();
     assert_eq!(session.project().pages, after.pages);
+}
+
+#[test]
+fn all_important_browser_snapshots_validate_serialize_and_copy_without_style_growth() {
+    let source = project(
+        "<section id='card'><button type='button'>Continue<span>Next</span></button></section>",
+    );
+    let before = source.clone();
+    let computed = concat!(
+        "display: block !important; position: relative !important; box-sizing: border-box !important;",
+        "width: 240px !important; height: 80px !important; min-width: 0px !important; max-width: none !important;",
+        "color: rgb(20, 30, 40) !important; background-color: rgb(245, 245, 245) !important;",
+        "border-top-width: 1px !important; border-right-width: 1px !important; border-bottom-width: 1px !important; border-left-width: 1px !important;",
+        "border-top-style: solid !important; border-right-style: solid !important; border-bottom-style: solid !important; border-left-style: solid !important;",
+        "border-top-color: rgb(100, 100, 100) !important; border-right-color: rgb(100, 100, 100) !important; border-bottom-color: rgb(100, 100, 100) !important; border-left-color: rgb(100, 100, 100) !important;",
+        "padding-top: 8px !important; padding-right: 12px !important; padding-bottom: 8px !important; padding-left: 12px !important;",
+        "margin-top: 0px !important; margin-right: 0px !important; margin-bottom: 0px !important; margin-left: 0px !important;",
+        "font-family: system-ui !important; font-size: 16px !important; font-weight: 400 !important; line-height: 24px !important;",
+        "opacity: 1 !important; z-index: auto !important; transform: none !important; translate: none !important;",
+        "animation-name: none !important; animation-play-state: running !important; transition-property: all !important; transition-duration: 0s !important;",
+        "visibility: visible !important; pointer-events: auto !important; --Brand: #224466 !important;"
+    );
+    let capture = |source: &Project| {
+        let mut styles = snapshot(source, "body > section:nth-of-type(1)");
+        for style in &mut styles {
+            style.style = computed.into();
+        }
+        source
+            .copy_layer(
+                source.home_page_id,
+                &LayerTarget::Element {
+                    target: selected(source, "body > section:nth-of-type(1)", "section"),
+                },
+                &styles,
+            )
+            .unwrap()
+    };
+    let clipboard = capture(&source);
+    assert_eq!(source, before);
+    let LayerClipboardContent::Element { html, .. } = &clipboard.content else {
+        panic!("Expected a complete visual element packet");
+    };
+    let baked = Document::from(format!("<body>{html}</body>"));
+    for node in baked.select("section, button, span").nodes() {
+        assert_eq!(node.attr("style").unwrap().matches("display:").count(), 1);
+    }
+    for _ in 0..3 {
+        let json = clipboard.to_json().unwrap();
+        assert_eq!(LayerClipboard::from_json(&json).unwrap(), clipboard);
+        assert_eq!(capture(&project(html)).content, clipboard.content);
+    }
+    let destination = project("");
+    let (pasted, selection) = destination
+        .paste_layer(0, destination.home_page_id, &clipboard, None)
+        .unwrap();
+    pasted
+        .inspect_element(pasted.home_page_id, &selection.element.unwrap())
+        .unwrap();
+    assert_eq!(document(&pasted).select("button > span").length(), 1);
+}
+
+#[test]
+fn copied_original_important_rules_keep_shorthand_order_with_mixed_snapshot_priorities() {
+    let source = project(
+        "<section style='border-left-color: blue !important; border: 2px solid red !important; color: navy !important; padding: 5px; --Ink: teal !important'>Content</section>",
+    );
+    let before = source.clone();
+    let mut styles = snapshot(&source, "body > section:nth-of-type(1)");
+    styles[0].style = concat!(
+        "color: rgb(0, 0, 128) !important; display: block; border-left-color: rgb(255, 0, 0) !important;",
+        "border-top-width: 2px !important; border-top-style: solid !important; border-top-color: rgb(255, 0, 0) !important;",
+        "padding-left: 5px; --Ink: teal !important; translate: none !important;"
+    )
+    .into();
+    let clipboard = source
+        .copy_layer(
+            source.home_page_id,
+            &LayerTarget::Element {
+                target: selected(&source, "body > section:nth-of-type(1)", "section"),
+            },
+            &styles,
+        )
+        .unwrap();
+    assert_eq!(source, before);
+    let LayerClipboardContent::Element { html, .. } = &clipboard.content else {
+        panic!("Expected a complete visual element packet");
+    };
+    let doc = Document::from(format!("<body>{html}</body>"));
+    let selection = doc.select("section");
+    let inline = selection.attr("style").unwrap();
+    assert!(
+        inline.rfind("border-left-color: blue !important;").unwrap()
+            < inline.rfind("border: 2px solid red !important;").unwrap()
+    );
+    assert!(inline.contains("color: navy !important;"));
+    assert_eq!(inline.matches("--Ink:").count(), 1);
+    assert_eq!(inline.matches("display:").count(), 1);
+    for _ in 0..3 {
+        clipboard.validate().unwrap();
+        assert_eq!(
+            LayerClipboard::from_json(&clipboard.to_json().unwrap()).unwrap(),
+            clipboard
+        );
+    }
 }
 
 #[test]
