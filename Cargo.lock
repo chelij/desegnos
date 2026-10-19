@@ -938,6 +938,7 @@ name = "desegni-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "cssparser",
  "dom_query",
  "html5ever",
  "quick-xml",
@@ -972,6 +973,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "desegni-core",
+ "rustix",
  "serde",
  "serde_json",
  "uuid",

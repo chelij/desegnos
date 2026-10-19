@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-website"
+description = "Enables the export_website command without any pre-configured scope."
+commands.allow = ["export_website"]
+
+[[permission]]
+identifier = "deny-export-website"
+description = "Denies the export_website command without any pre-configured scope."
+commands.deny = ["export_website"]

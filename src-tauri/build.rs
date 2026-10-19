@@ -1,6 +1,8 @@
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "export_website",
+            "open_export_folder",
             "pick_identity_source",
             "analyze_identity",
             "get_identity_analysis",

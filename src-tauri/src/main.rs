@@ -4,6 +4,7 @@
 compile_error!("Native test automation must not be compiled into release artifacts.");
 
 mod chatgpt;
+mod export;
 mod generation;
 mod identity;
 #[cfg(target_os = "linux")]
@@ -49,6 +50,7 @@ fn main() {
         })
         .setup(|app| {
             app.manage(std::sync::Mutex::new(Workspace::initialize(app.handle())?));
+            app.manage(std::sync::Mutex::new(export::ExportService::default()));
             let generation =
                 GenerationService::initialize(app.handle()).map_err(std::io::Error::other)?;
             app.manage(chatgpt::ChatgptState::initialize(
@@ -80,6 +82,8 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            export::export_website,
+            export::open_export_folder,
             identity::pick_identity_source,
             identity::analyze_identity,
             identity::get_identity_analysis,

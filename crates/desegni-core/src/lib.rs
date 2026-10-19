@@ -1,5 +1,6 @@
 mod dossier;
 mod editing;
+mod export;
 mod generation;
 mod identity;
 mod migration;
@@ -9,6 +10,7 @@ mod session;
 
 pub use dossier::*;
 pub use editing::*;
+pub use export::*;
 pub use generation::*;
 pub use identity::*;
 pub use migration::*;

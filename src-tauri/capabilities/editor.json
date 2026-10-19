@@ -3,6 +3,7 @@
   "description": "The trusted editor can use explicit project commands. Website content and remote origins receive no native permissions.",
   "windows": ["editor"],
   "permissions": [
+    "allow-export-website", "allow-open-export-folder",
     "allow-pick-identity-source", "allow-analyze-identity", "allow-get-identity-analysis", "allow-cancel-identity-analysis",
     "core:default", "core:window:allow-destroy", "allow-get-workspace", "allow-get-recent-projects", "allow-open-recent-project", "allow-create-project", "allow-edit-project",
     "allow-inspect-element", "allow-edit-element", "allow-refresh-element-bounds",
