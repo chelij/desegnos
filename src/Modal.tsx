@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
+import './dialogs.css';
 
 type ModalRecord = { dialog: HTMLDialogElement; opener: HTMLElement | null; parent: ModalRecord | null };
 const openModals: ModalRecord[] = [];
@@ -30,7 +31,7 @@ export function Modal({ title, children, close, wide = false, headerContent, cla
     };
   }, []);
   return <dialog ref={ref} className={`modal${wide ? ' wide' : ''} ${className}`} aria-label={title} onCancel={event => { event.preventDefault(); close(); }}>
-    <header className="modal-header"><div className="modal-titlebar"><h2>{title}</h2><button onClick={close} aria-label={`Close ${title}`}>Close</button></div>{headerContent}</header>
+    <header className="modal-header"><div className="modal-titlebar"><h2>{title}</h2><button type="button" className="modal-close" onClick={close} aria-label={`Close ${title}`} title="Close"><span aria-hidden="true">×</span></button></div>{headerContent}</header>
     {children}
   </dialog>;
 }

@@ -1,0 +1,9 @@
+.modal-header .modal-close { display: inline-grid; place-items: center; width: 32px; height: 32px; min-height: 32px; padding: 0; flex-shrink: 0; font-size: 24px; line-height: 1; }
+.api-key-connection { display: grid; gap: 14px; }
+.api-key-connection h3 { margin: 0; }
+.connection-status { color: var(--muted); font-size: 13px; }
+.ai-access-test { display: grid; justify-items: start; gap: 8px; padding-bottom: 18px; border-bottom: 1px solid var(--border-soft); }
+.ai-access-test .field-help { margin: 0; }
+.ai-advanced > summary { cursor: pointer; font-weight: 600; }
+.ai-advanced .advanced-settings { margin-top: 14px; display: grid; gap: 14px; }
+.ai-save-actions { justify-content: flex-end; padding-top: 14px; border-top: 1px solid var(--border-soft); }

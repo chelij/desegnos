@@ -12,9 +12,9 @@ function initialFiles(source: IdentitySource) {
   let total = 0;
   return source.files.filter(file => { if (total + file.textBytes > 480 * 1024) return false; total += file.textBytes; return true; }).map(file => file.id);
 }
-type Props = { busy: boolean; create: (name: string, viewport: Viewport, identity?: NewProjectIdentity) => Promise<void>; open: () => Promise<void>; settings: AiSettingsView | null; openSettings: () => void };
+type Props = { busy: boolean; create: (name: string, viewport: Viewport, identity?: NewProjectIdentity) => Promise<void>; open: () => Promise<void>; recentProjects?: { path: string; name: string }[]; openRecent?: (path: string) => Promise<void>; settings: AiSettingsView | null; openSettings: () => void };
 
-export function NewProject({ busy, create, open, settings, openSettings }: Props) {
+export function NewProject({ busy, create, open, recentProjects = [], openRecent, settings, openSettings }: Props) {
   const [mode, setMode] = useState<'blank' | 'identity' | null>(null);
   const [name, setName] = useState('');
   const [platform, setPlatform] = useState<'web' | 'mobile'>('web');
@@ -48,7 +48,7 @@ export function NewProject({ busy, create, open, settings, openSettings }: Props
     try {
       const value = await native<IdentityAnalysis | null>('get_identity_analysis');
       if (mounted.current && serial === previousRead.current) { setPrevious(value); setRecoveryError(''); }
-    } catch (error) { if (mounted.current && serial === previousRead.current) setRecoveryError(`Previous identity analysis could not be loaded: ${message(error)}`); }
+    } catch (error) { if (mounted.current && serial === previousRead.current) setRecoveryError(`Your previous brand review could not be loaded: ${message(error)}`); }
     finally { if (mounted.current && serial === previousRead.current) setReadingPrevious(false); }
   }, []);
   useEffect(() => {
@@ -111,10 +111,12 @@ export function NewProject({ busy, create, open, settings, openSettings }: Props
   const selectedBytes = source?.files.filter(file => files.includes(file.id)).reduce((total, file) => total + file.textBytes, 0) ?? 0;
   const logos = source?.files.flatMap(file => file.asset && candidate?.logoAssetIds.includes(file.asset.id) ? [file.asset] : []) ?? [];
   return <form className="new-project simple-new-project" onSubmit={submit}>
-    <h1>{mode === 'identity' ? 'Bring your identity' : mode === 'blank' ? 'Start with a blank page' : 'Create your website'}</h1>
+    <h1>{mode === 'identity' ? 'Use your existing brand' : mode === 'blank' ? 'Start with a blank website' : 'Create your website'}</h1>
     {!mode ? <>
-      <div className="project-start-choices"><button type="button" disabled={locked} onClick={() => setMode('blank')}>New blank page</button><button type="button" disabled={locked} onClick={() => setMode('identity')}>Import identity from project</button></div>
+      <p className="new-project-intro">Describe what goes where, generate your website, then edit and export it.</p>
+      <div className="project-start-choices"><button type="button" disabled={locked} onClick={() => setMode('blank')}><strong>Blank website</strong><span>Start from an empty page.</span></button><button type="button" disabled={locked} onClick={() => setMode('identity')}><strong>Use my existing brand</strong><span>Read colors, fonts and logos from a website or project.</span></button></div>
       <button type="button" onClick={() => { void run(open); }} disabled={locked}>Open project</button>
+      {recentProjects.length > 0 && openRecent && <section className="recent-projects" aria-label="Recent projects"><h2>Recent projects</h2><ul>{recentProjects.map(project => <li key={project.path}><button type="button" disabled={locked} title={project.path} onClick={() => { void run(() => openRecent(project.path)); }}><strong>{project.name}</strong><span>{project.path}</span></button></li>)}</ul></section>}
     </> : <>
       <label>Project name<input name="projectName" autoFocus required maxLength={120} value={name} onChange={event => setName(event.target.value)} autoComplete="off" disabled={locked} /></label>
       <fieldset disabled={locked}><legend>Screen guide</legend><div className="segmented">
@@ -125,21 +127,21 @@ export function NewProject({ busy, create, open, settings, openSettings }: Props
         if (event.target.value !== 'custom') { const [width, height] = event.target.value.split('x').map(Number); setViewport({ width, height }); }
       }}>{sizes[platform].map(([width, height]) => <option key={`${width}x${height}`} value={`${width}x${height}`}>{width} × {height}</option>)}<option value="custom">Custom size</option></select></label>
       {custom && <div className="field-pair custom-screen"><label>Width <span className="unit">px</span><input name="width" type="number" required min={1} max={32768} value={viewport.width} disabled={locked} onChange={event => setViewport({ ...viewport, width: Number(event.target.value) })} /></label><label>Height <span className="unit">px</span><input name="height" type="number" required min={1} max={100000} value={viewport.height} disabled={locked} onChange={event => setViewport({ ...viewport, height: Number(event.target.value) })} /></label></div>}
-      {mode === 'identity' && <section className="identity-import" aria-label="Import identity">
+      {mode === 'identity' && <section className="identity-import" aria-label="Use my existing brand">
         <div className="identity-source-actions"><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose project or ZIP</button><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose website folder</button></div>
-        {!source && recoveryError && <div className="message error" role="alert"><span>{recoveryError}</span><button type="button" disabled={locked || readingPrevious} onClick={() => { void readPrevious(); }}>Retry loading analysis</button></div>}
-        {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setFiles(previous.fileIds); acceptAnalysis(previous); setPrevious(null); }}>Continue previous analysis</button>}
+        {!source && recoveryError && <div className="message error" role="alert"><span>{recoveryError}</span><button type="button" disabled={locked || readingPrevious} onClick={() => { void readPrevious(); }}>Retry loading brand review</button></div>}
+        {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setFiles(previous.fileIds); acceptAnalysis(previous); setPrevious(null); }}>Continue previous brand review</button>}
         {source && <>
           <strong className="identity-source-name">{source.name}</strong>
-          <details className="identity-file-review"><summary>Files to read · {files.length} selected</summary><div className="identity-files">{source.files.map(file => <label className="identity-choice" key={file.id}><input type="checkbox" disabled={locked || !!candidate} checked={files.includes(file.id)} onChange={event => { setFiles(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id)); setAnalysis(null); }} /><span>{file.name}<small>{file.textBytes ? `${Math.ceil(file.textBytes / 1024)} KB` : 'Image'}{file.asset ? ' · logo candidate' : ''}</small></span></label>)}</div><p className="field-help">Selected files and logo images go to {settings?.authentication === 'chatgpt' ? 'ChatGPT' : 'OpenAI'} for analysis.</p></details>
+          <details className="identity-file-review"><summary>Files to read · {files.length} selected</summary><div className="identity-files">{source.files.map(file => <label className="identity-choice" key={file.id}><input type="checkbox" disabled={locked || !!candidate} checked={files.includes(file.id)} onChange={event => { setFiles(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id)); setAnalysis(null); }} /><span>{file.name}<small>{file.textBytes ? `${Math.ceil(file.textBytes / 1024)} KB` : 'Image'}{file.asset ? ' · possible logo' : ''}</small></span></label>)}</div><p className="field-help">Selected files and logo images go to {settings?.authentication === 'chatgpt' ? 'ChatGPT' : 'OpenAI'} for analysis.</p></details>
           {source.skipped.length > 0 && <details><summary>Skipped files · {source.skipped.length}</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{reason}</li>)}</ul></details>}
           {selectedBytes >= 512 * 1024 && <p role="alert">Choose fewer files to keep this analysis under 512 KB.</p>}
           {!candidate && <p className="field-help">Analysis sends the selected files and logos to {analysisMethod === 'chatgpt' ? `ChatGPT using ${analysisAccount?.label ? `${analysisAccount.label}’s` : 'your'} plan` : 'OpenAI using your API key'}.</p>}
-          {analyzing ? <div className="identity-progress" role="status"><span>{analysis.message || 'Reading the identity…'}</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Cancel analysis</button></div> : !candidate ? <>
+          {analyzing ? <div className="identity-progress" role="status"><span>{analysis.message || 'Reading your brand…'}</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Cancel analysis</button></div> : !candidate ? <>
             {analysis && <p role={analysis.status === 'failed' || analysis.status === 'unknown' ? 'alert' : 'status'}>{analysis.error || analysis.message}</p>}
-            <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || !files.length || selectedBytes >= 512 * 1024 || !connected} onClick={() => { void analyze(); }}>Analyze identity</button><button type="button" disabled={locked} onClick={openSettings}>{connected ? 'AI settings' : 'Connect AI'}</button></div>
-          </> : <div className="identity-result" aria-label="Identity review">
-            <h2>{candidate.brandName || 'Identity found'}</h2><p>{candidate.summary}</p>{candidate.tone && <p className="field-help">Tone · {candidate.tone}</p>}
+            <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || !files.length || selectedBytes >= 512 * 1024 || !connected} onClick={() => { void analyze(); }}>Analyze brand</button><button type="button" disabled={locked} onClick={openSettings}>{connected ? 'AI settings' : 'Connect AI'}</button></div>
+          </> : <div className="identity-result" aria-label="Brand review">
+            <h2>{candidate.brandName || 'Brand found'}</h2><p>{candidate.summary}</p>{candidate.tone && <p className="field-help">Tone · {candidate.tone}</p>}
             <div className="identity-findings">{candidate.findings.map((finding, index) => <div key={index}><label className="identity-choice"><input type="checkbox" checked={findings.includes(index)} disabled={locked} onChange={event => setFindings(current => event.target.checked ? [...current, index] : current.filter(value => value !== index))} /><span><strong>{finding.topic}</strong><span>{finding.value}</span></span></label><details><summary>{finding.confidence === 'low' ? 'Uncertain · ' : ''}Sources</summary><ul>{finding.evidence.map(id => <li key={id}>{source.files.find(file => file.id === id)?.name ?? id}</li>)}</ul></details></div>)}</div>
             {logos.length > 0 && <fieldset className="identity-logos"><legend>Logos to keep</legend>{logos.map(asset => <label className="identity-logo" key={asset.id}><img src={asset.dataUri} alt={asset.name} /><span><input type="checkbox" checked={assets.includes(asset.id)} disabled={locked} onChange={event => setAssets(current => event.target.checked ? [...current, asset.id] : current.filter(id => id !== asset.id))} />{asset.name}</span></label>)}</fieldset>}
             {candidate.warnings.length > 0 && <ul className="identity-warnings">{candidate.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
@@ -147,8 +149,8 @@ export function NewProject({ busy, create, open, settings, openSettings }: Props
           </div>}
         </>}
       </section>}
-      {candidate && !findings.length && !assets.length && <p className="field-help">Choose at least one finding or logo to keep.</p>}
-      <div className="form-actions"><button className="primary" disabled={locked || !name.trim() || (mode === 'identity' && (!candidate || !findings.length && !assets.length))} type="submit">{busy ? 'Creating…' : 'Create project'}</button><button type="button" disabled={locked} onClick={() => { setMode(null); setError(''); }}>Back</button></div>
+      {mode === 'identity' && candidate && !findings.length && !assets.length && <p className="field-help">Choose at least one finding or logo to keep.</p>}
+      <div className="form-actions"><button type="button" disabled={locked} onClick={() => { setMode(null); setError(''); }}>Back</button><button className="primary" disabled={locked || !name.trim() || (mode === 'identity' && (!candidate || !findings.length && !assets.length))} type="submit">{busy ? 'Creating…' : 'Create project'}</button></div>
     </>}
     {error && <p className="message error" role="alert">{error}</p>}
   </form>;

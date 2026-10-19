@@ -1,6 +1,15 @@
 .project-start-choices { display: grid; gap: 12px; }
-.project-start-choices button { min-height: 64px; text-align: left; padding: 16px; font-size: 15px; }
+.project-start-choices button { display: grid; gap: 6px; min-height: 86px; text-align: left; padding: 16px; font-size: 15px; }
+.project-start-choices button span { font-size: 13px; line-height: 1.45; font-weight: 400; color: var(--muted); }
 .project-start-choices button:first-child { border-style: dashed; }
+.new-project-intro { color: var(--muted); line-height: 1.5; }
+.recent-projects { min-width: 0; padding-top: 8px; }
+.recent-projects h2 { margin-bottom: 10px; font-size: 15px; }
+.recent-projects ul { display: grid; gap: 8px; padding: 0; margin: 0; list-style: none; }
+.recent-projects button { display: grid; gap: 5px; width: 100%; text-align: left; padding: 12px; }
+.recent-projects button strong, .recent-projects button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-projects button span { color: var(--muted); font-weight: 400; font-size: 11px; }
+.simple-new-project > .form-actions { justify-content: flex-end; }
 .identity-import { display: flex; flex-direction: column; gap: 14px; min-width: 0; border-top: 1px solid var(--border-soft); padding-top: 18px; }
 .identity-source-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .identity-source-name, .identity-choice span, .identity-logo span { overflow-wrap: anywhere; }
