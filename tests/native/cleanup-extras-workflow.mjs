@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {waitFor, xpathString} from './webdriver.mjs';
 import {chooseFile, savedState, verifyArchive} from './file-dialog-workflow.mjs';
+import {selectionSaveWorkflow} from './selection-save-workflow.mjs';
 import {assertCanvasOnly} from './workflow.mjs';
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGOwaQoAIgYIBQAdRgQ5DejjuQAAAABJRU5ErkJggg==';
@@ -160,5 +161,5 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     assert.equal(await driver.execute(()=>document.querySelector('ul[aria-label="Change history"]').textContent.includes('No changes yet')),true);await driver.escape();
     assert.equal(await driver.execute(()=>!!document.querySelector('.first-run-tips')),false);
   });
-  return (await workspace(driver)).project;
+  return selectionSaveWorkflow(driver,physical,step,output,home,about,projectPath,provider);
 }
