@@ -229,14 +229,28 @@ fn render_style(declarations: &[Declaration]) -> String {
 }
 
 fn visual_style(original: &str, snapshot: &str) -> Result<String> {
-    let mut computed = declarations(snapshot)?;
-    let mut important = BTreeMap::new();
-    for declaration in declarations(original)? {
-        if declaration.important {
-            important.insert(declaration.name.clone(), declaration);
-        }
-    }
-    computed.extend(important.into_values());
+    let (mut computed, mut important): (Vec<_>, Vec<_>) = declarations(snapshot)?
+        .into_iter()
+        .partition(|declaration| !declaration.important);
+    important.extend(
+        declarations(original)?
+            .into_iter()
+            .filter(|declaration| declaration.important),
+    );
+    computed.extend(important);
+    // Priority permits normal declarations first, but shorthand/longhand order
+    // within each priority must survive. Keep the last exact declaration so an
+    // already-baked important snapshot can be merged and validated repeatedly.
+    let mut seen = BTreeSet::new();
+    computed.reverse();
+    computed.retain(|declaration| {
+        seen.insert((
+            declaration.name.clone(),
+            declaration.value.clone(),
+            declaration.important,
+        ))
+    });
+    computed.reverse();
     let result = render_style(&computed);
     check_value(&result, MAX_LAYER_STYLE_BYTES)?;
     Ok(result)
