@@ -157,7 +157,7 @@ async function isolated() {
     driver = await new WebDriver(port).start(() => app.exitCode === null && app.signalCode === null);
     await waitFor(async () => /class="application(?:\s|")/.test(await driver.command('GET', '/source')), 'The benchmark editor did not mount', 30_000);
     const physical = new PhysicalInput(driver, app.pid); await physical.initialize(evidence);
-    await chooseFile(physical, () => driver.button('Open project'), join(evidence, 'working.desegni'), evidence, 'benchmark-open');
+    await chooseFile(physical, () => driver.button('Open project'), join(evidence, 'working.desegnos'), evidence, 'benchmark-open');
     const project = await waitFor(async () => (await driver.invoke('get_workspace')).project, 'The benchmark input did not open');
     assert.equal(project.id, request.projectId);
     const connected = await driver.invoke('set_ai_key', { key, storage: 'session' }); assert.equal(connected.credential.storage, 'session');
@@ -189,7 +189,7 @@ async function isolated() {
     await writeFile(join(evidence, 'job.json'), redact(JSON.stringify(job, null, 2)), { mode: 0o600 });
     await writeFile(join(evidence, 'project.json'), redact(JSON.stringify((await driver.invoke('get_workspace')).project, null, 2)), { mode: 0o600 });
     await driver.invoke('save_project', { saveAs: false });
-    await copyFile(join(evidence, 'working.desegni'), join(evidence, 'result.desegni')); await chmod(join(evidence, 'result.desegni'), 0o600);
+    await copyFile(join(evidence, 'working.desegnos'), join(evidence, 'result.desegnos')); await chmod(join(evidence, 'result.desegnos'), 0o600);
     // Reload the real editor so it reads the accepted native state; no state shim.
     try { await driver.execute(() => { location.reload(); return true; }); } catch { /* Navigation may discard the old script response. */ }
     await waitFor(async () => { try { return await driver.execute(() => !!document.querySelector('[data-testid="canvas"]')); } catch { return false; } }, 'The accepted benchmark result did not reopen on canvas', 30_000);
@@ -251,7 +251,7 @@ async function main() {
   for (const [variable,name] of [['XDG_DATA_HOME','data'],['XDG_CONFIG_HOME','config'],['XDG_CACHE_HOME','cache'],['XDG_RUNTIME_DIR','runtime']]) { environment[variable] = join(scratch,name); await mkdir(environment[variable],{mode:0o700}); }
   const request = { guard:randomUUID(), allowPaidGeneration:true, scenarioId:scenario.id, fixtureSha256:fixture.sha256, projectId:fixture.projectId, binary, binarySha256:digest(await readFile(binary)), budgetUsd, maxSeconds, evidence, originalDisplay:process.env.DISPLAY ?? null };
   await copyFile(join(fixtureRoot, fixture.path), join(evidence,'input.desegni')); await chmod(join(evidence,'input.desegni'),0o600);
-  await copyFile(join(evidence,'input.desegni'), join(evidence,'working.desegni')); await chmod(join(evidence,'working.desegni'),0o600);
+  await copyFile(join(evidence,'input.desegni'), join(evidence,'working.desegnos')); await chmod(join(evidence,'working.desegnos'),0o600);
   const requestPath = join(scratch,'launch.json'); await writeFile(requestPath,JSON.stringify(request),{mode:0o600});
   const original = await desktopState(); let child;
   await writeFile(join(evidence,'authorization.json'), JSON.stringify({...request,guard:undefined},null,2),{mode:0o600});

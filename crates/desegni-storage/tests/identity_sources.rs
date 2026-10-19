@@ -40,6 +40,33 @@ fn zip(temp: &Temp, name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
 }
 
 #[test]
+fn brand_import_reads_new_and_legacy_project_names_without_changing_either() {
+    let temp = Temp::new();
+    let legacy = temp.0.join("brand.desegni");
+    let current = temp.0.join("brand.desegnos");
+    let project = Project::new(
+        "Brand source".into(),
+        Viewport {
+            width: 1440,
+            height: 900,
+        },
+        Appearance::Light,
+    )
+    .unwrap();
+    let file = ProjectFile::acquire(&legacy).unwrap();
+    file.save(&project).unwrap();
+    fs::copy(&legacy, &current).unwrap();
+    let original = fs::read(&legacy).unwrap();
+    let old_source = collect_identity_source(&legacy).unwrap();
+    let new_source = collect_identity_source(&current).unwrap();
+    assert_eq!(old_source.files, new_source.files);
+    assert_eq!(old_source.sha256, new_source.sha256);
+    assert_eq!(fs::read(&legacy).unwrap(), original);
+    assert_eq!(fs::read(&current).unwrap(), original);
+    assert!(!temp.0.join("brand.desegnos.lock").exists());
+}
+
+#[test]
 fn folder_and_zip_collect_the_same_immutable_sources_with_stable_ids() {
     let folder = Temp::new();
     let original = [

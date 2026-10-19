@@ -34,6 +34,46 @@ fn project() -> Project {
 }
 
 #[test]
+fn new_and_legacy_filenames_round_trip_without_changing_the_archive_protocol() {
+    let temp = Temp::new();
+    let original = project();
+    for extension in PROJECT_FILE_EXTENSIONS {
+        let path = temp.0.join(format!("site.{extension}"));
+        let handle = ProjectFile::acquire(&path).unwrap();
+        handle.save(&original).unwrap();
+        assert_eq!(handle.path(), path);
+        assert_eq!(handle.load().unwrap(), original);
+        let mut archive = ZipArchive::new(fs::File::open(&path).unwrap()).unwrap();
+        let mut manifest = String::new();
+        archive
+            .by_name("manifest.json")
+            .unwrap()
+            .read_to_string(&mut manifest)
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&manifest).unwrap()["format"],
+            "desegni"
+        );
+        let changed = original
+            .apply(
+                0,
+                Command::RenameProject {
+                    name: "Updated project".into(),
+                },
+            )
+            .unwrap();
+        handle.save(&changed).unwrap();
+        assert_eq!(handle.path(), path);
+        assert_eq!(handle.load().unwrap(), changed);
+        assert_eq!(
+            load_project(&path.with_file_name(format!("site.{extension}.previous"))).unwrap(),
+            original
+        );
+    }
+    assert!(ProjectFile::acquire(&temp.0.join("site.zip")).is_err());
+}
+
+#[test]
 fn archive_contains_real_generated_notes_and_round_trips_decisions() {
     let temp = Temp::new();
     let mut p = project();

@@ -20,6 +20,13 @@ pub use identity_source::{
 
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_MODEL_BYTES: u64 = 128 * 1024 * 1024;
+pub const PROJECT_FILE_EXTENSIONS: [&str; 2] = ["desegnos", "desegni"];
+
+fn project_extension(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| PROJECT_FILE_EXTENSIONS.contains(&extension))
+}
 
 fn io(error: impl std::fmt::Display) -> Error {
     Error(error.to_string())
@@ -42,9 +49,9 @@ pub struct ProjectFile {
 
 impl ProjectFile {
     pub fn acquire(path: &Path) -> Result<Self> {
-        if path.extension().and_then(|x| x.to_str()) != Some("desegni") {
+        if !project_extension(path) {
             return Err(Error(
-                "Project files must use the .desegni extension.".into(),
+                "Project files must use .desegnos (or the older .desegni extension).".into(),
             ));
         }
         let parent = path
@@ -60,10 +67,10 @@ impl ProjectFile {
             Ok(_) => {
                 let path = requested.canonicalize().map_err(io)?;
                 let metadata = path.metadata().map_err(io)?;
-                if !metadata.is_file()
-                    || path.extension().and_then(|x| x.to_str()) != Some("desegni")
-                {
-                    return Err(Error("Choose a regular .desegni project file.".into()));
+                if !metadata.is_file() || !project_extension(&path) {
+                    return Err(Error(
+                        "Choose a regular .desegnos or .desegni project file.".into(),
+                    ));
                 }
                 #[cfg(unix)]
                 {

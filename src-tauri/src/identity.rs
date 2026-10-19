@@ -984,7 +984,10 @@ pub async fn pick_identity_source(
         let dialog = app.dialog().file();
         let picked = match kind {
             IdentitySourceKind::File => dialog
-                .add_filter("Desegnos project or website ZIP", &["desegni", "zip"])
+                .add_filter(
+                    "Desegnos project or website ZIP",
+                    &["desegnos", "desegni", "zip"],
+                )
                 .blocking_pick_file(),
             IdentitySourceKind::Folder => dialog.blocking_pick_folder(),
         };

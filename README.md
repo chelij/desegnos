@@ -10,7 +10,7 @@ Create a website by describing what belongs on the page. Place requests on the c
 4. Open **AI settings**. Connect an OpenAI API key or sign in with your ChatGPT plan, then **Test access**. Choose a model and save your settings.
 5. Choose **Flexible** for more interpretation or **Precise** to follow your request and placement closely. Click **Generate**. Progress appears above the canvas, and **Cancel** stops waiting.
 6. Review the result on the canvas. **Keep**, **Undo**, **Try again**, and **Details** are beside the result. Click an element to select it; double-click text to edit it. Drag a selected element to move it or a corner to resize it. Use **Ask AI** for a generated change.
-7. **Save** keeps an editable `.desegni` project. **Export website** writes a website you can open in a browser and share.
+7. **Save** keeps an editable `.desegnos` project. **Export website** writes a website you can open in a browser and share.
 
 Your project brief grows as you work. Open **Project brief** to review the purpose, audience, brand choices, and design feedback, or make a deliberate exception to a choice.
 
@@ -30,7 +30,7 @@ Single-click selects an element and shows its outline and controls. Right-click 
 
 API keys and sign-in tokens stay in secure device storage or the current session, separate from your project. API requests use your OpenAI billing; ChatGPT requests use the selected account's eligible plan or credits. The API budget is a conservative estimate, not a guaranteed billing cap. Cancelling submitted work may still use credits or incur charges.
 
-Projects save their website source, brief, and approved choices. Save keeps a previous archive for recovery. Desegnos preserves your work when a request fails, and interrupted requests do not resend automatically.
+Projects save their website source, brief, and approved choices. Existing `.desegni` projects still open and keep their path when you save them. Save keeps a previous archive for recovery. Desegnos preserves your work when a request fails, and interrupted requests do not resend automatically.
 
 ## Run and build
 

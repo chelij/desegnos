@@ -205,11 +205,11 @@ pub fn collect_identity_source(path: &Path) -> Result<IdentitySource> {
         collect_folder(&root, &root, &mut 0, &mut collector)?;
     } else if metadata.is_file() {
         match extension(&name).as_str() {
-            "desegni" => collect_project(path, &metadata, &mut collector)?,
+            "desegnos" | "desegni" => collect_project(path, &metadata, &mut collector)?,
             "zip" => collect_zip(path, &metadata, &mut collector)?,
             _ => {
                 return Err(Error(
-                    "Choose a .desegni project, a website folder, or a .zip website archive."
+                    "Choose a .desegnos or .desegni project, a website folder, or a .zip website archive."
                         .into(),
                 ));
             }

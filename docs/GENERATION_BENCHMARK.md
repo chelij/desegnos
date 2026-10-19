@@ -58,7 +58,7 @@ Run one scenario at a time. The runner submits once; it never retries. A new exp
 
    The explicit flag authorizes this owner-run attempt. Codex must not run that command. The budget blocks requests whose conservative native estimate exceeds it; it is **not a guaranteed billing cap**. A timeout cancels waiting, and submitted work can still incur charges. The default model and reasoning/output settings come from the fresh native profile and are recorded in the result.
 
-4. Open the printed evidence folder. Review its screenshots and `result.desegni` in Desegnos, including interaction behavior and the narrow-screen requirements where relevant. Fill `owner-rating.json` with your name, review timestamp, `usableWithoutManualFixes` and, for Precise scenarios, `strictOrderAndGrouping`. Enter confirmed billing in `actualBilledUsd` if available; otherwise leave it null. Leave explanatory notes for any failure.
+4. Open the printed evidence folder. Review its screenshots and `result.desegnos` in Desegnos, including interaction behavior and the narrow-screen requirements where relevant. Fill `owner-rating.json` with your name, review timestamp, `usableWithoutManualFixes` and, for Precise scenarios, `strictOrderAndGrouping`. Enter confirmed billing in `actualBilledUsd` if available; otherwise leave it null. Leave explanatory notes for any failure.
 
 5. Repeat for the remaining fixed cases, then summarize the whole evidence directory:
 
@@ -72,7 +72,7 @@ The Linux runner uses the existing guarded Xvfb route with an unused display ≥
 
 Each run has a unique directory under `test-results/benchmark/<UTC-date>/`; rerunning cannot replace an earlier attempt. Evidence is private to the owner:
 
-- `input.desegni`: unchanged copy of the fixed input; `working.desegni` and `result.desegni`: the real result saved through the native pipeline.
+- `input.desegni`: unchanged copy of the fixed input; `working.desegnos` and `result.desegnos`: the real result saved through the native pipeline.
 - `REQUIREMENTS.md` and `prepared.json`: exact native requirements, digest, settings and conservative pre-submission estimate.
 - `provider-output.txt`: exact successful transport output text before candidate parsing, copied from the opt-in debug capture. This is **not reconstructed candidate JSON** and **not raw HTTP headers or the SSE envelope**. Unsafe/rejected transport bodies are not retained; missing output is reported honestly.
 - `job.json`, `project.json` and `result.json`: actual outcome, source, usage, native attempts, duration and frozen catalogue prices. A provider failure remains a failure; no fabricated page is substituted.

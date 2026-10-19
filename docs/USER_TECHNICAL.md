@@ -75,7 +75,7 @@ This gate supports native HTML/DOM capabilities. It has no qualified external co
 
 ## Saving and recovery
 
-Save creates a real `.desegni` ZIP archive with validated manifest, canonical project JSON including generated source, and `PROJECT.md`. Later saves preserve `.previous`. Archive hashes, identities, schema, bounds, routes and references are checked before acceptance. Damaged or unsupported files are preserved and reported.
+Save creates a real `.desegnos` ZIP archive with validated manifest, canonical project JSON including generated source, and `PROJECT.md`. Later saves preserve `.previous`. Archive hashes, identities, schema, bounds, routes and references are checked before acceptance. Damaged or unsupported files are preserved and reported.
 
 The current format is schema 6. Schemas 1/2/3/4/5 migrate with their original prompts, generated source, choices, extensions and saved grid visibility preserved. The current fields include grid settings, the generated dossier, source-bound element targets and completed requests retained in history. Version-4 requests are inferred complete only when no edit followed the recorded application. Old frozen format-3/4 generation requirements remain valid after migration when their dependencies still match. Opening old files leaves their bytes unchanged and requires an explicit Save; that Save preserves the exact old archive as `.previous`.
 
@@ -116,7 +116,7 @@ pnpm desktop build --no-bundle
 
 Rust/provider tests need task-owned loopback sockets. The native harness uses guarded `~/.local/bin/xvfb-run -d` with isolated data and a private bus, and verifies the main desktop after cleanup. See [tests/native/README.md](../tests/native/README.md). The opt-in Linux vault runner creates a private Secret Service and verifies its process/bus/data before using synthetic credentials; ordinary tests never access a real vault.
 
-Normal Linux launch paths are `target/debug/desegnos` and `target/release/desegnos`; the existing `desegni` executables remain usable. These commands create no installers. Signing, updates, Windows/macOS verification, live OpenAI generation, complete export release scenarios, media/components, executable plugins and all remaining release scenarios remain required by the full plan.
+Normal Linux launch paths are the actual executables `target/debug/desegnos` and `target/release/desegnos`; managed `desegni` compatibility launch paths remain usable. Existing `.desegni` archives remain readable and save to their existing path; new saves default to `.desegnos`. These commands create no installers. Signing, updates, Windows/macOS verification, live OpenAI generation, complete export release scenarios, media/components, executable plugins and all remaining release scenarios remain required by the full plan.
 
 ## License
 

@@ -114,7 +114,7 @@ async function replaceMain(driver, physical, about) {
 
 export async function uxAuditWorkflow(driver, physical, step, evidence, provider) {
   const output = join(resolve(evidence), 'ux-audit'); await mkdir(output, { recursive: true, mode: 0o700 });
-  const projectPath = join(output, 'Audit website.desegni');
+  const projectPath = join(output, 'Audit website.desegnos');
   const longPrompt = 'Create a welcoming studio homepage with a clear heading and one useful action.\n' + Array.from({ length: 85 }, (_, index) => `Detail ${index + 1}: use clear labels and welcoming, readable content.`).join('\n');
   let projectId, homeId, aboutId, cancelled, applied, savedProject, exportedRoot;
 

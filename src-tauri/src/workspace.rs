@@ -737,7 +737,10 @@ pub async fn open_project(
     let picked = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .add_filter("Desegnos website", &["desegni"])
+            .add_filter(
+                "Desegnos website",
+                &desegni_storage::PROJECT_FILE_EXTENSIONS,
+            )
             .blocking_pick_file()
     })
     .await
@@ -786,8 +789,11 @@ pub async fn save_project(
         let picked = tauri::async_runtime::spawn_blocking(move || {
             app.dialog()
                 .file()
-                .add_filter("Desegnos website", &["desegni"])
-                .set_file_name("website.desegni")
+                .add_filter(
+                    "Desegnos website",
+                    &desegni_storage::PROJECT_FILE_EXTENSIONS,
+                )
+                .set_file_name("website.desegnos")
                 .blocking_save_file()
         })
         .await
