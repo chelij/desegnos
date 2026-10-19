@@ -25,6 +25,16 @@ pub(crate) struct Frame {
 }
 
 impl SseDecoder {
+    pub(crate) fn finish(self) -> Result<()> {
+        if self.line.is_empty() && self.data.is_empty() {
+            Ok(())
+        } else {
+            Err(ProviderError::new(
+                ErrorKind::Truncated,
+                SubmissionOutcome::Unknown,
+            ))
+        }
+    }
     pub(crate) fn push(&mut self, bytes: &[u8]) -> Result<Vec<Frame>> {
         let mut frames = vec![];
         for &byte in bytes {
@@ -580,6 +590,27 @@ impl<'a> ResponseStream<'a> {
             part.delta_seen = true;
         }
         Ok(())
+    }
+
+    pub(crate) fn web_search_calls(&self) -> usize {
+        self.items
+            .values()
+            .filter(|item| item.kind == ItemKind::WebSearch)
+            .count()
+    }
+
+    pub(crate) fn citations(&self) -> usize {
+        self.items
+            .values()
+            .filter_map(|item| item.message.as_ref())
+            .filter_map(|message| message.get("content").and_then(Value::as_array))
+            .flatten()
+            .filter_map(|part| part.get("annotations").and_then(Value::as_array))
+            .flatten()
+            .filter(|annotation| {
+                annotation.get("type").and_then(Value::as_str) == Some("url_citation")
+            })
+            .count()
     }
 
     pub(crate) fn accept(&mut self, frame: Frame) -> Result<Option<ProviderResponse>> {

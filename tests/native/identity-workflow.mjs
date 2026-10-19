@@ -205,7 +205,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.fill('Request 1', 'Create a welcoming homepage using the imported Northstar identity and its approved logo.');
     await waitFor(async () => (await workspace(driver)).project.pages[0].regions[0]?.prompt.includes('Northstar'), 'The future-generation identity request did not persist');
     const frozen = await driver.invoke('prepare_requirements');
-    assert.match(frozen.markdown, /^Requirements format: 8$/m);
+    assert.match(frozen.markdown, /^Requirements format: 9$/m);
     assert.ok(frozen.markdown.includes('#225577')); assert.ok(frozen.markdown.includes('Clear, warm and confident.'));
     assert.ok(!frozen.markdown.includes(selectedPng.dataUri)); assert.ok(frozen.markdown.includes(`desegnos-asset:${selectedPng.id}`)); assert.ok(frozen.markdown.includes(selectedPng.sha256));
     assert.equal(provider.generationRequests().length, generationCount);

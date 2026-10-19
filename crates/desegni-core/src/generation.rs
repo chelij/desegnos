@@ -326,6 +326,13 @@ impl GenerationCandidate {
         if snapshot.format_version()? >= 8 {
             self.validate_project_images()?;
         }
+        if snapshot.format_version()? >= 9 {
+            for page in &self.pages {
+                crate::validate_page_source(&page.content)
+                    .map_err(|error| Error(error.to_string()))?;
+                page.content.found_sources()?;
+            }
+        }
         self.validate_scope(snapshot, project)
     }
 

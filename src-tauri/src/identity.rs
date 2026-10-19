@@ -6,7 +6,7 @@ use crate::{
 };
 use desegni_ai::{
     AuthenticationMethod, CancellationToken, IdentityImage, ProviderProgress, ProviderResponse,
-    SubmissionOutcome, TokenUsage, estimate_identity_for_auth,
+    SubmissionOutcome, TokenUsage,
 };
 use desegni_core::{
     Appearance, Brief, Decision, IdentityAsset, ImportedIdentity, Project, RequirementsSnapshot,
@@ -457,6 +457,7 @@ fn freeze(
         page_count: 0,
         dependencies: BTreeMap::new(),
         dossier_context: None,
+        capabilities: None,
     };
     Ok((snapshot, images))
 }
@@ -713,14 +714,16 @@ impl IdentityService {
             .ok_or("This identity analysis is no longer active.")?
             .clone();
         let (requirements, images) = freeze(&record.source, &record.file_ids, job_id)?;
-        estimate_identity_for_auth(
-            access.authentication,
-            &requirements,
-            &candidate_schema(),
-            &access.settings,
-            &images,
-        )
-        .map_err(error)?;
+        access
+            .client
+            .estimate_identity(
+                access.authentication,
+                &requirements,
+                &candidate_schema(),
+                &access.settings,
+                &images,
+            )
+            .map_err(error)?;
         record.authentication = Some(access.authentication);
         record.account_id = access.account_id;
         record.submitted = true;

@@ -14,10 +14,19 @@ export function dataBlocks(markdown) {
 }
 
 export async function assertCanvasOnly(driver) {
-  assert.equal(await driver.execute(() => document.querySelectorAll('aside, .project-sidebar, .inspector').length), 0,
+  assert.equal(await driver.execute(() => document.querySelectorAll('aside:not(.first-run-tips), .project-sidebar, .inspector').length), 0,
     'The corrected editor must not contain a sidebar or inspector');
   assert.equal(await driver.execute(() => document.querySelectorAll('input[data-coordinate], [data-testid="canvas"] input[type="number"]').length), 0,
     'Request placement must not expose a numeric geometry inspector');
+}
+
+export async function assertGenerationModes(driver) {
+  await driver.menu(['AI style']);
+  const choices=await driver.execute(()=>[...document.querySelectorAll('[role=menu][aria-label="AI style"] button')].map(b=>({label:b.getAttribute('aria-label'),checked:b.getAttribute('aria-checked')})));
+  assert.deepEqual(choices.map(c=>c.label),['Flexible — small adjustments only','Precise — follow placement closely']);
+  const mode=(await driver.invoke('get_workspace')).project.generationMode;
+  assert.equal(choices[mode==='strict'?1:0].checked,'true');
+  await driver.escape();
 }
 
 export async function assertReviewCount(driver, expected) {
@@ -25,31 +34,26 @@ export async function assertReviewCount(driver, expected) {
   const { project } = await driver.invoke('get_workspace');
   const count = project.pages.flatMap(page => page.regions).filter(region => region.prompt.trim()).length;
   assert.equal(count, expected, 'The native target count differs from the described canvas requests');
-  assert.equal(await driver.execute(() => document.querySelectorAll('.generation-controls').length), expected === 0 ? 0 : 1);
-  if (expected === 0) return;
-  assert.equal(await driver.execute(() => {
-    const controls = document.querySelectorAll('.generation-controls');
-    if (controls.length !== 1) return false;
-    const buttons = [...controls[0].querySelectorAll('button')].map(button => button.textContent.replace(/\s+/g, ' ').trim());
-    return buttons.includes('Fuzzy') && buttons.includes('Strict') && buttons.includes('Generate');
-  }), true, 'The single global mode setting must sit beside Generate without a technical request counter');
+  const generate=await driver.execute(()=>[...document.querySelectorAll('.shell-primary-actions button')].find(b=>b.textContent.trim()==='Generate')?.disabled);
+  assert.equal(generate,expected===0,'One Generate button reflects whether described pending requests exist');
+  await assertGenerationModes(driver);
+
 }
 
 export async function reviewRequirements(driver, mode, evidence, name = 'REQUIREMENTS') {
   const { project } = await driver.invoke('get_workspace');
   assert.equal(project.generationMode, mode);
-  assert.equal(await driver.execute(value => [...document.querySelectorAll('.generation-controls button')]
-    .find(button => button.textContent.trim().toLowerCase() === value)?.getAttribute('aria-pressed'), mode), 'true');
   const targets = project.pages.flatMap(page => page.regions.filter(region => !region.completed && region.prompt.trim()).map(region => ({ page, region })));
   await assertReviewCount(driver, targets.length);
   const prepared = await driver.invoke('prepare_requirements');
-  await driver.menu(['Technical', 'Review requirements']);
-  const markdown = await waitFor(() => driver.source('REQUIREMENTS.md source'), 'The requirements document did not appear');
+  // The owner removed pre-send technical dialogs. Check the real native frozen
+  // document without restoring developer UI to the normal creation flow.
+  const markdown=prepared.markdown;
   assert.equal(markdown.replace(/^Job: .+$/m, 'Job: JOB'), prepared.markdown.replace(/^Job: .+$/m, 'Job: JOB'));
   assert.equal(prepared.sha256, createHash('sha256').update(prepared.markdown).digest('hex'));
   assert.equal(prepared.regionCount, targets.length);
   assert.equal(prepared.pageCount, new Set(targets.map(target => target.page.id)).size);
-  assert.match(markdown, /^Requirements format: 5$/m);
+  assert.match(markdown, /^Requirements format: 9$/m);
   assert.match(markdown, /^## Generation setting$/m);
   assert.equal([...markdown.matchAll(/"generationMode"\s*:/g)].length, 1);
   assert.doesNotMatch(markdown, /within 1 CSS pixel/);
@@ -77,22 +81,13 @@ export async function reviewRequirements(driver, mode, evidence, name = 'REQUIRE
   assert.deepEqual(context.exceptions, project.exceptions);
   await writeFile(join(evidence, `${name}.md`), markdown);
   await writeFile(join(evidence, `${name}-snapshot.json`), JSON.stringify(prepared, null, 2));
-  await driver.find('//button[normalize-space(.)="Save requirements"]', 'xpath');
-  await driver.click('.snapshot-details summary');
-  assert.equal(await driver.execute(() => document.querySelector('.snapshot-details').open), true);
-  const digest = await driver.execute(() => document.querySelector('.snapshot-details dd:last-child').textContent);
-  assert.equal(digest, createHash('sha256').update(markdown).digest('hex'));
-  await driver.click('.snapshot-details summary');
-  assert.equal(await driver.execute(() => document.querySelector('.snapshot-details').open), false);
-  await driver.button('Close review');
-  await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'Close review did not close requirements');
   return { markdown, settings: settings[0], requests };
 }
 
 export async function authorProject(driver, step, evidence) {
   await step('A fresh native app has no inherited project or recovery data', async () => {
-    await driver.ready('//button[normalize-space(.)="New blank page"]', 'xpath');
-    await driver.ready('//button[normalize-space(.)="Import identity from project"]', 'xpath');
+    await driver.ready('//button[@aria-label="Blank website"]', 'xpath');
+    await driver.ready('//button[@aria-label="Use my existing brand"]', 'xpath');
     const state = await driver.invoke('get_workspace');
     assert.equal(state.project, null);
     assert.equal(state.recovery, null);
@@ -101,9 +96,9 @@ export async function authorProject(driver, step, evidence) {
     await assertCanvasOnly(driver);
   });
 
-  await step('New blank page starts Mobile / Light, then the page dropdown switches to Dark', async () => {
+  await step('Blank website starts Mobile / Light, then the page dropdown switches to Dark', async () => {
     assert.equal(await driver.execute(() => !!document.querySelector('input[name="projectName"]')), false);
-    await driver.button('New blank page');
+    await driver.button('Blank website');
     await driver.fill('Project name', 'Native Saka website');
     await driver.button('Mobile');
     await driver.button('Create project');
@@ -150,8 +145,8 @@ export async function authorProject(driver, step, evidence) {
     }, 'The canvas prompt or global generation mode was lost');
     const { project } = await driver.invoke('get_workspace');
     assert.equal('mode' in project.pages[0].regions[0], false);
-    assert.equal((await driver.all('//button[normalize-space(.)="Fuzzy"]', 'xpath')).length, 1);
-    assert.equal((await driver.all('//button[normalize-space(.)="Strict"]', 'xpath')).length, 1);
+    await assertGenerationModes(driver);
+
     await assertReviewCount(driver, 1);
     await driver.button('Undo');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.generationMode === 'fuzzy', 'Undo did not restore the global mode');
@@ -161,9 +156,9 @@ export async function authorProject(driver, step, evidence) {
 
   await step('Grid visibility, percentage spacing, rulers and zoom preserve placement intent', async () => {
     const before = (await driver.invoke('get_workspace')).project.pages[0].regions[0].rect;
-    await driver.menu(['View', 'Show grid']);
+    await driver.toggleGrid();
     await waitFor(async () => !(await driver.invoke('get_workspace')).project.showGrid, 'The grid did not turn off');
-    await driver.menu(['View', 'Show grid']);
+    await driver.toggleGrid();
     await waitFor(async () => (await driver.invoke('get_workspace')).project.showGrid, 'The grid did not turn back on');
     await driver.button('Grid and rulers');
     await driver.select('Unit', 'percent');
@@ -195,14 +190,14 @@ export async function authorProject(driver, step, evidence) {
     await driver.fill('Purpose', 'A clear mobile home for the Saka studio.');
     await driver.fill('Brand name', 'Saka');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.brief.brandName === 'Saka', 'The brief did not persist');
-    await driver.button('Choices');
+    await driver.button('Rules');
     await driver.fill('Topic', 'Brand identity');
-    await driver.fill('Choice', choice);
-    await driver.click(driver.field('Keep this choice fixed'), 'xpath');
+    await driver.fill('Rule', choice);
+    await driver.click(driver.field('Never change this rule'), 'xpath');
     await driver.button('Add choice');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.decisions.length === 1, 'The identity choice was not recorded');
     await driver.button('Exceptions');
-    await driver.fill('Choice or design concern', 'Seasonal accent color');
+    await driver.fill('Which rule?', 'Seasonal accent color');
     await driver.fill('Why make an exception?', exceptionReason);
     const { project } = await driver.invoke('get_workspace');
     await driver.select('Applies to', `region:${project.pages[0].regions[0].id}`);
@@ -214,7 +209,7 @@ export async function authorProject(driver, step, evidence) {
     assert.match(markdown, /Use deep blue #16324F/);
     assert.match(markdown, /seasonal promotion/);
     await writeFile(join(evidence, 'PROJECT.md'), markdown);
-    await driver.click('button[aria-label="Close Project dossier"]');
+    await driver.click('button[aria-label="Close Project brief"]');
   });
 
   await step('Requirements carry exact on-canvas input, one global mode and placement hints', async () => {

@@ -9,8 +9,10 @@ mod layers;
 mod migration;
 mod model;
 mod project_assets;
+mod provenance;
 mod requirements;
 mod session;
+mod source;
 
 pub use dossier::*;
 pub use editing::*;
@@ -22,8 +24,10 @@ pub use layers::*;
 pub use migration::*;
 pub use model::*;
 pub use project_assets::*;
+pub use provenance::*;
 pub use requirements::*;
 pub use session::*;
+pub use source::*;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

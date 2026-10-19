@@ -118,13 +118,14 @@ export class WebDriver {
       return [...document.querySelectorAll('button')].some(button => (button.getAttribute('aria-label') === label || button.textContent.trim() === label)
         && button.getClientRects().length && getComputedStyle(button).visibility === 'visible' && !button.matches(':disabled') && (!top || top.contains(button)));
     }, text);
+    if (text === 'Fuzzy' || text === 'Strict') return this.menu(['AI style', text === 'Strict' ? 'Precise — follow placement closely' : 'Flexible — small adjustments only']);
     const routes = {
       'Add page': ['Add page'], 'AI settings':['AI settings'],
       'New project': ['New project'], 'Open project': ['Open project'], Save: ['Save'], 'Save as': ['Save as'],
-      'Project dossier': ['Project brief'], 'Recover projects': ['Project', 'Recover projects'],
-      Undo: ['Edit', 'Undo'], Redo: ['Edit', 'Redo'], 'Remove request': ['Edit', 'Remove request'],
+      'Project dossier': ['Project brief'], 'Recover projects': ['Recover unsaved projects'],
+
       'Page settings': ['Page settings'], 'Remove page': ['Remove page'],
-      'Review requirements': ['Technical', 'Review requirements'], 'Generation status': ['AI', 'Generation status'],
+      'Generation status': null,
     };
     if (!visible && routes[text]) return this.menu(routes[text]);
     // Keep the target tied to its accessible name while the UI changes around it.
@@ -154,8 +155,11 @@ export class WebDriver {
   }
 
   async select(label, value) {
-    if (label === 'Zoom') return this.menu(['View', 'Zoom', `${Number(value) * 100}%`]);
-    if (label === 'Editor theme') return this.menu(['View', 'Editor appearance', value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark']);
+    if (label === 'Page appearance') {
+      await this.menu(['Page settings']); await this.select('Website appearance', value); return this.button('Save page');
+    }
+    if (label === 'Zoom') return this.menu([`${Number(value) * 100}%`], 'Canvas zoom');
+    if (label === 'Editor theme') return this.menu(['Editor theme', value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark']);
     if (label === 'Page') return this.page(value);
     await this.ready(this.field(label), 'xpath');
     return this.execute((name, choice) => {
@@ -168,6 +172,20 @@ export class WebDriver {
     }, label, value);
   }
 
+  async toggleGrid() {
+    await this.button('Grid and rulers');
+    await this.click('//label[normalize-space(.)="Show grid"]/input', 'xpath');
+    await this.button('Save grid settings');
+  }
+  async revealSelection() {
+    await this.button('Layers');
+    await this.click('section[aria-label="Layers"] .layer-row[data-selected="true"] button.layer-select');
+    await this.button('Close Layers');
+  }
+  async escape() {
+    await this.command('POST','/actions',{actions:[{type:'key',id:'keyboard',actions:[{type:'keyDown',value:'\uE00C'},{type:'keyUp',value:'\uE00C'},{type:'keyDown',value:'\uE00C'},{type:'keyUp',value:'\uE00C'}]}]});
+    await this.command('DELETE','/actions');
+  }
   source(label) { return this.execute(name => document.querySelector(`pre[aria-label="${name}"]`)?.textContent ?? null, label); }
   screenshot() { return this.command('GET', '/screenshot'); }
 }

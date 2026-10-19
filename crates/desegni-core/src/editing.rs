@@ -134,7 +134,7 @@ pub(crate) fn locate<'a>(doc: &'a Document, target: &ElementTarget) -> Result<No
     )?;
     Ok(node)
 }
-fn selector(node: NodeRef<'_>, body: NodeRef<'_>) -> Option<String> {
+pub(crate) fn selector(node: NodeRef<'_>, body: NodeRef<'_>) -> Option<String> {
     let mut node = node;
     let mut parts = vec![];
     while node.id != body.id {
@@ -159,6 +159,14 @@ fn selector(node: NodeRef<'_>, body: NodeRef<'_>) -> Option<String> {
     parts.push("body".into());
     parts.reverse();
     Some(parts.join(" > "))
+}
+
+fn clear_found_ancestry(node: NodeRef<'_>) {
+    let mut current = Some(node);
+    while let Some(node) = current {
+        node.remove_attr(crate::FOUND_CONTENT_ATTRIBUTE);
+        current = node.parent();
+    }
 }
 fn text_nodes(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
     let mut pending = vec![node];
@@ -354,18 +362,22 @@ impl Project {
                         indexes.insert(text.index),
                         "A text block was supplied twice.",
                     )?;
-                    nodes
-                        .get(text.index)
-                        .ok_or_else(|| {
-                            Error("The text changed. Reopen the element editor.".into())
-                        })?
-                        .set_text(text.text.as_str());
+                    let text_node = nodes.get(text.index).ok_or_else(|| {
+                        Error("The text changed. Reopen the element editor.".into())
+                    })?;
+                    if text_node.text().as_ref() != text.text {
+                        clear_found_ancestry(*text_node);
+                        text_node.set_text(text.text.as_str());
+                    }
                 }
                 for (name, value) in attributes {
                     ensure(
                         ATTRIBUTES.contains(&name.as_str()),
                         "This attribute cannot be edited with this control.",
                     )?;
+                    if name == "src" && node.attr(name).as_deref() != value.as_deref() {
+                        clear_found_ancestry(node);
+                    }
                     if let Some(value) = value {
                         check_value(value, crate::MAX_SITE_SOURCE_BYTES)?;
                         if name == "href" {

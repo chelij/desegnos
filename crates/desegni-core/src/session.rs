@@ -47,6 +47,22 @@ impl Session {
         Ok(())
     }
 
+    pub fn edit_page_source(
+        &mut self,
+        revision: u64,
+        page_id: uuid::Uuid,
+        edit: &crate::PageSourceEdit,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> crate::SourceEditResult<()> {
+        self.assert_revision(revision)?;
+        let candidate = self.project.edit_page_source(revision, page_id, edit)?;
+        if candidate.revision != self.project.revision {
+            durable(&candidate)?;
+            self.commit(candidate);
+        }
+        Ok(())
+    }
+
     pub fn edit_element(
         &mut self,
         revision: u64,

@@ -209,6 +209,7 @@ fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
         page_count: 1,
         dependencies: BTreeMap::new(),
         dossier_context: None,
+        capabilities: None,
     }
 }
 
@@ -2939,4 +2940,21 @@ async fn web_search_events_preserve_the_single_structured_answer_and_reject_tool
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn citation_annotations_do_not_modify_the_structured_json_answer() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let mut events = finalized_answer_events(&frozen, Some("final_answer"));
+    let done = events
+        .iter_mut()
+        .find(|event| {
+            event["type"] == "response.output_item.done" && event["item"]["type"] == "message"
+        })
+        .unwrap();
+    done["item"]["content"][0]["annotations"] = json!([{"type":"url_citation","url":"https://example.com/history","title":"Lighthouse history","start_index":0,"end_index":10}]);
+    let response = generate_events(&frozen, events, AuthenticationMethod::ApiKey)
+        .await
+        .unwrap();
+    assert_eq!(response.text, candidate(&frozen));
 }

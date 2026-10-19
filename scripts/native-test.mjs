@@ -19,6 +19,7 @@ import { uxAuditWorkflow } from '../tests/native/ux-audit-workflow.mjs';
 import { canvasInputWorkflow } from '../tests/native/canvas-input-workflow.mjs';
 import { logoScopeWorkflow } from '../tests/native/logo-scope-workflow.mjs';
 import { layersWorkflow } from '../tests/native/layers-workflow.mjs';
+import { sourceEditWorkflow } from '../tests/native/source-edit-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const guardedXvfb = '~/.local/bin/xvfb-run';
@@ -170,7 +171,10 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'layers') {
+    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'source-edit') {
+      report.scope = 'Source editing, validation diagnostics, source map, history, archive and real export.';
+      project = await sourceEditWorkflow(driver, physical, step, evidence);
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'layers') {
       report.scope = 'Focused native Layers, real system clipboard, visual stacking, local history, export and recovery.';
       project = await layersWorkflow(driver, physical, step, evidence, provider);
     } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'canvas-input') {
@@ -271,20 +275,21 @@ async function runIsolated() {
 
 async function main() {
   if (args.includes('--help')) {
-    console.log('node scripts/native-test.mjs [--skip-build] [--ux-audit-only|--identity-only|--canvas-input-only|--layers-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
+    console.log('node scripts/native-test.mjs [--skip-build] [--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
     return;
   }
   if (process.platform !== 'linux') throw new Error('This runner requires the guarded Linux Xvfb route. Native Windows/macOS isolation must be configured on those runners.');
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
   if (args.includes('--canvas-input-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'canvas-input';
   if (args.includes('--identity-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'identity';
   if (args.includes('--generation-only') || args.includes('--ux-audit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'audit';
   if (args.includes('--logo-scope-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'logo-scope';
   if (args.includes('--layers-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'layers';
+  if (args.includes('--source-edit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'source-edit';
   process.chdir(root);
   const target = resolve('target/native-tests');
   const binary = resolve(binaryIndex === -1 ? join(target, 'debug/desegnos') : args[binaryIndex + 1]);

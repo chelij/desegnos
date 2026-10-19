@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { waitFor } from './webdriver.mjs';
-import { assertCanvasOnly, reviewRequirements } from './workflow.mjs';
+import { assertCanvasOnly, reviewRequirements, assertGenerationModes } from './workflow.mjs';
 
 const helper = fileURLToPath(new URL('./x11-input.py', import.meta.url));
 
@@ -209,8 +209,8 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
       await waitFor(async () => (await driver.invoke('get_workspace')).project.generationMode === mode, 'The global generation setting did not persist');
       const checked = await reviewRequirements(driver, mode, evidence, `two-requests-${mode}`);
       assert.equal(checked.requests.length, 2);
-      assert.equal((await driver.all('//button[normalize-space(.)="Fuzzy"]', 'xpath')).length, 1);
-      assert.equal((await driver.all('//button[normalize-space(.)="Strict"]', 'xpath')).length, 1);
+      await assertGenerationModes(driver);
+
       assert.equal((await driver.invoke('get_workspace')).project.pages[0].regions.every(request => !('mode' in request)), true);
     }
   });
@@ -235,7 +235,7 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
     const frozen = reviewed.requests.find(item => item.regionId === request.id);
     assert.deepEqual(frozen.placementHint, request.rect);
     assert.ok(frozen.placementPercent.x < 0, 'Requirements must express intentional negative percentages');
-    await driver.menu(['Edit', 'Remove request']);
+    await driver.click('.element-toolbar [aria-label="Delete layer"]');
     await driver.click('//dialog[@open]//button[normalize-space(.)="Remove"]', 'xpath');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions.length === 2, 'The temporary off-guide request was not removed');
     assert.deepEqual((await driver.invoke('get_workspace')).project.pages, before.pages);
@@ -262,7 +262,7 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
     await physical.keys('Right');
     const moved = await waitFor(async () => { const value = await region(2); return Math.abs(value.rect.x - snapped.rect.x - steps.x) < 0.000001 && value; }, 'The move grip did not use the configured 5% step');
     await writeFile(join(evidence, 'percentage-grid-gesture.json'), JSON.stringify({ settings: { ...before.gridSettings, snap: true }, steps, snapped: snapped.rect, moved: moved.rect }, null, 2));
-    await driver.menu(['Edit', 'Remove request']);
+    await driver.click('.element-toolbar [aria-label="Delete layer"]');
     await driver.click('//dialog[@open]//button[normalize-space(.)="Remove"]', 'xpath');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions.length === 2, 'The temporary snapping request was not removed');
     await driver.button('Grid and rulers');
@@ -364,7 +364,7 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
     for (const zoom of [0.25, 0.5, 0.75, 1, 1.5, 2]) {
       await driver.select('Zoom', String(zoom));
       await waitFor(() => driver.execute(value => Math.abs(document.querySelector('[data-testid="screen-guide"]').getBoundingClientRect().width - 390 * value) < 1, zoom), 'The chosen zoom did not render');
-      await driver.menu(['View', 'Show selection']);
+      await driver.revealSelection();
       await driver.executeAsync(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
       await physical.click(await physical.center('button[aria-label="Move request 2"]'));
       await physical.keys('Tab');
@@ -383,7 +383,7 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
     }
     await writeFile(join(evidence, 'zoom-legibility.json'), JSON.stringify(measurements, null, 2));
     await driver.select('Zoom', '0.75');
-    await driver.menu(['View', 'Center screen guide']);
+    await driver.press('[data-testid="canvas"]', '\uE011');
     const centered = await waitFor(() => driver.execute(() => {
       const scroll = document.querySelector('[data-testid="workspace-scroll"]');
       const guide = document.querySelector('[data-testid="screen-guide"]').getBoundingClientRect();

@@ -3,7 +3,7 @@ use crate::{GenerationCandidate, Result, editing, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const MAX_DOWNLOADED_IMAGES: usize = 4;
+pub const MAX_DOWNLOADED_IMAGES: usize = 8;
 pub const MAX_DOWNLOADED_IMAGE_BYTES: usize = 256 * 1024;
 
 impl GenerationCandidate {

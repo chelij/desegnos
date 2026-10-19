@@ -202,7 +202,7 @@ fn requirements_reference_original_identity_images_without_transcribing_their_by
     assert!(markdown.contains(&imported.assets[0].id.to_string()));
     assert!(!markdown.contains("data:image/"));
     let snapshot = project.prepare_requirements().unwrap();
-    assert!(snapshot.markdown.contains("Requirements format: 8"));
+    assert!(snapshot.markdown.contains("Requirements format: 9"));
     assert!(!snapshot.markdown.contains(&imported.assets[0].data_uri));
     assert!(
         snapshot
@@ -240,7 +240,7 @@ fn requirements_reference_original_identity_images_without_transcribing_their_by
             .prepare_requirements()
             .unwrap()
             .markdown
-            .contains("Requirements format: 8")
+            .contains("Requirements format: 9")
     );
 }
 

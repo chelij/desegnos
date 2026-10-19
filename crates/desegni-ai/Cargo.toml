@@ -33,6 +33,7 @@ keyring = { version = "=3.6.3", default-features = false, features = ["apple-nat
 keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]
+desegni-storage = { path = "../desegni-storage" }
 tokio = { version = "=1.53.3", default-features = false, features = ["rt-multi-thread", "net", "io-util", "test-util"] }
 
 [lints]

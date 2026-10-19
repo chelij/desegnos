@@ -121,7 +121,7 @@ export async function savedState(driver, path) {
 
 async function toggleGrid(driver) {
   const before = await driver.invoke('get_workspace');
-  await driver.menu(['View', 'Show grid']);
+  await driver.toggleGrid();
   return waitFor(async () => {
     const state = await driver.invoke('get_workspace');
     return state.project.showGrid !== before.project.showGrid && state.project.revision > before.project.revision && state;
@@ -203,9 +203,9 @@ export async function fileDialogWorkflow(driver, physical, step, evidence) {
   });
 
   await step('Native Save requirements picker writes the exact displayed frozen Markdown bytes', async () => {
-    await driver.menu(['Technical', 'Review requirements']);
-    const markdown = await waitFor(() => driver.source('REQUIREMENTS.md source'), 'The requirements document was not displayed');
-    await chooseFile(physical, () => driver.button('Save requirements'), requirementsPath, evidence, 'picker-06-save-requirements');
+    const prepared=await driver.invoke('prepare_requirements');
+    const markdown=prepared.markdown;
+    await chooseFile(physical, () => driver.invoke('save_requirements',{jobId:prepared.jobId}), requirementsPath, evidence, 'picker-06-save-requirements');
     const actual = await waitFor(async () => {
       try { return await readFile(requirementsPath); }
       catch (error) { if (error.code === 'ENOENT') return false; throw error; }
@@ -216,7 +216,6 @@ export async function fileDialogWorkflow(driver, physical, step, evidence) {
       path: requirementsPath, bytes: actual.length, sha256: createHash('sha256').update(actual).digest('hex'),
       jobId: markdown.match(/^Job: (.+)$/m)?.[1],
     }, null, 2));
-    await driver.click('button[aria-label="Close Review requirements"]');
   });
 
   let dirty;

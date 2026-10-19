@@ -59,7 +59,7 @@ export async function directEditingWorkflow(driver, physical, step, output, prov
     const node = [...document.querySelectorAll('.element-toolbar button')].find(node => node.getAttribute('aria-label') === label || node.textContent.trim() === label); const r = node.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};
   }, text);
   await step('Single-click outlines the actual element and direct text/style edits preserve nested markup without provider calls', async () => {
-    await driver.select('Zoom', '0.75'); await driver.menu(['View', 'Center screen guide']);
+    await driver.select('Zoom', '0.75'); await driver.press('[data-testid="canvas"]', '\uE011');
     await clickElement();
     assert.deepEqual((await workspace()).project, initial);
     assert.equal(await driver.execute(() => document.querySelectorAll('.annotation textarea').length), initial.pages[0].regions.filter(region => !region.completed).length);
@@ -97,7 +97,7 @@ export async function directEditingWorkflow(driver, physical, step, output, prov
     const configured = { ...before.gridSettings, spacing: 8, unit: 'pixels', snap: true };
     const changedGrid = Object.entries(configured).some(([key, value]) => before.gridSettings[key] !== value);
     if (changedGrid) await setGrid(configured);
-    await driver.select('Zoom', '1'); await driver.menu(['View', 'Center screen guide']); await clickElement(); await ready();
+    await driver.select('Zoom', '1'); await driver.press('[data-testid="canvas"]', '\uE011'); await clickElement(); await ready();
     const prior = await layout();
     await physical.drag(prior.point, {x:prior.point.x+11,y:prior.point.y+13});
     await waitFor(async()=>{const item=await layout();return item&&Math.abs(item.x-Math.round((prior.x+11)/8)*8)<.6&&Math.abs(item.y-Math.round((prior.y+13)/8)*8)<.6;},'Actual-size movement did not snap to grid'); await ready();
@@ -112,7 +112,7 @@ export async function directEditingWorkflow(driver, physical, step, output, prov
     assert.ok(Math.abs(bar.left)<.7&&Math.abs(bar.gap-8)<.7,JSON.stringify(bar));
     assert.deepEqual((await workspace()).project.pages,before.pages);
     if (changedGrid) await setGrid(before.gridSettings);
-    await driver.select('Zoom','0.75'); await driver.menu(['View','Center screen guide']); await clickElement(); await ready();
+    await driver.select('Zoom','0.75'); await driver.press('[data-testid="canvas"]', '\uE011'); await clickElement(); await ready();
     assert.equal(provider.generationRequests().length,requests);
   });
   await step('Four real corner drags resize the actual element, anchor the opposite corner and keep the icon bar above its top-left', async () => {

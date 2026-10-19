@@ -1231,6 +1231,8 @@ fn session_credentials_do_not_enter_disclosure_job_files_or_returned_settings() 
     let project = project();
     let prepared = service.prepare(&project).unwrap();
     let view = AiSettingsView {
+        provider: ProviderId::Openai,
+        providers: provider_catalogue(),
         settings: service.settings.clone(),
         credential: service.credentials.status(),
         catalogue: model_catalogue(),
@@ -1412,4 +1414,50 @@ fn benchmark_capture_is_opt_in_and_preserves_exact_output_per_attempt() {
         fs::read_to_string(directory.join("provider-output-2.txt")).unwrap(),
         "Second attempt"
     );
+}
+
+#[test]
+fn provider_selection_survives_restart_and_keeps_keys_and_settings_separate() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    service
+        .credentials
+        .set_key("openai-session-fixture".into(), CredentialStorage::Session)
+        .unwrap();
+    service
+        .select_provider(ProviderId::Anthropic, true)
+        .unwrap();
+    assert_eq!(service.settings.model, "claude-sonnet-5-5");
+    assert!(!service.credentials.status().configured);
+    service.credentials = Arc::new(CredentialManager::isolated_for_tests());
+    service
+        .credentials
+        .set_key(
+            "anthropic-session-fixture".into(),
+            CredentialStorage::Session,
+        )
+        .unwrap();
+    service.select_provider(ProviderId::Openai, true).unwrap();
+    assert_eq!(service.settings.model, desegni_ai::MODEL_ID);
+    assert!(service.credentials.status().configured);
+    service
+        .select_provider(ProviderId::Anthropic, true)
+        .unwrap();
+    assert!(service.credentials.status().configured);
+    let project = project();
+    let prepared = service.prepare(&project).unwrap();
+    assert_eq!(prepared.provider, ProviderId::Anthropic);
+    assert_eq!(
+        prepared.requirements.capabilities,
+        Some(ProviderId::Anthropic.capabilities())
+    );
+    service.select_provider(ProviderId::Google, true).unwrap();
+    let mut restarted = GenerationService::from_directory(service.directory.clone()).unwrap();
+    assert_eq!(restarted.provider, ProviderId::Google);
+    assert_eq!(restarted.settings.model, "gemini-3.8-flash");
+    assert_eq!(
+        restarted.latest(&project).unwrap().unwrap().provider,
+        ProviderId::Anthropic
+    );
+    assert!(restarted.select_provider(ProviderId::Local, true).is_err());
 }

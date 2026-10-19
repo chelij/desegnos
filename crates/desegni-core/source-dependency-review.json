@@ -1,0 +1,310 @@
+{
+  "reviewedAt": "2026-10-19",
+  "database": "https://github.com/RustSec/advisory-db",
+  "databaseCommit": "999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b",
+  "scope": "Packages newly added to Cargo.lock for source validation; package-name match against every RustSec advisory, not an audit of preexisting packages.",
+  "packages": [
+    {
+      "name": "ahash",
+      "version": "0.8.12",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/tkaitchuck/ahash"
+    },
+    {
+      "name": "allocator-api2",
+      "version": "0.2.21",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/zakarumych/allocator-api2"
+    },
+    {
+      "name": "ar_archive_writer",
+      "version": "0.5.3",
+      "license": "Apache-2.0 WITH LLVM-exception",
+      "repository": "https://github.com/rust-lang/ar_archive_writer"
+    },
+    {
+      "name": "ast_node",
+      "version": "7.0.0",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "better_scoped_tls",
+      "version": "1.0.1",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "bytes-str",
+      "version": "0.2.9",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/dudykr/ddbase.git"
+    },
+    {
+      "name": "const-str",
+      "version": "1.1.0",
+      "license": "MIT",
+      "repository": "https://github.com/Nugine/const-str"
+    },
+    {
+      "name": "convert_case",
+      "version": "0.6.0",
+      "license": "MIT",
+      "repository": "https://github.com/rutrum/convert-case"
+    },
+    {
+      "name": "cssparser-color",
+      "version": "0.5.0",
+      "license": "MPL-2.0",
+      "repository": "https://github.com/servo/rust-cssparser"
+    },
+    {
+      "name": "data-encoding",
+      "version": "2.11.1",
+      "license": "MIT",
+      "repository": "https://github.com/ia0/data-encoding"
+    },
+    {
+      "name": "either",
+      "version": "1.19.0",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rayon-rs/either"
+    },
+    {
+      "name": "from_variant",
+      "version": "3.0.0",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "hashbrown",
+      "version": "0.14.5",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/hashbrown"
+    },
+    {
+      "name": "hstr",
+      "version": "4.0.3",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "is-macro",
+      "version": "0.3.8",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/dudykr/ddbase.git"
+    },
+    {
+      "name": "itertools",
+      "version": "0.10.5",
+      "license": "MIT/Apache-2.0",
+      "repository": "https://github.com/rust-itertools/itertools"
+    },
+    {
+      "name": "lazy_static",
+      "version": "1.5.1",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang-nursery/lazy-static.rs"
+    },
+    {
+      "name": "lightningcss",
+      "version": "1.0.0-alpha.72",
+      "license": "MPL-2.0",
+      "repository": "https://github.com/parcel-bundler/lightningcss"
+    },
+    {
+      "name": "lightningcss-derive",
+      "version": "1.0.0-alpha.43",
+      "license": "MPL-2.0",
+      "repository": "https://github.com/parcel-bundler/lightningcss"
+    },
+    {
+      "name": "object",
+      "version": "0.39.1",
+      "license": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/gimli-rs/object"
+    },
+    {
+      "name": "parcel_selectors",
+      "version": "0.28.3",
+      "license": "MPL-2.0",
+      "repository": "https://github.com/parcel-bundler/lightningcss"
+    },
+    {
+      "name": "pastey",
+      "version": "0.1.1",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/as1100k/pastey"
+    },
+    {
+      "name": "pathdiff",
+      "version": "0.2.3",
+      "license": "MIT/Apache-2.0",
+      "repository": "https://github.com/Manishearth/pathdiff"
+    },
+    {
+      "name": "phf",
+      "version": "0.11.3",
+      "license": "MIT",
+      "repository": "https://github.com/rust-phf/rust-phf"
+    },
+    {
+      "name": "phf_codegen",
+      "version": "0.11.3",
+      "license": "MIT",
+      "repository": "https://github.com/rust-phf/rust-phf"
+    },
+    {
+      "name": "phf_generator",
+      "version": "0.11.3",
+      "license": "MIT",
+      "repository": "https://github.com/rust-phf/rust-phf"
+    },
+    {
+      "name": "phf_macros",
+      "version": "0.11.3",
+      "license": "MIT",
+      "repository": "https://github.com/rust-phf/rust-phf"
+    },
+    {
+      "name": "phf_shared",
+      "version": "0.11.3",
+      "license": "MIT",
+      "repository": "https://github.com/rust-phf/rust-phf"
+    },
+    {
+      "name": "psm",
+      "version": "0.1.32",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/stacker/"
+    },
+    {
+      "name": "scoped-tls",
+      "version": "1.0.1",
+      "license": "MIT/Apache-2.0",
+      "repository": "https://github.com/alexcrichton/scoped-tls"
+    },
+    {
+      "name": "seq-macro",
+      "version": "0.3.6",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/dtolnay/seq-macro"
+    },
+    {
+      "name": "siphasher",
+      "version": "0.3.11",
+      "license": "MIT/Apache-2.0",
+      "repository": "https://github.com/jedisct1/rust-siphash"
+    },
+    {
+      "name": "stacker",
+      "version": "0.1.25",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/rust-lang/stacker"
+    },
+    {
+      "name": "string_enum",
+      "version": "1.0.2",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_atoms",
+      "version": "10.0.0",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_common",
+      "version": "26.0.0",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_ecma_ast",
+      "version": "29.0.2",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_ecma_parser",
+      "version": "46.1.1",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_eq_ignore_macros",
+      "version": "1.0.1",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_html_ast",
+      "version": "26.0.0",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_html_parser",
+      "version": "26.1.0",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_html_utils",
+      "version": "17.0.0",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_macros_common",
+      "version": "1.0.1",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "swc_visit",
+      "version": "2.0.2",
+      "license": "Apache-2.0",
+      "repository": "https://github.com/swc-project/swc.git"
+    },
+    {
+      "name": "triomphe",
+      "version": "0.1.17",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/Manishearth/triomphe"
+    },
+    {
+      "name": "unicode-id-start",
+      "version": "1.5.0",
+      "license": "(MIT OR Apache-2.0) AND Unicode-3.0",
+      "repository": "https://github.com/Boshen/unicode-id-start"
+    },
+    {
+      "name": "unicode-width",
+      "version": "0.2.2",
+      "license": "MIT OR Apache-2.0",
+      "repository": "https://github.com/unicode-rs/unicode-width"
+    }
+  ],
+  "matchedAdvisories": [
+    {
+      "id": "RUSTSEC-2024-0402",
+      "package": "hashbrown",
+      "version": "0.14.5",
+      "versions": {
+        "patched": [
+          ">= 0.15.1"
+        ],
+        "unaffected": [
+          "< 0.15.0"
+        ]
+      },
+      "patchedOrUnaffected": true,
+      "reason": "0.14.5 is in the advisory\u2019s unaffected <0.15.0 range."
+    }
+  ],
+  "excluded": "SWC CSS parser was rejected because it required advisory-affected lexical 6.1.1 and lexical-core 0.8.5. Neither remains in the final lockfile.",
+  "affected": [],
+  "decision": "Use established SWC HTML/ECMAScript and Lightning CSS parsers with default optional features disabled. No minification, transformation or source-output APIs are used. Authored bytes remain unchanged in project storage; no plugin runtime, bundler or Node binding was added."
+}

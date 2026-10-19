@@ -1,6 +1,6 @@
 # Generation quality benchmark
 
-Status: **UNVERIFIED**. Prepared on 19 October 2026. Codex has made **no paid calls**, loaded **no owner credentials**, and assigned **no quality ratings**. Offline fixture validation proves valid inputs, not model quality.
+Status: **UNVERIFIED** for the 18-scenario owner-rated gate. Prepared on 19 October 2026. The separate owner-authorized cleanup check below used one connected ChatGPT-plan generation; none of the 18 scenarios has been assigned a quality rating. Offline fixture validation proves valid inputs, not model quality.
 
 This implements preparation for priority 1 in `FEATURE_PRIORITIES.md`. Later feature work does not establish this gate.
 
@@ -100,3 +100,14 @@ Offline checks performed: all 18 archives load through current core/storage, val
 After a real failure, append its scenario/run, the concrete problem, the exact requirement or instruction change and the next measured result. Preserve old runs and version changed fixtures. Do not claim prompt improvements from synthetic provider responses or offline validation.
 
 The small [fixture builder](../benchmarks/generation/fixture-builder/src/main.rs) uses existing core/storage libraries only. Check mode is read-only. Write mode refuses existing archives; intentional benchmark revisions should use reviewed new inputs rather than overwrite evidence.
+
+
+## Cleanup search and placeholder checks, 19 October 2026
+
+The owner authorized one real search/photo generation through their existing ChatGPT plan instead of an API key. Native authentication, model discovery, transport, image validation, candidate validation and storage were used. Exactly one generation took 53.37 seconds, made three web searches, downloaded one real Portland Head Light photograph and produced two factual sentences with source/credit links and zero placeholder slots. Reported usage was 31,389 input and 1,778 output tokens. Billing and owner usability ratings are unknown. The live stream had no citation annotations; a separate unit stream containing URL annotations verifies that they do not modify the candidate JSON.
+
+Evidence: [`live-search-plan/result.json`](../test-results/cleanup-codex-2026-10-19/live-search-plan/result.json), exact frozen requirements/provider output/project alongside it, and [`browser-check-current.log`](../test-results/cleanup-codex-2026-10-19/live-search-plan/browser-check-current.log). The `website-current` folder is a new **offline** export made after found-content stripping was implemented. It rendered its real local photograph and credits in ordinary Chromium; editor origin attributes were absent. Earlier exports are retained as original evidence. No additional live generation was used for export verification.
+
+The benchmark runner now records `placeholdersPerPage` for each rendered page and carries the metric into summaries. It counts outer marked slots once, plus legacy text labels containing “placeholder” outside marked slots. Missing evidence remains `null`, never zero. This is a mechanical diagnostic; owner review still decides usability.
+
+The same eight-image capacity fixture, using actual local HTTP downloads/decoding and no model calls, measured format 8 at 4 downloads / 4 missing slots and format 9 at 8 downloads / 0 missing slots. See [`image-capacity-benchmark.log`](../test-results/cleanup-codex-2026-10-19/image-capacity-benchmark.log). It demonstrates removal of the four-image ceiling; it does not establish broader generated-site quality. Fixed scenario prompts, archive hashes and project IDs are unchanged; derived requirements byte counts reflect format 9.

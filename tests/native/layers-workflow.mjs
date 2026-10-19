@@ -205,7 +205,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     provider.setMode('complete', { layerAudit: true }); await driver.button('Generate');
     const job = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'applied' && value; }, 'The native layer fixture did not apply', 25_000);
     assert.equal(provider.generationRequests().length, 1); assert.equal(provider.generationRequests()[0].markdown, job.requirements.markdown);
-    await previewReady(driver); await driver.click('section[aria-label="Generated changes"] button.primary'); await driver.button('Fit'); await settled(driver);
+    await previewReady(driver); if(await driver.execute(()=>!!document.querySelector('button[aria-label="Keep changes"]'))) await driver.button('Keep changes'); await driver.button('Fit'); await settled(driver);
     baseline = await siteState(driver); assert.equal(baseline.outerHit, 'orange-card'); assert.equal(baseline.nestedHit, 'purple-card');
     assert.equal(baseline.backdrop.zIndex, '-1'); assert.equal(baseline.backdrop.pointerEvents, 'none');
     // These wrappers have no selectable box; their visible children still need
@@ -216,11 +216,11 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await physical.captureWindow(join(output, '02-generated-overlap.png'));
   });
 
-  await step('Selection has exactly four quick icons and Layers opens at its top-left anchor', async () => {
+  await step('Selection offers Edit, Ask AI and Delete, and Layers opens at its selection anchor', async () => {
     await selectSite(driver, physical, 'blue-card'); await closeLayers(driver);
     assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar button')].map(button => ({ label: button.getAttribute('aria-label'), text: button.textContent.trim() }))),
-      ['Layers', 'Copy layer', 'Cut layer', 'Delete layer'].map(label => ({ label, text: '' })));
-    await physical.click(await physical.center('.element-toolbar [data-layers-trigger]')); await driver.ready(panel); await settled(driver);
+      [{label:null,text:'Edit'},{label:null,text:'Ask AI'},{label:'Delete layer',text:''}]);
+    await driver.button('Layers'); await driver.ready(panel); await settled(driver);
     const anchor = await physical.rect('.element-toolbar'), popup = await physical.rect(panel);
     assert.ok(Math.abs(anchor.left - popup.left) < 1, JSON.stringify({ anchor, popup }));
     assert.ok(Math.abs(popup.top - anchor.bottom - 6) < 1 || popup.bottom <= anchor.top, JSON.stringify({ anchor, popup }));
@@ -235,7 +235,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     });
     await physical.rightClick(at); await driver.ready('.editor-menu[aria-label="Element actions"]');
     assert.equal(await driver.execute(() => document.querySelector('.static-preview iframe').contentDocument.querySelector(document.querySelector('.element-selection').dataset.selector)?.id), 'orange-card');
-    for (const label of ['Edit', 'Ask AI', 'Replace', 'Move or resize', 'Copy', 'Cut', 'Paste', 'Arrange', 'Delete', 'Layers']) await driver.ready(`.editor-menu [aria-label=${JSON.stringify(label)}]`);
+    for (const label of ['Edit', 'Ask AI', 'Replace', 'Copy', 'Cut', 'Paste', 'Arrange', 'Delete', 'Layers']) await driver.ready(`.editor-menu [aria-label=${JSON.stringify(label)}]`);
     await physical.captureWindow(join(output, 'right-click-element-menu.png'));
     const before = (await workspace(driver)).project;
     await driver.click('.editor-menu [aria-label="Cut"]');
@@ -254,7 +254,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     const original = await driver.command('GET', '/window/rect');
     try {
       for (const theme of ['Light', 'Dark']) {
-        await closeLayers(driver); await driver.menu(['View', 'Editor appearance', theme]);
+        await closeLayers(driver); await driver.menu(['Editor theme', theme]);
         await waitFor(() => driver.execute(value => document.documentElement.dataset.theme === value, theme.toLowerCase()), 'The editor theme did not apply');
         const target = await selectSite(driver, physical, 'blue-card'); await closeLayers(driver); await openLayers(driver); await settled(driver);
         assert.equal(await driver.execute(() => document.activeElement?.dataset.layerSelector), target, 'Opening Layers did not focus the selected row');
@@ -286,10 +286,10 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     const view = await physical.rect('.workspace-scroll');
     await physical.rightClick({ x: view.right - 60, y: view.bottom - 120 });
     await driver.ready('.editor-menu[aria-label="Canvas actions"]');
-    for (const label of ['Add request here', 'Paste', 'Fit screen guide', 'Center screen guide', 'Show grid', 'Grid and rulers', 'Layers']) await driver.ready(`.editor-menu [aria-label=${JSON.stringify(label)}]`);
+    for (const label of ['Add request here', 'Paste', 'Fit to screen', 'Show grid', 'Layers']) await driver.ready(`.editor-menu [aria-label=${JSON.stringify(label)}]`);
     await driver.click('.editor-menu [aria-label="Add request here"]');
     await waitFor(async () => pending((await workspace(driver)).project).length === 1, 'The canvas menu did not create a real request');
-    await driver.ready('.element-toolbar [aria-label="Delete layer"]'); await driver.click('.element-toolbar [aria-label="Delete layer"]'); await driver.button('Remove');
+    await driver.ready('.element-toolbar [aria-label="Delete layer"]'); await driver.click('.element-toolbar [aria-label="Delete layer"]'); if(await driver.execute(()=>!!document.querySelector('dialog[open]'))) await driver.button('Remove');
     await waitFor(async () => pending((await workspace(driver)).project).length === 0, 'The temporary menu request was not removed');
     assert.equal(provider.generationRequests().length, 1);
   });
@@ -408,7 +408,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await driver.click('.editor-menu [aria-label="Edit request"]');
     await waitFor(() => driver.execute(id => document.activeElement?.closest('.annotation')?.dataset.regionId === id, request.id), 'Edit request did not return focus to its on-canvas text');
     await selectRequest(driver, physical, request.id); await closeLayers(driver);
-    await physical.click(await physical.center('.element-toolbar [aria-label="Cut layer"]'));
+    await physical.rightClick(await physical.center(`.request-controls[data-region-id="${request.id}"] .move-grip`)); await driver.click('.editor-menu [aria-label="Cut"]');
     await waitFor(async () => !pending((await workspace(driver)).project).some(item => item.id === request.id), 'The request quick Cut button did not remove its source');
     await physical.keys('Z', 1, ['Control']); await waitFor(async () => pending((await workspace(driver)).project).some(item => item.id === request.id), 'Undo did not restore the cut request');
     assert.deepEqual(pending((await workspace(driver)).project).find(item => item.id === request.id), request);
@@ -421,9 +421,9 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
   await step('Blocked generations offer a plain draft action and dialog menus escape clipping', async () => {
     await closeLayers(driver); provider.setMode('conflict'); await driver.button('Generate');
     await waitFor(async () => (await driver.invoke('get_generation', { projectId }))?.status === 'blocked', 'The controlled missing-input attempt did not stop for review');
-    await driver.button('Finish draft'); await driver.ready('section[aria-label="Finish your draft"]');
+    await driver.button('Details'); await driver.ready('section[aria-label="Finish your draft"]');
     const normal = await driver.execute(() => document.querySelector('section[aria-label="Finish your draft"]').innerText);
-    assert.match(normal, /clearly labelled placeholders/); assert.ok(!normal.includes('dependency gate'));
+    assert.match(normal, /more detail|build a draft/i); assert.ok(!normal.includes('dependency gate'));
     await driver.menu(['Advanced', 'AI instructions sent'], 'Generation options');
     await driver.ready('pre[aria-label="Generation REQUIREMENTS.md source"]');
     await driver.click('[aria-label="Generation options"]'); await driver.click('.editor-menu [aria-label="Advanced"]');
@@ -440,9 +440,9 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
 
   await step('Generate draft freezes the new policy, downloads actual images and shows honest placeholders', async () => {
     const previous = (await driver.invoke('get_generation', { projectId })).jobId;
-    provider.setMode('complete', { draftAudit: true }); await driver.button('Generate draft');
+    provider.setMode('complete', { draftAudit: true }); await driver.button('Build draft');
     const job = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.jobId !== previous && value?.status === 'applied' && value; }, 'The fresh labelled draft did not apply', 25_000);
-    assert.match(job.requirements.markdown, /Requirements format: 8/); assert.match(job.requirements.markdown, /clearly defined placeholders/);
+    assert.match(job.requirements.markdown, /Requirements format: 9/); assert.match(job.requirements.markdown, /clearly defined placeholders/);
     const image = await waitFor(() => driver.execute(() => {
       const doc = document.querySelector('.static-preview iframe')?.contentDocument, photo = doc?.getElementById('downloaded-photo'), missing = doc?.getElementById('missing-photo');
       return photo?.complete && photo.naturalWidth === 2 && missing?.complete && { src: photo.getAttribute('src'), source: photo.getAttribute('data-desegnos-image-source'), alt: missing.alt, placeholder: missing.hasAttribute('data-desegnos-placeholder'), disabled: doc.querySelector('button')?.disabled };
@@ -453,7 +453,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     assert.ok(job.candidate.criticism.some(item => item.suggestion.includes('Clearly labelled image placeholders')));
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
     await physical.captureWindow(join(output, 'downloaded-image-labelled-draft.png'));
-    await driver.click('section[aria-label="Generated changes"] button.primary');
+    if(await driver.execute(()=>!!document.querySelector('button[aria-label="Keep changes"]'))) await driver.button('Keep changes');
     const parent = join(output, 'image-export'); await mkdir(parent, { recursive: true });
     await chooseFolder(physical, () => driver.button('Export'), parent, output, 'image-export');
     await driver.ready('.export-notice');
@@ -470,10 +470,10 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await closeLayers(driver); await chooseFile(physical, () => driver.button('Save'), projectPath, output, 'layers-save');
     savedProject = (await savedState(driver, projectPath)).project;
     await verifyArchive(projectPath, savedProject, await driver.invoke('get_project_notes'));
-    await driver.menu(['Project', 'New project']); await driver.button('Blank website'); await driver.fill('Project name', 'Temporary Layers reopen check'); await driver.button('Create project');
+    await driver.menu(['New project']); await driver.button('Blank website'); await driver.fill('Project name', 'Temporary Layers reopen check'); await driver.button('Create project');
     await waitFor(async () => (await workspace(driver)).project?.id !== savedProject.id, 'The temporary blank project did not replace the saved layer project');
     const unsaved = (await workspace(driver)).dirty;
-    await chooseFile(physical, async () => { await driver.menu(['Project', 'Open project']); if (unsaved) await driver.button('Discard and continue'); }, projectPath, output, 'layers-open');
+    await chooseFile(physical, async () => { await driver.menu(['Open project']); if (unsaved) await driver.button('Discard and continue'); }, projectPath, output, 'layers-open');
     await waitFor(async () => (await workspace(driver)).project?.id === savedProject.id && (await workspace(driver)).path === projectPath, 'The saved layer project did not reopen');
     assert.deepEqual((await workspace(driver)).project, savedProject); await previewReady(driver); assert.deepEqual(await appearance(driver, copiedId), copiedAppearance);
     await physical.captureWindow(join(output, '07-reopened-layers.png'));

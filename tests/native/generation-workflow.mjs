@@ -14,7 +14,7 @@ const generationDialog = 'dialog[open] .generation-dialog';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function dialogButton(driver, text) {
-  if (text === 'Refresh job') return driver.menu(['Technical', 'Refresh job'], 'Generation options');
+  if (text === 'Refresh job') return driver.menu(['Advanced', 'Refresh job'], 'Generation options');
   if (text === 'AI settings') return driver.menu(['AI settings'], 'Generation options');
   if (text === 'Discard candidate') return driver.menu(['Discard result'], 'Generation options');
   if (text === 'Discard request') return driver.menu(['Discard request'], 'Generation options');
@@ -55,7 +55,7 @@ function assertAttachment(record, job) {
   assert.equal(record.body.store, false);
   assert.equal(record.body.stream, true);
   assert.equal(record.body.service_tier, 'default');
-  assert.deepEqual(record.body.tools, []);
+  assert.deepEqual(record.body.tools, [{type:'web_search'}]);
   assert.equal(record.body.text.format.strict, true);
   assert.equal(record.body.text.format.schema.additionalProperties, false);
 }
@@ -260,7 +260,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     const count = provider.generationRequests().length;
     provider.setMode('waiting', { marker });
     await driver.button('Strict');
-    await driver.click('.generation-controls button.primary');
+    await driver.click('.shell-primary-actions button.primary');
     first = await waitFor(async () => { const value = await job(); return value?.status === 'generating' && value; }, 'One Generate click did not start generation');
     await waitFor(() => driver.execute(() => !!document.querySelector('[data-testid="generation-progress"]')), 'The progress window did not open');
     await waitFor(() => provider.generationRequests().length === count + 1, 'The native request did not reach the provider');
@@ -295,7 +295,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   await directEditingWorkflow(driver, physical, step, output, provider);
   await step('A trusted element click opens an on-canvas prompt with a source-bound structural target at 75% zoom', async () => {
     await driver.select('Zoom', '0.75');
-    await driver.menu(['View', 'Center screen guide']);
+    await driver.press('[data-testid="canvas"]', '\uE011');
     const point = await driver.execute(() => {
       const frame = document.querySelector('.static-preview iframe'); const f = frame.getBoundingClientRect();
       const r = frame.contentDocument.querySelector('#fixture-action').getBoundingClientRect();
@@ -334,7 +334,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     await request('Change this button label to Create my page. Keep everything else.');
     provider.setMode('waiting', { marker, buttonLabel: 'Create my page' });
     const count = provider.generationRequests().length;
-    await driver.click('.generation-controls button.primary');
+    await driver.click('.shell-primary-actions button.primary');
     const value = await waitFor(async () => { const value = await job(); return value?.status === 'generating' && value; }, 'The element revision did not start');
     assert.equal(value.requirements.regionCount, 1);
     const blocks = dataBlocks(value.requirements.markdown);
@@ -364,7 +364,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   });
   await step('Explicit retry after an editor reload updates the canvas automatically and never repeats the request on its own', async () => {
     await request('Keep the current native button.'); provider.setMode('truncated');
-    await driver.click('.generation-controls button.primary');
+    await driver.click('.shell-primary-actions button.primary');
     const failed = await waitFor(async () => { const value = await job(); return value?.status === 'unknown' && value; }, 'The interrupted fixture did not finish');
     const count = provider.generationRequests().length;
     await clearDialogs();
@@ -391,7 +391,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   await step('Tall canvas content keeps a stable extent through prompt edits and pauses high-specificity CSS animation', async () => {
     await request('Keep this tall page and its button.');
     provider.setMode('complete', { marker, extraCss: 'body{min-height:100vh;margin:8px}main{min-height:1700px}#fixture-action{animation:fixture-motion 1s infinite!important;animation-play-state:running!important}@keyframes fixture-motion{to{transform:translateX(10px)}}', chunkDelayMs: 2 });
-    await driver.click('.generation-controls button.primary'); await completed();
+    await driver.click('.shell-primary-actions button.primary'); await completed();
     await waitFor(() => driver.execute(() => document.querySelector('.static-preview iframe')?.clientHeight >= 1700), 'The canvas did not expand for tall content');
     const height = await driver.execute(() => document.querySelector('.static-preview iframe').clientHeight);
     await delay(500); assert.equal(await driver.execute(() => document.querySelector('.static-preview iframe').clientHeight), height);
@@ -405,7 +405,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
       await request(`A controlled ${kind} revision`);
       const before = (await workspace()).project.pages[0].content;
       const count = provider.generationRequests().length; provider.setMode(kind);
-      await driver.click('.generation-controls button.primary');
+      await driver.click('.shell-primary-actions button.primary');
       const failed = await waitFor(async () => { const value = await job(); return value?.status === expected && value; }, `The ${kind} outcome did not appear`);
       assert.deepEqual((await workspace()).project.pages[0].content, before);
       assert.equal(failed.attempts.length, 1); await delay(800); assert.equal(provider.generationRequests().length, count + 1);
@@ -416,7 +416,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   await step('Cancel stops waiting and keeps the previous site; a late provider result cannot apply', async () => {
     await request('A request that will be cancelled'); provider.setMode('waiting');
     const before = (await workspace()).project.pages[0].content;
-    await driver.click('.generation-controls button.primary');
+    await driver.click('.shell-primary-actions button.primary');
     const running = await waitFor(async () => { const value = await job(); return value?.status === 'generating' && value; }, 'Cancel fixture did not start');
     await driver.button('Cancel generation');
     await waitFor(async () => (await job()).status === 'cancelled', 'Cancel did not complete');
@@ -427,7 +427,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   await step('An edit made while generation is running fails the stale-source guard and never replaces the current site', async () => {
     const area = await request('Original frozen request'); provider.setMode('waiting');
     const before = (await workspace()).project.pages[0].content;
-    await driver.click('.generation-controls button.primary');
+    await driver.click('.shell-primary-actions button.primary');
     const running = await waitFor(async () => { const value = await job(); return value?.status === 'generating' && value; }, 'The stale fixture did not start');
     await clearDialogs();
     const project = (await workspace()).project;
@@ -441,7 +441,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   });
   await step('The progress window fits both grey themes at 760px and leaves unaffected canvas sharp', async () => {
     await request('A compact-window progress check'); provider.setMode('waiting');
-    await driver.click('.generation-controls button.primary');
+    await driver.click('.shell-primary-actions button.primary');
     await waitFor(async () => (await job()).status === 'generating', 'Progress layout fixture did not start');
     const original = await driver.command('GET', '/window/rect');
     const theme = await driver.execute(() => localStorage.getItem('desegni.editor-theme') ?? 'system');
@@ -466,7 +466,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   await request('Keep the native button and its explanation.');
   retained = await driver.invoke('create_preview', { pageId: applied.homePageId, jobId: null, runScripts: true });
   provider.setMode('complete', { marker, retainedPreviewUrl: retained.url, chunkDelayMs: 2 });
-  await driver.click('.generation-controls button.primary'); await completed();
+  await driver.click('.shell-primary-actions button.primary'); await completed();
   await step('Selectable canvas keeps authored scripts paused and invalidates selection after navigation to an enabled package', async () => {
     await waitFor(() => driver.execute(() => !!document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#fixture-action')), 'The canvas did not render');
     await driver.execute(() => { window.__canvasMessages = []; window.addEventListener('message', event => { if (event.source === document.querySelector('.static-preview iframe')?.contentWindow) window.__canvasMessages.push(event.data); }); });

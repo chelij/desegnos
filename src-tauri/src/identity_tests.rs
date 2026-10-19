@@ -36,7 +36,11 @@ fn access(authentication: AuthenticationMethod, account: Option<Uuid>) -> Identi
         account_id: account,
         account_epoch: account.map(|_| 0),
         settings: ProviderSettings::default(),
-        client: OpenAiClient::new().unwrap(),
+        client: desegni_ai::ProviderClient::new(
+            desegni_ai::ProviderId::Openai,
+            OpenAiClient::new().unwrap(),
+        )
+        .unwrap(),
         key: ApiKey::new("sk-private-test-key-that-never-enters-identity-records".into()).unwrap(),
     }
 }

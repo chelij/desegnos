@@ -66,7 +66,7 @@ export async function migrationWorkflow(driver, physical, step, evidence) {
   });
 
   await step('The earlier canvas project remains recoverable after opening and saving a legacy project', async () => {
-    await driver.menu(['Project', 'Recover projects']);
+    await driver.menu(['Recover unsaved projects']);
     const action = `//dialog[@open]//section[@aria-label=${xpathString(`Recover ${original.name}`)}]//button[normalize-space(.)="Recover project"]`;
     assert.equal((await driver.all(action, 'xpath')).length, 1);
     await driver.click(action, 'xpath');

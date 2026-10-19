@@ -61,7 +61,7 @@ fn vision_reserve(images: &[IdentityImage]) -> u64 {
     images.len() as u64 * IDENTITY_IMAGE_TOKEN_RESERVE
 }
 
-fn identity_body(
+pub(crate) fn identity_body(
     authentication: AuthenticationMethod,
     snapshot: &RequirementsSnapshot,
     schema: &Value,

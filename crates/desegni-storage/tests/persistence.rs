@@ -850,7 +850,7 @@ fn real_schema_three_preserves_all_original_data_notes_and_backup_before_explici
     assert_eq!(reopened.project, document.project);
     frozen.validate_current(&reopened.project).unwrap();
     let new_request = reopened.project.prepare_requirements().unwrap();
-    assert!(new_request.markdown.contains("Requirements format: 8"));
+    assert!(new_request.markdown.contains("Requirements format: 9"));
     new_request.validate_current(&reopened.project).unwrap();
 }
 
@@ -1431,7 +1431,7 @@ fn schema_five_integrity_notes_frozen_requirements_and_exact_backup_are_preserve
     };
     project.pages[0].regions[0].element = Some(target);
     let frozen = project.prepare_requirements().unwrap();
-    assert!(frozen.markdown.contains("Requirements format: 8"));
+    assert!(frozen.markdown.contains("Requirements format: 9"));
     let path = temp.0.join("schema-five.desegni");
     let file = ProjectFile::acquire(&path).unwrap();
     file.save(&project).unwrap();
@@ -1530,4 +1530,45 @@ fn imported_asset_integrity_is_checked_even_when_archive_hashes_are_recomputed()
     let before = fs::read(&path).unwrap();
     assert!(file.load().is_err());
     assert_eq!(fs::read(&path).unwrap(), before);
+}
+
+#[test]
+fn typed_source_with_found_content_round_trips_journal_archive_and_export_without_metadata_leaks() {
+    let temp = Temp::new();
+    let original = project();
+    let id = original.home_page_id;
+    let mut session = Session::new(original.clone()).unwrap();
+    let journal = Journal::new(&temp.0, original.id).unwrap();
+    journal.append(&original).unwrap();
+    let html = "<main>\n<h1 data-desegnos-found='https://example.com/history'>Authored 💡</h1>\n<a href='https://example.com/history'>Photo credit</a>\n</main>";
+    session
+        .edit_page_source(
+            original.revision,
+            id,
+            &PageSourceEdit {
+                html: Some(html.into()),
+                css: Some("h1 {color: navy;}".into()),
+                javascript: Some("document.querySelector('h1').title = 'Local';".into()),
+            },
+            |next| journal.append(next),
+        )
+        .unwrap();
+    let accepted = session.project().clone();
+    let path = temp.0.join("typed.desegnos");
+    let file = ProjectFile::acquire(&path).unwrap();
+    file.save(&accepted).unwrap();
+    assert_eq!(file.load().unwrap(), accepted);
+    assert_eq!(
+        Journal::recover(journal.path()).unwrap(),
+        Some(accepted.clone())
+    );
+    assert_eq!(accepted.pages[0].content.as_ref().unwrap().html, html);
+    let export = compile_website(&accepted).unwrap();
+    let exported = String::from_utf8(export.files["index.html"].clone()).unwrap();
+    assert!(!exported.contains("data-desegnos-found"));
+    assert!(exported.contains("Photo credit"));
+    session.undo(|next| journal.append(next)).unwrap();
+    assert_eq!(session.project().pages, original.pages);
+    session.redo(|next| journal.append(next)).unwrap();
+    assert_eq!(session.project().pages, accepted.pages);
 }

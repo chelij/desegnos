@@ -154,24 +154,24 @@ export async function editorActions(driver, physical, step) {
     await driver.fill('Voice and tone', 'Direct and welcoming.');
     await waitFor(async () => (await project(driver)).brief.tone === 'Direct and welcoming.', 'The remaining brief fields were not accepted');
     const before = await project(driver);
-    await driver.button('Choices');
-    await driver.button('Edit choice');
-    await driver.fill('Choice', 'A draft that will be cancelled.');
+    await driver.button('Rules');
+    await driver.button('Edit rule');
+    await driver.fill('Rule', 'A draft that will be cancelled.');
     await driver.button('Cancel editing');
     assert.deepEqual((await project(driver)).decisions, before.decisions);
-    await driver.button('Edit choice');
-    await driver.fill('Choice', `${before.decisions[0].value} Keep navigation labels plain.`);
+    await driver.button('Edit rule');
+    await driver.fill('Rule', `${before.decisions[0].value} Keep navigation labels plain.`);
     await driver.button('Save choice');
     await waitFor(async () => (await project(driver)).decisions[0].value.endsWith('Keep navigation labels plain.'), 'The edited identity choice was not accepted');
     assert.equal((await project(driver)).decisions[0].id, before.decisions[0].id);
-    await driver.click('button[aria-label="Close Project dossier"]');
+    await driver.click('button[aria-label="Close Project brief"]');
     await closed(driver);
     await undo(driver, value => value.decisions[0].value === before.decisions[0].value);
     await driver.button('Project dossier');
-    await driver.button('Choices');
-    await driver.button('Remove choice');
+    await driver.button('Rules');
+    await driver.button('Remove rule');
     await waitFor(async () => (await project(driver)).decisions.length === 0, 'The deliberate decision removal was not accepted');
-    await driver.click('button[aria-label="Close Project dossier"]');
+    await driver.click('button[aria-label="Close Project brief"]');
     await closed(driver);
     await undo(driver, value => value.decisions.length === before.decisions.length);
     assert.deepEqual((await project(driver)).decisions, before.decisions);
@@ -183,7 +183,7 @@ export async function editorActions(driver, physical, step) {
     await driver.button('Exceptions');
     await driver.button('Remove exception');
     await waitFor(async () => (await project(driver)).exceptions.length === 0, 'The creative exception was not removed');
-    await driver.click('button[aria-label="Close Project dossier"]');
+    await driver.click('button[aria-label="Close Project brief"]');
     await closed(driver);
     await undo(driver, value => value.exceptions.length === before.exceptions.length);
     assert.deepEqual((await project(driver)).exceptions, before.exceptions);
@@ -211,7 +211,7 @@ export async function editorActions(driver, physical, step) {
 
   await step('New project uses the explicit discard choice and keeps the previous project recoverable', async () => {
     const before = await project(driver);
-    await driver.menu(['Project', 'New project']);
+    await driver.menu(['New project']);
     await driver.button('New blank page');
     await driver.fill('Project name', 'Native custom recovery project');
     await driver.button('Web');
@@ -232,7 +232,7 @@ export async function editorActions(driver, physical, step) {
     assert.equal(next.generationMode, 'fuzzy');
     assert.deepEqual(next.pages[0].regions, []);
     assert.ok((await driver.invoke('get_workspace')).recoveries.some(item => item.projectId === before.id));
-    await driver.menu(['Project', 'Recover projects']);
+    await driver.menu(['Recover unsaved projects']);
     await modalButton(driver, 'Recover project');
     await modalButton(driver, 'Discard and continue');
     await closed(driver);

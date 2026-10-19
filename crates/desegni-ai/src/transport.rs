@@ -61,6 +61,8 @@ impl CancellationToken {
 pub struct ProviderProgress {
     pub received_bytes: usize,
     pub response_id: Option<String>,
+    pub web_search_calls: usize,
+    pub citations: usize,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -275,6 +277,8 @@ impl OpenAiClient {
         progress(ProviderProgress {
             received_bytes: 0,
             response_id: None,
+            web_search_calls: 0,
+            citations: 0,
         });
         let mut response = tokio::select! {
             biased;
@@ -376,6 +380,8 @@ impl OpenAiClient {
                         progress(ProviderProgress {
                             received_bytes: received,
                             response_id: None,
+                            web_search_calls: 0,
+                            citations: 0,
                         });
                         continue;
                     }
@@ -401,6 +407,8 @@ impl OpenAiClient {
                     progress(ProviderProgress {
                         received_bytes: received,
                         response_id: stream.response_id.clone(),
+                        web_search_calls: stream.web_search_calls(),
+                        citations: stream.citations(),
                     });
                     return Ok(complete);
                 }
@@ -408,6 +416,8 @@ impl OpenAiClient {
             progress(ProviderProgress {
                 received_bytes: received,
                 response_id: stream.response_id.clone(),
+                web_search_calls: stream.web_search_calls(),
+                citations: stream.citations(),
             });
         }
     }
@@ -586,6 +596,8 @@ async fn non_stream_error(
     progress(ProviderProgress {
         received_bytes: received,
         response_id: None,
+        web_search_calls: 0,
+        citations: 0,
     });
     while !truncated {
         let chunk = tokio::select! {
@@ -621,6 +633,8 @@ async fn non_stream_error(
         progress(ProviderProgress {
             received_bytes: received,
             response_id: None,
+            web_search_calls: 0,
+            citations: 0,
         });
         let retained = chunk.len().min(ERROR_BODY_LIMIT - body.len());
         body.extend_from_slice(&chunk[..retained]);

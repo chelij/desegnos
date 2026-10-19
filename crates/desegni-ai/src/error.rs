@@ -108,7 +108,7 @@ impl ResponseRejection {
                 "The AI reply contained a credential and was rejected. Nothing was applied."
             }
             _ => {
-                "Desegnos could not verify the AI reply. The failed check is in More → Technical → Request details. Nothing was applied."
+                "Desegnos could not verify the AI reply. Open Details for the failed check. Nothing was applied."
             }
         }
     }
@@ -349,19 +349,19 @@ impl ProviderError {
                 "The provider response exceeded Desegnos's bounded output limit and was rejected."
             }
             ErrorKind::Authentication => {
-                "OpenAI rejected this key or its permissions. Replace the key or review its API access."
+                "The AI service rejected this key or its permissions. Replace the key or review its API access."
             }
             ErrorKind::Quota => {
-                "OpenAI reports insufficient quota. Review the API account's billing and usage before explicitly retrying."
+                "The AI service reports insufficient quota. Review the API account's billing and usage before explicitly retrying."
             }
             ErrorKind::RateLimited => {
-                "OpenAI rate-limited this request. Wait before explicitly retrying."
+                "The AI service rate-limited this request. Wait before explicitly retrying."
             }
             ErrorKind::ModelUnavailable => {
-                "This key cannot access the selected model. Review model access for the OpenAI API project."
+                "This key cannot access the selected model. Review model access in your AI account."
             }
             ErrorKind::RequestRejected => {
-                "OpenAI rejected this request. Review its settings and requirements before explicitly retrying."
+                "The AI service rejected this request. Review its settings and requirements before explicitly retrying."
             }
             ErrorKind::Redirect => {
                 "The provider attempted an HTTP redirect. Desegnos refused it and did not forward the key."
@@ -379,7 +379,7 @@ impl ProviderError {
                 "The provider returned an invalid or inconsistent structured response. It was rejected."
             }
             ErrorKind::UnexpectedResponseFormat => {
-                "OpenAI did not open a generation stream. No site is available to review. Response details are in More → Technical → Request details. Usage may be uncertain; nothing was retried."
+                "The AI service did not open a generation stream. Nothing was applied. Open Details for response information. Usage may be uncertain; nothing was retried."
             }
             ErrorKind::Cancelled => {
                 "Generation was cancelled. A submitted request may still incur a charge; late output will not be applied."

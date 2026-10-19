@@ -17,9 +17,9 @@ async function button(driver, name) {
     await driver.invoke(name === 'Send and generate' ? 'start_generation' : name === 'Apply reviewed changes' ? 'apply_generation' : 'retry_generation', {
       jobId: current.jobId, ...(name === 'Apply reviewed changes' ? { acceptedDecisionIndices: [] } : {}),
     });
-    await driver.menu(['Technical', 'Refresh job'], 'Generation options'); return;
+    await driver.menu(['Advanced', 'Refresh job'], 'Generation options'); return;
   }
-  if (name === 'Refresh job') return driver.menu(['Technical', 'Refresh job'], 'Generation options');
+  if (name === 'Refresh job') return driver.menu(['Advanced', 'Refresh job'], 'Generation options');
   if (name === 'AI settings') return driver.menu(['AI settings'], 'Generation options');
   if (name === 'Discard candidate') return driver.menu(['Discard result'], 'Generation options');
   if (name === 'Discard request') return driver.menu(['Discard request'], 'Generation options');
@@ -83,10 +83,10 @@ async function prepare(driver, provider, mode) {
   assert.equal(request.generationMode, mode); assert.equal(request.attempts.length, 0);
   assert.equal(provider.generationRequests().length, before);
   assert.equal(await driver.source('Generation REQUIREMENTS.md source'), null);
-  await driver.menu(['Technical', 'What will be sent'], 'Generation options');
+  await driver.menu(['Advanced', 'What will be sent'], 'Generation options');
   assert.equal(await driver.source('Generation REQUIREMENTS.md source'), request.requirements.markdown);
   assert.equal(hash(request.requirements.markdown), request.requirements.sha256);
-  await driver.menu(['Technical', 'Request details'], 'Generation options');
+  await driver.menu(['Advanced', 'Request details'], 'Generation options');
   assert.equal(await driver.execute(() => document.querySelector('.generation-facts').textContent.includes('Estimated job cost')), false);
   return { project, request };
 }
@@ -202,7 +202,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
     try {
       for (const selected of ['light', 'dark']) {
         await driver.select('Editor theme', selected); await driver.button('Generation status'); await driver.button('Details');
-        await driver.menu(['Technical', 'Request details'], 'Generation options');
+        await driver.menu(['Advanced', 'Request details'], 'Generation options');
         const details = await waitFor(() => driver.execute(() => document.querySelector('[aria-label="Provider response details"]')?.textContent), 'Stream matching details did not appear');
         assert.match(details, /contentPartAbsent/); assert.match(details, /Output 9 · Content 7/);
         assert.match(details, /3 text parts · 3 finalized items · 1 empty added item/);
@@ -256,7 +256,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
         for (const selected of ['light', 'dark']) {
           await driver.select('Editor theme', selected); await driver.button('Generation status'); await driver.button('Details');
           await terminal(driver, prepared.project.id, expected);
-          await driver.menu(['Technical', 'Request details'], 'Generation options');
+          await driver.menu(['Advanced', 'Request details'], 'Generation options');
           const details = await waitFor(() => driver.execute(() => document.querySelector('[aria-label="Provider response details"]')?.textContent), 'The response diagnostics did not appear');
           assert.match(details, /HTTP status200/);
           assert.match(details, kind === 'non-stream-error' ? /text\.format/ : /text\/html/);

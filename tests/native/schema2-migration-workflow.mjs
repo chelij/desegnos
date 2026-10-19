@@ -91,7 +91,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
   });
 
   await step('The earlier dirty canvas project remains recoverable after the schema2 upgrade and save', async () => {
-    await driver.menu(['Project', 'Recover projects']);
+    await driver.menu(['Recover unsaved projects']);
     const action = `//dialog[@open]//section[@aria-label=${xpathString(`Recover ${original.project.name}`)}]//button[normalize-space(.)="Recover project"]`;
     assert.equal((await driver.all(action, 'xpath')).length, 1);
     await driver.click(action, 'xpath');

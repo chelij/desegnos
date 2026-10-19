@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
 
-const SERVICE: &str = "io.desegni.openai";
 const ACCOUNT: &str = "api-key";
 
 #[derive(Clone)]
@@ -81,12 +80,14 @@ trait Vault: Send + Sync {
     fn remove(&self) -> Result<()>;
 }
 
-struct SystemVault;
+struct SystemVault {
+    service: &'static str,
+}
 
 impl SystemVault {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-    fn entry() -> Result<keyring::Entry> {
-        keyring::Entry::new(SERVICE, ACCOUNT)
+    fn entry(&self) -> Result<keyring::Entry> {
+        keyring::Entry::new(self.service, ACCOUNT)
             .map_err(|_| ProviderError::before(ErrorKind::VaultUnavailable))
     }
 }
@@ -94,19 +95,19 @@ impl SystemVault {
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 impl Vault for SystemVault {
     fn get(&self) -> Result<Option<ApiKey>> {
-        match Self::entry()?.get_password() {
+        match self.entry()?.get_password() {
             Ok(value) => ApiKey::new(value).map(Some),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err(ProviderError::before(ErrorKind::VaultUnavailable)),
         }
     }
     fn set(&self, key: &ApiKey) -> Result<()> {
-        Self::entry()?
+        self.entry()?
             .set_password(key.expose())
             .map_err(|_| ProviderError::before(ErrorKind::VaultUnavailable))
     }
     fn remove(&self) -> Result<()> {
-        match Self::entry()?.delete_credential() {
+        match self.entry()?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(ProviderError::before(ErrorKind::VaultUnavailable)),
         }
@@ -145,9 +146,15 @@ impl Default for CredentialManager {
 
 impl CredentialManager {
     pub fn new() -> Self {
+        Self::for_provider(crate::ProviderId::Openai)
+    }
+
+    pub fn for_provider(provider: crate::ProviderId) -> Self {
         Self {
             state: Mutex::new(CredentialState::default()),
-            vault: Box::new(SystemVault),
+            vault: Box::new(SystemVault {
+                service: provider.service(),
+            }),
         }
     }
 

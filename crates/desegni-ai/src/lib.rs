@@ -6,6 +6,7 @@ mod credentials;
 mod error;
 mod identity;
 mod images;
+mod providers;
 mod settings;
 mod sse;
 mod transport;
@@ -14,6 +15,7 @@ pub use chatgpt::*;
 pub use credentials::*;
 pub use error::*;
 pub use identity::*;
+pub use providers::*;
 pub use settings::*;
 pub use transport::*;
 

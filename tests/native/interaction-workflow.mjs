@@ -24,7 +24,7 @@ export async function interactionWorkflow(driver, physical, step, evidence) {
     assert.equal(await driver.execute(() => document.querySelector('.wordmark').textContent), 'Desegnos');
   });
   await step('Left-button dragging pans the workspace without creating or editing requests', async () => {
-    await driver.menu(['View', 'Center screen guide']);
+    await driver.press('[data-testid="canvas"]', '\uE011');
     const before = await project(); const point = await blank(); const from = await physical.rect(canvas);
     await physical.resetEvents();
     await physical.drag(point, { x: point.x + 75, y: point.y + 40 });
@@ -67,7 +67,7 @@ export async function interactionWorkflow(driver, physical, step, evidence) {
     await physical.captureWindow(join(evidence, 'desegnos-shortcuts-window.png'));
     await physical.keys('Escape'); await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'Escape did not close help');
     assert.deepEqual((await project()).pages, original.pages);
-    await driver.select('Zoom', '0.75'); await driver.menu(['View', 'Center screen guide']);
+    await driver.select('Zoom', '0.75'); await driver.press('[data-testid="canvas"]', '\uE011');
   });
   await step('Abandoned empty boxes disappear, recent typing survives and keyboard undo/redo restores selections', async () => {
     const firstPoint = await blank(); await physical.doubleClick(firstPoint);

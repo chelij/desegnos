@@ -290,7 +290,54 @@ fn private_system_vault_lifecycle() {
         "empty" => verify_missing(&manager),
         _ => panic!("Unknown private vault test phase"),
     }
+    verify_provider_vaults(&phase);
     verify_chatgpt_vault(&phase);
+}
+
+fn verify_provider_vaults(phase: &str) {
+    use desegni_ai::ProviderId;
+    let anthropic = CredentialManager::for_provider(ProviderId::Anthropic);
+    let google = CredentialManager::for_provider(ProviderId::Google);
+    const CLAUDE: &str = "sk-desegnos-isolated-anthropic-S101";
+    const GEMINI: &str = "desegnos-isolated-google-S201";
+    match phase {
+        "initial" => {
+            verify_missing(&anthropic);
+            verify_missing(&google);
+            verify_view(
+                &anthropic
+                    .set_key(CLAUDE.into(), CredentialStorage::System)
+                    .unwrap(),
+                CredentialLocation::System,
+                "S101",
+            );
+            verify_missing(&google);
+            verify_view(
+                &google
+                    .set_key(GEMINI.into(), CredentialStorage::System)
+                    .unwrap(),
+                CredentialLocation::System,
+                "S201",
+            );
+        }
+        "replace-session" | "restart-remove" => {
+            verify_view(&anthropic.status(), CredentialLocation::System, "S101");
+            verify_view(&google.status(), CredentialLocation::System, "S201");
+            verify_authentication(&anthropic, CLAUDE);
+            verify_authentication(&google, GEMINI);
+            if phase == "restart-remove" {
+                anthropic.remove_key().unwrap();
+                verify_missing(&anthropic);
+                verify_view(&google.status(), CredentialLocation::System, "S201");
+                google.remove_key().unwrap();
+            }
+        }
+        "empty" => {
+            verify_missing(&anthropic);
+            verify_missing(&google);
+        }
+        _ => unreachable!(),
+    }
 }
 
 fn verify_chatgpt_vault(phase: &str) {

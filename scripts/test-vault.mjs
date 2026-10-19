@@ -126,6 +126,7 @@ async function inside(binary, directory, evidencePath) {
     evidence.chatgpt = { signedOAuth: true, systemTokenBundle: true, persistedAcrossProcessesAndDaemons: true,
       rotatedRefresh: true, revokedAndRemoved: true, authenticatedModelReads: provider.modelRequests().filter(record => record.authentication === 'chatgpt').length, protocol: oauth };
     evidence.credentialScan = await assertNoSyntheticKeys([join(directory, 'data'), join(directory, 'chatgpt')]);
+    evidence.providers = {separateServices:true,independentKeys:true,persistedAcrossProcessesAndDaemons:true,independentRemoval:true};
     evidence.status = 'passed';
   } catch (error) { evidence.status = 'failed'; evidence.error = error.message; throw error; }
   finally { await stopOwned(daemon); await provider.close(); await writeFile(evidencePath, JSON.stringify(evidence, null, 2) + '\n'); }

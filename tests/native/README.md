@@ -20,7 +20,7 @@ The default run checks:
 - Select/Request/Pan/zoom, rulers, exactly one request per empty-space double-click, empty-request navigation, long-text expansion and grouped page requests.
 - Connection-first settings, a synthetic session key, actual model access testing and truthful budget wording.
 - Real loopback HTTP transport, byte-exact requirements and global interpretation, cancellation, editable nonmodal progress and transactional two-page apply.
-- Keep/Undo/Redo, inline text Enter/Escape, repeated double-click editing, toolbar placement and explicit Ask AI/Ctrl+K without provider calls for local changes.
+- Page updated / Undo / Redo, inline text Enter/Escape, repeated double-click editing, toolbar placement and explicit Ask AI/Ctrl+K without provider calls for local changes.
 - Preservation of an unfinished inline edit when generation completes; stale output must remain blocked.
 - Native Save/Open/recent-project pickers, archive integrity, local HTML replacement and portable two-page export with real embedded images, CSS and scripts.
 - Ordinary Chromium loading the exported website from disk, executing local scripts and navigating relative page links without Desegnos.
@@ -31,6 +31,10 @@ Evidence is retained in `test-results/native/<timestamp>/`: step report, native 
 
 ## Retained earlier coverage
 
-Historical workflow modules and their evidence remain available. Their labels and sequencing describe earlier interfaces and are not the default acceptance path. The previous combined 100-step run is recorded in `test-results/native/2026-10-19T10-54-29-820Z-715292/report.json`. It covered direct dragging/corner resizing/context menus, grid snapping, signed ChatGPT/account/rotation, provider failure and stream diagnostics, retained-preview script/IPC isolation, legacy migration, contrast and identity import.
+Historical workflow modules and their evidence remain available. Their shared helpers and menu/control paths have been migrated, but the older combined sequence is not the default acceptance path or fresh evidence for this cleanup. The previous combined 100-step run is recorded in `test-results/native/2026-10-19T10-54-29-820Z-715292/report.json`. It covered direct dragging/corner resizing/context menus, grid snapping, signed ChatGPT/account/rotation, provider failure and stream diagnostics, retained-preview script/IPC isolation, legacy migration, contrast and identity import.
 
-Rust tests continue to check fragmented and mislabeled event streams, completed-output merging, exact job/digest correlation, source staleness, size/credential bounds, durable transactions, retry archival and archive validation. The separately guarded OS-vault test is opt-in (`pnpm test:vault`); ordinary runs never touch the user's system vault. Paid generation quality is a distinct owner-run benchmark gate, not established by fixture success.
+Rust tests continue to check fragmented and mislabeled event streams, completed-output merging, exact job/digest correlation, source staleness, size/credential bounds, durable transactions, retry archival and archive validation. `--source-edit-only` additionally exercises the source-edit command, line errors, selector map, one-step history, native save/reopen/export and crash recovery. Run native display suites sequentially so their guarded Xvfb display allocation cannot race.
+
+The separately guarded OS-vault test is opt-in (`pnpm test:vault`); ordinary runs never touch the user's system vault. Paid generation quality is a distinct owner-run benchmark gate, not established by fixture success.
+
+The cleanup search check used exactly one owner-authorized connected ChatGPT-plan generation. It is separate from native fixtures and the still-unverified 18-scenario quality gate; see [the cleanup record](../../docs/CLEANUP_CODEX.md).

@@ -33,7 +33,7 @@ function sourceFor(record, endpoint, options) {
   const marker = options.marker ?? `fixture-${record.ordinal}`;
   const probe = `${endpoint.replace(/\/v1$/, '')}/probe/${marker}`;
   const retained = options.retainedPreviewUrl ?? '#retained-unavailable';
-  const html = `<main><h1>Generated native preview</h1><p id="fixture-status">Scripts are paused until enabled.</p><button id="fixture-action" type="button"><span>${options.buttonLabel ?? 'Try generated interaction'}</span></button><a id="fixture-retained" href="${retained.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}">Open retained preview</a><form id="fixture-form" action="${probe}/form" method="post"><input name="probe" value="blocked"></form><img alt="" src="${probe}/image"><script>parent.postMessage({type:'desegni-native-inline-script-ran'},'*')</script><script src="${probe}/external-script"></script></main>`;
+  const html = `<main><h1>Generated native preview</h1><p id="fixture-status">Scripts are paused until enabled.</p><button id="fixture-action" type="button"><span>${options.buttonLabel ?? 'Try generated interaction'}</span></button><a id="fixture-retained" href="${retained.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}">Open retained preview</a><form id="fixture-form" action="${probe}/form" method="post"><input name="probe" value="blocked"></form><img alt="" src="${probe}/image"><script>parent.postMessage({type:'desegni-native-inline-script-ran'},'*')</script></main>`;
   const css = 'html,body{margin:0;background:#162329;color:#f4f0e8;font:16px system-ui}main{padding:20px}h1{font-size:22px;margin:0 0 12px}#fixture-action,#fixture-retained{position:fixed;left:20px;box-sizing:border-box;width:240px;height:42px;padding:10px;background:#e9bd7c;color:#18232a;border:1px solid #e9bd7c;border-radius:6px;text-align:center;font:15px system-ui}#fixture-action{top:116px}#fixture-retained{top:174px}img{display:none}';
   const common = `const marker=${JSON.stringify(marker)};const send=(event,detail={})=>parent.postMessage({type:'desegni-native-fixture',marker,event,detail},'*');const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};`;
   const javascript = options.editorAudit
@@ -72,9 +72,19 @@ function candidateFor(record, endpoint, options) {
     summary: 'Native fixture candidate with complete source and explicit review choices',
     regions: requests.map(value => ({ regionId: value.regionId, status: conflict ? 'conflict' : 'implemented', explanation: conflict ? 'The requested remote service is unavailable in this dependency gate.' : 'Implemented with native HTML, CSS and browser DOM behavior.' })),
     pages: conflict ? [] : pageIds.map(pageId => {
-      const content = sourceFor(record, endpoint, options);
-      if (/^Requirements format: 8$/m.test(record.markdown)) {
-        const areas = requests.filter(value => value.pageId === pageId);
+      let content = sourceFor(record, endpoint, options);
+      const areas = requests.filter(value => value.pageId === pageId);
+      const existing=jsonBlocks(record.markdown).find(value=>value?.pageId===pageId && value.content)?.content;
+      if(existing && areas.every(area=>area.elementTarget && ['h1','button'].includes(area.elementTarget.tag))) {
+        content=structuredClone(existing);
+        for(const area of areas) {
+          const pattern=new RegExp(`<${area.elementTarget.tag}\\b[^>]*>`);
+          assert.ok(pattern.test(content.html),'The controlled targeted fixture needs its original element');
+          content.html=content.html.replace(pattern,tag=>tag.replace(/\sdata-desegnos-region=(?:"[^"]*"|'[^']*')/g,'').replace(/>$/,` data-desegnos-region="${area.regionId}">`));
+        }
+        return {pageId,content};
+      }
+      if (/^Requirements format: [89]$/m.test(record.markdown)) {
         content.html = content.html.replace('<main', `<main data-desegnos-region="${areas[0].regionId}"`);
         content.html += areas.slice(1).map(area => `<section data-desegnos-region="${area.regionId}"><p>Requested supporting content</p></section>`).join('');
       }
@@ -136,7 +146,7 @@ function readRequest(bytes, ordinal, mode, authentication) {
   const decoded = Buffer.from(encoded[1], 'base64');
   assert.equal(decoded.toString('base64'), encoded[1], 'Non-canonical Base64 file');
   const markdown = decoded.toString('utf8');
-  const webSearch = purpose === 'generation' && /^Requirements format: 8$/m.test(markdown);
+  const webSearch = purpose === 'generation' && /^Requirements format: [89]$/m.test(markdown);
   assert.deepEqual(body.tools, webSearch ? [{type:'web_search'}] : []); assert.equal(body.tool_choice, webSearch ? 'auto' : 'none');
   assert.deepEqual(Buffer.from(markdown, 'utf8'), decoded, 'Requirements are not exact valid UTF-8');
   assert.deepEqual(body.text.format.schema.properties.jobId.enum, [metadata.jobId]);

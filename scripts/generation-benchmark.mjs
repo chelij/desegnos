@@ -97,7 +97,7 @@ async function summarize(directory) {
     const strict = scenario.mode !== 'strict' || applied && rated && run.rating.strictOrderAndGrouping === true;
     const costRecorded = Number.isFinite(run?.result.usageCostEstimateUsd) && run.result.usageCostEstimateUsd >= 0 || Number.isFinite(run?.rating?.actualBilledUsd) && run.rating.actualBilledUsd >= 0;
     const accounting = Number.isFinite(run?.result.durationMs) && run.result.durationMs > 0 && costRecorded;
-    return { id: scenario.id, run: run?.path ?? null, attempted: (run?.result.providerAttempts ?? 0) > 0, applied, rated, usable: rated && run.rating.usableWithoutManualFixes, strictOrderAndGrouping: strict, costAndDurationRecorded: accounting };
+    return { id: scenario.id, placeholdersPerPage: run?.result.placeholdersPerPage ?? null, run: run?.path ?? null, attempted: (run?.result.providerAttempts ?? 0) > 0, applied, rated, usable: rated && run.rating.usableWithoutManualFixes, strictOrderAndGrouping: strict, costAndDurationRecorded: accounting };
   });
   const usable = scenarios.filter(item => item.applied && item.rated && item.usable).length;
   const complete = scenarios.every(item => item.attempted && item.rated && item.strictOrderAndGrouping && item.costAndDurationRecorded);
@@ -194,11 +194,20 @@ async function isolated() {
     try { await driver.execute(() => { location.reload(); return true; }); } catch { /* Navigation may discard the old script response. */ }
     await waitFor(async () => { try { return await driver.execute(() => !!document.querySelector('[data-testid="canvas"]')); } catch { return false; } }, 'The accepted benchmark result did not reopen on canvas', 30_000);
     await physical.initialize(evidence);
+    result.placeholdersPerPage=[];
     for (const page of (await driver.invoke('get_workspace')).project.pages) {
       await driver.page(page.id);
       if (page.content) await waitFor(() => driver.execute(() => document.querySelector('.static-preview')?.dataset.previewReady === 'true'), 'Accepted benchmark source did not render');
       await driver.button('Fit'); await physical.captureWindow(join(evidence, `page-${page.id}.png`));
       const layout = await driver.execute(() => { const document = window.document.querySelector('.static-preview iframe')?.contentDocument; return document ? [...document.querySelectorAll('header,nav,main,section,h1,h2,h3,footer,button,a,input,textarea')].slice(0,300).map(element => { const rect = element.getBoundingClientRect(); return { tag: element.localName, text: element.textContent.trim().slice(0,160), x:rect.x,y:rect.y,width:rect.width,height:rect.height }; }) : []; });
+      const placeholders=await driver.execute(()=>{
+        const doc=document.querySelector('.static-preview iframe')?.contentDocument;
+        if(!doc)return null;
+        const slots=[...doc.querySelectorAll('[data-desegnos-placeholder]')].filter(node=>!node.parentElement?.closest('[data-desegnos-placeholder]')).length;
+        const legacy=[...doc.querySelectorAll('*')].filter(node=>!node.closest('[data-desegnos-placeholder]')&&[...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&/placeholder/i.test(child.textContent))).length;
+        return {markedSlots:slots,legacyLabels:legacy,total:slots+legacy};
+      });
+      result.placeholdersPerPage.push({pageId:page.id,...(placeholders??{markedSlots:null,legacyLabels:null,total:null})});
       await writeFile(join(evidence, `layout-${page.id}.json`), JSON.stringify(layout, null, 2), { mode: 0o600 });
     }
     await writeFile(join(evidence, 'owner-rating.json'), JSON.stringify({ version:1, reviewer:null, reviewedAt:null, usableWithoutManualFixes:null, strictOrderAndGrouping:null, actualBilledUsd:null, notes:'' }, null, 2), { mode: 0o600 });

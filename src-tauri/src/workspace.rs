@@ -618,6 +618,96 @@ pub struct ElementEditView {
 }
 
 #[tauri::command]
+pub fn edit_page_source(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    html: Option<String>,
+    css: Option<String>,
+    javascript: Option<String>,
+) -> desegni_core::SourceEditResult<WorkspaceView> {
+    let mut state = state.lock().map_err(|_| {
+        desegni_core::SourceEditError::general(
+            "The workspace is busy. Keep your text and try again.",
+        )
+    })?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let session = session
+        .as_mut()
+        .ok_or_else(|| desegni_core::SourceEditError::general("Open a project first."))?;
+    if session.project().id != project_id {
+        return Err(desegni_core::SourceEditError::general(
+            "Return to the project that owns this page.",
+        ));
+    }
+    let journal = journal.as_ref().ok_or_else(|| {
+        desegni_core::SourceEditError::general(
+            "Recovery is unavailable. Keep your text; nothing was changed.",
+        )
+    })?;
+    session.edit_page_source(
+        revision,
+        page_id,
+        &desegni_core::PageSourceEdit {
+            html,
+            css,
+            javascript,
+        },
+        |project| journal.append(project),
+    )?;
+    state.prepared = None;
+    Ok(state.view())
+}
+
+#[tauri::command]
+pub fn open_found_source(
+    window: tauri::WebviewWindow,
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    target: desegni_core::ElementTarget,
+) -> NativeResult<()> {
+    if window.label() != "editor" {
+        return Err("Only the editor can open found-content sources.".into());
+    }
+    let url = {
+        let state = state.lock().map_err(message)?;
+        let project = state.project()?;
+        if project.id != project_id {
+            return Err("Return to the project that owns this item.".into());
+        }
+        project
+            .found_source(page_id, &target)
+            .map_err(message)?
+            .ok_or("This item has no online source.")?
+    };
+    open::that_detached(url).map_err(|_| "The source could not be opened in your browser.".into())
+}
+
+#[tauri::command]
+pub fn get_page_source_map(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+) -> desegni_core::SourceEditResult<desegni_core::PageSourceMap> {
+    let state = state
+        .lock()
+        .map_err(|_| desegni_core::SourceEditError::general("The workspace is unavailable."))?;
+    let project = state
+        .project()
+        .map_err(desegni_core::SourceEditError::general)?;
+    if project.id != project_id {
+        return Err(desegni_core::SourceEditError::general(
+            "Return to the project that owns this page.",
+        ));
+    }
+    project.page_source_map(page_id)
+}
+
+#[tauri::command]
 pub fn inspect_element(
     state: WorkspaceState<'_>,
     project_id: Uuid,

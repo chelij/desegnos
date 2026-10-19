@@ -70,12 +70,24 @@ async function childPoint(driver, selector, text = false) {
 async function clickHeading(driver, physical) {
   await previewReady(driver);
   await physical.click(await childPoint(driver, 'h1', true));
-  await driver.ready('.element-toolbar [aria-label="Layers"]');
+  await driver.ready('.element-toolbar button[title^="Change text"]');
 }
 
 async function chooseInterpretation(driver, precise) {
-  await driver.menu([precise ? 'Precise — follow descriptions and placement closely' : 'Flexible — coordinate and interpret requests'], 'Generation interpretation');
+  await driver.menu(['AI style', precise ? 'Precise — follow placement closely' : 'Flexible — small adjustments only']);
   await waitFor(async () => (await workspace(driver)).project.generationMode === (precise ? 'strict' : 'fuzzy'), 'The global interpretation choice did not persist');
+}
+
+async function openRequest(driver,pageId) {
+  const active=await driver.execute(()=>document.querySelector('[role=tab][aria-selected=true]')?.id.replace('page-tab-',''));
+  if(active!==pageId) await driver.page(pageId);
+  const page=(await workspace(driver)).project.pages.find(page=>page.id===pageId);
+  const request=page.regions.find(region=>!region.completed);
+  assert.ok(request,'The page needs a pending request');
+  await driver.button('Layers');
+  await driver.click(`section[aria-label="Layers"] .layer-row[data-region-id="${request.id}"] button.layer-select`);
+  await driver.button('Close Layers');
+  await driver.click(`.annotation[data-region-id="${request.id}"] textarea`);
 }
 
 async function allFiles(directory) {
@@ -104,11 +116,11 @@ function exportBody(about) {
 
 async function replaceMain(driver, physical, about) {
   await previewReady(driver);
-  await physical.click(await childPoint(driver, 'main'));
-  await driver.ready('.element-toolbar');
-  await physical.rightClick(await childPoint(driver, 'main')); await driver.click('.editor-menu [aria-label="Replace"]'); await driver.select('Replace with', 'html');
-  await driver.fill('Replacement HTML', exportBody(about)); await driver.button('Replace element');
-  await closed(driver);
+  const current=(await workspace(driver)).project;
+  const active=await driver.execute(()=>document.querySelector('[role=tab][aria-selected=true]').id.replace('page-tab-',''));
+  await driver.invoke('edit_page_source',{projectId:current.id,pageId:active,revision:current.revision,html:exportBody(about)});
+  // Save returns the real native workspace to the UI; tab changes alone do not read Rust state.
+  await driver.button('Save');
   await previewReady(driver, about ? 'About our standalone website' : 'Our standalone website');
 }
 
@@ -135,9 +147,9 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     projectId = value.id; homeId = value.homePageId;
     assert.deepEqual(value.pages[0].viewport, { width: 390, height: 844 }); assert.equal(value.pages[0].appearance, 'light'); assert.equal(value.showGrid, true);
     await driver.ready('[data-testid="canvas"]');
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('.generation-controls button')].find(button => button.textContent.trim() === 'Generate')?.disabled), true);
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('.shell-primary-actions button')].find(button => button.textContent.trim() === 'Generate')?.disabled), true);
     const fit = await driver.execute(() => { const guide = document.querySelector('[data-testid="screen-guide"]').getBoundingClientRect(), view = document.querySelector('.free-workspace').getBoundingClientRect(); return { top: guide.top, bottom: guide.bottom, viewportTop: view.top, viewportBottom: view.bottom, dockTop: document.querySelector('[aria-label="Canvas tools"]').getBoundingClientRect().top }; });
-    assert.ok(fit.top >= fit.viewportTop - 1 && fit.bottom <= Math.min(fit.viewportBottom, fit.dockTop - 12) + 1, JSON.stringify(fit));
+    assert.ok(fit.top >= fit.viewportTop - 1 && fit.bottom <= fit.viewportBottom + 1 && fit.bottom - fit.top >= (fit.viewportBottom - fit.viewportTop) * 0.75, JSON.stringify(fit));
     await driver.ready('.canvas-empty-hint button'); await physical.captureWindow(join(output, '02-empty-mobile-window.png'));
   });
 
@@ -159,7 +171,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     const emptyPoint = await driver.execute(() => { const guide = document.querySelector('[data-testid="screen-guide"]').getBoundingClientRect(); return { x: guide.x + guide.width / 4, y: guide.y + 35 }; });
     await physical.doubleClick(emptyPoint);
     await waitFor(async () => (await workspace(driver)).project.pages[0].regions.length === 1, 'Double-click did not add exactly one request');
-    await driver.click('details.request-overview > summary'); await driver.click('button.request-list-item');
+    await openRequest(driver, homeId);
     await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA'), 'An empty request could not be reopened from the overview');
     assert.equal((await workspace(driver)).project.pages[0].regions.length, 1);
     await physical.keys('Escape'); await driver.button('Undo');
@@ -167,28 +179,28 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.click('.canvas-empty-hint button'); await driver.fill('Request 1', longPrompt);
     await driver.click('[role="toolbar"][aria-label="Canvas tools"] button[aria-label="Select"], [role="toolbar"][aria-label="Canvas tools"] button[title^="Select"]');
     await waitFor(async () => (await workspace(driver)).project.pages[0].regions[0]?.prompt === longPrompt, 'The long request did not persist');
-    await driver.ready('.request-expand');
-    if (await driver.execute(() => document.querySelector('.request-expand').getAttribute('aria-expanded') === 'true')) await driver.click('.request-expand');
-    assert.equal(await driver.execute(() => document.querySelector('.request-expand').getAttribute('aria-expanded')), 'false');
-    await driver.click('.request-expand'); assert.equal(await driver.execute(() => document.querySelector('.request-expand').getAttribute('aria-expanded')), 'true');
-    await driver.click('.request-expand'); await driver.button('Fit');
+    const promptLayout = await driver.execute(() => {
+      const input = document.querySelector('.annotation textarea'), box = input.closest('.annotation');
+      const a=input.getBoundingClientRect(), b=box.getBoundingClientRect();
+      return {inside:a.left>=b.left-1&&a.right<=b.right+1&&a.top>=b.top-1&&a.bottom<=b.bottom+1,scrollable:input.scrollHeight>input.clientHeight};
+    });
+    assert.equal(promptLayout.inside,true,'Long prompt text must remain within its request');
+    assert.equal(promptLayout.scrollable,true,'Long prompts need internal scrolling');
+    await driver.button('Fit');
     await chooseInterpretation(driver, true); await chooseInterpretation(driver, false); await chooseInterpretation(driver, true);
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('.generation-controls button')].find(button => button.textContent.trim() === 'Generate')?.disabled), false);
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('.shell-primary-actions button')].find(button => button.textContent.trim() === 'Generate')?.disabled), false);
     await physical.captureWindow(join(output, '04-request-readability-window.png'));
   });
 
-  await step('Browser-style tabs and the Requests overview expose pending requests grouped by page', async () => {
+  await step('Browser-style tabs and Layers expose each page’s pending requests', async () => {
     await driver.button('Add page'); await driver.fill('Page name', 'About');
     await driver.click('dialog[open] .page-address summary'); await driver.fill('Page path', '/about'); await driver.button('Add page'); await closed(driver);
     aboutId = await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.path === '/about')?.id, 'The About page did not open');
     await driver.click('.canvas-empty-hint button'); await driver.fill('Request 1', 'Create a clear About page for the same studio.');
     await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === aboutId).regions[0]?.prompt.includes('About page'), 'The second page request did not persist');
-    await driver.click('details.request-overview > summary'); await driver.ready('section.request-popover[aria-label="Project requests"]');
-    const overview = await driver.execute(() => document.querySelector('section.request-popover').textContent);
-    assert.match(overview, /About/); assert.match(overview, /Home|Page 1/); assert.match(overview, /Pending/);
-    await physical.captureWindow(join(output, '05-request-overview-window.png'));
-    await driver.click('button.request-list-item');
-    await waitFor(() => driver.execute(id => document.getElementById(`page-tab-${id}`)?.getAttribute('aria-selected') === 'true' && !!document.querySelector('.annotation.selected textarea'), homeId), 'The grouped request did not switch to its page and select the request');
+    await openRequest(driver, homeId);
+    await waitFor(() => driver.execute(id => document.getElementById(`page-tab-${id}`)?.getAttribute('aria-selected') === 'true' && !!document.querySelector('.annotation.selected textarea'), homeId), 'Layers did not select the page request');
+    await physical.captureWindow(join(output,'05-page-request-navigation-window.png'));
   });
 
   await step('AI settings connect a session key in reading order and show truthful connection and budget states', async () => {
@@ -198,22 +210,23 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.button('Connect key');
     await waitFor(async () => (await driver.invoke('get_ai_settings')).credential.configured, 'The synthetic session key did not connect');
     await driver.button('Test access'); await waitFor(() => driver.execute(() => document.querySelector('.ai-settings [role="status"]')?.textContent.includes('Connected')), 'Test access did not show its result');
-    const positions = await driver.execute(() => [document.querySelector('.authentication-method'), document.querySelector('.api-key-connection'), document.querySelector('.ai-access-test'), document.querySelector('.generation-settings-form')].map(element => element.getBoundingClientRect().top));
+    const positions = await driver.execute(() => [document.querySelector('.ai-settings label'), document.querySelector('.api-key-connection'), document.querySelector('.ai-access-test')].map(element => element.getBoundingClientRect().top));
     assert.ok(positions.every((position, index) => index === 0 || position > positions[index - 1]));
+    await driver.click('details.ai-more summary');
     await driver.fill('API budget per generation (USD)', '10'); await driver.button('Save AI settings');
     await waitFor(() => driver.execute(() => document.querySelector('.ai-settings [role="status"]')?.textContent.includes('saved')), 'The bottom save did not acknowledge AI settings');
     assert.match(await driver.execute(() => document.querySelector('.generation-settings-form').textContent), /not a guaranteed billing cap/);
     await physical.captureWindow(join(output, '06-ai-connection-window.png')); await closeDialog(driver);
-    assert.match(await driver.execute(() => document.querySelector('button[aria-label="AI settings"]').textContent), /AI: OpenAI key/);
+    assert.equal((await driver.invoke('get_ai_settings')).credential.configured,true);
   });
 
   await step('Cancel stops a held generation visibly and preserves the current website and requests', async () => {
     const before = (await workspace(driver)).project;
     provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     cancelled = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The held generation did not reach the provider');
-    await driver.ready('section[aria-label="Generation status"]');
+    await driver.ready('.canvas-pill[aria-label="Generation status"]');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
-    await driver.click('//section[@aria-label="Generation status"]//button[starts-with(normalize-space(.),"Cancel")]', 'xpath');
+    await driver.click('//*[@role="region" and @aria-label="Generation status"]//button[starts-with(normalize-space(.),"Cancel")]', 'xpath');
     await jobAt(driver, projectId, ['cancelled']); provider.release(cancelled.jobId);
     assert.deepEqual((await workspace(driver)).project.pages, before.pages);
     await physical.captureWindow(join(output, '07-cancelled-generation-window.png'));
@@ -223,7 +236,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     const held = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && value.jobId !== cancelled.jobId && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The second generation did not reach the held provider');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
-    assert.match(await driver.execute(() => document.querySelector('section[aria-label="Generation status"]').textContent), /\d+:\d{2}|elapsed/i);
+    assert.match(await driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"]').textContent), /\d+:\d{2}|elapsed/i);
     await driver.click('[role="toolbar"][aria-label="Canvas tools"] button[aria-label="Pan"], [role="toolbar"][aria-label="Canvas tools"] button[title^="Pan"]');
     const view = await physical.rect('.free-workspace'); const start = { x: view.left + 80, y: view.top + 120 };
     const before = await driver.execute(() => { const element = document.querySelector('.workspace-scroll'); return [element.scrollLeft, element.scrollTop]; });
@@ -238,18 +251,18 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     const record = provider.generationRequests().find(item => item.metadata.jobId === applied.jobId);
     assert.equal(record.markdown, applied.requirements.markdown); assert.equal(hash(record.markdown), applied.requirements.sha256); assert.equal(record.metadata.generationMode, 'strict');
     assert.equal(applied.requirements.pageCount, 2); assert.equal((await workspace(driver)).project.pages.every(page => page.content?.html.includes('Generated native preview')), true);
-    await previewReady(driver, 'Generated native preview'); await driver.ready('section[aria-label="Generated changes"]');
+    await previewReady(driver, 'Generated native preview'); await driver.ready('.canvas-pill[aria-label="Generation status"]');
     await writeFile(join(output, 'submitted-instructions.md'), record.markdown);
   });
 
-  await step('On-canvas Keep, Undo, Try again and Details make the applied result reviewable without a sidebar', async () => {
-    const bar = '//section[@aria-label="Generated changes"]';
-    for (const label of ['Keep', 'Undo', 'Try again', 'Details']) await driver.ready(`${bar}//button[normalize-space(.)=${xpathString(label)}]`, 'xpath');
+  await step('On-canvas result actions preserve one-step Undo and Redo without a sidebar', async () => {
+    const bar = '//*[@role="region" and @aria-label="Generation status"]';
+    for (const label of ['Undo', 'Try again']) await driver.ready(`${bar}//button[normalize-space(.)=${xpathString(label)}]`, 'xpath');
     await physical.captureWindow(join(output, '09-applied-review-window.png'));
     const requests = requestCount(provider); await driver.click(`${bar}//button[normalize-space(.)="Undo"]`, 'xpath');
     await waitFor(async () => (await workspace(driver)).project.pages.every(page => !page.content), 'Result Undo did not restore the previous website');
     await driver.button('Redo'); await previewReady(driver, 'Generated native preview'); assert.equal(requestCount(provider), requests);
-    if (await driver.execute(() => !!document.querySelector('section[aria-label="Generated changes"]'))) await driver.click(`${bar}//button[normalize-space(.)="Keep"]`, 'xpath');
+    if (await driver.execute(() => !![...document.querySelectorAll('.canvas-pill[aria-label="Generation status"] button')].find(button=>button.textContent.trim()==='Keep'))) await driver.click(`${bar}//button[normalize-space(.)="Keep"]`, 'xpath');
     await assertCanvasOnly(driver);
   });
 
@@ -272,11 +285,11 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview');
     provider.setMode('complete', { editorAudit: true }); await driver.button('Generate'); applied = await jobAt(driver, projectId, ['applied']);
     await previewReady(driver, 'Generated native preview');
-    await driver.ready('section[aria-label="Generated changes"]');
+    await driver.ready('.canvas-pill[aria-label="Generation status"]');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
     await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Result review preserves newer typing' });
     await waitFor(() => driver.execute(() => document.querySelector('.inline-text-editor')?.textContent === 'Result review preserves newer typing'), 'The native typing did not settle in the inline editor');
-    await physical.click(await physical.center('section[aria-label="Generated changes"] button:nth-child(2)'));
+    await driver.click('//*[@role="region" and @aria-label="Generation status"]//button[normalize-space(.)="Undo"]','xpath');
     await previewReady(driver, 'Result review preserves newer typing');
     assert.equal((await workspace(driver)).project.latestGeneration.jobId, applied.jobId, 'Result Undo undid a newer local edit');
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview');
@@ -290,7 +303,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview'); await driver.button('Redo'); await previewReady(driver, 'Edited directly on the page');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]'); await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Cancelled text change' }); await physical.keys('Escape');
     await previewReady(driver, 'Edited directly on the page'); assert.equal(requestCount(provider), requests);
-    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar button')].map(button => button.getAttribute('aria-label'))), ['Layers', 'Copy layer', 'Cut layer', 'Delete layer']);
+    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar button')].map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['Edit', 'Ask AI', 'Delete layer']);
     assert.match(await driver.execute(() => document.querySelector('.workspace-measurement').textContent), /px/);
     const overlap = await driver.execute(() => { const a = document.querySelector('.element-toolbar').getBoundingClientRect(), b = document.querySelector('.element-selection').getBoundingClientRect(); return Math.max(0, Math.min(a.right,b.right)-Math.max(a.left,b.left))*Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)); });
     assert.equal(overlap, 0, 'The restored element toolbar hides the selected heading');
@@ -306,21 +319,19 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.equal(requestCount(provider), requests); await physical.captureWindow(join(output, '11-ask-ai-window.png'));
   });
 
-  await step('The request overview switches between completed and pending work and scrolls a selected request into view', async () => {
-    await driver.click('details.request-overview > summary'); await driver.ready('section.request-popover[aria-label="Project requests"]');
-    await driver.click('//section[contains(@class,"request-popover")]//button[starts-with(normalize-space(.),"Completed")]', 'xpath');
-    assert.match(await driver.execute(() => document.querySelector('section.request-popover').textContent), /About/);
-    await driver.click('//section[contains(@class,"request-popover")]//button[starts-with(normalize-space(.),"Pending")]', 'xpath');
-    await driver.click('button.request-list-item');
-    await waitFor(() => driver.execute(() => !!document.querySelector('.annotation.selected textarea')), 'Selecting a request did not select and show it');
-    await physical.captureWindow(join(output, '12-request-navigation-window.png'));
+  await step('Page tabs preserve completed work while Layers reveals and focuses a pending request', async () => {
+    await driver.page(aboutId); await previewReady(driver,'Generated native preview');
+    assert.ok((await workspace(driver)).project.pages.find(page=>page.id===aboutId).regions.every(region=>region.completed));
+    await openRequest(driver,homeId);
+    await waitFor(()=>driver.execute(()=>!!document.querySelector('.annotation.selected textarea')),'The pending request was not revealed');
+    await physical.captureWindow(join(output,'12-request-navigation-window.png'));
   });
 
   await step('Native Save writes a real archive and recent-project history stores its actual name and path', async () => {
     await chooseFile(physical, () => driver.button('Save'), projectPath, output, 'audit-save');
     savedProject = (await savedState(driver, projectPath)).project; await verifyArchive(projectPath, savedProject, await driver.invoke('get_project_notes'));
     const recent = await driver.invoke('get_recent_projects'); assert.deepEqual(recent.projects[0], { name: 'Audit website', path: projectPath });
-    await driver.menu(['Project', 'New project']);
+    await driver.menu(['New project']);
     await driver.ready('.recent-projects'); assert.match(await driver.execute(() => document.querySelector('.recent-projects').textContent), /Audit website/);
     await physical.captureWindow(join(output, '13-real-recent-projects-window.png')); await closeDialog(driver);
   });
@@ -342,10 +353,10 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   });
 
   await step('Opening an actual recent project restores its saved source and pending requests', async () => {
-    await driver.menu(['Project', 'New project']); await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
+    await driver.menu(['New project']); await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
     await driver.fill('Project name', 'Temporary audit page'); await driver.button('Create project'); await closed(driver);
     await waitFor(async () => (await workspace(driver)).project.id !== projectId, 'The temporary project did not open');
-    await driver.menu(['Project', 'New project']);
+    await driver.menu(['New project']);
     await driver.click(`//section[contains(@class,"recent-projects")]//button[@title=${xpathString(projectPath)}]`, 'xpath');
     await waitFor(async () => (await workspace(driver)).project.id === projectId || driver.execute(() => !!document.querySelector('dialog[aria-label="Save your changes?"][open]')), 'The recent project neither opened nor requested its explicit discard choice');
     if (await driver.execute(() => !!document.querySelector('dialog[aria-label="Save your changes?"][open]'))) await driver.button('Discard and continue');
@@ -355,9 +366,10 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
 
   await step('Local replacement builds two real portable pages with image sources, CSS assets, internal links and a click script', async () => {
     const requests = requestCount(provider);
-    await driver.click('details.request-overview > summary'); await driver.click('button.request-list-item');
+    await openRequest(driver,homeId);
     await waitFor(() => driver.execute(() => !!document.querySelector('.annotation.selected textarea')), 'The temporary export request was not selected');
-    await driver.menu(['Edit', 'Remove request']); await driver.button('Remove'); await closed(driver);
+    await driver.click('.element-toolbar [aria-label="Delete layer"]');
+    if(await driver.execute(()=>!!document.querySelector('dialog[open]'))) { await driver.button('Remove'); await closed(driver); }
     await driver.button('Fit'); await replaceMain(driver, physical, false); await driver.page(aboutId); await replaceMain(driver, physical, true); await driver.page(homeId);
     const value = (await workspace(driver)).project; assert.equal(value.pages.length, 2);
     for (const page of value.pages) { assert.ok(page.content.html.includes('srcset=')); assert.ok(page.content.html.includes('background-image:')); assert.ok(page.content.html.includes('Local click script works')); }
@@ -391,7 +403,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
 
   await step('Cancelling Export from the project menu preserves the website, archive and provider history', async () => {
     const before = (await workspace(driver)).project, archive = hash(await readFile(projectPath)), requests = requestCount(provider);
-    await chooseFile(physical, () => driver.menu(['Project', 'Export website…']), null, output, 'audit-export-cancel', true);
+    await chooseFile(physical, () => driver.menu(['Export website…']), null, output, 'audit-export-cancel', true);
     assert.deepEqual((await workspace(driver)).project, before); assert.equal(hash(await readFile(projectPath)), archive); assert.equal(requestCount(provider), requests);
     assert.deepEqual(provider.errors(), []); await assertCanvasOnly(driver);
     await writeFile(join(output, 'final-project.json'), JSON.stringify(before, null, 2));

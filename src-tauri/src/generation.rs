@@ -5,9 +5,9 @@ use crate::{
 };
 use desegni_ai::{
     ApiKey, AuthenticationMethod, CancellationToken, ChatgptView, CredentialInfo,
-    CredentialManager, CredentialStorage, ErrorKind, ModelInfo, OpenAiClient, ProviderError,
-    ProviderResponse, ProviderSettings, SubmissionOutcome, TokenUsage, estimate_for_auth,
-    model_catalogue,
+    CredentialManager, CredentialStorage, ErrorKind, ModelInfo, OpenAiClient, ProviderClient,
+    ProviderDescriptor, ProviderError, ProviderId, ProviderResponse, ProviderSettings,
+    SubmissionOutcome, TokenUsage, model_catalogue, provider_catalogue,
 };
 use desegni_core::{
     GenerationCandidate, GenerationMode, Project, RequirementsSnapshot, candidate_schema, digest,
@@ -126,6 +126,8 @@ pub struct GenerationJobView {
     #[serde(default)]
     areas: Vec<GenerationArea>,
     generation_mode: GenerationMode,
+    #[serde(default)]
+    provider: ProviderId,
     settings: ProviderSettings,
     #[serde(default)]
     authentication: AuthenticationMethod,
@@ -165,6 +167,13 @@ struct LatestJob {
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ProviderPreference {
+    version: u32,
+    provider: ProviderId,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AuthenticationPreference {
     version: u32,
     authentication: AuthenticationMethod,
@@ -173,6 +182,8 @@ struct AuthenticationPreference {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiSettingsView {
+    provider: ProviderId,
+    providers: Vec<ProviderDescriptor>,
     settings: ProviderSettings,
     credential: CredentialInfo,
     catalogue: Vec<ModelInfo>,
@@ -194,6 +205,8 @@ impl AiSettingsView {
 }
 
 pub struct GenerationService {
+    provider: ProviderId,
+    provider_credentials: BTreeMap<ProviderId, Arc<CredentialManager>>,
     directory: PathBuf,
     settings: ProviderSettings,
     configuration_error: Option<String>,
@@ -350,7 +363,9 @@ impl GenerationService {
             } else {
                 (credentials, client)
             };
-        Ok(Self {
+        let mut service = Self {
+            provider: ProviderId::Openai,
+            provider_credentials: BTreeMap::new(),
             directory,
             settings,
             configuration_error,
@@ -361,7 +376,94 @@ impl GenerationService {
             jobs: BTreeMap::new(),
             unsaved_jobs: BTreeSet::new(),
             active: BTreeMap::new(),
-        })
+        };
+        let preference = service.directory.join("provider.json");
+        if preference.exists() {
+            match read_json::<ProviderPreference>(&preference, 4096).and_then(|p| {
+                if p.version != 1 {
+                    return Err("The saved AI choice has an unsupported format.".into());
+                }
+                service.select_provider(p.provider, false)
+            }) {
+                Ok(()) => (),
+                Err(error) => service.configuration_error = Some(error),
+            }
+        }
+        Ok(service)
+    }
+
+    fn settings_path(&self, provider: ProviderId) -> PathBuf {
+        if provider == ProviderId::Openai {
+            self.directory.join("settings.json")
+        } else {
+            self.directory.join(format!(
+                "settings-{}.json",
+                serde_json::to_value(provider)
+                    .expect("provider is serializable")
+                    .as_str()
+                    .expect("provider is a string")
+            ))
+        }
+    }
+    fn adapter(&self, provider: ProviderId) -> NativeResult<ProviderClient> {
+        ProviderClient::new(provider, self.client.clone()?).map_err(message)
+    }
+    fn credentials_for(&mut self, provider: ProviderId) -> Arc<CredentialManager> {
+        if provider == self.provider {
+            return self.credentials.clone();
+        }
+        self.provider_credentials
+            .entry(provider)
+            .or_insert_with(|| Arc::new(CredentialManager::for_provider(provider)))
+            .clone()
+    }
+    fn select_provider(&mut self, provider: ProviderId, persist: bool) -> NativeResult<()> {
+        self.ensure_switch_allowed()?;
+        if !provider.available() {
+            return Err("This AI connection is not available yet.".into());
+        }
+        let authentication = if provider == ProviderId::Openai {
+            let path = self.directory.join("authentication.json");
+            if path.exists() {
+                let p: AuthenticationPreference = read_json(&path, 4096)?;
+                if p.version != 1 {
+                    return Err("The saved sign-in preference is unsupported.".into());
+                }
+                p.authentication
+            } else {
+                AuthenticationMethod::ApiKey
+            }
+        } else {
+            AuthenticationMethod::ApiKey
+        };
+        let path = self.settings_path(provider);
+        let settings = if path.exists() {
+            read_json::<ProviderSettings>(&path, 65_536)?
+        } else {
+            provider.defaults()
+        };
+        provider
+            .validate(&settings, authentication)
+            .map_err(message)?;
+        self.adapter(provider)?;
+        if persist {
+            write_json(
+                &self.directory.join("provider.json"),
+                &ProviderPreference {
+                    version: 1,
+                    provider,
+                },
+            )?;
+        }
+        self.provider_credentials
+            .insert(self.provider, self.credentials.clone());
+        self.credentials = self.credentials_for(provider);
+        self.provider = provider;
+        self.authentication = authentication;
+        self.settings = settings;
+        self.configuration_error = None;
+        self.authentication_error = None;
+        Ok(())
     }
 
     pub(super) fn chatgpt_directory(&self) -> PathBuf {
@@ -376,6 +478,9 @@ impl GenerationService {
         &mut self,
         authentication: AuthenticationMethod,
     ) -> NativeResult<()> {
+        if self.provider != ProviderId::Openai {
+            return Err("Choose OpenAI before changing its sign-in method.".into());
+        }
         write_json(
             &self.directory.join("authentication.json"),
             &AuthenticationPreference {
@@ -575,8 +680,8 @@ impl GenerationService {
         }
         record
             .view
-            .settings
-            .validate_for_auth(record.view.authentication)
+            .provider
+            .validate(&record.view.settings, record.view.authentication)
             .map_err(message)?;
         if (record.view.authentication == AuthenticationMethod::Chatgpt)
             != record.view.chatgpt_account_id.is_some()
@@ -686,15 +791,19 @@ impl GenerationService {
         {
             return Err("Apply or discard the existing generation review, or cancel its running request, before starting another.".into());
         }
-        let requirements = project.prepare_requirements().map_err(message)?;
-        let estimate = estimate_for_auth(
-            self.authentication,
-            &requirements,
-            project.generation_mode,
-            &candidate_schema(),
-            &self.settings,
-        )
-        .map_err(message)?;
+        let requirements = project
+            .prepare_requirements_with_capabilities(self.provider.capabilities())
+            .map_err(message)?;
+        let estimate = self
+            .adapter(self.provider)?
+            .estimate(
+                self.authentication,
+                &requirements,
+                project.generation_mode,
+                &candidate_schema(),
+                &self.settings,
+            )
+            .map_err(message)?;
         let record = JobRecord {
             version: 1,
             error: None,
@@ -718,6 +827,7 @@ impl GenerationService {
                     })
                     .collect(),
                 generation_mode: project.generation_mode,
+                provider: self.provider,
                 settings: self.settings.clone(),
                 authentication: self.authentication,
                 chatgpt_account_id: account_id,
@@ -774,14 +884,16 @@ impl GenerationService {
             .requirements
             .validate_current(project)
             .map_err(message)?;
-        let estimate = estimate_for_auth(
-            record.view.authentication,
-            &record.view.requirements,
-            record.view.generation_mode,
-            &candidate_schema(),
-            &record.view.settings,
-        )
-        .map_err(message)?;
+        let estimate = self
+            .adapter(record.view.provider)?
+            .estimate(
+                record.view.authentication,
+                &record.view.requirements,
+                record.view.generation_mode,
+                &candidate_schema(),
+                &record.view.settings,
+            )
+            .map_err(message)?;
         if estimate.estimate_usd > record.view.estimate_usd + 0.000_001 {
             return Err(
                 "The cost estimate changed. Prepare and review a new request before sending."
@@ -1115,8 +1227,8 @@ impl GenerationService {
 #[path = "generation_tests.rs"]
 mod tests;
 
-async fn credential_key(state: &AiState<'_>) -> NativeResult<ApiKey> {
-    let credentials = state.lock().map_err(message)?.credentials.clone();
+async fn credential_key(state: &AiState<'_>, provider: ProviderId) -> NativeResult<ApiKey> {
+    let credentials = state.lock().map_err(message)?.credentials_for(provider);
     tauri::async_runtime::spawn_blocking(move || credentials.key())
         .await
         .map_err(message)?
@@ -1127,7 +1239,7 @@ pub(super) async fn settings_view(
     state: &AiState<'_>,
     chatgpt_state: &ChatgptState,
 ) -> NativeResult<AiSettingsView> {
-    let (settings, credentials, configuration_error, authentication) = {
+    let (settings, credentials, configuration_error, authentication, provider) = {
         let service = state.lock().map_err(message)?;
         (
             service.settings.clone(),
@@ -1141,6 +1253,7 @@ pub(super) async fn settings_view(
             .flatten()
             .reduce(|first, next| format!("{first} {next}")),
             service.authentication,
+            service.provider,
         )
     };
     let credential = tauri::async_runtime::spawn_blocking(move || credentials.status())
@@ -1170,9 +1283,11 @@ pub(super) async fn settings_view(
             vec![]
         }
     } else {
-        model_catalogue()
+        provider.catalogue()
     };
     Ok(AiSettingsView {
+        provider,
+        providers: provider_catalogue(),
         settings,
         credential,
         catalogue,
@@ -1193,6 +1308,21 @@ pub async fn get_ai_settings(
 }
 
 #[tauri::command]
+pub async fn set_ai_provider(
+    window: WebviewWindow,
+    state: AiState<'_>,
+    chatgpt: State<'_, ChatgptState>,
+    provider: ProviderId,
+) -> NativeResult<AiSettingsView> {
+    trusted(&window)?;
+    state
+        .lock()
+        .map_err(message)?
+        .select_provider(provider, true)?;
+    settings_view(&state, &chatgpt).await
+}
+
+#[tauri::command]
 pub async fn save_ai_settings(
     window: WebviewWindow,
     state: AiState<'_>,
@@ -1202,10 +1332,11 @@ pub async fn save_ai_settings(
     trusted(&window)?;
     {
         let mut service = state.lock().map_err(message)?;
-        settings
-            .validate_for_auth(service.authentication)
+        service
+            .provider
+            .validate(&settings, service.authentication)
             .map_err(message)?;
-        write_json(&service.directory.join("settings.json"), &settings)?;
+        write_json(&service.settings_path(service.provider), &settings)?;
         service.settings = settings;
         service.configuration_error = None;
         if service.client.is_err() {
@@ -1259,12 +1390,13 @@ pub async fn test_ai_access(
     chatgpt: State<'_, ChatgptState>,
 ) -> NativeResult<AccessResult> {
     trusted(&window)?;
-    let (client, settings, authentication) = {
+    let (client, settings, authentication, provider) = {
         let service = state.lock().map_err(message)?;
         (
             service.client.clone()?,
             service.settings.clone(),
             service.authentication,
+            service.provider,
         )
     };
     if authentication == AuthenticationMethod::Chatgpt {
@@ -1290,12 +1422,13 @@ pub async fn test_ai_access(
         }
         return Ok(AccessResult { message: "OpenAI confirmed ChatGPT plan permission and access to the selected model. No generation request was made.".into() });
     }
-    let key = credential_key(&state).await?;
-    client
+    let key = credential_key(&state, provider).await?;
+    ProviderClient::new(provider, client)
+        .map_err(message)?
         .test_model_access(&settings, &key, &CancellationToken::new())
         .await
         .map_err(message)?;
-    Ok(AccessResult { message: "OpenAI accepted the key and confirmed access to the selected model. No text generation request was made.".into() })
+    Ok(AccessResult { message: "The AI service accepted the key and confirmed access to the selected model. No text generation request was made.".into() })
 }
 
 #[tauri::command]
@@ -1306,7 +1439,10 @@ pub async fn prepare_generation(
     chatgpt: State<'_, ChatgptState>,
 ) -> NativeResult<GenerationJobView> {
     trusted(&window)?;
-    let authentication = state.lock().map_err(message)?.authentication;
+    let (authentication, provider) = {
+        let service = state.lock().map_err(message)?;
+        (service.authentication, service.provider)
+    };
     let account_id = if authentication == AuthenticationMethod::Chatgpt {
         let mut view = chatgpt.view().await;
         let account = view
@@ -1343,13 +1479,13 @@ pub async fn prepare_generation(
         }
         Some(account_id)
     } else {
-        let _key = credential_key(&state).await?;
+        let _key = credential_key(&state, provider).await?;
         None
     };
     let workspace = workspace.lock().map_err(message)?;
     let project = workspace.project()?;
     let mut service = state.lock().map_err(message)?;
-    if service.authentication != authentication {
+    if service.authentication != authentication || service.provider != provider {
         return Err("The generation method changed while preparing this request. Review it and prepare again.".into());
     }
     if let Some(account_id) = account_id {
@@ -1424,11 +1560,15 @@ async fn submit(
     retry: bool,
 ) -> NativeResult<GenerationJobView> {
     trusted(&window)?;
-    let (authentication, account_id) = {
+    let (authentication, account_id, provider) = {
         let workspace = workspace.lock().map_err(message)?;
         let mut service = state.lock().map_err(message)?;
         let record = service.record(workspace.project()?, job_id)?;
-        (record.view.authentication, record.view.chatgpt_account_id)
+        (
+            record.view.authentication,
+            record.view.chatgpt_account_id,
+            record.view.provider,
+        )
     };
     let epoch = account_id.map(|id| chatgpt.epoch(id)).transpose()?;
     let key = if authentication == AuthenticationMethod::Chatgpt {
@@ -1442,13 +1582,13 @@ async fn submit(
             .await
             .map_err(message)?
     } else {
-        credential_key(&state).await?
+        credential_key(&state, provider).await?
     };
     let begin = || {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?.clone();
         let mut service = state.lock().map_err(message)?;
-        let client = service.client.clone()?;
+        let client = service.adapter(provider)?;
         let (view, cancellation) = service.begin(&project, job_id, retry)?;
         Ok((project, client, view, cancellation))
     };
@@ -1702,7 +1842,7 @@ pub(super) struct IdentityAccess {
     pub account_id: Option<Uuid>,
     pub account_epoch: Option<u64>,
     pub settings: ProviderSettings,
-    pub client: OpenAiClient,
+    pub client: ProviderClient,
     pub key: ApiKey,
 }
 
@@ -1711,7 +1851,7 @@ pub(super) async fn identity_access(
     chatgpt: &ChatgptState,
     cancellation: &CancellationToken,
 ) -> NativeResult<IdentityAccess> {
-    let (authentication, settings, client, credentials) = {
+    let (authentication, settings, client, credentials, provider) = {
         let service = state.lock().map_err(message)?;
         if let Some(error) = service
             .configuration_error
@@ -1721,14 +1861,15 @@ pub(super) async fn identity_access(
             return Err(error.clone());
         }
         service
-            .settings
-            .validate_for_auth(service.authentication)
+            .provider
+            .validate(&service.settings, service.authentication)
             .map_err(message)?;
         (
             service.authentication,
             service.settings.clone(),
             service.client.clone()?,
             service.credentials.clone(),
+            service.provider,
         )
     };
     let (account_id, account_epoch, key) = if authentication == AuthenticationMethod::Chatgpt {
@@ -1777,7 +1918,8 @@ pub(super) async fn identity_access(
             .await
             .map_err(message)?
             .map_err(message)?;
-        client
+        ProviderClient::new(provider, client.clone())
+            .map_err(message)?
             .test_model_access(&settings, &key, cancellation)
             .await
             .map_err(message)?;
@@ -1787,7 +1929,10 @@ pub(super) async fn identity_access(
         return Err("Identity analysis was cancelled before submission.".into());
     }
     let service = state.lock().map_err(message)?;
-    if service.authentication != authentication || service.settings != settings {
+    if service.authentication != authentication
+        || service.provider != provider
+        || service.settings != settings
+    {
         return Err(
             "AI settings changed while checking access. Review them and explicitly analyze again."
                 .into(),
@@ -1798,7 +1943,7 @@ pub(super) async fn identity_access(
         account_id,
         account_epoch,
         settings,
-        client,
+        client: ProviderClient::new(provider, client).map_err(message)?,
         key,
     })
 }

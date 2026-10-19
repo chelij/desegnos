@@ -70,7 +70,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     const actual=await driver.execute(id=>{const box=document.querySelector(`[data-region-id="${id}"]`).getBoundingClientRect();return {x:box.x,y:box.y};},region.id);
     await writeFile(join(output,'edge-placement.json'),JSON.stringify({point,actual},null,2));
     assert.ok(Math.abs(actual.x-point.x)<8 && Math.abs(actual.y-point.y)<8,JSON.stringify({point,actual}));
-    await physical.keys('Escape'); await driver.menu(['Edit','Remove request']); await driver.button('Remove');
+    await physical.keys('Escape'); await driver.click('.element-toolbar [aria-label="Delete layer"]'); await driver.button('Remove');
   });
   await step('A drawn request keeps the full height the user dragged instead of stopping at half the view', async () => {
     await driver.button('Fit'); await driver.button('Grid and rulers'); await driver.click(driver.field('Snap requests to the grid'),'xpath'); await driver.button('Save grid settings');
@@ -111,10 +111,10 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     const destination=join(output,'Canvas pointer and size.desegnos');
     await chooseFile(physical,()=>driver.button('Save'),destination,evidence,'canvas-save');
     const saved=await savedState(driver,destination); await verifyArchive(destination,saved.project,await driver.invoke('get_project_notes'));
-    await driver.menu(['Project','New project']); await driver.button('Blank website'); await driver.fill('Project name','Temporary reopen check'); await driver.button('Create project');
+    await driver.menu(['New project']); await driver.button('Blank website'); await driver.fill('Project name','Temporary reopen check'); await driver.button('Create project');
     await waitFor(async()=>(await workspace(driver)).project.id!==saved.project.id,'The temporary project did not replace the saved one');
     const unsaved=(await workspace(driver)).dirty;
-    await chooseFile(physical,async()=>{await driver.menu(['Project','Open project']);if(unsaved)await driver.button('Discard and continue');},destination,evidence,'canvas-open');
+    await chooseFile(physical,async()=>{await driver.menu(['Open project']);if(unsaved)await driver.button('Discard and continue');},destination,evidence,'canvas-open');
     await waitFor(async()=>(await workspace(driver)).project?.id===saved.project.id && (await workspace(driver)).path===destination,'The Desegnos project did not reopen');
     assert.deepEqual((await workspace(driver)).project,saved.project);
     // Leave an acknowledged unsaved edit for the runner's actual crash/recovery check.
