@@ -269,7 +269,7 @@ def main():
                 time.sleep(0.02)
         if action == "key":
             name, count = request.get("key"), request.get("count", 1)
-            if name not in ("Left", "Right", "Up", "Down", "Home", "End", "Escape", "Return", "Tab", "L", "K", "A", "C", "V", "R", "Z", "Y", "S", "N", "O", "bracketleft", "bracketright", "equal", "minus", "0", "1", "2", "Page_Down", "Page_Up", "F1", "F2", "space", "Delete", "BackSpace") or type(count) is not int or not 1 <= count <= 20:
+            if name not in ("Left", "Right", "Up", "Down", "Home", "End", "Escape", "Return", "Tab", "L", "K", "A", "C", "X", "V", "R", "Z", "Y", "S", "N", "O", "bracketleft", "bracketright", "equal", "minus", "0", "1", "2", "Page_Down", "Page_Up", "F1", "F2", "F10", "space", "Delete", "BackSpace") or type(count) is not int or not 1 <= count <= 20:
                 raise RuntimeError("Only bounded navigation and file-picker key sequences are allowed")
             code = keysym_to_code(display, string_to_keysym(name.encode()))
             if not code:

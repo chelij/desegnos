@@ -1,5 +1,7 @@
 # OpenAI generation contract
 
+Current draft policy and native image adapter: [Draft content and downloaded images](DRAFT_IMAGES.md). Requirements format 7 permits visibly labelled missing-content placeholders, honest disabled actions and system-font fallbacks. Explicit image markers request bounded native PNG/JPEG downloads; provider tools and preview networking remain disabled. Formats 3–6 retain their frozen contracts. Successful generations apply directly on the canvas; the earlier review/send description below is historical.
+
 Implementation gate: Generate freezes Desegnos's requirements Markdown and global mode, sends the exact UTF-8 file bytes to OpenAI, receives a bounded structured candidate, previews it in an unprivileged frame, and offers transactional Apply/Discard. Provider HTTP and credentials cannot mutate projects. Core validation and the native job coordinator cannot be bypassed by a provider or plugin.
 
 API keys and authorized ChatGPT plans share this core contract. The [ChatGPT authentication contract](CHATGPT_CONTRACT.md) adds native verified identity, account registration/storage/refresh/revocation and account-specific discovery. Every job freezes `authentication: apiKey | chatgpt`, nullable `chatgptAccountId` and safe nullable `failureKind`; missing fields in old records default to API-key mode. No selection/preference change can redirect an existing send or retry. Sign-out cancels bound work before revocation. Plan limits and failed streams never fall back to API billing.

@@ -4,7 +4,7 @@ import { useDraftText } from './DraftText';
 import { LayersPopover, LayerIcon } from './Layers';
 import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
-import { ContextMenu, MenuButton } from './Menus';
+import { ContextMenu, type MenuItem } from './Menus';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type InlineText } from './Preview';
 import { alignmentLines, elementResizeRect, elementToolbarPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, Viewport } from './types';
@@ -13,6 +13,7 @@ import './canvas.css';
 export type RequestPatch = { prompt?: string; rect?: RectChange | Partial<Rect> };
 export type CanvasViewAction = { serial: number; kind: 'guide' | 'selection' | 'fit' };
 type Gesture = GeometryGesture & { pointerId: number; region?: Region; active: boolean };
+type CanvasContext = { point: Point } & ({ kind: 'element'; selection: ElementSelection } | { kind: 'request'; regionId: string } | { kind: 'canvas'; at: Point });
 type Measurements = { left: number; top: number; width: number; height: number };
 const emptyMeasurements: Measurements = { left: 0, top: 0, width: 0, height: 0 };
 const isTextInput = (target: EventTarget | null) => target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable);
@@ -32,18 +33,19 @@ function paintStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSPrope
 }
 
 type CanvasProps = {
+  canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
   page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void;
-  arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
+  arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: Rect[]; highlighted?: Rect[];
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>;
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect) => void; pickElement: (selection: ElementSelection) => void; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void;
 };
-export type CanvasHandle = { synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; copyLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ page, layersOpen, setLayersOpen, selectionChanged, arrangeRequest, copyNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, changeZoom, select, add, pickElement, change, remove }, ref) {
+export type CanvasHandle = { synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, changeZoom, select, add, pickElement, change, remove }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
-  const [context, setContext] = useState<{ selection: ElementSelection; point: Point } | null>(null);
+  const [context, setContext] = useState<CanvasContext | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const site = useRef<CanvasPreviewHandle>(null);
   const [siteLayers, setSiteLayers] = useState<SiteLayer[]>([]);
@@ -108,7 +110,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const acceptedVersion = useMemo(() => JSON.stringify([page.content, page.viewport, page.appearance]),
     [page.content?.html, page.content?.css, page.content?.javascript, page.viewport.width, page.viewport.height, page.appearance]);
   const acceptedVersionRef = useRef(acceptedVersion); acceptedVersionRef.current = acceptedVersion;
-  useLayoutEffect(() => { plainClicks.current = 0; lastPlainClick.current = null; if (elementDrag.current) cancel(); inlineTicket.current++; inlineTextRef.current = null; setInlineText(null); }, [acceptedVersion]);
+  useLayoutEffect(() => { setContext(null); plainClicks.current = 0; lastPlainClick.current = null; if (elementDrag.current) cancel(); inlineTicket.current++; inlineTextRef.current = null; setInlineText(null); }, [acceptedVersion]);
 
   function measure() {
     const node = scroll.current;
@@ -439,6 +441,23 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
     finally { setLayerBusy(false); }
   }
+  async function cutLayer() {
+    if (layerBusy || editingElement || nudging) return;
+    setLayerBusy(true); setElementError('');
+    try {
+      await finishLayerDraft();
+      const ticket = selectionSerial.current, pageId = pageRef.current.id;
+      const region = pageRef.current.regions.find(item => item.id === selected && !item.completed);
+      if (region) await cutNative({ kind: 'request', regionId: region.id }, []);
+      else if (elementRef.current && elementRef.current.element.selector !== 'body') {
+        const target = elementRef.current.element;
+        await cutNative({ kind: 'element', target }, site.current!.copyStyles(target));
+      } else throw new Error('Select a layer to cut.');
+      if (pageRef.current.id === pageId && selectionSerial.current === ticket) { deselectElement(); select(null, false); }
+      refreshLayers();
+    } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+    finally { setLayerBusy(false); }
+  }
   async function pasteLayer() {
     if (layerBusy) return;
     setLayerBusy(true); setElementError('');
@@ -494,7 +513,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     finally { setLayerBusy(false); }
   }
   function askAI() { const current = elementRef.current; if (current && !editingElement && !nudging) { setContext(null); pickElement(current); } }
-  useImperativeHandle(ref, () => ({ addRequest: addRequestInView, focusRequest: focusRegion, askAI, copyLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
+  useImperativeHandle(ref, () => ({ addRequest: addRequestInView, focusRequest: focusRegion, askAI, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
     if (inlineSaving.current) await inlineSaving.current;
     const text = inlineTextRef.current;
     if (text) { const node = stage.current?.querySelector<HTMLElement>('.inline-text-editor'); await finishText(node?.innerText ?? text.text); }
@@ -546,13 +565,24 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     } catch (error) { cancel(); setElementError(error instanceof Error ? error.message : String(error)); }
   }
   function closeContext(restore = true) { setContext(null); if (restore) stage.current?.focus({ preventScroll: true }); }
+  function openElementContext(selection: ElementSelection, client: Point) {
+    cancel(); chooseElement(selection); setContext({ kind: 'element', selection, point: client });
+  }
+  function openRequestContext(regionId: string, client: Point) {
+    cancel(); deselectElement(); select(regionId); setContext({ kind: 'request', regionId, point: client });
+  }
   function contextMenu(event: ReactMouseEvent) {
-    if (event.target instanceof HTMLElement && event.target.closest('.annotation, .element-toolbar, .editor-menu')) return;
-    const at = point({ x: event.clientX, y: event.clientY });
-    const selection = event.target instanceof Element && event.target.closest('[data-corner]') ? elementRef.current : page.content ? site.current?.pick(at.x, at.y) : null;
-    event.preventDefault(); event.stopPropagation(); cancel(); chooseElement(selection ?? null);
-    if (!selection) return;
-    setContext({ selection, point: { x: event.clientX, y: event.clientY } });
+    const node = event.target;
+    if (!(node instanceof Element) || node.closest('.element-toolbar, .editor-menu, .inline-text-editor')) return;
+    // Selected text keeps the operating system's text editing menu.
+    if (node instanceof HTMLTextAreaElement && node.selectionStart !== node.selectionEnd) return;
+    const client = { x: event.clientX, y: event.clientY }, at = point(client);
+    event.preventDefault(); event.stopPropagation();
+    const request = node.closest<HTMLElement>('[data-region-id]')?.dataset.regionId;
+    if (request && pageRef.current.regions.some(item => item.id === request && !item.completed)) { openRequestContext(request, client); return; }
+    const selection = node.closest('[data-corner]') ? elementRef.current : page.content ? site.current?.pick(at.x, at.y) : null;
+    if (selection && selection.element.selector !== 'body') openElementContext(selection, client);
+    else { cancel(); chooseElement(null); setContext({ kind: 'canvas', at, point: client }); }
   }
   function refreshElement() {
     refreshLayers();
@@ -658,10 +688,17 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   function keyboard(event: KeyboardEvent, region?: Region, resize = false) {
     if ((event.ctrlKey || event.metaKey) && event.key !== 'Escape') return;
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); panKey.current = false; setPanReady(false); if (!gesture.current && !pan.current && !elementDrag.current) { select(null); deselectElement(); } cancel(); return; }
-    if (!region && element && (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey)) {
+    if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) {
       event.preventDefault();
       const box = stage.current!.getBoundingClientRect();
-      setContext({ selection: element, point: { x: box.left + (element.rect.x - bounds.left) * zoom, y: box.top + (element.rect.y + element.rect.height - bounds.top) * zoom } }); return;
+      const request = region ?? page.regions.find(item => item.id === selected && !item.completed);
+      const rect = request?.rect ?? element?.rect;
+      const at = rect ? { x: box.left + (rect.x - bounds.left) * zoom, y: box.top + (rect.y + rect.height - bounds.top) * zoom }
+        : { x: measurements.width / 2 + inset.x, y: measurements.height / 2 + inset.y };
+      if (request) openRequestContext(request.id, at);
+      else if (element) openElementContext(element, at);
+      else setContext({ kind: 'canvas', point: at, at: point(at) });
+      return;
     }
     if (!region && event.key === 'Enter') {
       event.preventDefault();
@@ -694,7 +731,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     const node = toolbar.current; if (!node) return;
     const measure = () => { const rect = node.getBoundingClientRect(); if (!rect.width || !rect.height) return; setToolbarSize(current => current.width === rect.width && current.height === rect.height ? current : { width: rect.width, height: rect.height }); };
     measure(); const observer = new ResizeObserver(measure); observer.observe(node); return () => observer.disconnect();
-  }, [!!element, !!inlineText]);
+  }, [!!element, !!selected, !!inlineText]);
   const visible = { x: bounds.left + measurements.left / zoom, y: bounds.top + measurements.top / zoom };
   const selectedRect = preview ?? element?.rect ?? page.regions.find(region => region.id === selected)?.rect;
   const aligningRegion = gesture.current?.region?.id ?? selected;
@@ -706,14 +743,43 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const inset = { x: scroll.current?.offsetLeft ?? 0, y: scroll.current?.offsetTop ?? 0 };
   const occupied = useMemo(() => element ? site.current?.occupied(element.element) ?? [] : [], [element, acceptedVersion]);
   const inViewport = (rect: Rect): Rect => ({ x: (rect.x - bounds.left) * zoom - measurements.left + inset.x, y: (rect.y - bounds.top) * zoom - measurements.top + inset.y, width: rect.width * zoom, height: rect.height * zoom });
-  const toolbarPoint = element ? elementToolbarPosition(inViewport(element.rect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupied.map(inViewport)) : null;
+  const toolbarRect = element?.rect ?? page.regions.find(item => item.id === selected && !item.completed)?.rect;
+  const toolbarPoint = toolbarRect ? elementToolbarPosition(inViewport(toolbarRect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupied.map(inViewport)) : null;
   const toolbarPosition = toolbarPoint ? { left: toolbarPoint.x, top: toolbarPoint.y } : {};
   const measurementRect = coordinate ? inViewport(selectedRect ?? { ...coordinate, width: 0, height: 0 }) : null;
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
 
+  const editBusy = layerBusy || editingElement || nudging;
+  const arrangeItems: MenuItem[] = (['front', 'forward', 'backward', 'back'] as const).map((direction, index) => ({ id: direction, label: ['Bring to front', 'Bring forward', 'Send backward', 'Send to back'][index], disabled: editBusy, action: () => { void arrangeLayer(direction); } }));
+  const historyItems: MenuItem[] = [{ id: 'history-divider', label: '', separator: true }, { id: 'undo', label: 'Undo', disabled: !canUndo || editBusy, shortcut: 'Ctrl/Cmd+Z', action: undo }, { id: 'redo', label: 'Redo', disabled: !canRedo || editBusy, shortcut: 'Ctrl/Cmd+Shift+Z', action: redo }];
+  const contextItems: MenuItem[] = context ? [
+    ...(context.kind === 'element' ? [
+      { id: 'edit', label: 'Edit', disabled: editBusy, action: () => setElementDialog('edit') },
+      { id: 'generate', label: 'Ask AI', disabled: editBusy, action: askAI },
+      { id: 'replace', label: 'Replace', disabled: editBusy, action: () => setElementDialog('replace') },
+      { id: 'position', label: 'Move or resize', disabled: editBusy, children: [{ id: 'move', label: 'Move', action: () => setElementDialog('position') }, { id: 'resize', label: 'Resize', action: () => setElementDialog('edit') }] },
+    ] : context.kind === 'request' ? [{ id: 'edit', label: 'Edit request', disabled: editBusy, action: () => focusRegion(context.regionId) }] : [{ id: 'add', label: 'Add request here', action: () => { deselectElement(); add(requestAt(context.at, zoom)); } }]),
+    ...(context.kind !== 'canvas' ? [
+      { id: 'copy', label: 'Copy', disabled: editBusy, shortcut: 'Ctrl/Cmd+C', action: () => { void copyLayer(); } },
+      { id: 'cut', label: 'Cut', disabled: editBusy, shortcut: 'Ctrl/Cmd+X', action: () => { void cutLayer(); } },
+    ] : []),
+    { id: 'paste', label: 'Paste', disabled: editBusy, shortcut: 'Ctrl/Cmd+V', action: () => { void pasteLayer(); } },
+    ...(context.kind !== 'canvas' ? [
+      { id: 'arrange', label: 'Arrange', disabled: editBusy, children: arrangeItems },
+      ...(context.kind === 'element' ? [{ id: 'parent', label: 'Select parent', action: () => chooseElement(site.current?.next(true, elementRef.current?.element) ?? null) }] : []),
+      { id: 'delete', label: 'Delete', disabled: editBusy, action: () => { if (context.kind === 'element') setElementDialog('remove'); else if (context.kind === 'request') remove(context.regionId); } },
+    ] : [
+      { id: 'fit', label: 'Fit screen guide', action: () => show('fit') },
+      { id: 'center', label: 'Center screen guide', action: () => show('guide') },
+      { id: 'grid', label: 'Show grid', checked: grid, action: toggleGrid },
+      { id: 'grid-settings', label: 'Grid and rulers', action: configureGrid },
+    ]),
+    { id: 'layers', label: 'Layers', action: () => setLayersOpen(true) },
+    ...historyItems,
+  ] : [];
   return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''}`}
     onKeyDownCapture={event => { if (event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
-    <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the element toolbar, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
+    <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
     {gridSettings.rulers && <><div className="ruler-corner" aria-hidden="true">{rulerUnit === 'percent' ? '%' : 'px'}</div>
       <Ruler axis="x" unit={rulerUnit} start={visible.x} length={measurements.width} reference={page.viewport.width} zoom={zoom} cursor={cursor?.x} selection={selectedRect ? [selectedRect.x, selectedRect.x + selectedRect.width] : undefined} />
       <Ruler axis="y" unit={rulerUnit} start={visible.y} length={measurements.height} reference={page.viewport.height} zoom={zoom} cursor={cursor?.y} selection={selectedRect ? [selectedRect.y, selectedRect.y + selectedRect.height] : undefined} /></>}
@@ -756,30 +822,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
         </div>
       </div>
     </div>
-    {element && !inlineText && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label="Selected element" style={toolbarPosition}>
-      <button className="ask-ai" title="Describe a change with AI · Ctrl/⌘ K" disabled={editingElement || nudging} onClick={askAI}>Ask AI</button>
-      <button aria-label="Edit" title="Edit element · F2" disabled={editingElement || nudging} onClick={() => setElementDialog('edit')}><ElementIcon name="edit" /></button>
-      <button aria-label="Replace" title="Replace element" disabled={editingElement || nudging || element.element.selector === 'body'} onClick={() => setElementDialog('replace')}><ElementIcon name="replace" /></button>
-      <button aria-label="Move" title="Position offsets" disabled={editingElement || nudging || element.element.selector === 'body'} onClick={() => setElementDialog('position')}><ElementIcon name="move" /></button>
-      <button aria-label="Bring forward" title="Bring forward · Ctrl/⌘ ]" disabled={editingElement || nudging || layerBusy || element.element.selector === 'body'} onClick={() => { void arrangeLayer('forward'); }}><LayerIcon direction="forward" /></button>
-      <button aria-label="Send backward" title="Send backward · Ctrl/⌘ [" disabled={editingElement || nudging || layerBusy || element.element.selector === 'body'} onClick={() => { void arrangeLayer('backward'); }}><LayerIcon direction="backward" /></button>
-      <MenuButton label={<ElementIcon name="more" />} ariaLabel="Element options" title="More element actions" showChevron={false} items={[
-        { id: 'copy-layer', label: 'Copy layer', shortcut: 'Ctrl/Cmd+C', disabled: layerBusy || element.element.selector === 'body', action: () => { void copyLayer(); } },
-        { id: 'paste-layer', label: 'Paste layer', shortcut: 'Ctrl/Cmd+V', disabled: layerBusy, action: () => { void pasteLayer(); } },
-        { id: 'layer-front', label: 'Bring to front', disabled: layerBusy || element.element.selector === 'body', action: () => { void arrangeLayer('front'); } },
-        { id: 'layer-back', label: 'Send to back', disabled: layerBusy || element.element.selector === 'body', action: () => { void arrangeLayer('back'); } },
-        { id: 'before', label: 'Move earlier', disabled: editingElement || nudging || element.element.selector === 'body', action: () => { void applyElement({ kind: 'reorder', direction: 'before' }).catch(() => {}); } },
-        { id: 'after', label: 'Move later', disabled: editingElement || nudging || element.element.selector === 'body', action: () => { void applyElement({ kind: 'reorder', direction: 'after' }).catch(() => {}); } },
-        { id: 'parent', label: 'Select parent', action: () => chooseElement(site.current?.next(true, elementRef.current?.element) ?? null) },
-        { id: 'delete', label: 'Delete element', disabled: editingElement || nudging || element.element.selector === 'body', action: () => setElementDialog('remove') },
-        { id: 'deselect', label: 'Deselect', action: deselectElement },
-      ]} />
+    {toolbarRect && !inlineText && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
+      <button data-layers-trigger aria-label="Layers" title="Layers" aria-haspopup="dialog" aria-expanded={layersOpen} onClick={() => setLayersOpen(!layersOpen)}><LayerIcon /></button>
+      <button aria-label="Copy layer" title="Copy · Ctrl/⌘ C" disabled={layerBusy || editingElement || nudging || element?.element.selector === 'body'} onClick={() => { void copyLayer(); }}><QuickIcon name="copy" /></button>
+      <button aria-label="Cut layer" title="Cut · Ctrl/⌘ X" disabled={layerBusy || editingElement || nudging || element?.element.selector === 'body'} onClick={() => { void cutLayer(); }}><QuickIcon name="cut" /></button>
+      <button aria-label="Delete layer" title="Delete" disabled={layerBusy || editingElement || nudging || element?.element.selector === 'body'} onClick={() => { if (element) setElementDialog('remove'); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
     </div>}
-    {context && <ContextMenu key={`${context.point.x}:${context.point.y}:${context.selection.element.selector}`} label="Element actions" point={context.point} close={closeContext} items={[
-      { id: 'edit', label: 'Edit', disabled: editingElement || nudging, action: () => setElementDialog('edit') },
-      { id: 'generate', label: 'Ask AI', disabled: editingElement || nudging, action: () => pickElement(context.selection) },
-    ]} />}
-    <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element?.element.selector ?? null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady}
+    {context && <ContextMenu key={`${context.kind}:${context.point.x}:${context.point.y}`} label={context.kind === 'element' ? 'Element actions' : context.kind === 'request' ? 'Request actions' : 'Canvas actions'} point={context.point} close={closeContext} items={contextItems} />}
+    <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element?.element.selector ?? null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady} anchor={toolbarPoint ? { x: toolbarPoint.x, y: toolbarPoint.y, height: toolbarSize.height } : null} contextElement={openElementContext} contextRequest={openRequestContext}
       chooseElement={item => { chooseElement(item); reveal(item.rect, false); }} chooseRequest={item => { deselectElement(); select(item.id); reveal(item.rect, false); }}
       arrange={direction => { void arrangeLayer(direction); }} copy={() => { void copyLayer(); }} paste={() => { void pasteLayer(); }} close={() => setLayersOpen(false)} />
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
@@ -851,7 +901,7 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
     {hasMore && <button type="button" className="request-expand" style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom + displayHeight, width: shown.width * zoom }} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
   </div>
-    {selected && !target && <div className="request-controls" style={{ ...paintStyle(shown, bounds, zoom), zIndex: controlsLayer }} onFocusCapture={select}><button ref={move} className="annotation-grip move-grip" aria-label={`Move request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag to move. Arrow keys change placement."
+    {selected && !target && <div className="request-controls" data-region-id={region.id} style={{ ...paintStyle(shown, bounds, zoom), zIndex: controlsLayer }} onFocusCapture={select}><button ref={move} className="annotation-grip move-grip" aria-label={`Move request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag to move. Arrow keys change placement."
       style={{ visibility: moveVisible ? undefined : 'hidden', left: (rect.x - (painted?.x ?? rect.x)) * zoom - 28, top: (rect.y - (painted?.y ?? rect.y)) * zoom }}
       onPointerDown={event => begin(event, 'move', region)} onKeyDown={event => keyboard(event, region)}><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1"/><circle cx="11" cy="4" r="1"/><circle cx="5" cy="8" r="1"/><circle cx="11" cy="8" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="11" cy="12" r="1"/></svg></button>
       <button className="annotation-grip resize-grip" aria-label={`Resize request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag or use arrow keys to resize the placement hint."
@@ -890,8 +940,8 @@ function elementName(tag: string): string {
   return ({ a: 'Link', button: 'Button', img: 'Image', input: 'Input', textarea: 'Text area', select: 'Dropdown', h1: 'Heading', h2: 'Heading', h3: 'Heading', h4: 'Heading', h5: 'Heading', h6: 'Heading', p: 'Paragraph', span: 'Text', div: 'Container', section: 'Section', nav: 'Navigation', header: 'Header', footer: 'Footer', main: 'Main', body: 'Page', ul: 'List', ol: 'List', li: 'List item', form: 'Form' } as Record<string, string>)[tag] ?? tag.charAt(0).toUpperCase() + tag.slice(1);
 }
 
-function ElementIcon({ name }: { name: 'edit' | 'replace' | 'move' | 'more' }) {
-  return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-    {name === 'edit' ? <><path d="m15 4 5 5M4 20l4-1 12-12a2 2 0 0 0-5-5L3 14l-1 6Z" /><path d="M13 20h9" /></> : name === 'replace' ? <><path d="M4 8h15l-4-4m4 12H4l4 4" /><path d="M20 4v6M4 14v6" /></> : name === 'move' ? <><path d="M12 3v18M3 12h18m-12-6 3-3 3 3m-6 12 3 3 3-3M6 9l-3 3 3 3m12-6 3 3-3 3" /></> : <><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></>}
+function QuickIcon({ name }: { name: 'copy' | 'cut' | 'delete' }) {
+  return <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    {name === 'copy' ? <path d="M7 7H17V17H7ZM3 13V3H13" /> : name === 'cut' ? <><circle cx="5" cy="5" r="2.5"/><circle cx="5" cy="15" r="2.5"/><path d="M7 6.5L17 17M7 13.5L17 3M10 10L7 7"/></> : <><path d="M3 5H17M7 5V2H13V5M5 5L6 18H14L15 5M8 8V15M12 8V15"/></>}
   </svg>;
 }

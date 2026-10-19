@@ -15,6 +15,11 @@ function jsonBlocks(markdown) {
 }
 
 function sourceFor(record, endpoint, options) {
+  if (options.draftAudit) {
+    const origin = endpoint.replace(/\/v1$/, '');
+    return { html: `<main id="image-draft"><h1>Sample website</h1><p>Placeholder: add your introduction.</p><button disabled>Add your GitHub link</button><figure><img id="downloaded-photo" data-desegnos-download src="${origin}/images/photo.png" alt="Sample green picture"><figcaption>Sample image · Native fixture</figcaption></figure><figure><img id="missing-photo" data-desegnos-download src="${origin}/images/missing.png" alt="Sample missing picture"><figcaption>Placeholder: replace with your product screenshot.</figcaption></figure></main>`,
+      css: 'body{margin:0;background:white;color:#222;font:16px system-ui}main{padding:40px}figure{display:inline-block;vertical-align:top;margin:24px 24px 0 0}img{display:block;width:240px;height:135px;object-fit:contain}figcaption{max-width:240px;margin-top:8px}button{padding:12px}', javascript: '' };
+  }
   if (options.layerAudit) return {
     html: '<main id="layer-stage"><div id="layer-backdrop" aria-label="Background decoration"></div><div id="blue-card" aria-label="Blue card"><h2>Blue card</h2><label for="card-input">Name</label><input id="card-input" aria-label="Card name" value="A real copied input"><a href="#card-input">Jump to input</a><svg width="24" height="24" viewBox="0 0 24 24" aria-label="Copied graphic"><defs><clipPath id="card-clip"><circle cx="12" cy="12" r="10"/></clipPath></defs><rect width="24" height="24" fill="white" clip-path="url(#card-clip)"/></svg><ul><li>Detail</li></ul></div><div id="orange-card" aria-label="Orange card"><h2>Orange card</h2><p>Front card</p></div><div id="nested-group" aria-label="Nested group"><div id="green-card"><h2>Green nested card</h2></div><div id="purple-card"><h2>Purple nested card</h2></div></div><div id="zero-wrapper"><div id="zero-child">Visible zero-wrapper child</div></div><div id="contents-wrapper"><div id="contents-child">Visible contents child</div></div></main>',
     css: 'html,body{margin:0;background:#f2f2f2;color:#222;font:16px system-ui}#layer-stage{position:relative;width:800px;height:680px;background:white}#layer-backdrop{position:absolute;inset:0;background:red;z-index:-1;pointer-events:none}#zero-wrapper{position:absolute;left:600px;top:430px;width:0;height:0}#zero-child{position:absolute;width:140px;height:80px;padding:8px;background:#ccc}#contents-wrapper{display:contents}#contents-child{position:absolute;left:600px;top:540px;width:140px;height:80px;padding:8px;background:#ccc}#blue-card,#orange-card,#nested-group{position:absolute;box-sizing:border-box;border-radius:8px;padding:16px}#blue-card{left:80px;top:60px;width:280px;height:230px;background:rgb(30,100,190);color:white;z-index:1}#orange-card{left:180px;top:150px;width:280px;height:230px;background:rgb(230,130,45);z-index:2}h2{font-size:19px;margin:0 0 14px}#blue-card label,#blue-card input{display:block}#blue-card input{width:180px;margin:4px 0 8px}#blue-card::before{content:"Copied badge";position:absolute;right:8px;top:8px;background:rgb(250,220,80);color:#222;padding:2px 5px;font-size:10px}#blue-card::after{content:"";position:absolute;right:12px;bottom:12px;width:14px;height:14px;background:rgb(250,220,80);border-radius:50%}#blue-card ul{position:absolute;right:12px;bottom:32px;margin:0;padding-left:20px;font-size:11px}#blue-card li::marker{color:rgb(250,220,80);font-size:19px}#blue-card a{color:white}#blue-card svg{display:block;margin-top:8px}#nested-group{left:80px;top:420px;width:480px;height:210px;background:#ddd;z-index:3;opacity:.9;transform:translateX(0)}#green-card,#purple-card{position:absolute;box-sizing:border-box;width:260px;height:130px;padding:16px}#green-card{left:10px;top:15px;background:rgb(40,170,100);z-index:1}#purple-card{left:120px;top:60px;background:rgb(155,90,185);z-index:2}',
@@ -171,6 +176,13 @@ export async function startProviderServer() {
   const schedule = (fn, ms) => { const timer = setTimeout(() => { timers.delete(timer); fn(); }, ms); timers.add(timer); };
   const server = createServer(async (request, response) => {
     const path = new URL(request.url, 'http://127.0.0.1').pathname;
+    if (path.startsWith('/images/')) {
+      assert.equal(request.headers.authorization, undefined); assert.equal(request.headers.cookie, undefined); assert.equal(request.headers.referer, undefined);
+      probes.push({ method: request.method, path, at: new Date().toISOString() });
+      if (path === '/images/photo.png') response.writeHead(200, { 'content-type': 'image/png' }).end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGOwaQoAIgYIBQAdRgQ5DejjuQAAAABJRU5ErkJggg==', 'base64'));
+      else response.writeHead(404, { 'content-type': 'text/plain' }).end('Missing fixture image');
+      return;
+    }
     if (path.startsWith('/probe/')) { probes.push({ method: request.method, path, at: new Date().toISOString() }); response.writeHead(204).end(); return; }
     if (await oauth.handle(request, response)) return;
     const account = oauth.authenticate(request.headers.authorization);

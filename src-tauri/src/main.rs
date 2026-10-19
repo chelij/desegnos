@@ -100,6 +100,7 @@ fn main() {
             refresh_element_bounds,
             edit_element,
             copy_layer,
+            cut_layer,
             paste_layer,
             undo_project,
             redo_project,

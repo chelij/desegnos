@@ -83,7 +83,7 @@ impl std::fmt::Debug for ProviderResponse {
 #[derive(Clone)]
 pub struct OpenAiClient {
     client: Client,
-    endpoint: String,
+    pub(crate) endpoint: String,
     deadline: Duration,
 }
 

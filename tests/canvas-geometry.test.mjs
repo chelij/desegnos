@@ -39,7 +39,7 @@ try {
   });
   await test('layer clipboard and stacking shortcuts preserve all text editing and composition', () => {
     const input={key:'c',ctrlKey:true,metaKey:false,shiftKey:false,altKey:false};
-    for(const [key,action] of [['c','copyLayer'],['v','pasteLayer'],[']','layerForward'],['[','layerBackward']]) {
+    for(const [key,action] of [['c','copyLayer'],['x','cutLayer'],['v','pasteLayer'],[']','layerForward'],['[','layerBackward']]) {
       assert.equal(editorShortcut({...input,key},false),action); assert.equal(editorShortcut({...input,key},true),null);
       assert.equal(editorShortcut({...input,key,isComposing:true},false),null);
       assert.equal(editorShortcut({...input,key,defaultPrevented:true},false),null);

@@ -5,6 +5,7 @@ pub mod chatgpt;
 mod credentials;
 mod error;
 mod identity;
+mod images;
 mod settings;
 mod sse;
 mod transport;

@@ -850,7 +850,7 @@ fn real_schema_three_preserves_all_original_data_notes_and_backup_before_explici
     assert_eq!(reopened.project, document.project);
     frozen.validate_current(&reopened.project).unwrap();
     let new_request = reopened.project.prepare_requirements().unwrap();
-    assert!(new_request.markdown.contains("Requirements format: 5"));
+    assert!(new_request.markdown.contains("Requirements format: 7"));
     new_request.validate_current(&reopened.project).unwrap();
 }
 
@@ -1407,7 +1407,7 @@ fn schema_five_integrity_notes_frozen_requirements_and_exact_backup_are_preserve
     };
     project.pages[0].regions[0].element = Some(target);
     let frozen = project.prepare_requirements().unwrap();
-    assert!(frozen.markdown.contains("Requirements format: 5"));
+    assert!(frozen.markdown.contains("Requirements format: 7"));
     let path = temp.0.join("schema-five.desegni");
     let file = ProjectFile::acquire(&path).unwrap();
     file.save(&project).unwrap();

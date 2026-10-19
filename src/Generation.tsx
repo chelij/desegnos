@@ -54,7 +54,7 @@ export function GenerationFeedback({ controller, compact = false, children }: {
   const job = operation === 'Preparing AI instructions…' ? null : currentJob;
   if (!job && !operation && !error) return null;
   const headings = { prepared: 'Preparing your design', generating: job?.receivedBytes ? 'Receiving AI response' : (elapsedSeconds ?? 0) >= 30 ? 'Still waiting for OpenAI' : 'Waiting for OpenAI',
-    ready: 'Updating your canvas', blocked: 'Generation needs review', failed: 'Generation failed', unknown: 'Generation outcome uncertain',
+    ready: 'Updating your canvas', blocked: 'Let’s finish your draft', failed: 'Generation failed', unknown: 'Generation outcome uncertain',
     cancelled: 'Generation cancelled', discarded: 'Result discarded', applying: 'Updating your canvas…', applied: 'Changes applied' };
   const heading = operation ?? (job ? headings[job.status] : 'Generation could not start');
   const detail = operation ? 'Your changes will appear on the canvas.'
@@ -62,6 +62,7 @@ export function GenerationFeedback({ controller, compact = false, children }: {
     : job?.status === 'generating' ? 'Your changes will appear here when ready.'
     : job?.status === 'ready' ? 'Your changes are being put in place.'
     : job?.status === 'applied' ? 'Your site and project brief are up to date.'
+    : job?.status === 'blocked' ? 'Edit your requests or try a draft with clearly labelled placeholders.'
     : job?.message ?? 'Read the error, then review AI settings or prepare the request again.';
   return <section className={`generation-status${compact ? ' compact' : ''}`} data-job-status={job?.status} aria-label="Generation status">
     <div className="generation-status-copy"><p className="generation-heading" role="status" aria-atomic="true"><strong>{heading}</strong></p>
@@ -74,8 +75,8 @@ export function GenerationFeedback({ controller, compact = false, children }: {
   </section>;
 }
 
-function GenerationDetails({ controller, project, settings, openSettings, manageUsage, close }: {
-  controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; close: () => void;
+function GenerationDetails({ controller, project, settings, openSettings, manageUsage, editRequest, close }: {
+  controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void; close: () => void;
 }) {
   const { job, error, operation } = controller;
   const [tab, setTab] = useState<'review' | 'requirements' | 'attempts' | 'details'>('review');
@@ -118,6 +119,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
       { id: 'source', label: showSource ? 'Hide source code' : 'Source code', disabled: !candidate?.pages.length, action: () => { setTab('review'); setShowSource(value => !value); } },
       { id: 'attempts', label: 'Attempts', action: () => setTab('attempts') },
       { id: 'refresh', label: 'Refresh job', disabled: !!operation, action: () => { void controller.refresh(); } },
+      ...(canRetry ? [{ id: 'retry-snapshot', label: 'Retry original request', disabled: !!operation, action: () => setConfirmRetry(true) }] : []),
     ] },
     { id: 'settings', label: 'AI settings', action: openSettings },
     ...(canDiscard ? [{ id: 'discard', label: job?.status === 'prepared' ? 'Discard request' : 'Discard result', disabled: !!operation, action: () => { void controller.discard().catch(() => {}); } }] : []),
@@ -168,8 +170,16 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
           {attempt.responseId && <p className="small response-id">Response: {attempt.responseId}</p>}{attempt.usage && <p className="small">{attempt.usage.inputTokens} input · {attempt.usage.outputTokens} output · {attempt.usage.totalTokens} total tokens</p>}
         </li>)}</ol>}</section>}
         {tab === 'review' && <section className="generation-section">{!candidate ? <p className="muted">{job.status === 'prepared' ? 'Your requests and project brief are ready to send.' : job.status === 'generating' ? 'Your site will appear here when it is ready.' : 'No completed site to review.'}</p> : <>
-          <h3>{candidate.summary || 'Candidate review'}</h3>
-          {candidate.regions.some(region => region.status !== 'implemented') && <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul>}
+          {job.status === 'blocked' ? <section aria-label="Finish your draft"><h3>Your page is unchanged</h3>
+            <p>Missing pictures, links or copy can use clearly labelled placeholders. Desegnos can use font fallbacks and download online images when available.</p>
+            <p>Try a new draft, or change a request on the canvas first.</p>
+            <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
+              const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
+              return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
+                {request && !request.completed && <button onClick={() => editRequest(region.regionId)}>Change request</button>}</li>;
+            })}</ul>
+            <details><summary>Why this attempt stopped</summary><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></details>
+          </section> : <><h3>Your website</h3><p>{candidate.summary}</p></>}
           {source && <><div className="candidate-page-picker"><label>Result page<select value={source.pageId} onChange={event => setPageId(event.target.value)}>{candidate.pages.map(item => <option key={item.pageId} value={item.pageId}>{project.pages.find(page => page.id === item.pageId)?.name ?? item.pageId}</option>)}</select></label></div>
             {page && <PagePreview key={`${job.jobId}:${source.pageId}`} page={page} revision={job.baseRevision} jobId={job.jobId} />}
             {showSource && <section className="candidate-source"><h3>Source code</h3><SourceView key={source.pageId} content={source.content} label="Generated" /></section>}
@@ -186,7 +196,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
           {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>Apply changes</button>}
-          {canRetry && <button disabled={!!operation} onClick={() => setConfirmRetry(true)}>Retry same snapshot</button>}
+          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>{job.status === 'blocked' ? 'Generate draft' : 'Generate again'}</button>}
         </div>
       </>}
     </div></Modal>
@@ -199,7 +209,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
 
 
 export function GenerationDialog(props: {
-  controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; close: () => void;
+  controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void; close: () => void;
 }) {
   return <GenerationDetails {...props} />;
 }

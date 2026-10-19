@@ -706,6 +706,60 @@ pub async fn copy_layer(
 }
 
 #[tauri::command]
+pub async fn cut_layer(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    target: desegni_core::LayerTarget,
+    visual_styles: Vec<desegni_core::ElementStyleEdit>,
+) -> NativeResult<WorkspaceView> {
+    // Keep the original unless the OS has accepted the complete clipboard
+    // packet. A concurrent edit while the transfer runs must never be cut.
+    copy_layer(
+        app,
+        state.clone(),
+        project_id,
+        page_id,
+        revision,
+        target.clone(),
+        visual_styles,
+    )
+    .await?;
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let session = session.as_mut().ok_or("Open a project first.")?;
+    if session.project().id != project_id || session.project().revision != revision {
+        return Err("The project changed while copying. The layer was copied, but nothing was removed. Select it again to cut.".into());
+    }
+    let journal = journal.as_ref().ok_or("Open a project first.")?;
+    match target {
+        desegni_core::LayerTarget::Request { region_id } => session
+            .execute(
+                revision,
+                desegni_core::Command::RemoveRegion { page_id, region_id },
+                |next| journal.append(next),
+            )
+            .map_err(message)?,
+        desegni_core::LayerTarget::Element { target } => {
+            session
+                .edit_element(
+                    revision,
+                    page_id,
+                    &target,
+                    &desegni_core::ElementEdit::Remove,
+                    |next| journal.append(next),
+                )
+                .map_err(message)?;
+        }
+    }
+    Ok(state.view())
+}
+
+#[tauri::command]
 pub async fn paste_layer(
     app: AppHandle,
     state: WorkspaceState<'_>,

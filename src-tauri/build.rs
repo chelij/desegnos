@@ -15,6 +15,7 @@ fn main() {
             "inspect_element",
             "edit_element",
             "copy_layer",
+            "cut_layer",
             "paste_layer",
             "refresh_element_bounds",
             "undo_project",

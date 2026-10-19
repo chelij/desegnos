@@ -105,6 +105,40 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
 }
 
 #[test]
+fn drafts_allow_explicit_placeholders_and_portable_image_downloads_without_package_authority() {
+    let (project, snapshot, mut candidate) = fixture();
+    assert!(snapshot.markdown.contains("clearly defined placeholders"));
+    assert!(snapshot.markdown.contains("system font fallbacks"));
+    assert!(snapshot.markdown.contains("data-desegnos-download"));
+    assert!(snapshot.markdown.contains("\"packageInstalls\": false"));
+    candidate.pages[0].content.html = "<a href='https://example.com/link'>Source</a><img id='portable' DATA-DESEGNOS-DOWNLOAD src='https://example.com/pixel.png' alt='Sample garden'><img id='missing' data-desegnos-download src='https://example.com/missing.png' alt='Sample workshop' srcset='https://example.com/bypass.png 2x'>".into();
+    assert_eq!(candidate.image_download_urls().unwrap().len(), 2);
+    let pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=";
+    let missing = candidate
+        .embed_downloaded_images(&std::collections::BTreeMap::from([(
+            "https://example.com/pixel.png".into(),
+            pixel.into(),
+        )]))
+        .unwrap();
+    assert_eq!(missing, 1);
+    assert!(candidate.image_download_urls().unwrap().is_empty());
+    candidate.validate(&snapshot, &project).unwrap();
+    let html = &candidate.pages[0].content.html;
+    assert!(html.contains(pixel));
+    assert!(html.contains("data-desegnos-image-source=\"https://example.com/pixel.png\""));
+    assert!(html.contains("Image placeholder: Sample workshop"));
+    assert!(!html.contains("srcset="));
+    let applied = project
+        .apply_generation(&snapshot, &candidate, &[])
+        .unwrap();
+    let exported = compile_website(&applied).unwrap();
+    assert!(exported.files.keys().any(|name| name.ends_with(".png")));
+    let output = String::from_utf8(exported.files["index.html"].clone()).unwrap();
+    assert!(!output.contains("src=\"https:"));
+    assert!(output.contains("Image placeholder: Sample workshop"));
+}
+
+#[test]
 fn strict_output_schema_and_decoder_match_the_candidate_contract() {
     fn check_schema(value: &Value) {
         assert!(
@@ -284,14 +318,18 @@ fn conflicts_and_unavailable_components_never_become_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 5"));
+    assert!(snapshot.markdown.contains("Requirements format: 7"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
     assert!(snapshot.markdown.contains(&digest(
         project.pages[0].content.as_ref().unwrap().html.as_bytes()
     )));
-    assert!(snapshot.markdown.contains("no external React components"));
+    assert!(
+        snapshot
+            .markdown
+            .contains("No external packages, React components")
+    );
     assert!(snapshot.markdown.contains("Structured result contract"));
     for condition in [
         "html",

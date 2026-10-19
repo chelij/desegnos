@@ -27,7 +27,10 @@ async function previewReady(driver) {
 }
 
 async function openLayers(driver) {
-  if (!await driver.execute(() => !!document.querySelector('section[aria-label="Layers"]'))) await driver.button('Layers');
+  if (!await driver.execute(() => !!document.querySelector('section[aria-label="Layers"]'))) {
+    const selector = await driver.execute(() => document.querySelector('.element-toolbar [data-layers-trigger]') ? '.element-toolbar [data-layers-trigger]' : '[aria-label="Canvas tools"] [data-layers-trigger]');
+    await driver.click(selector);
+  }
   await driver.ready(panel);
 }
 
@@ -168,6 +171,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     let current = pending((await workspace(driver)).project);
     assert.ok(current[0].zIndex > current[1].zIndex);
     assert.deepEqual(current.map(({ id, rect, prompt }) => ({ id, rect, prompt })), originalRequests.map(({ id, rect, prompt }) => ({ id, rect, prompt })));
+    await closeLayers(driver);
     const hit = await driver.execute((first, second) => {
       const a = document.querySelector(`.annotation[data-region-id="${first}"]`).getBoundingClientRect(), b = document.querySelector(`.annotation[data-region-id="${second}"]`).getBoundingClientRect();
       const at = { x: Math.max(a.left, b.left) + 24, y: Math.max(a.top, b.top) + 24 };
@@ -212,6 +216,39 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await physical.captureWindow(join(output, '02-generated-overlap.png'));
   });
 
+  await step('Selection has exactly four quick icons and Layers opens at its top-left anchor', async () => {
+    await selectSite(driver, physical, 'blue-card'); await closeLayers(driver);
+    assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar button')].map(button => ({ label: button.getAttribute('aria-label'), text: button.textContent.trim() }))),
+      ['Layers', 'Copy layer', 'Cut layer', 'Delete layer'].map(label => ({ label, text: '' })));
+    await physical.click(await physical.center('.element-toolbar [data-layers-trigger]')); await driver.ready(panel); await settled(driver);
+    const anchor = await physical.rect('.element-toolbar'), popup = await physical.rect(panel);
+    assert.ok(Math.abs(anchor.left - popup.left) < 1, JSON.stringify({ anchor, popup }));
+    assert.ok(Math.abs(popup.top - anchor.bottom - 6) < 1 || popup.bottom <= anchor.top, JSON.stringify({ anchor, popup }));
+    await physical.captureWindow(join(output, 'selection-four-icons-layers.png'));
+    await closeLayers(driver);
+  });
+
+  await step('Right-click selects a website layer, offers editing and cuts with one-step Undo', async () => {
+    const at = await driver.execute(() => {
+      const frame = document.querySelector('.static-preview iframe'), r = frame.getBoundingClientRect(), zoom = Number(document.querySelector('[data-testid="canvas"]').dataset.zoom);
+      return { x: r.left + 420 * zoom, y: r.top + 330 * zoom };
+    });
+    await physical.rightClick(at); await driver.ready('.editor-menu[aria-label="Element actions"]');
+    assert.equal(await driver.execute(() => document.querySelector('.static-preview iframe').contentDocument.querySelector(document.querySelector('.element-selection').dataset.selector)?.id), 'orange-card');
+    for (const label of ['Edit', 'Ask AI', 'Replace', 'Move or resize', 'Copy', 'Cut', 'Paste', 'Arrange', 'Delete', 'Layers']) await driver.ready(`.editor-menu [aria-label=${JSON.stringify(label)}]`);
+    await physical.captureWindow(join(output, 'right-click-element-menu.png'));
+    const before = (await workspace(driver)).project;
+    await driver.click('.editor-menu [aria-label="Cut"]');
+    await waitFor(async () => !(await workspace(driver)).project.pages[0].content.html.includes('id="orange-card"'), 'Cut did not remove the selected node'); await previewReady(driver);
+    await physical.keys('Z', 1, ['Control']); await previewReady(driver);
+    assert.deepEqual((await workspace(driver)).project.pages[0].content, before.pages[0].content, 'One Undo must restore the complete cut source');
+    await selectSite(driver, physical, 'orange-card'); await closeLayers(driver);
+    await physical.keys('X', 1, ['Control']); await waitFor(async () => !(await workspace(driver)).project.pages[0].content.html.includes('id="orange-card"'), 'Trusted Ctrl+X did not cut the selected element');
+    await physical.keys('Z', 1, ['Control']); await previewReady(driver);
+    assert.deepEqual((await workspace(driver)).project.pages[0].content, before.pages[0].content);
+    assert.equal(provider.generationRequests().length, 1);
+  });
+
   await step('The floating Layers popover fits both themes and a 760px window with trusted keyboard focus', async () => {
     const before = (await workspace(driver)).project;
     const original = await driver.command('GET', '/window/rect');
@@ -242,6 +279,19 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     } finally {
       await driver.command('POST', '/window/rect', { width: original.width, height: original.height, x: original.x, y: original.y }); await settled(driver); await physical.initialize(evidence); await driver.button('Fit'); await settled(driver);
     }
+  });
+
+  await step('Blank canvas right-click adds a real request and exposes local view commands', async () => {
+    await closeLayers(driver);
+    const view = await physical.rect('.workspace-scroll');
+    await physical.rightClick({ x: view.right - 60, y: view.bottom - 120 });
+    await driver.ready('.editor-menu[aria-label="Canvas actions"]');
+    for (const label of ['Add request here', 'Paste', 'Fit screen guide', 'Center screen guide', 'Show grid', 'Grid and rulers', 'Layers']) await driver.ready(`.editor-menu [aria-label=${JSON.stringify(label)}]`);
+    await driver.click('.editor-menu [aria-label="Add request here"]');
+    await waitFor(async () => pending((await workspace(driver)).project).length === 1, 'The canvas menu did not create a real request');
+    await driver.ready('.element-toolbar [aria-label="Delete layer"]'); await driver.click('.element-toolbar [aria-label="Delete layer"]'); await driver.button('Remove');
+    await waitFor(async () => pending((await workspace(driver)).project).length === 0, 'The temporary menu request was not removed');
+    assert.equal(provider.generationRequests().length, 1);
   });
 
   await step('Website layer controls change actual overlap hits while boxes and DOM order remain unchanged', async () => {
@@ -350,6 +400,72 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await physical.captureWindow(join(output, '06-text-clipboard.png'));
   });
 
+  await step('Request right-click and quick Cut preserve placement, text and one-step history', async () => {
+    const request = pending((await workspace(driver)).project)[0];
+    await selectRequest(driver, physical, request.id); await closeLayers(driver);
+    await physical.rightClick(await physical.center(`.request-controls[data-region-id="${request.id}"] .move-grip`));
+    await driver.ready('.editor-menu[aria-label="Request actions"]');
+    await driver.click('.editor-menu [aria-label="Edit request"]');
+    await waitFor(() => driver.execute(id => document.activeElement?.closest('.annotation')?.dataset.regionId === id, request.id), 'Edit request did not return focus to its on-canvas text');
+    await selectRequest(driver, physical, request.id); await closeLayers(driver);
+    await physical.click(await physical.center('.element-toolbar [aria-label="Cut layer"]'));
+    await waitFor(async () => !pending((await workspace(driver)).project).some(item => item.id === request.id), 'The request quick Cut button did not remove its source');
+    await physical.keys('Z', 1, ['Control']); await waitFor(async () => pending((await workspace(driver)).project).some(item => item.id === request.id), 'Undo did not restore the cut request');
+    assert.deepEqual(pending((await workspace(driver)).project).find(item => item.id === request.id), request);
+    await selectRequest(driver, physical, request.id); await closeLayers(driver);
+    await physical.click(await physical.center('.element-toolbar [aria-label="Delete layer"]')); await driver.button('Remove');
+    await waitFor(async () => pending((await workspace(driver)).project).length === 0, 'Quick Delete did not remove the pending request');
+    await physical.keys('Z', 1, ['Control']); await waitFor(async () => pending((await workspace(driver)).project).length === 1, 'Undo did not restore quick Delete');
+  });
+
+  await step('Blocked generations offer a plain draft action and dialog menus escape clipping', async () => {
+    await closeLayers(driver); provider.setMode('conflict'); await driver.button('Generate');
+    await waitFor(async () => (await driver.invoke('get_generation', { projectId }))?.status === 'blocked', 'The controlled missing-input attempt did not stop for review');
+    await driver.button('Finish draft'); await driver.ready('section[aria-label="Finish your draft"]');
+    const normal = await driver.execute(() => document.querySelector('section[aria-label="Finish your draft"]').innerText);
+    assert.match(normal, /clearly labelled placeholders/); assert.ok(!normal.includes('dependency gate'));
+    await driver.menu(['Advanced', 'AI instructions sent'], 'Generation options');
+    await driver.ready('pre[aria-label="Generation REQUIREMENTS.md source"]');
+    await driver.click('[aria-label="Generation options"]'); await driver.click('.editor-menu [aria-label="Advanced"]');
+    const visible = await driver.execute(() => {
+      const menu = document.querySelector('.editor-menu[aria-label="Advanced"]'), r = menu.getBoundingClientRect();
+      const button = menu.querySelector('[aria-label="AI instructions sent"]'), b = button.getBoundingClientRect();
+      return { topLayer: menu.matches(':popover-open'), hit: document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2) === button || button.contains(document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)), left: r.left, right: r.right, width: innerWidth };
+    });
+    assert.equal(visible.topLayer, true); assert.equal(visible.hit, true); assert.ok(visible.left >= 0 && visible.right <= visible.width);
+    await physical.captureWindow(join(output, 'generation-unclipped-more-menu.png'));
+    await physical.keys('Escape'); await physical.keys('Escape');
+    await driver.menu(['Overview'], 'Generation options');
+  });
+
+  await step('Generate draft freezes the new policy, downloads actual images and shows honest placeholders', async () => {
+    const previous = (await driver.invoke('get_generation', { projectId })).jobId;
+    provider.setMode('complete', { draftAudit: true }); await driver.button('Generate draft');
+    const job = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.jobId !== previous && value?.status === 'applied' && value; }, 'The fresh labelled draft did not apply', 25_000);
+    assert.match(job.requirements.markdown, /Requirements format: 7/); assert.match(job.requirements.markdown, /clearly defined placeholders/);
+    const image = await waitFor(() => driver.execute(() => {
+      const doc = document.querySelector('.static-preview iframe')?.contentDocument, photo = doc?.getElementById('downloaded-photo'), missing = doc?.getElementById('missing-photo');
+      return photo?.complete && photo.naturalWidth === 2 && missing?.complete && { src: photo.getAttribute('src'), source: photo.getAttribute('data-desegnos-image-source'), alt: missing.alt, placeholder: missing.hasAttribute('data-desegnos-placeholder'), disabled: doc.querySelector('button')?.disabled };
+    }), 'Native downloaded image bytes did not render in the accepted canvas');
+    assert.match(image.src, /^data:image\/png;base64,/); assert.match(image.source, /\/images\/photo\.png$/);
+    assert.match(image.alt, /^Image placeholder:/); assert.equal(image.placeholder, true); assert.equal(image.disabled, true);
+    assert.equal(provider.networkProbes().filter(probe => probe.path.startsWith('/images/')).length, 2);
+    assert.ok(job.candidate.criticism.some(item => item.suggestion.includes('Clearly labelled image placeholders')));
+    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
+    await physical.captureWindow(join(output, 'downloaded-image-labelled-draft.png'));
+    await driver.click('section[aria-label="Generated changes"] button.primary');
+    const parent = join(output, 'image-export'); await mkdir(parent, { recursive: true });
+    await chooseFolder(physical, () => driver.button('Export'), parent, output, 'image-export');
+    await driver.ready('.export-notice');
+    const directory = await waitFor(async () => { const entries = (await readdir(parent, { withFileTypes: true })).filter(item => item.isDirectory()); return entries.length === 1 && join(parent, entries[0].name); }, 'The image draft did not export');
+    const exported = await inspectChromiumPage({ url: pathToFileURL(join(directory, 'index.html')).href, outputDirectory: output, label: 'exported-image-draft', expression: `(() => ({ photo: document.querySelector('#downloaded-photo')?.naturalWidth, missing: document.querySelector('#missing-photo')?.naturalWidth, src: document.querySelector('#downloaded-photo')?.getAttribute('src'), disabled: document.querySelector('button')?.disabled }))()` });
+    assert.equal(exported.value.photo, 2); assert.equal(exported.value.missing, 640); assert.equal(exported.value.disabled, true);
+    assert.ok(!exported.value.src.startsWith('http') && !exported.value.src.startsWith('data:'));
+    await driver.click('[aria-label="Dismiss export notice"]');
+    // Keep the existing stacking/export checks focused on their original site.
+    await driver.button('Undo'); await previewReady(driver);
+  });
+
   await step('Save and reopen preserve actual layer source, references and request order', async () => {
     await closeLayers(driver); await chooseFile(physical, () => driver.button('Save'), projectPath, output, 'layers-save');
     savedProject = (await savedState(driver, projectPath)).project;
@@ -366,6 +482,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
   await step('Exported ordinary files preserve copied layers and pseudo-elements without native runtime', async () => {
     const parent = join(output, 'export-parent'); await mkdir(parent, { recursive: true });
     await chooseFolder(physical, () => driver.button('Export'), parent, output, 'layers-export');
+    await driver.ready('.export-notice');
     const directory = await waitFor(async () => { const entries = (await readdir(parent, { withFileTypes: true })).filter(item => item.isDirectory()); return entries.length === 1 && join(parent, entries[0].name); }, 'Export did not create the real website folder');
     const index = join(directory, 'index.html'); assert.match(await readFile(index, 'utf8'), /Blue card/);
     const result = await inspectChromiumPage({ url: pathToFileURL(index).href, outputDirectory: output, label: 'exported-layers', expression: `(() => {
@@ -387,7 +504,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await selectRequest(driver, physical, request.id); await closeLayers(driver);
     await driver.fill('Request 4', 'Recovery keeps the copied website layers and this unsaved request.');
     await waitFor(async () => { const value = await workspace(driver); return value.dirty && value.project.revision > savedProject.revision && pending(value.project)[0]?.prompt.includes('unsaved request'); }, 'The final unsaved layer edit was not journaled');
-    assert.equal(hash(await readFile(projectPath)), archiveHash); assert.equal(provider.generationRequests().length, 1); assert.deepEqual(provider.errors(), []); await assertCanvasOnly(driver);
+    assert.equal(hash(await readFile(projectPath)), archiveHash); assert.equal(provider.generationRequests().length, 3); assert.deepEqual(provider.errors(), []); await assertCanvasOnly(driver);
   });
   return (await workspace(driver)).project;
 }

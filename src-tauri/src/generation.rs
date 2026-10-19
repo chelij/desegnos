@@ -935,6 +935,10 @@ impl GenerationService {
                 )?;
                 match GenerationCandidate::from_json(&response.text).and_then(|candidate| {
                     candidate.validate(&record.view.requirements, original)?;
+                    if record.view.requirements.markdown.starts_with("# Generation requirements\n\nRequirements format: 7\n\n")
+                        && !candidate.image_download_urls()?.is_empty() {
+                        return Err(desegni_core::Error("Images could not be prepared. Nothing was applied. Try generating again or remove the image request.".into()));
+                    }
                     Ok(candidate)
                 }) {
                     Ok(candidate) => {
@@ -955,7 +959,7 @@ impl GenerationService {
                         } else if candidate.is_ready() {
                             "Review the generated website, component choices, identity proposals and design feedback before applying.".into()
                         } else {
-                            "The agent reported unresolved requirements. Review the conflicts; they must be resolved before Apply.".into()
+                            "Some requests need a choice. You can edit them or generate a draft with labelled placeholders.".into()
                         };
                         record.view.candidate = Some(candidate);
                     }
@@ -1473,6 +1477,12 @@ async fn submit(
                 },
             )
             .await;
+        let result = match result {
+            Ok(response) => Ok(client
+                .download_images(response, &request.requirements, &original, &cancellation)
+                .await),
+            Err(error) => Err(error),
+        };
         let workspace_state = app.state::<Mutex<Workspace>>();
         let service_state = app.state::<Mutex<GenerationService>>();
         if let Ok(mut workspace) = workspace_state.lock()

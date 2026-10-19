@@ -1,0 +1,22 @@
+# Draft content and downloaded images
+
+Generate prepares a complete draft with clearly defined placeholders when copy, destinations, pictures or authentic examples are missing. The requirements tell the agent to label these visibly, disable unconfigured actions with a helpful label, use system font fallbacks and avoid fabricated customer work, endorsements or successful submissions. Missing optional content should not become an unavailable-component conflict. Accepted identity and protected facts still apply; a genuine incompatible requirement remains blocked. Feedback should ask one short question in plain language.
+
+A blocked attempt offers **Finish draft → Generate draft**, which creates a new frozen request from the current project. **Change request** returns to that on-canvas prompt. Detailed provider explanations stay inside a disclosure. More → Advanced retains attempts, exact requirements, source and an explicitly confirmed retry of the original snapshot. A new draft uses the configured account again; it is not a free repair of the old attempt. Existing jobs retain their requirements and digest. The default successful result still applies directly to the canvas and supports Undo.
+
+## Image capability
+
+The agent requests a native download with `<img data-desegnos-download src="https://…" alt="…">`. This supports known direct image URLs, including URLs the user supplies. It does **not** provide a search engine, scrape websites, invent search results, or enable browser networking. The requirements ask for visible credits and source links when known, without inventing ownership or license permission. Online photos must not masquerade as authentic product/customer screenshots.
+
+The provider adapter downloads up to four distinct public HTTPS PNG/JPEG URLs per generation. Each image must fit 256 KiB, 4096 pixels per side and eight million pixels; each attempt has an eight-second deadline, including redirects and name resolution. There are at most two followed redirects. Private/special-use addresses, credentials in URLs, nonstandard ports, proxies, compressed HTTP bodies, SVG downloads and non-image/MIME-spoofed responses are rejected. DNS answers are validated and pinned for each hop. Image requests receive no API key, account token, cookie or referrer. Images are decoded with bounded dimensions and allocation before embedding. These downloads are optional: failures and excess URLs produce a clearly visible image placeholder rather than a broken image or a successful-download claim.
+
+The core substitutes the validated raster data in the returned source, removes external srcset alternatives and retains `data-desegnos-image-source` for provenance. At most 64 marked image placements are processed. Existing page/job source budgets still apply; an image that would exceed a page's budget becomes a placeholder. The final candidate is validated again before it can be applied. The normal portable exporter extracts the embedded bytes to local assets, so the exported site works without the source image host or Desegnos.
+
+## Boundaries
+
+- `desegni-core` owns requirements format 7, pure image discovery/substitution, candidate validation and ordinary project source. Formats 3–6 retain their old rendering and validation paths.
+- `desegni-ai` owns the credential-free HTTP image adapter, URL/DNS checks and raster decoding. It returns a candidate response; it cannot write project files or apply a result.
+- The native coordinator runs the image stage outside project locks, shares the job's cancellation token, then uses its existing durable result/apply flow. Cancellation or a changed project cannot apply late output. No automatic paid retry or account/billing fallback was added.
+- The editor owns concise draft actions and on-canvas editing. The preview still cannot fetch arbitrary network resources. Product plugins gain no capability from this feature.
+
+Raster decoding uses the already locked, widely used Rust `image` crate, pinned at 0.25.10 with only PNG/JPEG requested by this adapter. No new package resolutions or JavaScript dependencies were added. Production online image quality and paid model instruction-following remain separate live checks; automated checks use a controlled local HTTP fixture and actual exported files.

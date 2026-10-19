@@ -62,6 +62,8 @@ function MenuLevel({ id, label, items, anchor, last = false, nested = false, bac
   const enabled = items.flatMap((item, index) => !item.separator && !item.disabled ? [index] : []);
   useLayoutEffect(() => {
     if (!anchor || !panel.current) return;
+    const menu = panel.current;
+    menu.showPopover();
     const rect = anchor.getBoundingClientRect();
     const bounds = panel.current.getBoundingClientRect();
     const margin = 8;
@@ -72,6 +74,7 @@ function MenuLevel({ id, label, items, anchor, last = false, nested = false, bac
       left: Math.max(margin, Math.min(left, window.innerWidth - bounds.width - margin)),
       top: Math.max(margin, Math.min(preferredTop, window.innerHeight - bounds.height - margin)), ready: true,
     });
+    return () => { if (menu.matches(':popover-open')) menu.hidePopover(); };
   }, []);
   useLayoutEffect(() => {
     if (position.ready) buttons.current.get(last ? enabled.at(-1)! : enabled[0])?.focus({ preventScroll: true });
@@ -91,7 +94,7 @@ function MenuLevel({ id, label, items, anchor, last = false, nested = false, bac
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
       event.preventDefault();
       const next = event.key === 'Home' ? enabled[0] : event.key === 'End' ? enabled.at(-1)! : enabled[(index + (event.key === 'ArrowDown' ? 1 : -1) + enabled.length) % enabled.length];
-      setSubmenu(null); buttons.current.get(next)?.focus({ preventScroll: true });
+      setSubmenu(null); buttons.current.get(next)?.focus({ preventScroll: true }); buttons.current.get(next)?.scrollIntoView({ block: 'nearest' });
     } else if (event.key === 'ArrowRight' && items[focused]?.children?.length) { event.preventDefault(); activate(focused); }
     else if ((event.key === 'ArrowLeft' && nested) || event.key === 'Escape') {
       event.preventDefault(); event.stopPropagation(); if (nested) back?.(); else rootClose();
@@ -105,7 +108,7 @@ function MenuLevel({ id, label, items, anchor, last = false, nested = false, bac
       if (next !== undefined) { event.preventDefault(); setSubmenu(null); buttons.current.get(next)?.focus({ preventScroll: true }); }
     }
   }
-  return <ul ref={panel} id={id} role="menu" aria-label={label} className="editor-menu" onKeyDown={keyboard}
+  return <ul ref={panel} id={id} popover="manual" role="menu" aria-label={label} className="editor-menu" onKeyDown={keyboard}
     style={{ left: position.left, top: position.top, visibility: position.ready ? 'visible' : 'hidden' }}>
     {items.map((item, index) => item.separator ? <li key={item.id} role="separator" className="menu-separator" /> : <li key={item.id} role="none">
       <button type="button" ref={element => { if (element) buttons.current.set(index, element); else buttons.current.delete(index); }}
@@ -124,7 +127,7 @@ export function ContextMenu({ label, point, items, close }: { label: string; poi
   const container = useRef<HTMLDivElement>(null); const id = useId();
   useEffect(() => {
     const outside = (event: PointerEvent | FocusEvent) => { if (event.target instanceof Node && !container.current?.contains(event.target)) close(false); };
-    const dismiss = () => close(false);
+    const dismiss = (event: Event) => { if (!(event.target instanceof Node) || !container.current?.contains(event.target)) close(false); };
     document.addEventListener('pointerdown', outside, true); document.addEventListener('focusin', outside);
     window.addEventListener('resize', dismiss); window.addEventListener('scroll', dismiss, true);
     return () => { document.removeEventListener('pointerdown', outside, true); document.removeEventListener('focusin', outside); window.removeEventListener('resize', dismiss); window.removeEventListener('scroll', dismiss, true); };

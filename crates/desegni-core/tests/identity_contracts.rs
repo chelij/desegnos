@@ -202,7 +202,7 @@ fn requirements_include_portable_identity_bytes_while_project_notes_contain_only
     assert!(markdown.contains(&imported.assets[0].id.to_string()));
     assert!(!markdown.contains("data:image/"));
     let snapshot = project.prepare_requirements().unwrap();
-    assert!(snapshot.markdown.contains("Requirements format: 6"));
+    assert!(snapshot.markdown.contains("Requirements format: 7"));
     assert!(snapshot.markdown.contains(&imported.assets[0].data_uri));
     assert!(snapshot.markdown.contains(&imported.summary));
     assert!(snapshot.markdown.contains(&imported.source_sha256));
@@ -235,7 +235,7 @@ fn requirements_include_portable_identity_bytes_while_project_notes_contain_only
             .prepare_requirements()
             .unwrap()
             .markdown
-            .contains("Requirements format: 5")
+            .contains("Requirements format: 7")
     );
 }
 

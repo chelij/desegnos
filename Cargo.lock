@@ -963,6 +963,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "desegni-core",
+ "image",
  "jsonwebtoken",
  "keyring",
  "reqwest",
@@ -2174,6 +2175,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

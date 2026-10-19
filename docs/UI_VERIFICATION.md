@@ -1,5 +1,11 @@
 # Desegnos: UI verification
 
+## Four-icon selection, right-click menus and labelled drafts: PASS
+
+19 October 2026. The final build passes [24 focused native steps](../test-results/native/2026-10-19T14-38-06-989Z-1319453/report.json) and [25 authoring regression steps](../test-results/native/2026-10-19T14-36-35-874Z-1313744/report.json), with trusted OS input on guarded private displays. Selection shows Layers/Copy/Cut/Delete icons at its top-left, Layers remains anchored at 760px in both themes, and right-click opens context-appropriate actions without a sidebar. Copy/Cut/history manipulate actual source without AI calls. Keyboard focus and Escape remain usable. Dialog More/Advanced menus remain visible outside dialog bounds via native browser popovers.
+
+The primary agent inspected the actual [unclipped dialog menu](../test-results/native/2026-10-19T14-38-06-989Z-1319453/layers/generation-unclipped-more-menu.png), [four-icon anchored Layers](../test-results/native/2026-10-19T14-38-06-989Z-1319453/layers/selection-four-icons-layers.png), and [downloaded picture with a clearly labelled failed-image placeholder](../test-results/native/2026-10-19T14-38-06-989Z-1319453/layers/downloaded-image-labelled-draft.png). The exported files also render in ordinary Chromium with external traffic blocked. Generated sample content and the synthetic provider are explicit fixtures, not claims about model quality or authentic customer work. The editor's existing neutral palette and layout remain in place. The release startup and core/adapter boundaries are recorded in [implementation](IMPLEMENTATION.md#selection-menus-and-complete-drafts-19-october-2026).
+
 ## Supplied identity, direct controls and project creation: PASS
 
 19 October 2026. The [final combined native run](../test-results/native/2026-10-19T10-54-29-820Z-715292/report.json) passes 100 steps on a guarded isolated display. The primary agent inspected the actual [corner controls and wordmark](../test-results/native/2026-10-19T10-54-29-820Z-715292/generation/corner-resize-icon-toolbar-window.png), the [identity review](../test-results/native/2026-10-19T10-50-15-852Z-693764/identity/identity-review-window.png) and the [fresh normal startup](../test-results/startup/2026-10-19T10-46-42-318Z-676675/startup.png).

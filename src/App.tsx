@@ -301,6 +301,7 @@ export default function App() {
       } else if (shortcut === 'zoomIn' || shortcut === 'zoomOut') { event.preventDefault(); setZoom(value => steppedZoom(value, shortcut === 'zoomIn' ? 1 : -1)); return; }
       else if (shortcut === 'actualSize' || shortcut === 'doubleSize') { event.preventDefault(); setZoom(shortcut === 'actualSize' ? 1 : 2); return; }
       else if (shortcut === 'selectTool' || shortcut === 'requestTool' || shortcut === 'panTool') { event.preventDefault(); setTool(shortcut === 'selectTool' ? 'select' : shortcut === 'requestTool' ? 'request' : 'pan'); return; }
+      else if (shortcut === 'cutLayer') { if (activeLayer || selected) { event.preventDefault(); void canvas.current?.cutLayer(); } return; }
       else if (shortcut === 'copyLayer') { if (activeLayer || selected) { event.preventDefault(); void canvas.current?.copyLayer(); } return; }
       else if (shortcut === 'pasteLayer') { event.preventDefault(); void canvas.current?.pasteLayer(); return; }
       else if (shortcut === 'layerForward' || shortcut === 'layerBackward' || shortcut === 'layerFront' || shortcut === 'layerBack') {
@@ -444,6 +445,15 @@ export default function App() {
     if (!page) return;
     await mutate({ type: 'arrange_region', page_id: page.id, region_id: id, direction });
   }
+  async function cutLayerNative(target: LayerTarget, styles: ElementStyleEdit[]) {
+    const projectId = project?.id, targetPageId = page?.id;
+    await settle();
+    await queue(async workspace => {
+      if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was cut.');
+      const next = await native<WorkspaceView>('cut_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, target, visualStyles: styles });
+      accept(next); setNotice('Layer cut.');
+    }, false);
+  }
   async function refreshElementBounds(pageId: string, viewport: Viewport, bounds: ElementBounds[]) {
     const projectId = project?.id;
     await queue(async workspace => {
@@ -492,6 +502,7 @@ export default function App() {
     { id: 'edit', label: 'Edit', disabled: !project, children: [
       { id: 'undo', label: 'Undo', shortcut: 'Ctrl/Cmd+Z', disabled: !view?.canUndo, action: () => run(() => travel('undo_project')) },
       { id: 'redo', label: 'Redo', shortcut: 'Ctrl/Cmd+Shift+Z', disabled: !view?.canRedo, action: () => run(() => travel('redo_project')) },
+      { id: 'cut-layer', label: 'Cut layer', shortcut: 'Ctrl/Cmd+X', disabled: !region && (!activeLayer || activeLayer.selector === 'body'), action: () => run(() => canvas.current!.cutLayer()) },
       { id: 'copy-layer', label: 'Copy layer', shortcut: 'Ctrl/Cmd+C', disabled: !region && (!activeLayer || activeLayer.selector === 'body'), action: () => run(() => canvas.current!.copyLayer()) },
       { id: 'paste-layer', label: 'Paste layer', shortcut: 'Ctrl/Cmd+V', action: () => run(() => canvas.current!.pasteLayer()) },
       { id: 'arrange', label: 'Arrange layer', disabled: !region && (!activeLayer || activeLayer.selector === 'body'), children: [
@@ -574,13 +585,13 @@ export default function App() {
           }}><span>{item.name}</span>{!item.included && <span className="page-draft">Hidden</span>}</button>)}
       </div><button className="add-page-tab" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}>+</button></div>
       {showGenerationStatus && <div className="generation-strip"><GenerationFeedback controller={generation} compact>
-        <button onClick={openGeneration}>Details</button>
+        <button onClick={openGeneration}>{generation.job?.status === 'blocked' ? 'Finish draft' : 'Details'}</button>
         {generation.job?.status === 'generating' && <button disabled={!!generation.operation} onClick={() => run(generation.cancel)}>Cancel generation</button>}
         {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
       </GenerationFeedback></div>}
       {resultReview && <section className="result-review" aria-label="Generated changes"><strong>Website updated</strong><button className="primary" onClick={() => setResultReview(null)}>Keep</button><button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button><button disabled={pending > 0} title="Undo this result and generate a new version; this uses your AI account again" onClick={() => run(() => rejectResult(true))}>Try again</button><button onClick={openGeneration}>Details</button></section>}
       <main className="workspace" id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined}>
-      {page && <Canvas ref={canvas} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
       </main>
       <footer className="status-bar"><span title={view.path ?? undefined}>{region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{page && <button className="page-appearance-toggle" aria-label={`Page appearance: ${page.appearance === 'light' ? 'Light' : 'Dark'}`} title={`Switch page to ${page.appearance === 'light' ? 'dark' : 'light'}`} onClick={() => run(() => mutate(current => { const target = current.pages.find(item => item.id === page.id); return target ? { type: 'update_page', page_id: target.id, name: target.name, path: target.path, viewport: target.viewport, appearance: target.appearance === 'light' ? 'dark' : 'light', included: target.included } : null; }))}>{page.appearance === 'light' ? '☀ Light' : '☾ Dark'}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
@@ -624,7 +635,12 @@ export default function App() {
     </div></div></Modal>}
     {confirmation && <Modal title={confirmation.title} close={() => setConfirmation(null)}><DialogError error={error} dismiss={() => setError('')} /><div className="dialog-body"><p>{confirmation.message}</p><div className="form-actions"><button className="danger" disabled={pending > 0} onClick={() => { void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>Remove</button><button onClick={() => setConfirmation(null)}>Cancel</button></div></div></Modal>}
     {showPreview && page?.content && <Modal title="Site preview" wide close={() => setShowPreview(false)}><div className="accepted-preview"><PagePreview key={`${project?.id}:${page.id}`} page={page} revision={project!.revision} /></div></Modal>}
-    {generation.visible && project && <GenerationDialog controller={generation} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} manageUsage={manageChatgptUsage} close={closeGeneration} />}
+    {generation.visible && project && <GenerationDialog controller={generation} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} manageUsage={manageChatgptUsage} editRequest={id => {
+      const owner = project.pages.find(item => item.regions.some(region => region.id === id));
+      if (!owner) return;
+      generation.close();
+      run(async () => { await selectPage(owner.id, id); setSelected(id); setFocusPrompt(true); });
+    }} close={closeGeneration} />}
     {showAiSettings && <Modal title="AI settings" wide close={() => setShowAiSettings(false)}><AiSettings current={aiSettings} refresh={refreshAiSettings} update={updateAiSettings} manageUsage={manageChatgptUsage} pollingError={aiPollingError} /></Modal>}
     {aiSettings?.chatgpt.showWelcome && !welcomeHidden && <ChatgptWelcome update={updateAiSettings} manageUsage={manageChatgptUsage} dismissed={dismissChatgptWelcome} />}
   </div>;

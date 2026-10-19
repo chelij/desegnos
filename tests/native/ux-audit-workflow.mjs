@@ -70,7 +70,7 @@ async function childPoint(driver, selector, text = false) {
 async function clickHeading(driver, physical) {
   await previewReady(driver);
   await physical.click(await childPoint(driver, 'h1', true));
-  await driver.ready('.element-toolbar .ask-ai');
+  await driver.ready('.element-toolbar [aria-label="Layers"]');
 }
 
 async function chooseInterpretation(driver, precise) {
@@ -106,7 +106,7 @@ async function replaceMain(driver, physical, about) {
   await previewReady(driver);
   await physical.click(await childPoint(driver, 'main'));
   await driver.ready('.element-toolbar');
-  await driver.button('Replace'); await driver.select('Replace with', 'html');
+  await physical.rightClick(await childPoint(driver, 'main')); await driver.click('.editor-menu [aria-label="Replace"]'); await driver.select('Replace with', 'html');
   await driver.fill('Replacement HTML', exportBody(about)); await driver.button('Replace element');
   await closed(driver);
   await previewReady(driver, about ? 'About our standalone website' : 'Our standalone website');
@@ -254,7 +254,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   });
 
   await step('A draft typed during generation is committed before apply and stale output cannot overwrite it', async () => {
-    await clickHeading(driver, physical); await physical.click(await physical.center('.element-toolbar .ask-ai'));
+    await clickHeading(driver, physical); await physical.rightClick(await childPoint(driver, 'h1', true)); await driver.click('.editor-menu [aria-label="Ask AI"]');
     await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA'), 'Ask AI did not focus its request');
     await physical.raw({ action: 'text', text: 'Refine this heading while keeping its meaning.' });
     await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === homeId).regions.some(region => region.prompt === 'Refine this heading while keeping its meaning.'), 'Typing in Ask AI lost focus or failed to persist');
@@ -290,15 +290,15 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview'); await driver.button('Redo'); await previewReady(driver, 'Edited directly on the page');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]'); await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Cancelled text change' }); await physical.keys('Escape');
     await previewReady(driver, 'Edited directly on the page'); assert.equal(requestCount(provider), requests);
-    await clickHeading(driver, physical); assert.match(await driver.execute(() => document.querySelector('.element-type-tag').textContent), /Heading|H1/i);
+    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar button')].map(button => button.getAttribute('aria-label'))), ['Layers', 'Copy layer', 'Cut layer', 'Delete layer']);
     assert.match(await driver.execute(() => document.querySelector('.workspace-measurement').textContent), /px/);
     const overlap = await driver.execute(() => { const a = document.querySelector('.element-toolbar').getBoundingClientRect(), b = document.querySelector('.element-selection').getBoundingClientRect(); return Math.max(0, Math.min(a.right,b.right)-Math.max(a.left,b.left))*Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)); });
     assert.equal(overlap, 0, 'The restored element toolbar hides the selected heading');
     await physical.captureWindow(join(output, '10-inline-edit-selection-window.png'));
   });
 
-  await step('A labelled Ask AI action and Ctrl+K open the same on-page request without sending anything', async () => {
-    const requests = requestCount(provider); await physical.click(await physical.center('.element-toolbar .ask-ai'));
+  await step('The right-click Ask AI action and Ctrl+K open the same on-page request without sending anything', async () => {
+    const requests = requestCount(provider); await physical.rightClick(await childPoint(driver, 'h1', true)); await driver.click('.editor-menu [aria-label="Ask AI"]');
     const request = await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === homeId).regions.find(region => !region.completed && region.element?.tag === 'h1'), 'Ask AI did not create a source-bound request');
     await driver.fill(`Request ${(await workspace(driver)).project.pages.find(page => page.id === homeId).regions.findIndex(region => region.id === request.id) + 1}`, 'Make the heading warmer while preserving its meaning.');
     await clickHeading(driver, physical); await physical.keys('K', 1, ['Control']);
@@ -367,6 +367,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   await step('Export writes a usable standalone website through the native destination picker and shows Open folder', async () => {
     const parent = join(output, 'export-parent'); await mkdir(parent, { recursive: true, mode: 0o700 });
     await chooseFolder(physical, () => driver.button('Export'), parent, output, 'audit-export');
+    await driver.ready('.export-notice');
     const folders = await waitFor(async () => { const entries = await readdir(parent, { withFileTypes: true }); return entries.filter(entry => entry.isDirectory()).length === 1 && entries; }, 'Export did not create its website folder');
     assert.equal(folders.length, 1); exportedRoot = join(parent, folders[0].name);
     const files = await allFiles(exportedRoot), names = files.map(path => relative(exportedRoot, path).split(sep).join('/'));
