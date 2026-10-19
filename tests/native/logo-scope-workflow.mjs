@@ -19,7 +19,7 @@ export async function logoScopeWorkflow(driver, physical, step, evidence, provid
       return current.pages[0].content?.html.includes('project-logo') && current;
     }, 'The approved project logo did not apply', 25000);
     const record = provider.generationRequests().at(-1);
-    assert.match(record.markdown, /Requirements format: 9/);
+    assert.match(record.markdown, /Requirements format: 10/);
     assert.ok(record.markdown.includes(`desegnos-asset:${asset.id}`));
     assert.ok(!record.markdown.includes(asset.dataUri));
     assert.match(record.markdown, /never in page HTML/);
@@ -37,7 +37,7 @@ export async function logoScopeWorkflow(driver, physical, step, evidence, provid
     await driver.ready('section[aria-label="Layers"] .layer-select[data-layer-selector$="img:nth-of-type(2)"]');
     await driver.click('section[aria-label="Layers"] .layer-select[data-layer-selector$="img:nth-of-type(2)"]');
     await driver.button('Close Layers');
-    await driver.click('.element-toolbar button[title^="Change text"]');
+    await driver.execute(()=>document.getElementById('page-canvas').focus({preventScroll:true}));await physical.keys('F2');await driver.ready('dialog[aria-label="Edit element"][open]');
     await driver.select('Project image', asset.id);
     await physical.captureWindow(join(evidence, 'project-image-picker.png'));
     await driver.button('Save changes');

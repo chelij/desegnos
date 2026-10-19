@@ -1,5 +1,7 @@
 # Desegnos cleanup spec
 
+Follow-up status, 20 October 2026: remaining integration, editable CodeMirror, exact History and selection/safe-save work are implemented. [The follow-up report](SELECTION_SAVE_CODEX.md) records the current behavior and verification. The original owner decisions and dated handoff notes below remain as their historical context.
+
 Date: 2026-10-19. Source: owner interview plus a UI audit of the latest native screenshots and the frontend source. Where this file conflicts with UX_AUDIT.md or FEATURE_PRIORITIES.md on what to build next, this file wins. PRODUCT.md still sets direction.
 
 ## Owner decisions

@@ -172,7 +172,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.button('Create project');
     if (await driver.execute(() => !!document.querySelector('dialog[aria-label="Save your changes?"][open]'))) await driver.button('Discard and continue');
     finalProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id !== originalProject.id && value; }, 'The imported-identity project did not open');
-    assert.equal(finalProject.name, 'Imported Northstar website'); assert.equal(finalProject.schemaVersion, 6);
+    assert.equal(finalProject.name, 'Imported Northstar website'); assert.equal(finalProject.schemaVersion, 7);
     assert.equal(finalProject.appearance, 'light'); assert.equal(finalProject.pages[0].appearance, 'light');
     assert.deepEqual(finalProject.viewport, { width: 1536, height: 864 });
     assert.equal(finalProject.pages.length, 1); assert.equal(finalProject.pages[0].content, null); assert.deepEqual(finalProject.pages[0].regions, []);
@@ -205,7 +205,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.fill('Request 1', 'Create a welcoming homepage using the imported Northstar identity and its approved logo.');
     await waitFor(async () => (await workspace(driver)).project.pages[0].regions[0]?.prompt.includes('Northstar'), 'The future-generation identity request did not persist');
     const frozen = await driver.invoke('prepare_requirements');
-    assert.match(frozen.markdown, /^Requirements format: 9$/m);
+    assert.match(frozen.markdown, /^Requirements format: 10$/m);
     assert.ok(frozen.markdown.includes('#225577')); assert.ok(frozen.markdown.includes('Clear, warm and confident.'));
     assert.ok(!frozen.markdown.includes(selectedPng.dataUri)); assert.ok(frozen.markdown.includes(`desegnos-asset:${selectedPng.id}`)); assert.ok(frozen.markdown.includes(selectedPng.sha256));
     assert.equal(provider.generationRequests().length, generationCount);

@@ -71,7 +71,8 @@ async function selectSite(driver, physical, id) {
   await clickLayerRow(driver, physical, row);
   await waitFor(() => driver.execute(selector => {
     const selection = document.querySelector('[data-testid="direct-element-selection"]');
-    return selection?.dataset.selector === selector && selection.dataset.sourceHash === document.querySelector('.static-preview')?.dataset.sourceHash;
+    const node=document.querySelector('.static-preview iframe')?.contentDocument?.querySelector(selector);
+    return selection?.dataset.selector === selector && !!selection.dataset.elementId && selection.dataset.elementId === node?.getAttribute('data-desegnos-id');
   }, target), 'The exact current-source website layer did not own selection');
   return target;
 }
@@ -338,7 +339,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await waitFor(async () => (await workspace(driver)).project.revision > before.revision, 'The real clipboard site paste was not persisted'); await previewReady(driver);
     copiedId = await waitFor(() => driver.execute(() => {
       const selection = document.querySelector('[data-testid="direct-element-selection"]'), preview = document.querySelector('.static-preview');
-      if (!selection || selection.dataset.sourceHash !== preview?.dataset.sourceHash) return false;
+      if (!selection || !selection.dataset.elementId || preview?.querySelector('iframe')?.contentDocument?.querySelector(selection.dataset.selector)?.getAttribute('data-desegnos-id') !== selection.dataset.elementId) return false;
       const node = preview.querySelector('iframe').contentDocument.querySelector(selection.dataset.selector);
       return node?.getAttribute('aria-label') === 'Blue card' && node.id !== 'blue-card' && node.id;
     }), 'The pasted element did not own the current-source selection');
@@ -373,7 +374,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await physical.keys('V', 1, ['Control']);
     const pastedId = await waitFor(() => driver.execute(() => {
       const preview = document.querySelector('.static-preview'), selection = document.querySelector('[data-testid="direct-element-selection"]');
-      if (preview?.dataset.previewReady !== 'true' || !selection || selection.dataset.sourceHash !== preview.dataset.sourceHash) return false;
+      if (preview?.dataset.previewReady !== 'true' || !selection || !selection.dataset.elementId || preview.querySelector('iframe')?.contentDocument?.querySelector(selection.dataset.selector)?.getAttribute('data-desegnos-id') !== selection.dataset.elementId) return false;
       return preview.querySelector('iframe').contentDocument.querySelector(selection.dataset.selector)?.id;
     }), 'The cross-page paste did not select the new current-source layer');
     assert.notEqual(pastedId, copiedId); assert.deepEqual(await appearance(driver, pastedId), copiedAppearance);
@@ -442,7 +443,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     const previous = (await driver.invoke('get_generation', { projectId })).jobId;
     provider.setMode('complete', { draftAudit: true }); await driver.button('Build draft');
     const job = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.jobId !== previous && value?.status === 'applied' && value; }, 'The fresh labelled draft did not apply', 25_000);
-    assert.match(job.requirements.markdown, /Requirements format: 9/); assert.match(job.requirements.markdown, /clearly defined placeholders/);
+    assert.match(job.requirements.markdown, /Requirements format: 10/); assert.match(job.requirements.markdown, /clearly defined placeholders/);
     const image = await waitFor(() => driver.execute(() => {
       const doc = document.querySelector('.static-preview iframe')?.contentDocument, photo = doc?.getElementById('downloaded-photo'), missing = doc?.getElementById('missing-photo');
       return photo?.complete && photo.naturalWidth === 2 && missing?.complete && { src: photo.getAttribute('src'), source: photo.getAttribute('data-desegnos-image-source'), alt: missing.alt, placeholder: missing.hasAttribute('data-desegnos-placeholder'), disabled: doc.querySelector('button')?.disabled };

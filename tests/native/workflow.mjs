@@ -53,7 +53,7 @@ export async function reviewRequirements(driver, mode, evidence, name = 'REQUIRE
   assert.equal(prepared.sha256, createHash('sha256').update(prepared.markdown).digest('hex'));
   assert.equal(prepared.regionCount, targets.length);
   assert.equal(prepared.pageCount, new Set(targets.map(target => target.page.id)).size);
-  assert.match(markdown, /^Requirements format: 9$/m);
+  assert.match(markdown, /^Requirements format: 10$/m);
   assert.match(markdown, /^## Generation setting$/m);
   assert.equal([...markdown.matchAll(/"generationMode"\s*:/g)].length, 1);
   assert.doesNotMatch(markdown, /within 1 CSS pixel/);

@@ -21,7 +21,7 @@ export async function sourceEditWorkflow(driver,physical,step,evidence) {
     assert.equal(project.revision,original.revision+1);assert.equal(accepted.canUndo,true);
     assert.equal(content.html.replace(/ data-desegnos-id="[^"]+"/g,''),html);assert.equal(content.css,css);assert.equal(content.javascript,javascript);
     const map=await driver.invoke('get_page_source_map',{projectId:project.id,pageId:project.homePageId});
-    assert.equal(map.htmlSha256,digest(content.html));assert.equal(map.sourceSha256,digest(JSON.stringify(content)));
+    assert.equal(map.htmlSha256,digest(content.html));assert.equal(map.sourceSha256,digest(JSON.stringify({html:content.html,css:content.css,javascript:content.javascript})));
     const range=map.ranges.find(r=>r.selector==='body > main:nth-of-type(1) > h1:nth-of-type(1)');assert.equal(range.startLine,2);assert.equal(range.endLine,2);
     await writeFile(join(output,'source-map.json'),JSON.stringify(map,null,2));
     await chooseFile(physical,()=>driver.button('Save'),projectPath,output,'typed-first-save');

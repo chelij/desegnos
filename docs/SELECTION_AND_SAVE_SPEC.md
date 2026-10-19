@@ -1,5 +1,7 @@
 # Selection targets and safe save spec
 
+Implementation status, 20 October 2026: completed and integrated in WebMaker. Current projects use schema 7 and new requirements use format 10; the starting-state table and earlier frontend handoff notes below describe the state before this work. See [implementation and verification](SELECTION_SAVE_CODEX.md) and [the current backend contract](CLEANUP_BACKEND_CONTRACT.md).
+
 Date: 2026-10-20. Source: comparison with codex-openpencil (README only, not installed), checked against the current code. Two ideas carry over: selections that stay attached to their elements, and saves that never quietly overwrite other work. PRODUCT.md and CLEANUP_SPEC.md still set direction; this file covers only these two features.
 
 ## What exists today

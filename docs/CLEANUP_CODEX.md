@@ -1,5 +1,7 @@
 # Cleanup backend implementation — 19 October 2026
 
+The subsequent 20 October selection/save, History and frontend integration is complete; [the follow-up report](SELECTION_SAVE_CODEX.md) records current versions and checks. Results below describe the original cleanup run.
+
 Codex completed X1, X2, X3, X4, X5 and X7 from `CLEANUP_SPEC.md`. X6 was explicitly excluded. Frontend files remain Claude-owned. The user's running editor was neither relaunched nor controlled; native checks used disposable profiles, session buses and guarded Xvfb displays. See [the frontend contract](CLEANUP_BACKEND_CONTRACT.md) for the actual commands and remaining C4/C5/C9 wiring.
 
 ## Result

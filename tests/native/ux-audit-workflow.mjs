@@ -312,7 +312,8 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
 
   await step('The right-click Ask AI action and Ctrl+K open the same on-page request without sending anything', async () => {
     const requests = requestCount(provider); await physical.rightClick(await childPoint(driver, 'h1', true)); await driver.click('.editor-menu [aria-label="Ask AI"]');
-    const request = await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === homeId).regions.find(region => !region.completed && region.element?.tag === 'h1'), 'Ask AI did not create a source-bound request');
+    const request = await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === homeId).regions.find(region => !region.completed && region.elements?.some(target => target.tag === 'h1')), 'Ask AI did not create an element-bound request');
+    assert.equal(request.elements.length,1);assert.ok(request.elements[0].id);assert.equal(request.elements[0].sourceSha256,undefined);
     await driver.fill(`Request ${(await workspace(driver)).project.pages.find(page => page.id === homeId).regions.findIndex(region => region.id === request.id) + 1}`, 'Make the heading warmer while preserving its meaning.');
     await clickHeading(driver, physical); await physical.keys('K', 1, ['Control']);
     await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA' && !!document.activeElement.closest('[data-testid="canvas"]')), 'Ctrl+K did not focus its on-canvas AI request');

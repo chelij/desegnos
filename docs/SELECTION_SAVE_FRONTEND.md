@@ -15,7 +15,7 @@ Implemented against `SELECTION_AND_SAVE_SPEC.md` and the native contracts from t
 
 `node node_modules/typescript/bin/tsc --noEmit`, the production Vite build, all 37 existing canvas geometry tests, six `tests/selection-projection.test.mjs` regressions, and seven `tests/code-mirror-state.test.mjs` regressions pass in the isolated selection-save-ui worktree. The new regressions cover stable/legacy identity, canonical selection and signed union geometry, hidden metadata across text/name/style edits, inserted/deleted siblings, quoted markup/raw text, and multiline UTF-16 source-map positions.
 
-Native end-to-end acceptance is coordinated by the parent task against the integrated backend and frontend. This document does not claim it has run before that integration.
+Integrated native acceptance is now complete: [the follow-up report](SELECTION_SAVE_CODEX.md) records the checks against the combined backend and frontend, including save conflicts, stale-request recovery, code-draft protection and exact History.
 
 ## CodeMirror 6 implementation
 
