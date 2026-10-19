@@ -4,9 +4,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { ChangeSet, EditorState, Transaction } from '@codemirror/state';
+import { ChangeSet, Compartment, EditorState, StateEffect, Transaction } from '@codemirror/state';
 import { history, isolateHistory, redo, undo, undoDepth } from '@codemirror/commands';
-import { SearchQuery } from '@codemirror/search';
+import { SearchQuery, search, setSearchQuery } from '@codemirror/search';
 import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';
 import { javascript } from '@codemirror/lang-javascript';
@@ -18,7 +18,7 @@ try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/editorHtml.ts', 'src/codeMirrorMetadata.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { htmlMetadata, metadataHistory, replaceMetadata, mapHtmlMetadata } = await import(pathToFileURL(join(temporary, 'codeMirrorMetadata.js')).href);
+  const { htmlMetadata, metadataHistory, replaceMetadata, mapHtmlMetadata, metadataEcho } = await import(pathToFileURL(join(temporary, 'codeMirrorMetadata.js')).href);
   const { projectEditorHtml, restoreEditorHtml } = await import(pathToFileURL(join(temporary, 'editorHtml.js')).href);
   const stateFor = raw => { const projected = projectEditorHtml(raw); return EditorState.create({ doc: projected.text, extensions: [htmlMetadata.init(() => projected), metadataHistory, history(), html()] }); };
   const apply = (state, changes, isolated = false) => state.update({ changes, userEvent: 'input.type', annotations: isolated ? isolateHistory.of('full') : undefined }).state;
@@ -44,6 +44,34 @@ try {
     const after = raw(state);
     state = travel(state, undo); assert.equal(raw(state), before);
     state = travel(state, redo); assert.equal(raw(state), after);
+  });
+  await test('metadata, search and read-only echoes do not split adjacent fast typing', () => {
+    const editable = new Compartment(), marks = StateEffect.define();
+    const initial = projectEditorHtml('// Before');
+    let state = EditorState.create({ doc: initial.text, extensions: [htmlMetadata.init(() => initial), metadataHistory, history(), search(), editable.of(EditorState.readOnly.of(false))] });
+    for (const [index, char] of [...'\n// Immediate project save'].entries()) {
+      state = state.update({ changes: { from: state.doc.length, insert: char }, userEvent: 'input.type', annotations: Transaction.time.of(1000 + index) }).state;
+      state = state.update(metadataEcho(state, projectEditorHtml(state.doc.toString()))).state;
+      state = state.update({ effects: editable.reconfigure(EditorState.readOnly.of(false)) }).state;
+      state = state.update({ effects: marks.of([]) }).state;
+      state = state.update({ effects: setSearchQuery.of(new SearchQuery({ search: '', caseSensitive: false, literal: true })) }).state;
+      assert.equal(undoDepth(state), 1);
+    }
+    state = travel(state, undo); assert.equal(state.doc.toString(), '// Before');
+  });
+  await test('lagging React echoes preserve newer editor text, IDs and complete undo history', () => {
+    let state = stateFor('<p data-desegnos-id="original">A</p>');
+    const before = raw(state), position = state.doc.toString().indexOf('A');
+    state = apply(state, { from: position, insert: 'B' });
+    const lagged = state.field(htmlMetadata);
+    state = apply(state, { from: position + 1, insert: 'C' });
+    const newer = raw(state);
+    assert.equal(metadataEcho(state, lagged), null, 'An older echo must never replace the current document or metadata');
+    assert.equal(raw(state), newer); assert.equal(undoDepth(state), 1);
+    state = state.update(metadataEcho(state, state.field(htmlMetadata))).state;
+    assert.equal(undoDepth(state), 1);
+    state = travel(state, undo); assert.equal(raw(state), before);
+    state = travel(state, redo); assert.equal(raw(state), newer);
   });
   await test('multi-range changes remove only deleted tags and retain surviving IDs', () => {
     let state = stateFor('<p data-desegnos-id="first">A</p>\n<p data-desegnos-id="second">B</p>\n<p data-desegnos-id="third">C</p>');

@@ -8,14 +8,14 @@ import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';
 import { javascript } from '@codemirror/lang-javascript';
 import { tags } from '@lezer/highlight';
-import { htmlMetadata, mapHtmlMetadata, metadataHistory, replaceMetadata } from './codeMirrorMetadata';
+import { htmlMetadata, mapHtmlMetadata, metadataEcho, metadataHistory, replaceMetadata } from './codeMirrorMetadata';
 import type { HtmlProjection } from './editorHtml';
 import type { SiteContent } from './types';
 
 type Tab = keyof SiteContent;
 export type CodeLineMark = { line: number; className: string; title?: string };
 export type CodeSaveSnapshot = { text: string; projection: HtmlProjection; changes: ChangeSet };
-export type CodeEditorHandle = { reveal: (line: number) => void; snapshot: () => CodeSaveSnapshot; rebase: (projection: HtmlProjection, snapshot: CodeSaveSnapshot) => HtmlProjection; release: (snapshot: CodeSaveSnapshot) => void };
+export type CodeEditorHandle = { reveal: (line: number) => void; snapshot: () => CodeSaveSnapshot; rebase: (projection: HtmlProjection, snapshot: CodeSaveSnapshot) => HtmlProjection; release: (snapshot: CodeSaveSnapshot) => void; replaceSource: (projection: HtmlProjection) => void };
 const externalUpdate = Annotation.define<boolean>();
 const setLineMarks = StateEffect.define<CodeLineMark[]>();
 const lineMarks = StateField.define<DecorationSet>({
@@ -51,10 +51,10 @@ export const CodeEditor = forwardRef<CodeEditorHandle, {
   const editable = useRef(new Compartment());
   const representation = useRef(props.hiddenMetadata);
   const cachedMarks = useRef('');
-  function makeState() {
+  function makeState(projection = latest.current.projection) {
     const current = latest.current;
-    return EditorState.create({ doc: current.text, extensions: [
-      htmlMetadata.init(() => current.projection), metadataHistory, history(), lineMarks,
+    return EditorState.create({ doc: projection.text, extensions: [
+      htmlMetadata.init(() => projection), metadataHistory, history(), lineMarks,
       current.language === 'html' ? html() : current.language === 'css' ? css() : javascript(),
       lineNumbers(), highlightActiveLineGutter(), drawSelection(), bracketMatching(), indentOnInput(), indentUnit.of('  '), syntaxHighlighting(colours), search(),
       editable.current.of([EditorState.readOnly.of(current.readOnly), EditorView.editable.of(!current.readOnly)]),
@@ -81,13 +81,14 @@ export const CodeEditor = forwardRef<CodeEditorHandle, {
   useLayoutEffect(() => {
     const view = editor.current; if (!view) return;
     const changedRepresentation = representation.current !== props.hiddenMetadata;
-    if (changedRepresentation || view.state.doc.toString() !== props.text) {
+    if (changedRepresentation) {
       snapshots.current.clear();
       view.setState(makeState()); representation.current = props.hiddenMetadata; cachedMarks.current = '';
-    } else if (props.projection.text === props.text && !snapshots.current.size) {
-      // The native save may have assigned IDs to new elements. Update only metadata,
-      // so the editor's text undo history survives successful saves.
-      view.dispatch({ effects: replaceMetadata.of(props.projection), annotations: [Transaction.addToHistory.of(false), externalUpdate.of(true)] });
+    } else if (!snapshots.current.size) {
+      // A React echo can lag behind newer native input. Only acknowledge matching
+      // text; authoritative source replacement is explicit below.
+      const echo = metadataEcho(view.state, props.projection);
+      if (echo) view.dispatch({ ...echo, annotations: [Transaction.addToHistory.of(false), externalUpdate.of(true)] });
     }
     view.dispatch({ effects: editable.current.reconfigure([EditorState.readOnly.of(props.readOnly), EditorView.editable.of(!props.readOnly)]), annotations: externalUpdate.of(true) });
     const marks = JSON.stringify(props.marks);
@@ -114,6 +115,16 @@ export const CodeEditor = forwardRef<CodeEditorHandle, {
       return mapped;
     },
     release(snapshot) { snapshots.current.delete(snapshot); },
+    replaceSource(projection) {
+      const view = editor.current; if (!view) return;
+      if (view.state.doc.toString() === projection.text) {
+        view.dispatch({ effects: replaceMetadata.of(projection), annotations: [Transaction.addToHistory.of(false), externalUpdate.of(true)] });
+      } else {
+        snapshots.current.clear(); view.setState(makeState(projection));
+        view.dispatch({ effects: [setLineMarks.of(latest.current.marks), setSearchQuery.of(new SearchQuery({ search: latest.current.query, caseSensitive: false, literal: true }))], annotations: externalUpdate.of(true) });
+        cachedMarks.current = JSON.stringify(latest.current.marks);
+      }
+    },
   }));
   return <div ref={host} className="code-editor-host" hidden={!props.active} data-language={props.language} />;
 });

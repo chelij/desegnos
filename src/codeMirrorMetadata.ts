@@ -1,4 +1,4 @@
-import { ChangeSet, StateEffect, StateField, type Extension } from '@codemirror/state';
+import { ChangeSet, EditorState, StateEffect, StateField, Transaction, type Extension, type TransactionSpec } from '@codemirror/state';
 import { invertedEffects } from '@codemirror/commands';
 import { projectEditorHtml, type HtmlProjection } from './editorHtml.js';
 
@@ -27,3 +27,10 @@ export const htmlMetadata = StateField.define<HtmlProjection>({
 export const metadataHistory: Extension = invertedEffects.of(transaction =>
   transaction.docChanged || transaction.effects.some(effect => effect.is(replaceMetadata))
     ? [replaceMetadata.of(transaction.startState.field(htmlMetadata))] : []);
+
+// React may acknowledge an older local edit after CodeMirror already accepted
+// newer input. Such an echo cannot replace text or assign older metadata.
+export function metadataEcho(state: EditorState, projection: HtmlProjection): TransactionSpec | null {
+  return state.doc.toString() === projection.text
+    ? { effects: replaceMetadata.of(projection), annotations: Transaction.addToHistory.of(false) } : null;
+}

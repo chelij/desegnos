@@ -76,7 +76,9 @@ export const CodePane = forwardRef<CodePaneHandle, {
   useEffect(() => {
     for (const [language] of TABS) {
       if (lastApplied.current[language]?.source === (content?.[language] ?? '')) delete lastApplied.current[language];
-      const value = draftRef.current[language]; if (!value || flights.current[language]) continue;
+      const value = draftRef.current[language];
+      if (!value) { editors.current[language]?.replaceSource(projectText(language, sourceFor(language))); continue; }
+      if (flights.current[language]) continue;
       const source = sourceFor(language);
       if (source === value.base) { if (projectText(language, source).text === value.text) draft(language, undefined); }
       else { clearTimer(language); setStatus(language, { kind: 'conflict', message: 'This page changed elsewhere while you were editing.' }); }
@@ -144,7 +146,7 @@ export const CodePane = forwardRef<CodePaneHandle, {
     const best = inside.sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine) || a.endColumn - a.startColumn - (b.endColumn - b.startColumn))[0];
     if (best && (best.id ? best.id !== target?.id : best.selector !== target?.selector)) pick(best.selector, best.id);
   }
-  function discard() { clearTimer(tab); queued.current.delete(tab); draft(tab, undefined); setStatus(tab, { kind: 'idle' }); }
+  function discard() { clearTimer(tab); queued.current.delete(tab); editors.current[tab]?.replaceSource(projectText(tab, sourceFor(tab))); draft(tab, undefined); setStatus(tab, { kind: 'idle' }); }
   function pendingDrafts(): PendingCodeDraft[] {
     return TABS.flatMap<PendingCodeDraft>(([language, label]) => {
       const value = draftRef.current[language]; if (!value) return [];
