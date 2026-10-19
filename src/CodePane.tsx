@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition, updateHtmlProjection, type HtmlProjection, type HtmlEditRange } from './editorHtml';
 import type { ElementTarget, SiteContent } from './types';
 
 export type CodeView = 'design' | 'split' | 'code';
@@ -19,7 +20,7 @@ function colour(line: string, tab: Tab) {
       comment ? span('comment', comment) : `${indent}${span('attr', property)}${colon}`);
   }
   if (tab === 'html') return escape(line).replace(/(&lt;!--.*?--&gt;)|(&lt;\/?)([a-zA-Z][\w-]*)|([\w:-]+)=("[^"]*"|'[^']*')/g,
-    (match, comment, open, tag, attribute, value) => comment ? span('comment', comment) : open ? open + span('tag', tag) : `${span('attr', attribute)}=${span('string', value)}`);
+    (match, comment, open, tag, attribute, value) => comment ? span('comment', comment) : open ? open + span('tag', tag) : attribute.startsWith('data-desegnos-') ? span('meta', `${attribute}=${value}`) : `${span('attr', attribute)}=${span('string', value)}`);
   return escape(line).replace(/(\/\/.*$)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\b([a-z]+)\b/g,
     (match, comment, string, word) => comment ? span('comment', comment) : string ? span('string', string) : KEYWORDS.test(word) ? span('tag', word) : word);
 }
@@ -53,8 +54,7 @@ function formatCss(css: string) {
   return css.replace(/\s*\{\s*/g, ' {\n  ').replace(/;\s*(?!\s*\})/g, ';\n  ').replace(/;?\s*\}\s*/g, ';\n}\n').replace(/\n  \n/g, '\n').trim();
 }
 
-// Best-effort location of the selected element until the native source map exists:
-// match its id, then its first class, then its tag.
+// A fallback for compact legacy HTML whose display formatting predates the source map.
 function findLine(lines: string[], target: ElementTarget | null): number | null {
   if (!target || target.selector === 'body') return null;
   const id = target.selector.match(/#([\w-]+)(?![^[]*\])/)?.[1];
@@ -72,7 +72,7 @@ function findLine(lines: string[], target: ElementTarget | null): number | null 
 }
 
 export type SourceDiagnostic = { language: string; line: number; column: number; endLine: number; endColumn: number; message: string };
-export type SourceRange = { selector: string; startLine: number; endLine: number; startColumn: number; endColumn: number; implicit: boolean };
+export type SourceRange = { id?: string; selector: string; startLine: number; endLine: number; startColumn: number; endColumn: number; implicit: boolean };
 export type SourceMapView = { html: string; ranges: SourceRange[] };
 type SaveError = { message?: string; diagnostics?: SourceDiagnostic[]; conflict?: boolean };
 type Status = { kind: 'idle' | 'saving' | 'saved' | 'invalid' | 'conflict' | 'error'; message?: string; diagnostics?: SourceDiagnostic[] };
@@ -81,7 +81,7 @@ const LINE = 19;
 // The code shown and edited: the saved text when it already has lines, otherwise a tidy layout of compacted output.
 function displayText(content: SiteContent | null, tab: Tab) {
   const raw = content?.[tab] ?? '';
-  return tab === 'html' ? formatHtml(raw) : tab === 'css' ? formatCss(raw) : raw;
+  return tab === 'html' ? raw.includes('data-desegnos-id') ? raw : formatHtml(raw) : tab === 'css' ? formatCss(raw) : raw;
 }
 function cursorAt(text: string, index: number) {
   const before = text.slice(0, index); const line = before.split('\n').length;
@@ -90,24 +90,45 @@ function cursorAt(text: string, index: number) {
 
 export function CodePane({ content, target, map, save, pick }: {
   content: SiteContent | null; target: ElementTarget | null; map: SourceMapView | null;
-  save?: (language: Tab, text: string, expected: string) => Promise<void>; pick?: (selector: string) => void;
+  save?: (language: Tab, text: string, expected: string) => Promise<void>; pick?: (selector: string, id?: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>('html');
   const [query, setQuery] = useState('');
   const [hit, setHit] = useState(0);
   const [drafts, setDrafts] = useState<Partial<Record<Tab, string>>>({});
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [showMeta, setShowMeta] = useState(() => { try { return localStorage.getItem('desegnos.code-show-meta') === 'yes'; } catch { return false; } });
   const base = useRef<Partial<Record<Tab, string>>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
-  const shown = displayText(content, tab);
+  const rawShown = displayText(content, tab);
+  const hidden = tab === 'html' && !showMeta;
+  const projection = useMemo(() => projectEditorHtml(rawShown), [rawShown]);
+  const draftProjection = useRef<HtmlProjection | null>(null);
+  const inputEdit = useRef<(HtmlEditRange & { inputType: string }) | null>(null);
+  const projectionHistory = useRef(new Map<string, HtmlProjection>());
+  const shown = hidden ? projection.text : rawShown;
+  useEffect(() => {
+    const node = input.current; if (!node) return;
+    const capture = (event: InputEvent) => { inputEdit.current = { from: node.selectionStart, to: node.selectionEnd, inputType: event.inputType }; };
+    node.addEventListener('beforeinput', capture);
+    return () => node.removeEventListener('beforeinput', capture);
+  }, [!!content]);
   const text = drafts[tab] ?? shown;
   const lines = useMemo(() => text.split('\n'), [text]);
   const width = useMemo(() => lines.reduce((max, line) => Math.max(max, line.length), 0), [lines]);
-  const exact = !!content && shown === content[tab] && drafts[tab] === undefined;
-  const mapped = tab === 'html' && exact && map?.html === content?.html ? map : null;
-  const range = mapped && target ? mapped.ranges.filter(item => item.selector === target.selector).sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine))[0] : undefined;
+  const exact = !!content && rawShown === content[tab] && drafts[tab] === undefined;
+  const mapped = useMemo(() => {
+    if (tab !== 'html' || !exact || map?.html !== content?.html) return null;
+    if (!hidden) return map;
+    return { ...map, ranges: map.ranges.map(item => {
+      const start = sourcePosition(shown, projection.rawToVisible(sourceOffset(rawShown, item.startLine, item.startColumn)));
+      const end = sourcePosition(shown, projection.rawToVisible(sourceOffset(rawShown, item.endLine, item.endColumn)));
+      return { ...item, startLine: start.line, startColumn: start.column, endLine: end.line, endColumn: end.column };
+    }) };
+  }, [tab, exact, map, content?.html, hidden, shown, rawShown, projection]);
+  const range = mapped && target ? mapped.ranges.filter(item => target.id ? item.id === target.id : item.selector === target.selector).sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine))[0] : undefined;
   const selected = range ? [range.startLine - 1, range.endLine - 1] : (() => { const line = tab === 'html' ? findLine(lines, target) : null; return line === null ? null : [line, line]; })();
   const errors = new Map((status.kind === 'invalid' ? status.diagnostics ?? [] : []).filter(item => item.language === tab || (tab === 'html' && item.language === 'html')).map(item => [item.line - 1, item.message]));
   const matches = useMemo(() => query.trim() ? lines.flatMap((line, index) => line.toLowerCase().includes(query.toLowerCase()) ? [index] : []) : [], [lines, query]);
@@ -120,25 +141,47 @@ export function CodePane({ content, target, map, save, pick }: {
     setDrafts(current => {
       const next = { ...current };
       for (const key of Object.keys(current) as Tab[]) {
-        if ((content?.[key] ?? '') === current[key]) { delete next[key]; delete base.current[key]; }
+        if ((key === 'html' && !showMeta ? projectEditorHtml(content?.html ?? '').text : content?.[key] ?? '') === current[key]) { delete next[key]; delete base.current[key]; if (key === 'html') draftProjection.current = null; }
         else if ((content?.[key] ?? '') !== base.current[key]) setStatus({ kind: 'conflict', message: 'This page changed elsewhere while you were editing.' });
       }
       return next;
     });
-  }, [content]);
+  }, [content, showMeta]);
   async function commit(language: Tab, value: string) {
     if (!save || base.current[language] === undefined) return;
-    if (value === displayText(content, language)) { setDrafts(current => { const next = { ...current }; delete next[language]; return next; }); return; }
+    if (value === (language === 'html' && !showMeta ? projectEditorHtml(displayText(content, language)).text : displayText(content, language))) { setDrafts(current => { const next = { ...current }; delete next[language]; delete base.current[language]; if (language === 'html') draftProjection.current = null; return next; }); return; }
     setStatus({ kind: 'saving' });
-    try { await save(language, value, base.current[language]!); setStatus({ kind: 'saved' }); }
+    const rawValue = language === 'html' && !showMeta && draftProjection.current ? restoreEditorHtml(draftProjection.current) : value;
+    try {
+      await save(language, rawValue, base.current[language]!);
+      setStatus({ kind: 'saved' });
+    }
     catch (raw) {
       const error = (raw ?? {}) as SaveError;
       if (error.conflict) setStatus({ kind: 'conflict', message: error.message });
-      else if (error.diagnostics?.length) setStatus({ kind: 'invalid', message: error.message, diagnostics: error.diagnostics });
+      else if (error.diagnostics?.length) {
+        const projection = language === 'html' && !showMeta ? projectEditorHtml(rawValue) : null;
+        const diagnostics = error.diagnostics.map(item => {
+          if (!projection || item.language !== 'html') return item;
+          const start = sourcePosition(value, projection.rawToVisible(sourceOffset(rawValue, item.line, item.column)));
+          const end = sourcePosition(value, projection.rawToVisible(sourceOffset(rawValue, item.endLine, item.endColumn)));
+          return { ...item, line: start.line, column: start.column, endLine: end.line, endColumn: end.column };
+        });
+        setStatus({ kind: 'invalid', message: error.message, diagnostics });
+      }
       else setStatus({ kind: 'error', message: typeof raw === 'string' ? raw : error.message ?? String(raw) });
     }
   }
-  function change(value: string) {
+  function change(value: string, explicit?: HtmlEditRange) {
+    if (hidden) {
+      const previous = draftProjection.current ?? projection;
+      projectionHistory.current.set(previous.text, previous);
+      const edit = inputEdit.current; inputEdit.current = null;
+      const restored = edit?.inputType === 'historyUndo' || edit?.inputType === 'historyRedo' ? projectionHistory.current.get(value) : undefined;
+      draftProjection.current = restored ?? updateHtmlProjection(previous, value, explicit ?? edit ?? undefined);
+      projectionHistory.current.set(value, draftProjection.current);
+      if (projectionHistory.current.size > 100) projectionHistory.current.delete(projectionHistory.current.keys().next().value!);
+    }
     if (base.current[tab] === undefined) base.current[tab] = content?.[tab] ?? '';
     setDrafts(current => ({ ...current, [tab]: value }));
     if (status.kind !== 'conflict') setStatus({ kind: 'idle' });
@@ -146,23 +189,25 @@ export function CodePane({ content, target, map, save, pick }: {
     const language = tab;
     timer.current = setTimeout(() => { void commit(language, value); }, 700);
   }
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
   function flush() { if (timer.current) { clearTimeout(timer.current); timer.current = null; } const value = drafts[tab]; if (value !== undefined && status.kind !== 'conflict') void commit(tab, value); }
-  function reload() { base.current = {}; setDrafts({}); setStatus({ kind: 'idle' }); }
+  function reload() { if (timer.current) { clearTimeout(timer.current); timer.current = null; } draftProjection.current = null; base.current = {}; setDrafts({}); setStatus({ kind: 'idle' }); }
   // Clicking in the code selects the matching element on the canvas.
   function follow() {
     const node = input.current; if (!node || !mapped || !pick) return;
     const at = cursorAt(text, node.selectionStart);
     const inside = mapped.ranges.filter(item => (at.line > item.startLine || (at.line === item.startLine && at.column >= item.startColumn)) && (at.line < item.endLine || (at.line === item.endLine && at.column < item.endColumn)));
     const best = inside.sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine) || (a.endColumn - a.startColumn) - (b.endColumn - b.startColumn))[0];
-    if (best && best.selector !== target?.selector) pick(best.selector);
+    if (best && (best.id ? best.id !== target?.id : best.selector !== target?.selector)) pick(best.selector, best.id);
   }
   const editing = !!save && !!content;
-  const note = status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? 'Saved. Undo works as usual.' : status.kind === 'invalid' ? 'Not saved yet. Fix the highlighted line.' : status.kind === 'error' ? status.message : status.kind === 'conflict' ? status.message : drafts[tab] !== undefined ? 'Saving after you pause…' : editing && shown !== content?.[tab] ? 'This code was compacted. It’s shown tidied, and your first edit saves that tidy layout.' : editing ? 'Edits save automatically when you pause.' : '';
+  const note = status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? 'Saved. Undo works as usual.' : status.kind === 'invalid' ? 'Not saved yet. Fix the highlighted line.' : status.kind === 'error' ? status.message : status.kind === 'conflict' ? status.message : drafts[tab] !== undefined ? 'Saving after you pause…' : editing && rawShown !== content?.[tab] ? 'This code was compacted. It’s shown tidied, and your first edit saves that tidy layout.' : editing ? 'Edits save automatically when you pause.' : '';
   return <section className="code-pane" aria-label="Page code">
     <header className="code-pane-bar">
       <div className="code-tabs" role="tablist" aria-label="Code files">{TABS.map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { flush(); setTab(value); }}>{label}{drafts[value] !== undefined ? ' •' : ''}</button>)}</div>
       <input className="code-search" type="search" placeholder="Find in code" aria-label="Find in code" value={query} onChange={event => setQuery(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter' && matches.length) { event.preventDefault(); setHit(value => value + (event.shiftKey ? matches.length - 1 : 1)); } }} />
+      {tab === 'html' && content?.html.includes('data-desegnos-') && <label className="code-meta-toggle" title="Desegnos uses these to keep track of elements. They are removed when you export."><input type="checkbox" checked={showMeta} disabled={drafts.html !== undefined || status.kind === 'saving'} onChange={event => { draftProjection.current = null; setShowMeta(event.target.checked); try { localStorage.setItem('desegnos.code-show-meta', event.target.checked ? 'yes' : 'no'); } catch {} }} />Show editor attributes</label>}
       {query.trim() && <span className="code-count" aria-live="polite">{matches.length ? `${(hit % matches.length) + 1}/${matches.length}` : '0'}</span>}
     </header>
     {!content ? <p className="code-empty">Generate the page to see its code here.</p> : <div ref={scroller} className="code-scroll">
@@ -173,7 +218,7 @@ export function CodePane({ content, target, map, save, pick }: {
           <textarea ref={input} className="code-input" aria-label={`${TABS.find(([value]) => value === tab)![1]} code`} value={text} readOnly={!editing} wrap="off" spellCheck={false} autoCapitalize="off" autoComplete="off"
             onChange={event => change(event.target.value)} onBlur={flush} onClick={follow} onKeyUp={event => { if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') follow(); }}
             onKeyDown={event => {
-              if (event.key === 'Tab' && !event.shiftKey && editing) { event.preventDefault(); const node = event.currentTarget; const start = node.selectionStart; const value = `${text.slice(0, start)}  ${text.slice(node.selectionEnd)}`; change(value); requestAnimationFrame(() => { node.selectionStart = node.selectionEnd = start + 2; }); }
+              if (event.key === 'Tab' && !event.shiftKey && editing) { event.preventDefault(); const node = event.currentTarget; const start = node.selectionStart; const value = `${text.slice(0, start)}  ${text.slice(node.selectionEnd)}`; change(value, { from: start, to: node.selectionEnd }); requestAnimationFrame(() => { node.selectionStart = node.selectionEnd = start + 2; }); }
               if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); flush(); }
             }} />
         </div>

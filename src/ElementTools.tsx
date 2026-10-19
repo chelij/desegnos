@@ -14,11 +14,11 @@ export function ElementDialog({ mode, target, visual, inspect, apply, move, clos
   move: (x: number, y: number) => Promise<void>; close: () => void;
 }) {
   const [details, setDetails] = useState<ElementDetails | null>(null); const [error, setError] = useState('');
-  useEffect(() => { let active = true; void inspect(target).then(value => { if (active) setDetails(value); }, error => { if (active) setError(String(error)); }); return () => { active = false; }; }, [target.sourceSha256, target.selector]);
+  useEffect(() => { let active = true; void inspect(target).then(value => { if (active) setDetails(value); }, error => { if (active) setError(String(error)); }); return () => { active = false; }; }, [target.id, target.sourceSha256, target.selector]);
   return <Modal title={titles[mode]} close={close}><div className="dialog-body element-dialog">
     {error && <p className="message error" role="alert">{error}</p>}
     {!details && !error && <p role="status">Opening this item…</p>}
-    {details && <ElementForm key={`${target.sourceSha256}:${target.selector}:${mode}`} mode={mode} projectImages={projectImages} details={details} visual={visual} apply={apply} move={move} close={close} />}
+    {details && <ElementForm key={`${target.id ?? target.sourceSha256}:${target.selector}:${mode}`} mode={mode} projectImages={projectImages} details={details} visual={visual} apply={apply} move={move} close={close} />}
   </div></Modal>;
 }
 function ElementForm({ mode, details, visual, apply, move, close, projectImages }: { projectImages: IdentityAsset[]; mode: ElementDialogMode; details: ElementDetails; visual: ElementVisual | null; apply: (change: ElementEdit) => Promise<void>; move: (x: number, y: number) => Promise<void>; close: () => void }) {

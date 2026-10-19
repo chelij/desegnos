@@ -18,7 +18,7 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
 export type ElementMover = { preview: (x: number, y: number) => ElementSelection | null; style: (x: number, y: number) => string; cancel: () => void };
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
-export type CanvasPreviewHandle = { layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type CanvasPreviewHandle = { layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
@@ -59,7 +59,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     }
     label = node.getAttribute('aria-label') || label.trim() || node.getAttribute('alt') || node.getAttribute('title') || '';
     return { node, target: { selector: ['body', ...parts].join(' > '), tag: node.localName,
-      label: Array.from(label.replace(/\s+/g, ' ').trim()).slice(0, 240).join(''), sourceSha256: descriptor.sourceSha256 } };
+      label: Array.from(label.replace(/\s+/g, ' ').trim()).slice(0, 240).join(''), ...(node.getAttribute('data-desegnos-id') ? { id: node.getAttribute('data-desegnos-id')! } : { sourceSha256: descriptor.sourceSha256 }) } };
   }
   function selected(node: Element | null, remember = false, exact = false): ElementSelection | null {
     const found = identify(node, exact); if (!found) return null;
@@ -71,8 +71,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
 
   function findNode(target: ElementTarget): Element | null {
     const doc = frame.current?.contentDocument;
-    if (!doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || target.sourceSha256 !== descriptor?.sourceSha256) return null;
-    try { const node = Document.prototype.querySelector.call(doc, target.selector); return node?.localName === target.tag ? node : null; } catch { return null; }
+    if (!doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || (!target.id && target.sourceSha256 !== descriptor?.sourceSha256)) return null;
+    try { const node = Document.prototype.querySelector.call(doc, target.id ? `[data-desegnos-id="${CSS.escape(target.id)}"]` : target.selector); return node && (target.id || node.localName === target.tag) ? node : null; } catch { return null; }
   }
   function visual(target: ElementTarget): ElementVisual | null {
     const node = findNode(target); if (!node) return null;
@@ -156,6 +156,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   useImperativeHandle(ref, () => ({
     source() { return registeredVersion.current?.pageId === pageId && registeredVersion.current.revision === revision && mounted.current?.session === descriptor?.sessionId && mounted.current?.document === frame.current?.contentDocument && !invalidated.current ? descriptor?.sourceSha256 ?? null : null; },
     find(target) { return selected(findNode(target), false, true); },
+    contains(target) { return !!findNode(target); },
     layers() { const doc = frame.current?.contentDocument; return doc && identify(doc.body) ? siteLayerTree(doc, node => selected(node, false, true)) : []; },
     layerStyles(target, direction) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteLayerStyles(node, direction, value => identify(value)?.target ?? null); },
     copyStyles(target) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteCopyStyles(node, value => identify(value)?.target ?? null); },

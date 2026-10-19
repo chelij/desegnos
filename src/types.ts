@@ -9,7 +9,7 @@ export type GenerationMode = 'fuzzy' | 'strict';
 export type Viewport = { width: number; height: number };
 export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: boolean; rulers: boolean };
 export type Rect = { x: number; y: number; width: number; height: number };
-export type ElementTarget = { selector: string; tag: string; label: string; sourceSha256: string };
+export type ElementTarget = { id?: string; selector: string; tag: string; label: string; sourceSha256?: string };
 export type LayerDirection = 'forward' | 'backward' | 'front' | 'back';
 export type LayerPseudoStyle = { pseudo: 'before' | 'after' | 'marker'; style: string };
 export type ElementStyleEdit = { target: ElementTarget; style: string; pseudoStyles?: LayerPseudoStyle[] };
@@ -18,11 +18,11 @@ export type LayerPasteView = { workspace: WorkspaceView; selection: { element: E
 export type ElementSelection = { element: ElementTarget; rect: Rect };
 export type ElementEdit = { kind: 'update'; texts: { index: number; text: string }[]; attributes: Record<string, string | null>; style: string | null }
   | { kind: 'replace'; html: string; keepStyle: boolean } | { kind: 'reorder'; direction: 'before' | 'after' } | { kind: 'layerStyles'; styles: ElementStyleEdit[] } | { kind: 'remove' };
-export type ElementBounds = { regionId: string; target: ElementTarget; rect: Rect };
+export type ElementBounds = { regionId: string; bounds: { target: ElementTarget; rect: Rect }[] };
 export type ElementDetails = { target: ElementTarget; texts: { index: number; text: string }[]; textsTruncated: boolean; attributes: Record<string, string>; inlineStyle: string; html: string; canMove: boolean; canMoveBefore: boolean; canMoveAfter: boolean };
 export type ElementEditView = { workspace: WorkspaceView; element: ElementTarget | null };
 export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string };
-export type Region = { element?: ElementTarget; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
+export type Region = { elements?: ElementTarget[]; element?: ElementTarget; allowTargetRemoval?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
 export type SiteContent = { html: string; css: string; javascript: string };
 export type Page = { id: string; name: string; path: string; included: boolean; viewport: Viewport; appearance: Appearance; regions: Region[]; content: SiteContent | null };
 export type Brief = { purpose: string; audience: string; brandName: string; tone: string };
@@ -33,7 +33,7 @@ export type Project = { schemaVersion: number; id: string; name: string; revisio
   importedIdentity?: ImportedIdentity;
   appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; brief: Brief;
   decisions: Decision[]; exceptions: DesignException[]; appliedJobIds: string[]; extensions: Record<string, { schemaVersion: number; data: unknown }> };
-export type RecoveryInfo = { projectId: string; name: string; revision: number };
+export type RecoveryInfo = { projectId: string; name: string; revision: number; savedPath: string | null; editedAtMs: number };
 export type RecentProject = { path: string; name: string };
 export type RecentProjectsView = { projects: RecentProject[]; error: string | null };
 export type WebsiteExport = { path: string; indexPath: string; pageCount: number; fileCount: number; warnings: string[] };
@@ -95,6 +95,10 @@ export type Command =
   | { type: 'delete_page'; page_id: string }
   | { type: 'add_region'; page_id: string; rect: Rect }
   | { type: 'add_element_region'; page_id: string; rect: Rect; element: ElementTarget }
+  | { type: 'add_element_regions'; page_id: string; elements: ElementTarget[]; bounds: { target: ElementTarget; rect: Rect }[] }
+  | { type: 'retarget_region'; page_id: string; region_id: string; elements: ElementTarget[]; bounds: { target: ElementTarget; rect: Rect }[] }
+  | { type: 'set_region_target_removal'; page_id: string; region_id: string; allow_target_removal: boolean }
+  | { type: 'delete_elements'; page_id: string; elements: ElementTarget[] }
   | { type: 'update_region'; page_id: string; region_id: string; rect: Rect; prompt: string }
   | { type: 'dismiss_empty_regions'; keep_region_id: string | null }
   | { type: 'arrange_region'; page_id: string; region_id: string; direction: LayerDirection }

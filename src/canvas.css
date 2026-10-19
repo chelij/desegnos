@@ -134,3 +134,16 @@
 .free-workspace .element-type-tag .found-tag { color: #1a7f37; font-weight: 600; white-space: nowrap; }
 :root[data-theme="dark"] .free-workspace .element-type-tag .found-tag { color: #7ee787; }
 .free-workspace .element-type-tag { white-space: nowrap; }
+
+/* Multi-select: each extra element gets its own outline; the toolbar shows the count. */
+.free-workspace .multi-selection { outline: 2px dashed var(--annotation-focus); outline-offset: -1px; }
+.free-workspace .element-toolbar .multi-count { align-self: center; padding: 0 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* A request whose element changed: say so plainly and offer the two fixes. */
+.free-workspace .request-stale { position: absolute; left: 0; right: 0; top: 0; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 8px; background: #fff3e0; color: #7a4a00; border-bottom: 1px solid #f0c27b; font-size: 12px; }
+.free-workspace .request-stale span { flex: 1 1 140px; }
+.free-workspace .request-stale button { min-height: 24px; padding: 1px 8px; font-size: 11px; }
+:root[data-theme="dark"] .free-workspace .request-stale { background: #3a2a10; color: #f2c94c; border-color: #7a5a20; }
+.free-workspace .repick-hint { position: absolute; z-index: 12; top: 40px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 999px; background: var(--annotation-focus); color: #fff; font-size: 13px; box-shadow: 0 3px 12px #00000030; }
+.free-workspace .repick-hint button { min-height: 26px; padding: 2px 10px; border-radius: 999px; font-size: 12px; }
+.free-workspace.repicking .canvas { cursor: crosshair; }

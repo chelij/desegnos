@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { Project } from './types';
 
 export type CheckKind = 'placeholder' | 'issue' | 'found';
-export type CheckItem = { id: string; kind: CheckKind; pageId: string; pageName: string; title: string; detail: string; fix: string; selector: string | null; tag: string | null };
+export type CheckItem = { id: string; kind: CheckKind; pageId: string; pageName: string; title: string; detail: string; fix: string; elementId: string | null; selector: string | null; tag: string | null };
 
 const PLACEHOLDER_TEXT = /\b(placeholder|lorem ipsum|sample (text|content|copy|image|photo)|add your [a-z]+|your (business|company|brand|shop) name|tbd|coming soon)\b/i;
 
@@ -31,13 +31,13 @@ export function checkProject(project: Project): CheckItem[] {
     const seen = new Set<Element>();
     const add = (kind: CheckKind, node: Element | null, title: string, detail: string, fix: string) => {
       if (node) { if (seen.has(node)) return; seen.add(node); }
-      items.push({ id: `${page.id}:${items.length}`, kind, pageId: page.id, pageName: page.name, title, detail, fix, selector: node ? selectorFor(node) : null, tag: node?.localName ?? null });
+      items.push({ id: `${page.id}:${items.length}`, kind, pageId: page.id, pageName: page.name, title, detail, fix, elementId: node?.getAttribute('data-desegnos-id') ?? null, selector: node ? selectorFor(node) : null, tag: node?.localName ?? null });
     };
     for (const node of doc.body.querySelectorAll('[data-desegnos-placeholder], img[alt^="Image placeholder" i]'))
       add('placeholder', node, 'Image placeholder', snippet(node).replace(/^Image placeholder:?\s*/i, '') || 'No picture yet', 'Find a real, suitable photo for this on the web and use it here, with a visible credit.');
     for (const node of doc.body.querySelectorAll('[data-desegnos-found]')) {
       let host = ''; try { host = new URL(node.getAttribute('data-desegnos-found') ?? '').hostname.replace(/^www\./, ''); } catch {}
-      items.push({ id: `${page.id}:${items.length}`, kind: 'found', pageId: page.id, pageName: page.name, title: node.localName === 'img' ? 'Picture found online' : 'Text found online', detail: [host, snippet(node)].filter(Boolean).join(' · '), fix: '', selector: selectorFor(node), tag: node.localName });
+      items.push({ id: `${page.id}:${items.length}`, kind: 'found', pageId: page.id, pageName: page.name, title: node.localName === 'img' ? 'Picture found online' : 'Text found online', detail: [host, snippet(node)].filter(Boolean).join(' · '), fix: '', elementId: node.getAttribute('data-desegnos-id'), selector: selectorFor(node), tag: node.localName });
     }
     const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
     for (let text = walker.nextNode(); text; text = walker.nextNode()) {
@@ -63,7 +63,7 @@ export function checkProject(project: Project): CheckItem[] {
       if (next > level + 1) add('issue', node, 'Heading skips a level', `${snippet(node)} (H${level} → H${next})`, `Change this heading to H${level + 1} so the outline doesn’t skip a level.`);
       level = next;
     }
-    if (!doc.title.trim()) add('issue', null, 'Page has no title', 'The browser tab and search results will show no name.', 'Add a short, descriptive page title.');
+    if (doc.querySelector('title') && !doc.title.trim()) add('issue', null, 'Page has no title', 'The browser tab and search results will show no name.', 'Add a short, descriptive page title.');
   }
   return items;
 }
