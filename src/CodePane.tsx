@@ -1,232 +1,163 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition, updateHtmlProjection, type HtmlProjection, type HtmlEditRange } from './editorHtml';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import type { CodeEditorHandle, CodeLineMark } from './CodeEditor';
+const CodeEditor = lazy(() => import('./CodeEditor').then(module => ({ default: module.CodeEditor })));
+import { projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition, type HtmlProjection } from './editorHtml';
 import type { ElementTarget, SiteContent } from './types';
 
 export type CodeView = 'design' | 'split' | 'code';
 type Tab = keyof SiteContent;
 const TABS: [Tab, string][] = [['html', 'HTML'], ['css', 'CSS'], ['javascript', 'JavaScript']];
-
-function escape(text: string) { return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-
-// Light, dependency-free colouring. Each pass is a single regex over escaped text,
-// so inserted spans are never re-scanned and page source can never inject markup.
-const span = (kind: string, text: string) => `<span class="tok-${kind}">${text}</span>`;
-const KEYWORDS = /^(const|let|var|function|return|if|else|for|while|new|class|import|export|await|async)$/;
-function colour(line: string, tab: Tab) {
-  if (tab === 'css') {
-    const rule = line.match(/^(\s*[^{}]+)(\{\s*)$/);
-    if (rule) return span('tag', escape(rule[1])) + escape(rule[2]);
-    return escape(line).replace(/(\/\*.*?\*\/)|^(\s*)([\w-]+)(\s*:)/g, (match, comment, indent, property, colon) =>
-      comment ? span('comment', comment) : `${indent}${span('attr', property)}${colon}`);
-  }
-  if (tab === 'html') return escape(line).replace(/(&lt;!--.*?--&gt;)|(&lt;\/?)([a-zA-Z][\w-]*)|([\w:-]+)=("[^"]*"|'[^']*')/g,
-    (match, comment, open, tag, attribute, value) => comment ? span('comment', comment) : open ? open + span('tag', tag) : attribute.startsWith('data-desegnos-') ? span('meta', `${attribute}=${value}`) : `${span('attr', attribute)}=${span('string', value)}`);
-  return escape(line).replace(/(\/\/.*$)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\b([a-z]+)\b/g,
-    (match, comment, string, word) => comment ? span('comment', comment) : string ? span('string', string) : KEYWORDS.test(word) ? span('tag', word) : word);
-}
-
-// Display-only formatting for minified output. The saved source is never changed.
-const CONTAINERS = new Set(['html', 'head', 'body', 'main', 'header', 'footer', 'section', 'article', 'nav', 'aside', 'div', 'ul', 'ol', 'form', 'table', 'thead', 'tbody', 'tr', 'figure', 'fieldset', 'select']);
-const LINES = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'button', 'a', 'img', 'input', 'label', 'textarea', 'td', 'th', 'meta', 'link', 'title', 'script', 'style', 'figcaption', 'option', 'video', 'iframe', 'blockquote', 'pre', 'br', 'hr']);
-const INLINE = new Set(['a', 'img', 'input', 'label', 'button', 'br']);
-function formatHtml(html: string) {
-  if (html.split('\n').length > 8) return html;
-  const out: string[] = []; let depth = 0; let current = ''; let raw = '';
-  const flush = () => { if (current.trim()) out.push('  '.repeat(depth) + current.trim()); current = ''; };
-  for (const part of html.split(/(<[^>]+>)/)) {
-    if (!part) continue;
-    if (raw) { current += part; if (part.toLowerCase() === `</${raw}>`) { raw = ''; flush(); } continue; }
-    const tag = part.match(/^<(\/?)([a-zA-Z][\w-]*)/);
-    if (!tag) { current += part; continue; }
-    const closing = !!tag[1], name = tag[2].toLowerCase();
-    if (CONTAINERS.has(name)) {
-      flush();
-      if (closing) { depth = Math.max(0, depth - 1); out.push('  '.repeat(depth) + part); }
-      else { out.push('  '.repeat(depth) + part); if (!part.endsWith('/>')) depth += 1; }
-    } else if (!closing && LINES.has(name) && !(INLINE.has(name) && current.trim())) { flush(); current = part; if (['script', 'style', 'pre', 'textarea'].includes(name)) raw = name; }
-    else { current += part; if (closing && LINES.has(name) && !INLINE.has(name)) flush(); }
-  }
-  flush();
-  return out.join('\n');
-}
-function formatCss(css: string) {
-  if (css.split('\n').length > 8) return css;
-  return css.replace(/\s*\{\s*/g, ' {\n  ').replace(/;\s*(?!\s*\})/g, ';\n  ').replace(/;?\s*\}\s*/g, ';\n}\n').replace(/\n  \n/g, '\n').trim();
-}
-
-// A fallback for compact legacy HTML whose display formatting predates the source map.
-function findLine(lines: string[], target: ElementTarget | null): number | null {
-  if (!target || target.selector === 'body') return null;
-  const id = target.selector.match(/#([\w-]+)(?![^[]*\])/)?.[1];
-  const className = target.selector.match(/\.([\w-]+)/)?.[1];
-  const patterns = [
-    id && new RegExp(`id=["']${id}["']`),
-    className && new RegExp(`<${target.tag}\\b[^>]*class=["'][^"']*\\b${className}\\b`, 'i'),
-    new RegExp(`<${target.tag}\\b`, 'i'),
-  ].filter(Boolean) as RegExp[];
-  for (const pattern of patterns) {
-    const index = lines.findIndex(line => pattern.test(line));
-    if (index >= 0) return index;
-  }
-  return null;
-}
-
 export type SourceDiagnostic = { language: string; line: number; column: number; endLine: number; endColumn: number; message: string };
 export type SourceRange = { id?: string; selector: string; startLine: number; endLine: number; startColumn: number; endColumn: number; implicit: boolean };
 export type SourceMapView = { html: string; ranges: SourceRange[] };
 type SaveError = { message?: string; diagnostics?: SourceDiagnostic[]; conflict?: boolean };
 type Status = { kind: 'idle' | 'saving' | 'saved' | 'invalid' | 'conflict' | 'error'; message?: string; diagnostics?: SourceDiagnostic[] };
-const LINE = 19;
-
-// The code shown and edited: the saved text when it already has lines, otherwise a tidy layout of compacted output.
-function displayText(content: SiteContent | null, tab: Tab) {
-  const raw = content?.[tab] ?? '';
-  return tab === 'html' ? raw.includes('data-desegnos-id') ? raw : formatHtml(raw) : tab === 'css' ? formatCss(raw) : raw;
-}
-function cursorAt(text: string, index: number) {
-  const before = text.slice(0, index); const line = before.split('\n').length;
-  return { line, column: index - before.lastIndexOf('\n') };
-}
+type Draft = { text: string; base: string; projection: HtmlProjection };
+const plain = (text: string): HtmlProjection => ({ text, anchors: [], rawToVisible: offset => offset });
 
 export function CodePane({ content, target, map, save, pick }: {
   content: SiteContent | null; target: ElementTarget | null; map: SourceMapView | null;
-  save?: (language: Tab, text: string, expected: string) => Promise<void>; pick?: (selector: string, id?: string) => void;
+  save?: (language: Tab, text: string, expected: string) => Promise<SiteContent>; pick?: (selector: string, id?: string) => void;
 }) {
   const [tab, setTab] = useState<Tab>('html');
   const [query, setQuery] = useState('');
   const [hit, setHit] = useState(0);
-  const [drafts, setDrafts] = useState<Partial<Record<Tab, string>>>({});
-  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [drafts, setDraftState] = useState<Partial<Record<Tab, Draft>>>({});
+  const draftRef = useRef(drafts);
+  const [statuses, setStatuses] = useState<Partial<Record<Tab, Status>>>({});
   const [showMeta, setShowMeta] = useState(() => { try { return localStorage.getItem('desegnos.code-show-meta') === 'yes'; } catch { return false; } });
-  const base = useRef<Partial<Record<Tab, string>>>({});
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scroller = useRef<HTMLDivElement>(null);
-  const input = useRef<HTMLTextAreaElement>(null);
-  const rawShown = displayText(content, tab);
-  const hidden = tab === 'html' && !showMeta;
-  const projection = useMemo(() => projectEditorHtml(rawShown), [rawShown]);
-  const draftProjection = useRef<HtmlProjection | null>(null);
-  const inputEdit = useRef<(HtmlEditRange & { inputType: string }) | null>(null);
-  const projectionHistory = useRef(new Map<string, HtmlProjection>());
-  const shown = hidden ? projection.text : rawShown;
-  useEffect(() => {
-    const node = input.current; if (!node) return;
-    const capture = (event: InputEvent) => { inputEdit.current = { from: node.selectionStart, to: node.selectionEnd, inputType: event.inputType }; };
-    node.addEventListener('beforeinput', capture);
-    return () => node.removeEventListener('beforeinput', capture);
-  }, [!!content]);
-  const text = drafts[tab] ?? shown;
-  const lines = useMemo(() => text.split('\n'), [text]);
-  const width = useMemo(() => lines.reduce((max, line) => Math.max(max, line.length), 0), [lines]);
-  const exact = !!content && rawShown === content[tab] && drafts[tab] === undefined;
+  const current = useRef({ content, save, showMeta }); current.current = { content, save, showMeta };
+  const editors = useRef<Partial<Record<Tab, CodeEditorHandle>>>({});
+  const timers = useRef<Partial<Record<Tab, ReturnType<typeof setTimeout>>>>({});
+  const flights = useRef<Partial<Record<Tab, Promise<void>>>>({});
+  const queued = useRef(new Set<Tab>());
+  const searchInput = useRef<HTMLInputElement>(null);
+  const status = statuses[tab] ?? { kind: 'idle' };
+  const projectText = (language: Tab, raw: string) => language === 'html' && !current.current.showMeta ? projectEditorHtml(raw) : plain(raw);
+  const projections = useMemo(() => ({ html: showMeta ? plain(content?.html ?? '') : projectEditorHtml(content?.html ?? ''), css: plain(content?.css ?? ''), javascript: plain(content?.javascript ?? '') }), [content, showMeta]);
+  const text = drafts[tab]?.text ?? projections[tab].text;
+  const exact = !drafts.html || drafts.html.text === projections.html.text && drafts.html.base === content?.html;
   const mapped = useMemo(() => {
-    if (tab !== 'html' || !exact || map?.html !== content?.html) return null;
-    if (!hidden) return map;
+    if (!exact || !map || map.html !== content?.html) return null;
+    if (showMeta) return map;
     return { ...map, ranges: map.ranges.map(item => {
-      const start = sourcePosition(shown, projection.rawToVisible(sourceOffset(rawShown, item.startLine, item.startColumn)));
-      const end = sourcePosition(shown, projection.rawToVisible(sourceOffset(rawShown, item.endLine, item.endColumn)));
+      const start = sourcePosition(projections.html.text, projections.html.rawToVisible(sourceOffset(map.html, item.startLine, item.startColumn)));
+      const end = sourcePosition(projections.html.text, projections.html.rawToVisible(sourceOffset(map.html, item.endLine, item.endColumn)));
       return { ...item, startLine: start.line, startColumn: start.column, endLine: end.line, endColumn: end.column };
     }) };
-  }, [tab, exact, map, content?.html, hidden, shown, rawShown, projection]);
-  const range = mapped && target ? mapped.ranges.filter(item => target.id ? item.id === target.id : item.selector === target.selector).sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine))[0] : undefined;
-  const selected = range ? [range.startLine - 1, range.endLine - 1] : (() => { const line = tab === 'html' ? findLine(lines, target) : null; return line === null ? null : [line, line]; })();
-  const errors = new Map((status.kind === 'invalid' ? status.diagnostics ?? [] : []).filter(item => item.language === tab || (tab === 'html' && item.language === 'html')).map(item => [item.line - 1, item.message]));
-  const matches = useMemo(() => query.trim() ? lines.flatMap((line, index) => line.toLowerCase().includes(query.toLowerCase()) ? [index] : []) : [], [lines, query]);
-  const focusLine = matches.length ? matches[hit % matches.length] : selected?.[0] ?? null;
-  const reveal = (line: number) => { const node = scroller.current; if (node) node.scrollTop = Math.max(0, line * LINE - node.clientHeight / 2); };
+  }, [exact, map, content?.html, showMeta, projections.html]);
+  const range = mapped && target ? mapped.ranges.filter(item => target.id ? item.id === target.id : item.selector === target.selector).sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine) || a.endColumn - a.startColumn - (b.endColumn - b.startColumn))[0] : undefined;
+  const matches = useMemo(() => {
+    const result: { offset: number; line: number }[] = [];
+    if (!query) return result;
+    const lower = text.toLowerCase(), find = query.toLowerCase();
+    let at = 0;
+    while ((at = lower.indexOf(find, at)) >= 0) { result.push({ offset: at, line: sourcePosition(text, at).line }); at += find.length; }
+    return result;
+  }, [text, query]);
+  const focusLine = matches.length ? matches[hit % matches.length].line : tab === 'html' ? range?.startLine ?? null : null;
   useEffect(() => { setHit(0); }, [query, tab]);
-  useEffect(() => { if (focusLine !== null && document.activeElement !== input.current) reveal(focusLine); }, [focusLine, tab, content]);
-  // A saved draft comes back as the page's source; a change made elsewhere while drafting is a conflict.
+  function draft(language: Tab, value: Draft | undefined) {
+    const next = { ...draftRef.current };
+    if (value) next[language] = value; else delete next[language];
+    draftRef.current = next; setDraftState(next);
+  }
+  function setStatus(language: Tab, value: Status) { setStatuses(current => ({ ...current, [language]: value })); }
+  function clearTimer(language: Tab) { if (timers.current[language]) clearTimeout(timers.current[language]); delete timers.current[language]; }
+  useEffect(() => () => { for (const timer of Object.values(timers.current)) clearTimeout(timer); }, []);
+  // A native save may add IDs without changing visible text. Clear only the draft
+  // that actually matches the applied source; keep later typing and rejected text.
   useEffect(() => {
-    setDrafts(current => {
-      const next = { ...current };
-      for (const key of Object.keys(current) as Tab[]) {
-        if ((key === 'html' && !showMeta ? projectEditorHtml(content?.html ?? '').text : content?.[key] ?? '') === current[key]) { delete next[key]; delete base.current[key]; if (key === 'html') draftProjection.current = null; }
-        else if ((content?.[key] ?? '') !== base.current[key]) setStatus({ kind: 'conflict', message: 'This page changed elsewhere while you were editing.' });
+    for (const [language] of TABS) {
+      const value = draftRef.current[language]; if (!value || flights.current[language]) continue;
+      const source = content?.[language] ?? '';
+      if (source === value.base) { if (projectText(language, source).text === value.text) draft(language, undefined); }
+      else { clearTimer(language); setStatus(language, { kind: 'conflict', message: 'This page changed elsewhere while you were editing.' }); }
+    }
+  }, [content, drafts]);
+  async function commit(language: Tab): Promise<void> {
+    clearTimer(language);
+    if (flights.current[language]) { queued.current.add(language); return flights.current[language]; }
+    const value = draftRef.current[language], save = current.current.save;
+    if (!value || !save) return;
+    const source = current.current.content?.[language] ?? '';
+    if (source !== value.base) { setStatus(language, { kind: 'conflict', message: 'This page changed elsewhere while you were editing.' }); return; }
+    if (value.text === projectText(language, source).text) { draft(language, undefined); return; }
+    const editor = editors.current[language]; if (!editor) return;
+    const snapshot = editor.snapshot();
+    const hidden = language === 'html' && !current.current.showMeta;
+    const rawValue = hidden ? restoreEditorHtml(snapshot.projection) : snapshot.text;
+    setStatus(language, { kind: 'saving' });
+    const operation = async () => {
+      try {
+        const applied = await save(language, rawValue, value.base);
+        const projection = projectText(language, applied[language]);
+        const rebased = editor.rebase(projection, snapshot);
+        const latest = draftRef.current[language];
+        if (latest) draft(language, { text: rebased.text, base: applied[language], projection: rebased });
+        setStatus(language, { kind: 'saved' });
+      } catch (raw) {
+        const error = (raw ?? {}) as SaveError;
+        if (error.conflict) setStatus(language, { kind: 'conflict', message: error.message });
+        else if (error.diagnostics?.length) {
+          const projection = hidden ? projectEditorHtml(rawValue) : null;
+          const diagnostics = error.diagnostics.map(item => {
+            if (!projection || item.language !== 'html') return item;
+            const start = sourcePosition(snapshot.text, projection.rawToVisible(sourceOffset(rawValue, item.line, item.column)));
+            const end = sourcePosition(snapshot.text, projection.rawToVisible(sourceOffset(rawValue, item.endLine, item.endColumn)));
+            return { ...item, line: start.line, column: start.column, endLine: end.line, endColumn: end.column };
+          });
+          setStatus(language, { kind: 'invalid', message: error.message, diagnostics });
+        } else setStatus(language, { kind: 'error', message: typeof raw === 'string' ? raw : error.message ?? String(raw) });
+      } finally {
+        editor.release(snapshot); delete flights.current[language];
+        // A queued pause saves the newer text once; a rejected unchanged draft is
+        // never retried automatically.
+        const again = queued.current.delete(language);
+        const latest = draftRef.current[language];
+        if (latest && current.current.content?.[language] === latest.base && projectText(language, latest.base).text === latest.text) draft(language, undefined);
+        else if (again && latest && latest.text !== snapshot.text) void commit(language);
       }
-      return next;
-    });
-  }, [content, showMeta]);
-  async function commit(language: Tab, value: string) {
-    if (!save || base.current[language] === undefined) return;
-    if (value === (language === 'html' && !showMeta ? projectEditorHtml(displayText(content, language)).text : displayText(content, language))) { setDrafts(current => { const next = { ...current }; delete next[language]; delete base.current[language]; if (language === 'html') draftProjection.current = null; return next; }); return; }
-    setStatus({ kind: 'saving' });
-    const rawValue = language === 'html' && !showMeta && draftProjection.current ? restoreEditorHtml(draftProjection.current) : value;
-    try {
-      await save(language, rawValue, base.current[language]!);
-      setStatus({ kind: 'saved' });
-    }
-    catch (raw) {
-      const error = (raw ?? {}) as SaveError;
-      if (error.conflict) setStatus({ kind: 'conflict', message: error.message });
-      else if (error.diagnostics?.length) {
-        const projection = language === 'html' && !showMeta ? projectEditorHtml(rawValue) : null;
-        const diagnostics = error.diagnostics.map(item => {
-          if (!projection || item.language !== 'html') return item;
-          const start = sourcePosition(value, projection.rawToVisible(sourceOffset(rawValue, item.line, item.column)));
-          const end = sourcePosition(value, projection.rawToVisible(sourceOffset(rawValue, item.endLine, item.endColumn)));
-          return { ...item, line: start.line, column: start.column, endLine: end.line, endColumn: end.column };
-        });
-        setStatus({ kind: 'invalid', message: error.message, diagnostics });
-      }
-      else setStatus({ kind: 'error', message: typeof raw === 'string' ? raw : error.message ?? String(raw) });
-    }
+    };
+    flights.current[language] = operation();
+    return flights.current[language];
   }
-  function change(value: string, explicit?: HtmlEditRange) {
-    if (hidden) {
-      const previous = draftProjection.current ?? projection;
-      projectionHistory.current.set(previous.text, previous);
-      const edit = inputEdit.current; inputEdit.current = null;
-      const restored = edit?.inputType === 'historyUndo' || edit?.inputType === 'historyRedo' ? projectionHistory.current.get(value) : undefined;
-      draftProjection.current = restored ?? updateHtmlProjection(previous, value, explicit ?? edit ?? undefined);
-      projectionHistory.current.set(value, draftProjection.current);
-      if (projectionHistory.current.size > 100) projectionHistory.current.delete(projectionHistory.current.keys().next().value!);
-    }
-    if (base.current[tab] === undefined) base.current[tab] = content?.[tab] ?? '';
-    setDrafts(current => ({ ...current, [tab]: value }));
-    if (status.kind !== 'conflict') setStatus({ kind: 'idle' });
-    if (timer.current) clearTimeout(timer.current);
-    const language = tab;
-    timer.current = setTimeout(() => { void commit(language, value); }, 700);
+  function change(language: Tab, text: string, projection: HtmlProjection) {
+    const previous = draftRef.current[language];
+    draft(language, { text, projection, base: previous?.base ?? current.current.content?.[language] ?? '' });
+    if (statuses[language]?.kind !== 'conflict') setStatus(language, { kind: 'idle' });
+    clearTimer(language); timers.current[language] = setTimeout(() => { void commit(language); }, 700);
   }
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  function flush() { if (timer.current) { clearTimeout(timer.current); timer.current = null; } const value = drafts[tab]; if (value !== undefined && status.kind !== 'conflict') void commit(tab, value); }
-  function reload() { if (timer.current) { clearTimeout(timer.current); timer.current = null; } draftProjection.current = null; base.current = {}; setDrafts({}); setStatus({ kind: 'idle' }); }
-  // Clicking in the code selects the matching element on the canvas.
-  function follow() {
-    const node = input.current; if (!node || !mapped || !pick) return;
-    const at = cursorAt(text, node.selectionStart);
-    const inside = mapped.ranges.filter(item => (at.line > item.startLine || (at.line === item.startLine && at.column >= item.startColumn)) && (at.line < item.endLine || (at.line === item.endLine && at.column < item.endColumn)));
-    const best = inside.sort((a, b) => (a.endLine - a.startLine) - (b.endLine - b.startLine) || (a.endColumn - a.startColumn) - (b.endColumn - b.startColumn))[0];
+  function follow(offset: number) {
+    if (!mapped || !pick || tab !== 'html') return;
+    const at = sourcePosition(text, offset);
+    const inside = mapped.ranges.filter(item => (at.line > item.startLine || at.line === item.startLine && at.column >= item.startColumn) && (at.line < item.endLine || at.line === item.endLine && at.column < item.endColumn));
+    const best = inside.sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine) || a.endColumn - a.startColumn - (b.endColumn - b.startColumn))[0];
     if (best && (best.id ? best.id !== target?.id : best.selector !== target?.selector)) pick(best.selector, best.id);
   }
-  const editing = !!save && !!content;
-  const note = status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? 'Saved. Undo works as usual.' : status.kind === 'invalid' ? 'Not saved yet. Fix the highlighted line.' : status.kind === 'error' ? status.message : status.kind === 'conflict' ? status.message : drafts[tab] !== undefined ? 'Saving after you pause…' : editing && rawShown !== content?.[tab] ? 'This code was compacted. It’s shown tidied, and your first edit saves that tidy layout.' : editing ? 'Edits save automatically when you pause.' : '';
+  function reload() { clearTimer(tab); draft(tab, undefined); setStatus(tab, { kind: 'idle' }); }
+  const note = status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? 'Saved. Undo works as usual.' : status.kind === 'invalid' ? 'Not saved yet. Fix the highlighted line.' : status.kind === 'error' || status.kind === 'conflict' ? status.message : drafts[tab] ? 'Saving after you pause…' : save && content ? 'Edits save automatically when you pause.' : '';
   return <section className="code-pane" aria-label="Page code">
     <header className="code-pane-bar">
-      <div className="code-tabs" role="tablist" aria-label="Code files">{TABS.map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { flush(); setTab(value); }}>{label}{drafts[value] !== undefined ? ' •' : ''}</button>)}</div>
-      <input className="code-search" type="search" placeholder="Find in code" aria-label="Find in code" value={query} onChange={event => setQuery(event.target.value)}
-        onKeyDown={event => { if (event.key === 'Enter' && matches.length) { event.preventDefault(); setHit(value => value + (event.shiftKey ? matches.length - 1 : 1)); } }} />
-      {tab === 'html' && content?.html.includes('data-desegnos-') && <label className="code-meta-toggle" title="Desegnos uses these to keep track of elements. They are removed when you export."><input type="checkbox" checked={showMeta} disabled={drafts.html !== undefined || status.kind === 'saving'} onChange={event => { draftProjection.current = null; setShowMeta(event.target.checked); try { localStorage.setItem('desegnos.code-show-meta', event.target.checked ? 'yes' : 'no'); } catch {} }} />Show editor attributes</label>}
-      {query.trim() && <span className="code-count" aria-live="polite">{matches.length ? `${(hit % matches.length) + 1}/${matches.length}` : '0'}</span>}
+      <div className="code-tabs" role="tablist" aria-label="Code files">{TABS.map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { void commit(tab); setTab(value); }}>{label}{drafts[value] && drafts[value]!.text !== projections[value].text ? ' •' : ''}</button>)}</div>
+      <input ref={searchInput} className="code-search" type="search" placeholder="Find in code" aria-label="Find in code" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && matches.length) { event.preventDefault(); setHit(value => value + (event.shiftKey ? matches.length - 1 : 1)); } }} />
+      {content?.html.includes('data-desegnos-') && tab === 'html' && <label className="code-meta-toggle" title="Editor attributes stay attached to elements and are removed on export."><input type="checkbox" checked={showMeta} disabled={!!drafts.html || statuses.html?.kind === 'saving'} onChange={event => { setShowMeta(event.target.checked); try { localStorage.setItem('desegnos.code-show-meta', event.target.checked ? 'yes' : 'no'); } catch {} }} />Show editor attributes</label>}
+      {query && <span className="code-count" aria-live="polite">{matches.length ? `${hit % matches.length + 1}/${matches.length}` : '0'}</span>}
     </header>
-    {!content ? <p className="code-empty">Generate the page to see its code here.</p> : <div ref={scroller} className="code-scroll">
-      <div className="code-sheet" style={{ height: lines.length * LINE + 12, minWidth: `calc(${width + 4}ch + 52px)` }}>
-        <div className="code-gutter" aria-hidden="true">{lines.map((_, index) => <span key={index} className={errors.has(index) ? 'has-error' : undefined}>{index + 1}</span>)}</div>
-        <div className="code-text">
-          <div className="code-highlight" aria-hidden="true">{lines.map((line, index) => <div key={index} data-line={index} title={errors.get(index)} className={`code-line${selected && index >= selected[0] && index <= selected[1] ? ' selected' : ''}${matches.includes(index) ? ' match' : ''}${index === focusLine && matches.length ? ' current' : ''}${errors.has(index) ? ' error' : ''}`}><code dangerouslySetInnerHTML={{ __html: colour(line, tab) || ' ' }} /></div>)}</div>
-          <textarea ref={input} className="code-input" aria-label={`${TABS.find(([value]) => value === tab)![1]} code`} value={text} readOnly={!editing} wrap="off" spellCheck={false} autoCapitalize="off" autoComplete="off"
-            onChange={event => change(event.target.value)} onBlur={flush} onClick={follow} onKeyUp={event => { if (event.key.startsWith('Arrow') || event.key === 'Home' || event.key === 'End') follow(); }}
-            onKeyDown={event => {
-              if (event.key === 'Tab' && !event.shiftKey && editing) { event.preventDefault(); const node = event.currentTarget; const start = node.selectionStart; const value = `${text.slice(0, start)}  ${text.slice(node.selectionEnd)}`; change(value, { from: start, to: node.selectionEnd }); requestAnimationFrame(() => { node.selectionStart = node.selectionEnd = start + 2; }); }
-              if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); flush(); }
-            }} />
-        </div>
-      </div>
-    </div>}
-    <footer className={`code-pane-note status-${status.kind}`} role="status">
-      <span>{note}</span>
-      {status.kind === 'invalid' && <ul className="code-errors">{(status.diagnostics ?? []).slice(0, 3).map((item, index) => <li key={index}><button type="button" className="link-button" onClick={() => { setTab(item.language === 'css' ? 'css' : item.language === 'javascript' ? 'javascript' : 'html'); reveal(item.line - 1); }}>Line {item.line}</button> {item.message}</li>)}</ul>}
+    {!content ? <p className="code-empty">Generate the page to see its code here.</p> : <Suspense fallback={<p className="code-empty" role="status">Opening code…</p>}>{TABS.map(([language, label]) => {
+      const value = drafts[language]?.text ?? projections[language].text;
+      const marks = new Map<number, CodeLineMark>();
+      const mark = (line: number, className: string, title?: string) => { const old = marks.get(line); marks.set(line, { line, className: [old?.className, className].filter(Boolean).join(' '), title: title ?? old?.title }); };
+      if (language === 'html' && range) for (let line = range.startLine; line <= range.endLine - (range.endColumn === 1 && range.endLine > range.startLine ? 1 : 0); line++) mark(line, 'selected');
+      if (language === tab) {
+        for (const match of matches) mark(match.line, 'match');
+        if (matches.length) mark(matches[hit % matches.length].line, 'current');
+      }
+      for (const error of statuses[language]?.diagnostics ?? []) if (error.language === language) mark(error.line, 'error', error.message);
+      return <CodeEditor key={language} ref={node => { if (node) editors.current[language] = node; else delete editors.current[language]; }} language={language} label={`${label} code`} text={value} projection={drafts[language]?.projection ?? projections[language]} hiddenMetadata={language === 'html' && !showMeta} readOnly={!save} active={language === tab} marks={[...marks.values()]} query={language === tab ? query : ''} focusLine={language === tab ? focusLine : null} change={(text, projection) => change(language, text, projection)} cursor={language === 'html' ? follow : () => {}} flush={() => { void commit(language); }} find={() => searchInput.current?.focus()} />;
+    })}</Suspense>}
+    <footer className={`code-pane-note status-${status.kind}`} role="status"><span>{note}</span>
+      {status.kind === 'invalid' && <ul className="code-errors">{(status.diagnostics ?? []).slice(0, 3).map((item, index) => <li key={index}><button type="button" className="link-button" onClick={() => { const language = item.language === 'css' ? 'css' : item.language === 'javascript' ? 'javascript' : 'html'; setTab(language); requestAnimationFrame(() => editors.current[language]?.reveal(item.line)); }}>Line {item.line}</button> {item.message}</li>)}</ul>}
       {status.kind === 'conflict' && <button type="button" onClick={reload}>Reload latest code</button>}
     </footer>
   </section>;

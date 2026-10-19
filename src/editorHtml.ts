@@ -29,20 +29,6 @@ export function projectEditorHtml(raw: string): HtmlProjection {
   for (const item of hidden) { const at = rawToVisible(item.anchor); grouped.set(at, (grouped.get(at) ?? '') + item.text); }
   return { text, anchors: [...grouped].map(([at, text]) => ({ at, text })), rawToVisible };
 }
-export type HtmlEditRange = { from: number; to: number };
-export function updateHtmlProjection(previous: HtmlProjection, text: string, edit?: HtmlEditRange): HtmlProjection {
-  let start = 0;
-  while (start < previous.text.length && start < text.length && previous.text[start] === text[start]) start++;
-  let oldEnd = previous.text.length, newEnd = text.length;
-  while (oldEnd > start && newEnd > start && previous.text[oldEnd - 1] === text[newEnd - 1]) { oldEnd--; newEnd--; }
-  if (edit && edit.from >= 0 && edit.to >= edit.from && edit.to <= previous.text.length) {
-    const insertedEnd = text.length - (previous.text.length - edit.to);
-    if (text.slice(0, edit.from) === previous.text.slice(0, edit.from) && text.slice(insertedEnd) === previous.text.slice(edit.to)) { start = edit.from; oldEnd = edit.to; newEnd = insertedEnd; }
-  }
-  const shift = newEnd - oldEnd;
-  const anchors = previous.anchors.flatMap(anchor => anchor.at < start ? [anchor] : anchor.at >= oldEnd ? [{ ...anchor, at: anchor.at + shift }] : []);
-  return { text, anchors, rawToVisible: previous.rawToVisible };
-}
 export function restoreEditorHtml(projection: HtmlProjection): string {
   let raw = projection.text;
   for (const anchor of [...projection.anchors].sort((a, b) => b.at - a.at)) {

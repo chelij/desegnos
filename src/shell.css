@@ -196,24 +196,25 @@
 :root[data-theme="dark"] .canvas-status-actions > .check-chip { color: #f2c94c; border-color: #8a6a20; background: #2e2610; }
 .history-menu > button { min-height: 32px; padding-inline: 10px; font-size: 12px; }
 
-/* Code editor: a transparent textarea over coloured lines, so typing and highlighting share one layout. */
-.code-scroll { flex: 1; min-height: 0; overflow: auto; }
-.code-sheet { position: relative; display: grid; grid-template-columns: 44px 1fr; font: 12px/19px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; tab-size: 2; }
-.code-gutter { position: sticky; left: 0; z-index: 2; padding: 6px 8px 6px 0; text-align: right; color: var(--muted); background: var(--surface); user-select: none; }
-.code-gutter span { display: block; height: 19px; }
-.code-gutter span.has-error { color: #c62828; font-weight: 700; }
-.code-text { position: relative; min-width: 0; }
-.code-highlight, .code-input { padding: 6px 16px 6px 8px; }
-.code-line { height: 19px; white-space: pre; }
-.code-line code { font: inherit; }
+/* CodeMirror owns rendering, input, syntax highlighting, selection and local history. */
+.code-editor-host { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.code-editor-host[hidden] { display: none; }
+.code-editor-host .cm-editor { height: 100%; background: var(--surface); color: var(--text); }
+.code-editor-host .cm-editor.cm-focused { outline: none; box-shadow: inset 2px 0 0 var(--accent); }
+.code-editor-host .cm-scroller { overflow: auto; font: 12px/19px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.code-editor-host .cm-content { padding: 6px 0; caret-color: var(--text); }
+.code-editor-host .cm-line { padding: 0 16px 0 8px; }
+.code-editor-host .cm-gutters { background: var(--surface); color: var(--muted); border-right: 1px solid var(--border-soft); }
+.code-editor-host .cm-activeLineGutter { background: var(--selected); color: var(--text); }
+.code-editor-host .cm-cursor, .code-editor-host .cm-dropCursor { border-left-color: var(--text); }
+.code-editor-host .cm-selectionBackground, .code-editor-host .cm-focused .cm-selectionBackground { background: color-mix(in srgb, var(--accent) 28%, transparent); }
+.code-editor-host .cm-searchMatch { background: color-mix(in srgb, #f2c94c 28%, transparent); }
+.code-editor-host .cm-searchMatch-selected { background: color-mix(in srgb, #f2c94c 50%, transparent); }
+.code-editor-host .cm-tooltip { background: var(--surface); color: var(--text); border: 1px solid var(--border); }
+.code-editor-host .cm-panels { background: var(--surface); color: var(--text); border-color: var(--border); }
 .code-line.error { background: color-mix(in srgb, #e53935 18%, transparent); text-decoration: underline wavy #e53935; text-decoration-skip-ink: none; }
-.code-input { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; margin: 0; border: 0; border-radius: 0; outline: none; resize: none; overflow: hidden; background: transparent; color: transparent; caret-color: var(--text); font: inherit; line-height: 19px; white-space: pre; tab-size: 2; }
-.code-input::selection { background: color-mix(in srgb, var(--accent) 30%, transparent); }
-.code-input:focus-visible { outline: none; box-shadow: inset 2px 0 0 var(--accent); }
 .code-pane-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 5px 10px; border-top: 1px solid var(--border-soft); font-size: 11px; color: var(--muted); }
 .code-pane-note.status-invalid, .code-pane-note.status-error, .code-pane-note.status-conflict { color: #b3261e; }
 .code-pane-note button { min-height: 24px; padding: 1px 8px; font-size: 11px; }
 .code-errors { flex-basis: 100%; margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; color: var(--text); }
-/* Editor-only attributes stay in the code (removing them would detach requests) but fade into the background. */
-.tok-meta { color: var(--muted); }
 .code-meta-toggle { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); white-space: nowrap; }

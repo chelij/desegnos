@@ -4,15 +4,18 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { ChangeSet, EditorState } from '@codemirror/state';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const temporary = await mkdtemp(join(root, '.selection-projection-'));
 try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/elementTargets.ts', 'src/editorHtml.ts'], { cwd: root, encoding: 'utf8' });
+  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/elementTargets.ts', 'src/editorHtml.ts', 'src/codeMirrorMetadata.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { canonicalSelections, sameTarget, sameTargets, regionTargets, unionRect } = await import(pathToFileURL(join(temporary, 'elementTargets.js')).href);
-  const { projectEditorHtml, updateHtmlProjection, restoreEditorHtml, sourceOffset, sourcePosition } = await import(pathToFileURL(join(temporary, 'editorHtml.js')).href);
+  const { projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition } = await import(pathToFileURL(join(temporary, 'editorHtml.js')).href);
+  const { mapHtmlMetadata } = await import(pathToFileURL(join(temporary, 'codeMirrorMetadata.js')).href);
+  const updateProjection = (projection, from, to, insert = '') => { const change = ChangeSet.of({ from, to, insert }, projection.text.length); return mapHtmlMetadata(projection, change, change.apply(EditorState.create({ doc: projection.text }).doc).toString()); };
   const target = (id, selector = 'body > div:nth-of-type(1)') => ({ id, selector, tag: 'div', label: '' });
   const select = (id, selector, x = 0, y = 0) => ({ element: target(id, selector), rect: { x, y, width: 100, height: 60 } });
 
@@ -36,9 +39,9 @@ try {
   await test('hidden attributes survive text, tag name and normal attribute edits', () => {
     let projection = projectEditorHtml('<h1 data-desegnos-id="abcdefgh" data-desegnos-found="https://example.com/source" class="title">Hello</h1>');
     assert.equal(projection.text, '<h1 class="title">Hello</h1>');
-    projection = updateHtmlProjection(projection, projection.text.replace('Hello', 'Welcome'));
-    projection = updateHtmlProjection(projection, projection.text.replace('class="title"', 'class="lead"'));
-    projection = updateHtmlProjection(projection, projection.text.replace('<h1', '<h2'));
+    projection = updateProjection(projection, projection.text.indexOf('Hello'), projection.text.indexOf('Hello') + 5, 'Welcome');
+    projection = updateProjection(projection, projection.text.indexOf('title'), projection.text.indexOf('title') + 5, 'lead');
+    projection = updateProjection(projection, 1, 3, 'h2');
     const raw = restoreEditorHtml(projection);
     assert.ok(raw.includes('data-desegnos-id="abcdefgh"'));
     assert.ok(raw.includes('data-desegnos-found="https://example.com/source"'));
@@ -47,10 +50,10 @@ try {
   });
   await test('inserting and deleting sibling code keeps each surviving element ID', () => {
     let projection = projectEditorHtml('<p data-desegnos-id="first">A</p>\n<p data-desegnos-id="second">B</p>');
-    projection = updateHtmlProjection(projection, '<p>New</p>\n' + projection.text, { from: 0, to: 0 });
+    projection = updateProjection(projection, 0, 0, '<p>New</p>\n');
     let raw = restoreEditorHtml(projection);
     assert.ok(raw.startsWith('<p>New</p>\n<p data-desegnos-id="first">'));
-    projection = updateHtmlProjection(projection, projection.text.replace('<p>A</p>\n', ''), { from: '<p>New</p>\n'.length, to: '<p>New</p>\n<p>A</p>\n'.length });
+    projection = updateProjection(projection, '<p>New</p>\n'.length, '<p>New</p>\n<p>A</p>\n'.length);
     raw = restoreEditorHtml(projection);
     assert.ok(!raw.includes('data-desegnos-id="first"'));
     assert.ok(raw.includes('data-desegnos-id="second"'));
