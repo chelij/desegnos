@@ -33,7 +33,7 @@ impl GenerationCandidate {
     /// honest, visible placeholders. The source URL stays with each image.
     pub fn embed_downloaded_images(&mut self, images: &BTreeMap<String, String>) -> Result<usize> {
         let placeholder = format!("data:image/svg+xml;base64,{}", STANDARD.encode(
-            r##"<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="#e5e7eb"/><rect x="20" y="20" width="600" height="320" rx="12" fill="none" stroke="#6b7280" stroke-dasharray="8 6"/><g fill="#374151" text-anchor="middle" font-family="sans-serif"><text x="320" y="176" font-size="26">Image placeholder</text><text x="320" y="212" font-size="18">Replace with your image</text></g></svg>"##
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="#e5e7eb"/><rect x="20" y="20" width="600" height="320" rx="12" fill="none" stroke="#6b7280" stroke-dasharray="8 6"/><g fill="#374151" text-anchor="middle" font-family="sans-serif"><text x="320" y="190" font-size="26">Image placeholder</text></g></svg>"##
         ));
         let mut missing = 0;
         let mut references = 0;

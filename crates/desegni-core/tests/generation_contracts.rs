@@ -166,6 +166,15 @@ fn drafts_allow_explicit_placeholders_and_portable_image_downloads_without_packa
     assert!(html.contains("data-desegnos-image-source=\"https://example.com/pixel.png\""));
     assert!(html.contains("Image placeholder: Sample workshop"));
     assert!(!html.contains("srcset="));
+    let document = dom_query::Document::from(html.as_str());
+    let missing_src = document.select("#missing").attr("src").unwrap();
+    use base64::Engine;
+    let placeholder = base64::engine::general_purpose::STANDARD
+        .decode(missing_src.split_once(',').unwrap().1)
+        .unwrap();
+    let placeholder = String::from_utf8(placeholder).unwrap();
+    assert_eq!(placeholder.matches("<text ").count(), 1);
+    assert!(!placeholder.contains("Replace with"));
     let applied = project
         .apply_generation(&snapshot, &candidate, &[])
         .unwrap();
