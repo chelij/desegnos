@@ -933,9 +933,11 @@ impl GenerationService {
                     &response.text,
                     std::env::var("DESEGNI_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                match GenerationCandidate::from_json(&response.text).and_then(|candidate| {
+                match GenerationCandidate::from_json(&response.text).and_then(|mut candidate| {
+                    let format = record.view.requirements.format_version()?;
+                    if format >= 8 { candidate.resolve_project_assets(original)?; }
                     candidate.validate(&record.view.requirements, original)?;
-                    if record.view.requirements.markdown.starts_with("# Generation requirements\n\nRequirements format: 7\n\n")
+                    if format >= 7
                         && !candidate.image_download_urls()?.is_empty() {
                         return Err(desegni_core::Error("Images could not be prepared. Nothing was applied. Try generating again or remove the image request.".into()));
                     }

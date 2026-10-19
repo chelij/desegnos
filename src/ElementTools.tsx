@@ -1,15 +1,15 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Modal } from './Modal';
 import { escapeHtml, imageFile } from './elementEditing';
-import type { ElementDetails, ElementEdit, ElementTarget, ElementVisual } from './types';
+import type { ElementDetails, ElementEdit, ElementTarget, ElementVisual, IdentityAsset } from './types';
 
 export type ElementDialogMode = 'edit' | 'replace' | 'position' | 'remove';
 const titles = { edit: 'Edit element', replace: 'Replace element', position: 'Move element', remove: 'Delete element' };
 const color = (value: string) => { const rgb = value.match(/[\d.]+/g)?.slice(0, 3); return rgb?.length === 3 ? `#${rgb.map(value => Math.max(0, Math.min(255, Math.round(Number(value)))).toString(16).padStart(2, '0')).join('')}` : '#000000'; };
 const styleFields = [['fontSize', 'Font size'], ['width', 'Width'], ['height', 'Height'], ['padding', 'Padding'], ['borderRadius', 'Corner radius']] as const;
 
-export function ElementDialog({ mode, target, visual, inspect, apply, move, close }: {
-  mode: ElementDialogMode; target: ElementTarget; visual: ElementVisual | null;
+export function ElementDialog({ mode, target, visual, inspect, apply, move, close, projectImages = [] }: {
+  projectImages?: IdentityAsset[]; mode: ElementDialogMode; target: ElementTarget; visual: ElementVisual | null;
   inspect: (target: ElementTarget) => Promise<ElementDetails>; apply: (change: ElementEdit) => Promise<void>;
   move: (x: number, y: number) => Promise<void>; close: () => void;
 }) {
@@ -18,10 +18,10 @@ export function ElementDialog({ mode, target, visual, inspect, apply, move, clos
   return <Modal title={titles[mode]} close={close}><div className="dialog-body element-dialog">
     {error && <p className="message error" role="alert">{error}</p>}
     {!details && !error && <p role="status">Opening this item…</p>}
-    {details && <ElementForm key={`${target.sourceSha256}:${target.selector}:${mode}`} mode={mode} details={details} visual={visual} apply={apply} move={move} close={close} />}
+    {details && <ElementForm key={`${target.sourceSha256}:${target.selector}:${mode}`} mode={mode} projectImages={projectImages} details={details} visual={visual} apply={apply} move={move} close={close} />}
   </div></Modal>;
 }
-function ElementForm({ mode, details, visual, apply, move, close }: { mode: ElementDialogMode; details: ElementDetails; visual: ElementVisual | null; apply: (change: ElementEdit) => Promise<void>; move: (x: number, y: number) => Promise<void>; close: () => void }) {
+function ElementForm({ mode, details, visual, apply, move, close, projectImages }: { projectImages: IdentityAsset[]; mode: ElementDialogMode; details: ElementDetails; visual: ElementVisual | null; apply: (change: ElementEdit) => Promise<void>; move: (x: number, y: number) => Promise<void>; close: () => void }) {
   const [texts, setTexts] = useState(details.texts); const [attributes, setAttributes] = useState(details.attributes);
   const [styles, setStyles] = useState<Record<string, string>>({ ...visual });
   const [kind, setKind] = useState(['p', 'h1', 'h2', 'h3', 'button', 'a', 'img', 'section', 'div'].includes(details.target.tag) ? details.target.tag : 'p');
@@ -59,7 +59,15 @@ function ElementForm({ mode, details, visual, apply, move, close }: { mode: Elem
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
-  const imageControl = <label>Image file<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={event => { void file(event.target.files?.[0]); }} />{fileName && <span className="field-help">{fileName}</span>}</label>;
+  const projectImage = projectImages.find(asset => asset.dataUri === image);
+  const imageControl = <>
+    {projectImages.length > 0 && <><label>Project image<select value={projectImage?.id ?? ''} onChange={event => {
+      const asset = projectImages.find(item => item.id === event.target.value); if (!asset) return;
+      setImage(asset.dataUri); attr('src', asset.dataUri); setFileName(asset.name);
+    }}><option value="">Choose an image from this project</option>{projectImages.map(asset => <option key={asset.id} value={asset.id}>{asset.name.split('/').at(-1)}</option>)}</select></label>
+      {projectImage && <img className="project-image-preview" src={projectImage.dataUri} alt={projectImage.name.split('/').at(-1)} style={{ maxWidth: '100%', maxHeight: 120, objectFit: 'contain', background: '#888' }} />}</>}
+    <label>Image file<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={event => { void file(event.target.files?.[0]); }} />{fileName && <span className="field-help">{fileName}</span>}</label>
+  </>;
   return <form onSubmit={event => { void submit(event); }}>
     {error && <p className="message error" role="alert">{error}</p>}
     {mode === 'remove' ? <p>Delete this item and everything inside it? You can undo this.</p> : mode === 'position' ? <><p>Drag the selected element on the canvas, or enter an offset.</p><div className="form-row"><label>Move horizontally (px)<input type="number" value={x} step="any" onChange={event => setX(event.target.valueAsNumber)} required /></label><label>Move vertically (px)<input type="number" value={y} step="any" onChange={event => setY(event.target.valueAsNumber)} required /></label></div></> : mode === 'replace' ? <>

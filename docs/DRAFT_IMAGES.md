@@ -6,7 +6,7 @@ A blocked attempt offers **Finish draft → Generate draft**, which creates a ne
 
 ## Image capability
 
-The agent requests a native download with `<img data-desegnos-download src="https://…" alt="…">`. Current-format generations (requirements format 7) also give the model OpenAI's `web_search` tool in the request it receives, so it can look up missing facts, destinations and direct image URLs before asking for downloads. Desegnos itself still runs no search engine, scrapes no websites and enables no browser networking; search runs on the provider side, and only the image downloads below run natively. The requirements ask for visible credits and source links when known, without inventing ownership or license permission. Online photos must not masquerade as authentic product/customer screenshots.
+The agent requests a native download with `<img data-desegnos-download src="https://…" alt="…">`. Current-format generations (requirements format 8) also give the model OpenAI's `web_search` tool in the request it receives, so it can look up missing facts, destinations and direct image URLs before asking for downloads. Desegnos itself still runs no search engine, scrapes no websites and enables no browser networking; search runs on the provider side, and only the image downloads below run natively. The requirements ask for visible credits and source links when known, without inventing ownership or license permission. Online photos must not masquerade as authentic product/customer screenshots.
 
 The provider adapter downloads up to four distinct public HTTPS PNG/JPEG URLs per generation. Each image must fit 256 KiB, 4096 pixels per side and eight million pixels; each attempt has an eight-second deadline, including redirects and name resolution. There are at most two followed redirects. Private/special-use addresses, credentials in URLs, nonstandard ports, proxies, compressed HTTP bodies, SVG downloads and non-image/MIME-spoofed responses are rejected. DNS answers are validated and pinned for each hop. Image requests receive no API key, account token, cookie or referrer. Images are decoded with bounded dimensions and allocation before embedding. These downloads are optional: failures and excess URLs produce a clearly visible image placeholder rather than a broken image or a successful-download claim.
 
@@ -14,9 +14,19 @@ The core substitutes the validated raster data in the returned source, removes e
 
 ## Boundaries
 
-- `desegni-core` owns requirements format 7, pure image discovery/substitution, candidate validation and ordinary project source. Formats 3–6 retain their old rendering and validation paths.
+- `desegni-core` owns requirements format 8, pure image discovery/substitution, candidate validation and ordinary project source. Formats 3–7 retain their old rendering and validation paths.
 - `desegni-ai` owns the credential-free HTTP image adapter, URL/DNS checks and raster decoding. It returns a candidate response; it cannot write project files or apply a result.
 - The native coordinator runs the image stage outside project locks, shares the job's cancellation token, then uses its existing durable result/apply flow. Cancellation or a changed project cannot apply late output. No automatic paid retry or account/billing fallback was added.
 - The editor owns concise draft actions and on-canvas editing. The preview still cannot fetch arbitrary network resources. Product plugins gain no capability from this feature.
 
 Raster decoding uses the already locked, widely used Rust `image` crate, pinned at 0.25.10 with only PNG/JPEG requested by this adapter. No new package resolutions or JavaScript dependencies were added. Production online image quality and paid model instruction-following remain separate live checks; automated checks use a controlled local HTTP fixture and actual exported files.
+
+## Project assets and request scope (format 8)
+
+New generations send an image catalogue with names, MIME types, fingerprints and `desegnos-asset:<uuid>` references. The agent never transcribes imported image bytes. Core resolves only the frozen project's validated assets, atomically and within source budgets; the native acceptance boundary repeats resolution and validation. Unknown references and malformed Base64 image sources cannot apply. Accepted source remains ordinary portable HTML/CSS with embedded original images, and export extracts the exact bytes. Existing affected-source attachments replace known data URIs with these references while retaining hashes of the real accepted source. Frozen formats 3–7 retain their exact requirement rendering and provider tool policy.
+
+Flexible permits small local nudges, aiming within eight CSS pixels per edge at the reference viewport. Both modes retain requested placement, size and scope. New pages require one marked root per requested area and reject visible/interactive content outside those roots. Selected-element requests compare surrounding DOM before and after, preserving previous area markers. Existing-page requests drawn as rectangles have no trusted mapping to old DOM nodes, so structural comparison is deliberately unavailable there. These checks do not prove semantic relevance within a requested root or CSS/JavaScript effects and do not measure pixel geometry. Placement fidelity still requires browser benchmark evidence; no paid model quality claim follows from fixture tests.
+
+The public site must not contain editor commentary, draft badges, unsolicited slogans or invented marketing claims. Explanations, criticism and missing-input questions belong to structured feedback and the project brief. Missing-content slots receive a single short local label. Required image credits stay beside their image.
+
+The element editor offers **Project image** for choosing an already imported logo without another generation. It uses the ordinary source edit, durability and Undo flow. No new dependencies or plugin capabilities were introduced.

@@ -323,7 +323,10 @@ impl GenerationCandidate {
                 "Design feedback refers to an unrequested area.",
             )?;
         }
-        Ok(())
+        if snapshot.format_version()? >= 8 {
+            self.validate_project_images()?;
+        }
+        self.validate_scope(snapshot, project)
     }
 
     pub(crate) fn validate_identity(&self, snapshot: &RequirementsSnapshot) -> Result<()> {

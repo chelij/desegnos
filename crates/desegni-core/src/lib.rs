@@ -2,11 +2,13 @@ mod dossier;
 mod editing;
 mod export;
 mod generation;
+mod generation_scope;
 mod identity;
 mod images;
 mod layers;
 mod migration;
 mod model;
+mod project_assets;
 mod requirements;
 mod session;
 
@@ -19,6 +21,7 @@ pub use images::*;
 pub use layers::*;
 pub use migration::*;
 pub use model::*;
+pub use project_assets::*;
 pub use requirements::*;
 pub use session::*;
 

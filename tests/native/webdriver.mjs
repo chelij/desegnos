@@ -119,10 +119,11 @@ export class WebDriver {
         && button.getClientRects().length && getComputedStyle(button).visibility === 'visible' && !button.matches(':disabled') && (!top || top.contains(button)));
     }, text);
     const routes = {
-      'New project': ['Project', 'New project'], 'Open project': ['Project', 'Open project'], Save: ['Project', 'Save'], 'Save as': ['Project', 'Save as'],
-      'Project dossier': ['Project', 'Project dossier'], 'Recover projects': ['Project', 'Recover projects'],
+      'Add page': ['Add page'], 'AI settings':['AI settings'],
+      'New project': ['New project'], 'Open project': ['Open project'], Save: ['Save'], 'Save as': ['Save as'],
+      'Project dossier': ['Project brief'], 'Recover projects': ['Project', 'Recover projects'],
       Undo: ['Edit', 'Undo'], Redo: ['Edit', 'Redo'], 'Remove request': ['Edit', 'Remove request'],
-      'Page settings': ['Page', 'Page settings'], 'Remove page': ['Page', 'Remove page'],
+      'Page settings': ['Page settings'], 'Remove page': ['Remove page'],
       'Review requirements': ['Technical', 'Review requirements'], 'Generation status': ['AI', 'Generation status'],
     };
     if (!visible && routes[text]) return this.menu(routes[text]);

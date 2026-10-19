@@ -2915,3 +2915,28 @@ async fn chatgpt_catalogue_cancel_and_deadline_use_the_same_native_cancellation_
 
 #[path = "identity_tests.rs"]
 mod identity_contracts;
+
+#[tokio::test]
+async fn web_search_events_preserve_the_single_structured_answer_and_reject_tool_text() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let mut events = finalized_answer_events(&frozen, Some("final_answer"));
+    let item = json!({"id":"ws_fixture","type":"web_search_call","status":"completed","action":{"type":"search","query":"requested image"}});
+    events.insert(
+        1,
+        json!({"type":"response.output_item.added","output_index":4,"item":item}),
+    );
+    events.insert(
+        2,
+        json!({"type":"response.output_item.done","output_index":4,"item":item}),
+    );
+    let response = generate_events(&frozen, events.clone(), AuthenticationMethod::ApiKey)
+        .await
+        .unwrap();
+    assert_eq!(response.text, candidate(&frozen));
+    events.insert(3, json!({"type":"response.output_text.done","output_index":4,"content_index":0,"item_id":"ws_fixture","text":"untrusted search content"}));
+    assert!(
+        generate_events(&frozen, events, AuthenticationMethod::ApiKey)
+            .await
+            .is_err()
+    );
+}

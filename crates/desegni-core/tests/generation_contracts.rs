@@ -96,10 +96,48 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
         requirements_sha256: snapshot.sha256.clone(),
         summary: "Implemented the counter and its explanation on the requested pages.".into(),
         regions,
-        pages: vec![GeneratedPage { page_id: home, content: source("Count") }, GeneratedPage { page_id: details, content: SiteContent { html: "<details><summary>Counter behavior</summary><p>Click to change the label.</p></details>".into(), css: String::new(), javascript: String::new() } }],
-        component_requests: vec![ComponentRequest { region_id: project.pages[0].regions[0].id, capability: "Interactive counter button".into(), resolution: ComponentResolution::Native, reason: "HTML button and a DOM click listener are available.".into() }],
-        decision_proposals: vec![DecisionProposal { topic: "Control shape".into(), value: "Square counter button".into(), scope: Scope::Page(home), rationale: "A clear shape for the primary control.".into() }, DecisionProposal { topic: "Voice".into(), value: "Plain language".into(), scope: Scope::Project, rationale: "Keep explanations consistent.".into() }],
-        criticism: vec![DesignCriticism { region_id: Some(project.pages[0].regions[0].id), message: "The control and explanation need clear separation.".into(), suggestion: "Keep a consistent gap between them.".into() }],
+        pages: vec![
+            GeneratedPage {
+                page_id: home,
+                content: source("Count"),
+            },
+            GeneratedPage {
+                page_id: details,
+                content: SiteContent {
+                    html: format!(
+                        "<details data-desegnos-region=\"{}\"><summary>Counter behavior</summary><p>Click to change the label.</p></details>",
+                        project.pages[1].regions[0].id
+                    ),
+                    css: String::new(),
+                    javascript: String::new(),
+                },
+            },
+        ],
+        component_requests: vec![ComponentRequest {
+            region_id: project.pages[0].regions[0].id,
+            capability: "Interactive counter button".into(),
+            resolution: ComponentResolution::Native,
+            reason: "HTML button and a DOM click listener are available.".into(),
+        }],
+        decision_proposals: vec![
+            DecisionProposal {
+                topic: "Control shape".into(),
+                value: "Square counter button".into(),
+                scope: Scope::Page(home),
+                rationale: "A clear shape for the primary control.".into(),
+            },
+            DecisionProposal {
+                topic: "Voice".into(),
+                value: "Plain language".into(),
+                scope: Scope::Project,
+                rationale: "Keep explanations consistent.".into(),
+            },
+        ],
+        criticism: vec![DesignCriticism {
+            region_id: Some(project.pages[0].regions[0].id),
+            message: "The control and explanation need clear separation.".into(),
+            suggestion: "Keep a consistent gap between them.".into(),
+        }],
     };
     (project, snapshot, candidate)
 }
@@ -318,7 +356,7 @@ fn conflicts_and_unavailable_components_never_become_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 7"));
+    assert!(snapshot.markdown.contains("Requirements format: 8"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -772,7 +810,13 @@ fn automatic_notes_preserve_user_history_and_failed_writes_leave_the_session_unc
         .filter(|page| !page.regions.is_empty())
         .map(|page| GeneratedPage {
             page_id: page.id,
-            content: source("Actual source"),
+            content: SiteContent {
+                html: format!(
+                    "<main data-desegnos-region=\"{}\"><button>Actual source</button></main>",
+                    page.regions[0].id
+                ),
+                ..source("Actual source")
+            },
         })
         .collect();
     candidate.component_requests.clear();
@@ -1237,4 +1281,86 @@ fn direct_local_source_edits_invalidate_an_already_frozen_generation() {
         edited.pages[0].content.as_ref().unwrap().javascript,
         page.content.as_ref().unwrap().javascript
     );
+}
+
+#[test]
+fn selected_element_generation_preserves_surrounding_content_in_both_modes() {
+    for mode in [GenerationMode::Fuzzy, GenerationMode::Strict] {
+        let (mut project, _, _) = fixture();
+        project.generation_mode = mode;
+        for page in &mut project.pages {
+            for region in &mut page.regions {
+                region.completed = true;
+            }
+        }
+        project.pages[0].content.as_mut().unwrap().html =
+            "<main><button>Existing home</button><footer data-desegnos-region='f19de1f2-ec4c-425c-8813-284f77ed31b1'>Keep this exact footer</footer></main>"
+                .into();
+        let target = ElementTarget {
+            selector: "body > main:nth-of-type(1) > button:nth-of-type(1)".into(),
+            tag: "button".into(),
+            label: "Existing home".into(),
+            source_sha256: project.pages[0].content.as_ref().unwrap().sha256().unwrap(),
+        };
+        let home = project.home_page_id;
+        let rect = Rect {
+            x: 24.0,
+            y: 32.0,
+            width: 280.0,
+            height: 120.0,
+        };
+        project = project
+            .apply(
+                project.revision,
+                Command::AddElementRegion {
+                    page_id: home,
+                    rect,
+                    element: target,
+                },
+            )
+            .unwrap();
+        let id = project.pages[0].regions.last().unwrap().id;
+        project = project
+            .apply(
+                project.revision,
+                Command::UpdateRegion {
+                    page_id: home,
+                    region_id: id,
+                    rect,
+                    prompt: "Make this button green".into(),
+                },
+            )
+            .unwrap();
+        let snapshot = project.prepare_requirements().unwrap();
+        let valid = GenerationCandidate {
+            job_id: snapshot.job_id,
+            requirements_sha256: snapshot.sha256.clone(),
+            summary: "Changed the button.".into(),
+            regions: vec![RegionOutcome {
+                region_id: id,
+                status: RegionStatus::Implemented,
+                explanation: "Updated the requested button.".into(),
+            }],
+            pages: vec![GeneratedPage {
+                page_id: home,
+                content: SiteContent {
+                    html: format!(
+                        "<main><button data-desegnos-region='{id}' style='color:green'>Existing home</button><footer data-desegnos-region='f19de1f2-ec4c-425c-8813-284f77ed31b1'>Keep this exact footer</footer></main>"
+                    ),
+                    ..project.pages[0].content.clone().unwrap()
+                },
+            }],
+            component_requests: vec![],
+            decision_proposals: vec![],
+            criticism: vec![],
+        };
+        valid.validate(&snapshot, &project).unwrap();
+        let mut changed = valid.clone();
+        changed.pages[0].content.html = changed.pages[0]
+            .content
+            .html
+            .replace("Keep this exact footer", "Unrequested marketing slogan");
+        assert!(changed.validate(&snapshot, &project).is_err());
+        assert!(project.apply_generation(&snapshot, &changed, &[]).is_err());
+    }
 }

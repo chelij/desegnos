@@ -442,7 +442,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     const previous = (await driver.invoke('get_generation', { projectId })).jobId;
     provider.setMode('complete', { draftAudit: true }); await driver.button('Generate draft');
     const job = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.jobId !== previous && value?.status === 'applied' && value; }, 'The fresh labelled draft did not apply', 25_000);
-    assert.match(job.requirements.markdown, /Requirements format: 7/); assert.match(job.requirements.markdown, /clearly defined placeholders/);
+    assert.match(job.requirements.markdown, /Requirements format: 8/); assert.match(job.requirements.markdown, /clearly defined placeholders/);
     const image = await waitFor(() => driver.execute(() => {
       const doc = document.querySelector('.static-preview iframe')?.contentDocument, photo = doc?.getElementById('downloaded-photo'), missing = doc?.getElementById('missing-photo');
       return photo?.complete && photo.naturalWidth === 2 && missing?.complete && { src: photo.getAttribute('src'), source: photo.getAttribute('data-desegnos-image-source'), alt: missing.alt, placeholder: missing.hasAttribute('data-desegnos-placeholder'), disabled: doc.querySelector('button')?.disabled };

@@ -193,7 +193,7 @@ fn imported_identity_validates_source_and_asset_uniqueness_before_attachment() {
 }
 
 #[test]
-fn requirements_include_portable_identity_bytes_while_project_notes_contain_only_metadata() {
+fn requirements_reference_original_identity_images_without_transcribing_their_bytes() {
     let imported = identity();
     let project = described(blank().set_initial_identity(imported.clone()).unwrap());
     let markdown = project.project_markdown().unwrap();
@@ -202,8 +202,13 @@ fn requirements_include_portable_identity_bytes_while_project_notes_contain_only
     assert!(markdown.contains(&imported.assets[0].id.to_string()));
     assert!(!markdown.contains("data:image/"));
     let snapshot = project.prepare_requirements().unwrap();
-    assert!(snapshot.markdown.contains("Requirements format: 7"));
-    assert!(snapshot.markdown.contains(&imported.assets[0].data_uri));
+    assert!(snapshot.markdown.contains("Requirements format: 8"));
+    assert!(!snapshot.markdown.contains(&imported.assets[0].data_uri));
+    assert!(
+        snapshot
+            .markdown
+            .contains(&project_asset_reference(imported.assets[0].id))
+    );
     assert!(snapshot.markdown.contains(&imported.summary));
     assert!(snapshot.markdown.contains(&imported.source_sha256));
     snapshot.validate_current(&project).unwrap();
@@ -235,7 +240,7 @@ fn requirements_include_portable_identity_bytes_while_project_notes_contain_only
             .prepare_requirements()
             .unwrap()
             .markdown
-            .contains("Requirements format: 7")
+            .contains("Requirements format: 8")
     );
 }
 
@@ -345,4 +350,151 @@ fn persisted_raster_headers_enforce_dimensions_before_any_preview_or_import() {
             .validate()
             .is_err()
     );
+}
+
+fn asset_candidate(
+    project: &Project,
+    html: String,
+    css: String,
+) -> (RequirementsSnapshot, GenerationCandidate) {
+    let snapshot = project.prepare_requirements().unwrap();
+    let candidate = GenerationCandidate {
+        job_id: snapshot.job_id,
+        requirements_sha256: snapshot.sha256.clone(),
+        summary: "Used the requested logo.".into(),
+        regions: vec![RegionOutcome {
+            region_id: project.pages[0].regions[0].id,
+            status: RegionStatus::Implemented,
+            explanation: "Used the project image.".into(),
+        }],
+        pages: vec![GeneratedPage {
+            page_id: project.home_page_id,
+            content: SiteContent {
+                html,
+                css,
+                javascript: String::new(),
+            },
+        }],
+        component_requests: vec![],
+        decision_proposals: vec![],
+        criticism: vec![],
+    };
+    (snapshot, candidate)
+}
+
+#[test]
+fn stable_project_image_references_resolve_exactly_export_and_undo_without_transcription() {
+    let mut imported = identity();
+    let png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=").unwrap();
+    imported.assets.push(image("image/png", &png));
+    let project = described(blank().set_initial_identity(imported.clone()).unwrap());
+    let svg_ref = project_asset_reference(imported.assets[0].id);
+    let png_ref = project_asset_reference(imported.assets[1].id);
+    let (snapshot, mut candidate) = asset_candidate(
+        &project,
+        format!(
+            "<main data-desegnos-region='{}'><img src='{svg_ref}' alt='Studio'><img src='{png_ref}' alt='Studio raster'></main>",
+            project.pages[0].regions[0].id
+        ),
+        format!("main{{background-image:url('{png_ref}')}}"),
+    );
+    assert!(!snapshot.markdown.contains("data:image/"));
+    assert!(candidate.validate(&snapshot, &project).is_err());
+    assert_eq!(candidate.resolve_project_assets(&project).unwrap(), 3);
+    assert_eq!(candidate.resolve_project_assets(&project).unwrap(), 0);
+    candidate.validate(&snapshot, &project).unwrap();
+    let expected = candidate.pages[0].content.clone();
+    assert!(expected.html.contains(&imported.assets[0].data_uri));
+    assert!(expected.html.contains(&imported.assets[1].data_uri));
+    assert!(expected.css.contains(&imported.assets[1].data_uri));
+    let mut session = Session::new(project.clone()).unwrap();
+    session
+        .apply_generation(&snapshot, &candidate, &[], |_| Ok(()))
+        .unwrap();
+    let exported = compile_website(session.project()).unwrap();
+    for asset in &imported.assets {
+        assert!(
+            exported
+                .files
+                .values()
+                .any(|bytes| digest(bytes) == asset.sha256)
+        );
+    }
+    let next_source = session
+        .project()
+        .generation_source_with_asset_references(&expected);
+    assert!(next_source.html.contains(&svg_ref));
+    assert!(next_source.css.contains(&png_ref));
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages, project.pages);
+    session.redo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages[0].content.as_ref(), Some(&expected));
+}
+
+#[test]
+fn invalid_project_references_and_damaged_image_bytes_cannot_apply_or_partially_resolve() {
+    let imported = identity();
+    let project = described(blank().set_initial_identity(imported.clone()).unwrap());
+    let valid = project_asset_reference(imported.assets[0].id);
+    for invalid in [
+        project_asset_reference(Uuid::new_v4()),
+        "desegnos-asset:malformed".into(),
+    ] {
+        let (_, mut candidate) = asset_candidate(
+            &project,
+            format!("<img src='{valid}'><img src='{invalid}'>"),
+            String::new(),
+        );
+        let before = candidate.clone();
+        assert!(candidate.resolve_project_assets(&project).is_err());
+        assert_eq!(candidate, before);
+    }
+    let (snapshot, candidate) = asset_candidate(
+        &project,
+        format!(
+            "<main data-desegnos-region='{}'><img src='data:image/png;base64,aGVsbG8=Z'></main>",
+            project.pages[0].regions[0].id
+        ),
+        String::new(),
+    );
+    assert!(
+        candidate
+            .validate(&snapshot, &project)
+            .unwrap_err()
+            .0
+            .contains("damaged image")
+    );
+    assert!(
+        project
+            .apply_generation(&snapshot, &candidate, &[])
+            .is_err()
+    );
+}
+
+#[test]
+fn flexible_and_strict_reject_unsolicited_content_outside_new_request_roots() {
+    for mode in [GenerationMode::Fuzzy, GenerationMode::Strict] {
+        let mut project = described(blank());
+        project.generation_mode = mode;
+        let root = format!(
+            "<main data-desegnos-region='{}'><h1>Welcome</h1></main>",
+            project.pages[0].regions[0].id
+        );
+        let (snapshot, valid) = asset_candidate(&project, root.clone(), String::new());
+        valid.validate(&snapshot, &project).unwrap();
+        for extra in [
+            "<header>Draft · Made for you</header>",
+            "<p>Note: replace these items later</p>",
+            "<nav><a href='#'>New section</a></nav>",
+        ] {
+            let mut candidate = valid.clone();
+            candidate.pages[0].content.html = format!("{extra}{root}");
+            assert!(candidate.validate(&snapshot, &project).is_err());
+            assert!(
+                project
+                    .apply_generation(&snapshot, &candidate, &[])
+                    .is_err()
+            );
+        }
+    }
 }

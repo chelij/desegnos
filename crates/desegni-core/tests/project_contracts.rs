@@ -447,14 +447,16 @@ fn one_global_generation_setting_controls_all_placement_hints_and_staleness() {
         "The contact form below the heading",
     );
     let fuzzy = p.prepare_requirements().unwrap();
-    assert!(fuzzy.markdown.contains("Requirements format: 7"));
+    assert!(fuzzy.markdown.contains("Requirements format: 8"));
     assert_eq!(fuzzy.markdown.matches("\"generationMode\"").count(), 1);
     assert_eq!(fuzzy.markdown.matches("\"placementHint\"").count(), 2);
     assert!(!fuzzy.markdown.contains("\"mode\""));
     assert!(!fuzzy.markdown.contains("\"rect\""));
     assert!(!fuzzy.markdown.contains("1 CSS pixel"));
     assert!(!fuzzy.markdown.contains("Strict geometry"));
-    assert!(fuzzy.markdown.contains("relative placement"));
+    assert!(fuzzy.markdown.contains("small local nudges only"));
+    assert!(fuzzy.markdown.contains("8 CSS pixels"));
+    assert!(fuzzy.markdown.contains("never in page HTML"));
     let strict = p
         .apply(
             p.revision,

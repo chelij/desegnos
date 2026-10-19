@@ -17,6 +17,7 @@ import { startProviderServer, assertNoSyntheticKeys } from '../tests/native/prov
 import { identityWorkflow } from '../tests/native/identity-workflow.mjs';
 import { uxAuditWorkflow } from '../tests/native/ux-audit-workflow.mjs';
 import { canvasInputWorkflow } from '../tests/native/canvas-input-workflow.mjs';
+import { logoScopeWorkflow } from '../tests/native/logo-scope-workflow.mjs';
 import { layersWorkflow } from '../tests/native/layers-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -175,7 +176,7 @@ async function runIsolated() {
     } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'canvas-input') {
       report.scope = 'Focused canvas input, zoom, pan and unlimited box sizing.';
       project = await canvasInputWorkflow(driver, physical, step, evidence, provider);
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity') {
+    } else if (['identity', 'logo-scope'].includes(process.env.DESEGNI_NATIVE_TEST_SCOPE)) {
       report.scope = 'Focused native brand import and recovery.';
       await step('Create a real source website for brand import', async () => {
         await driver.button('Blank website');
@@ -183,7 +184,7 @@ async function runIsolated() {
         await driver.button('Mobile'); await driver.button('Create project');
         await waitFor(() => driver.execute(() => !!document.querySelector('[data-testid="canvas"]')), 'The focused canvas did not mount');
         await physical.initialize(evidence);
-        await driver.button('Add request');
+        await driver.press('[data-testid="canvas"]', '\uE007');
         await driver.fill('Request 1', 'Create a native interactive button and explain its behavior.');
         await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions[0]?.prompt, 'The request did not persist');
         await driver.invoke('set_ai_key', { key: provider.key(), storage: 'session' });
@@ -197,15 +198,16 @@ async function runIsolated() {
       report.scope = 'Current UX audit core loop with real export, local edits, generation and recovery.';
       project = await uxAuditWorkflow(driver, physical, step, evidence, provider);
     }
-    if (!process.env.DESEGNI_NATIVE_TEST_SCOPE || process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity') {
+    if (!process.env.DESEGNI_NATIVE_TEST_SCOPE || ['identity', 'logo-scope'].includes(process.env.DESEGNI_NATIVE_TEST_SCOPE)) {
       project = await identityWorkflow(driver, physical, step, evidence, provider);
+      if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'logo-scope') project = await logoScopeWorkflow(driver, physical, step, evidence, provider);
     }
     // A saved-only workflow correctly has no unsaved journal to recover.
     // Make one real acknowledged edit so this runner tests crash recovery.
     if (!(await driver.invoke('get_workspace')).dirty) {
       await step('Leave an acknowledged unsaved canvas edit for crash recovery', async () => {
         const before = (await driver.invoke('get_workspace')).project;
-        await driver.menu(['View', 'Show grid']);
+        await driver.invoke('edit_project', {revision:before.revision,command:{type:'set_grid',enabled:!before.showGrid}});
         project = await waitFor(async () => {
           const state = await driver.invoke('get_workspace');
           return state.dirty && state.project.revision > before.revision && state.project.showGrid !== before.showGrid && state.project;
@@ -230,7 +232,7 @@ async function runIsolated() {
       assert.equal(ai.chatgpt.accounts.some(account => account.connected || account.planEnabled || account.storage !== 'none'), false);
       const job = await driver.invoke('get_generation', { projectId: project.id });
       if (project.importedIdentity) {
-        assert.equal(job, null);
+        if (project.latestGeneration) assert.equal(job?.jobId, project.latestGeneration.jobId); else assert.equal(job, null);
         const identity = await driver.invoke('get_identity_analysis');
         assert.equal(identity.status, 'complete');
         assert.equal(identity.source.sha256, project.importedIdentity.sourceSha256);
@@ -276,11 +278,12 @@ async function main() {
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
   if (args.includes('--canvas-input-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'canvas-input';
   if (args.includes('--identity-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'identity';
   if (args.includes('--generation-only') || args.includes('--ux-audit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'audit';
+  if (args.includes('--logo-scope-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'logo-scope';
   if (args.includes('--layers-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'layers';
   process.chdir(root);
   const target = resolve('target/native-tests');

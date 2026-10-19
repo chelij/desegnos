@@ -850,7 +850,7 @@ fn real_schema_three_preserves_all_original_data_notes_and_backup_before_explici
     assert_eq!(reopened.project, document.project);
     frozen.validate_current(&reopened.project).unwrap();
     let new_request = reopened.project.prepare_requirements().unwrap();
-    assert!(new_request.markdown.contains("Requirements format: 7"));
+    assert!(new_request.markdown.contains("Requirements format: 8"));
     new_request.validate_current(&reopened.project).unwrap();
 }
 
@@ -980,6 +980,10 @@ fn signed_placements_grid_settings_and_generated_dossier_round_trip_through_real
     let (_, _, mut candidate) = generation_fixture();
     candidate.job_id = snapshot.job_id;
     candidate.requirements_sha256 = snapshot.sha256.clone();
+    candidate.pages[0].content.html = candidate.pages[0].content.html.replace(
+        &candidate.regions[0].region_id.to_string(),
+        &configured.pages[0].regions[0].id.to_string(),
+    );
     candidate.regions[0].region_id = configured.pages[0].regions[0].id;
     candidate.pages[0].page_id = configured.home_page_id;
     candidate.decision_proposals[0].scope = Scope::Page(configured.home_page_id);
@@ -1073,10 +1077,30 @@ fn generation_fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) 
         job_id: snapshot.job_id,
         requirements_sha256: snapshot.sha256.clone(),
         summary: "Added the requested native disclosure.".into(),
-        regions: vec![RegionOutcome { region_id: p.pages[0].regions[0].id, status: RegionStatus::Implemented, explanation: "Uses native details and summary elements.".into() }],
-        pages: vec![GeneratedPage { page_id: p.home_page_id, content: SiteContent { html: "<details><summary>About this project</summary><p>Saved generated source.</p></details>".into(), css: "details { padding: 1rem; }".into(), javascript: "document.querySelector('details').addEventListener('toggle', () => {});".into() } }],
+        regions: vec![RegionOutcome {
+            region_id: p.pages[0].regions[0].id,
+            status: RegionStatus::Implemented,
+            explanation: "Uses native details and summary elements.".into(),
+        }],
+        pages: vec![GeneratedPage {
+            page_id: p.home_page_id,
+            content: SiteContent {
+                html: format!(
+                    "<details data-desegnos-region=\"{}\"><summary>About this project</summary><p>Saved generated source.</p></details>",
+                    p.pages[0].regions[0].id
+                ),
+                css: "details { padding: 1rem; }".into(),
+                javascript:
+                    "document.querySelector('details').addEventListener('toggle', () => {});".into(),
+            },
+        }],
         component_requests: vec![],
-        decision_proposals: vec![DecisionProposal { topic: "Explanation format".into(), value: "Native disclosure".into(), scope: Scope::Page(p.home_page_id), rationale: "The detail is optional to read.".into() }],
+        decision_proposals: vec![DecisionProposal {
+            topic: "Explanation format".into(),
+            value: "Native disclosure".into(),
+            scope: Scope::Page(p.home_page_id),
+            rationale: "The detail is optional to read.".into(),
+        }],
         criticism: vec![],
     };
     (p, snapshot, candidate)
@@ -1407,7 +1431,7 @@ fn schema_five_integrity_notes_frozen_requirements_and_exact_backup_are_preserve
     };
     project.pages[0].regions[0].element = Some(target);
     let frozen = project.prepare_requirements().unwrap();
-    assert!(frozen.markdown.contains("Requirements format: 7"));
+    assert!(frozen.markdown.contains("Requirements format: 8"));
     let path = temp.0.join("schema-five.desegni");
     let file = ProjectFile::acquire(&path).unwrap();
     file.save(&project).unwrap();

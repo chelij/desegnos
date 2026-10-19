@@ -15,6 +15,11 @@ function jsonBlocks(markdown) {
 }
 
 function sourceFor(record, endpoint, options) {
+  if (options.logoScope) {
+    const asset = jsonBlocks(record.markdown).find(value => Array.isArray(value?.assets))?.assets[0];
+    assert.ok(asset?.url?.startsWith('desegnos-asset:'));
+    return { html: `<main id="logo-test"><h1>Northstar Studio</h1><img id="project-logo" src="${asset.url}" alt="Northstar Studio" width="128" height="128"><img id="editable-image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGOwaQoAIgYIBQAdRgQ5DejjuQAAAABJRU5ErkJggg==" alt="Image to edit" width="128" height="128"><p>Image placeholder</p></main>`, css:'body{margin:0;background:white;color:#222;font:16px system-ui}main{padding:24px}img{display:block}', javascript:'' };
+  }
   if (options.draftAudit) {
     const origin = endpoint.replace(/\/v1$/, '');
     return { html: `<main id="image-draft"><h1>Sample website</h1><p>Placeholder: add your introduction.</p><button disabled>Add your GitHub link</button><figure><img id="downloaded-photo" data-desegnos-download src="${origin}/images/photo.png" alt="Sample green picture"><figcaption>Sample image · Native fixture</figcaption></figure><figure><img id="missing-photo" data-desegnos-download src="${origin}/images/missing.png" alt="Sample missing picture"><figcaption>Placeholder: replace with your product screenshot.</figcaption></figure></main>`,
@@ -66,7 +71,15 @@ function candidateFor(record, endpoint, options) {
     jobId: record.metadata.jobId, requirementsSha256: record.metadata.requirementsSha256,
     summary: 'Native fixture candidate with complete source and explicit review choices',
     regions: requests.map(value => ({ regionId: value.regionId, status: conflict ? 'conflict' : 'implemented', explanation: conflict ? 'The requested remote service is unavailable in this dependency gate.' : 'Implemented with native HTML, CSS and browser DOM behavior.' })),
-    pages: conflict ? [] : pageIds.map(pageId => ({ pageId, content: sourceFor(record, endpoint, options) })),
+    pages: conflict ? [] : pageIds.map(pageId => {
+      const content = sourceFor(record, endpoint, options);
+      if (/^Requirements format: 8$/m.test(record.markdown)) {
+        const areas = requests.filter(value => value.pageId === pageId);
+        content.html = content.html.replace('<main', `<main data-desegnos-region="${areas[0].regionId}"`);
+        content.html += areas.slice(1).map(area => `<section data-desegnos-region="${area.regionId}"><p>Requested supporting content</p></section>`).join('');
+      }
+      return {pageId, content};
+    }),
     componentRequests: [{ regionId: requests[0].regionId, capability: 'Interactive button', resolution: conflict ? 'unavailable' : 'native', reason: conflict ? 'No external service is available.' : 'A native button and DOM listener provide the interaction without a package.' }],
     decisionProposals: conflict ? [] : [
       { topic: `Native fixture navigation ${record.metadata.jobId}`, value: 'Use a clear native action button.', scope: { kind: 'project' }, rationale: 'The primary action should remain recognizable across the site.' },
@@ -100,7 +113,6 @@ function identityCandidateFor(record) {
 function readRequest(bytes, ordinal, mode, authentication) {
   const body = JSON.parse(bytes);
   assert.equal(body.stream, true); assert.equal(body.store, false);
-  assert.deepEqual(body.tools, []); assert.equal(body.tool_choice, 'none');
   assert.equal(body.model, 'gpt-6.1-sol');
   if (authentication === 'chatgpt') {
     for (const field of ['max_output_tokens', 'service_tier', 'background', 'conversation', 'previous_response_id', 'prompt', 'truncation']) assert.equal(field in body, false, `Unsupported plan field ${field}`);
@@ -124,6 +136,8 @@ function readRequest(bytes, ordinal, mode, authentication) {
   const decoded = Buffer.from(encoded[1], 'base64');
   assert.equal(decoded.toString('base64'), encoded[1], 'Non-canonical Base64 file');
   const markdown = decoded.toString('utf8');
+  const webSearch = purpose === 'generation' && /^Requirements format: 8$/m.test(markdown);
+  assert.deepEqual(body.tools, webSearch ? [{type:'web_search'}] : []); assert.equal(body.tool_choice, webSearch ? 'auto' : 'none');
   assert.deepEqual(Buffer.from(markdown, 'utf8'), decoded, 'Requirements are not exact valid UTF-8');
   assert.deepEqual(body.text.format.schema.properties.jobId.enum, [metadata.jobId]);
   assert.deepEqual(body.text.format.schema.properties.requirementsSha256.enum, [metadata.requirementsSha256]);

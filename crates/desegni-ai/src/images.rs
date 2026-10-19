@@ -186,15 +186,16 @@ impl OpenAiClient {
         project: &Project,
         cancellation: &CancellationToken,
     ) -> ProviderResponse {
-        if !snapshot
-            .markdown
-            .starts_with("# Generation requirements\n\nRequirements format: 7\n\n")
-        {
+        let format = snapshot.format_version().unwrap_or(0);
+        if format < 7 {
             return response;
         }
         let Ok(mut candidate) = GenerationCandidate::from_json(&response.text) else {
             return response;
         };
+        if format >= 8 && candidate.resolve_project_assets(project).is_err() {
+            return response;
+        }
         if candidate.validate(snapshot, project).is_err() {
             return response;
         }
@@ -202,6 +203,11 @@ impl OpenAiClient {
             return response;
         };
         if urls.is_empty() {
+            if format >= 8
+                && let Ok(text) = serde_json::to_string(&candidate)
+            {
+                response.text = text;
+            }
             return response;
         }
         #[cfg(any(test, feature = "test-support"))]
