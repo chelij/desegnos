@@ -8,7 +8,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 use uuid::Uuid;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
@@ -91,7 +91,7 @@ impl SaveFailure {
 
 pub struct ProjectFile {
     path: PathBuf,
-    _lock: File,
+    _lock: Arc<File>,
     stamp: Mutex<Option<FileStamp>>,
 }
 
@@ -149,7 +149,7 @@ impl ProjectFile {
         })?;
         Ok(Self {
             path,
-            _lock: lock,
+            _lock: Arc::new(lock),
             stamp: Mutex::new(None),
         })
     }
@@ -332,6 +332,18 @@ impl ProjectFile {
         let (document, observed) = read_project_document(&self.path)?;
         *stamp = Some(observed);
         Ok(document)
+    }
+
+    /// Stage an explicit reopen without reacquiring our own lock or rebasing the active file.
+    /// The old handle and its save baseline remain valid if workspace activation fails.
+    pub fn reopen(&self) -> Result<(Self, DecodedProject)> {
+        let file = Self {
+            path: self.path.clone(),
+            _lock: Arc::clone(&self._lock),
+            stamp: Mutex::new(None),
+        };
+        let document = file.load_document()?;
+        Ok((file, document))
     }
 
     /// Read the recorded saved snapshot without accepting an external change as a new baseline.

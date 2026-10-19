@@ -63,7 +63,7 @@ pub struct WorkspaceView {
     migration_notice: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HistoryView {
     session_id: Uuid,
@@ -409,6 +409,19 @@ impl Workspace {
         }
         self.remember_recent();
         Ok(())
+    }
+
+    fn open_path(&mut self, path: &std::path::Path) -> NativeResult<()> {
+        let (file, document) = if let Some(current) = self.file.as_ref().filter(|file| {
+            file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
+        }) {
+            current.reopen().map_err(message)?
+        } else {
+            let file = ProjectFile::acquire(path).map_err(message)?;
+            let document = file.load_document().map_err(message)?;
+            (file, document)
+        };
+        self.open_document(file, document)
     }
 
     fn remember_recent(&mut self) {
@@ -1237,8 +1250,7 @@ pub async fn open_project(
     let Some(picked) = picked else {
         return Ok(None);
     };
-    let file = ProjectFile::acquire(&picked.into_path().map_err(message)?).map_err(message)?;
-    let document = file.load_document().map_err(message)?;
+    let path = picked.into_path().map_err(message)?;
     let mut state = state.lock().map_err(message)?;
     generation
         .lock()
@@ -1252,7 +1264,7 @@ pub async fn open_project(
         );
     }
     state.check_replace(discard)?;
-    state.open_document(file, document)?;
+    state.open_path(&path)?;
     Ok(Some(state.view()))
 }
 
@@ -1748,6 +1760,66 @@ mod tests {
         assert_eq!(fs::read(pointer).unwrap(), before);
         assert_eq!(desegni_storage::load_project(&old_path).unwrap(), original);
         assert_eq!(desegni_storage::load_project(&new_path).unwrap(), candidate);
+    }
+
+    #[test]
+    fn reopening_the_current_file_resets_history_without_releasing_its_lock() {
+        let temp = Temp::new();
+        let original = project("Reopen my saved site");
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.start(original.clone(), None, None).unwrap();
+        let path = temp.0.join("site.desegnos");
+        workspace
+            .save_snapshot(&original, Some(path.clone()))
+            .unwrap();
+        change_grid(&mut workspace);
+        let edited = workspace.session.as_ref().unwrap().project().clone();
+        workspace.save_snapshot(&edited, None).unwrap();
+        let previous_session = workspace.view().history.unwrap().session_id;
+        workspace.open_path(&path).unwrap();
+        assert_eq!(workspace.session.as_ref().unwrap().project(), &edited);
+        let history = workspace.view().history.unwrap();
+        assert_ne!(history.session_id, previous_session);
+        assert_eq!((history.position, history.end), (0, 0));
+        assert!(!workspace.view().dirty);
+        assert!(ProjectFile::acquire(&path).is_err());
+        drop(workspace);
+        ProjectFile::acquire(&path).unwrap();
+    }
+
+    #[test]
+    fn a_failed_reopen_keeps_the_active_session_lock_and_original_save_baseline() {
+        let temp = Temp::new();
+        let original = project("Preserve a failed reopen");
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.start(original.clone(), None, None).unwrap();
+        let path = temp.0.join("site.desegnos");
+        workspace
+            .save_snapshot(&original, Some(path.clone()))
+            .unwrap();
+        let previous_history = workspace.view().history;
+        let stamp = workspace.file.as_ref().unwrap().stamp().unwrap();
+        let bytes = fs::read(&path).unwrap();
+        fs::write(&path, b"Unreadable external changes").unwrap();
+        assert!(workspace.open_path(&path).is_err());
+        assert_eq!(workspace.session.as_ref().unwrap().project(), &original);
+        assert_eq!(workspace.view().history, previous_history);
+        assert_eq!(workspace.file.as_ref().unwrap().stamp().unwrap(), stamp);
+        assert!(ProjectFile::acquire(&path).is_err());
+        fs::write(&path, bytes).unwrap();
+        let pointer = workspace.pointer_path(original.id);
+        let backup = pointer.with_file_name(format!(
+            "{}.previous",
+            pointer.file_name().unwrap().to_string_lossy()
+        ));
+        if backup.exists() {
+            fs::remove_file(&backup).unwrap();
+        }
+        fs::create_dir(&backup).unwrap();
+        assert!(workspace.open_path(&path).is_err());
+        assert_eq!(workspace.view().history, previous_history);
+        assert_eq!(workspace.file.as_ref().unwrap().stamp().unwrap(), stamp);
+        assert!(ProjectFile::acquire(&path).is_err());
     }
 
     #[test]
@@ -2318,9 +2390,7 @@ pub fn open_recent_project(
             "This project is not in your recent list. Use Open project to choose it.".into(),
         );
     }
-    let file = ProjectFile::acquire(&path).map_err(message)?;
-    let document = file.load_document().map_err(message)?;
-    state.open_document(file, document)?;
+    state.open_path(&path)?;
     Ok(state.view())
 }
 
