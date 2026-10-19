@@ -84,13 +84,15 @@ async function changedBy(driver, action, message) {
 async function siteState(driver) {
   return driver.execute(() => {
     const doc = document.querySelector('.static-preview iframe').contentDocument;
-    const ids = ['layer-stage', 'blue-card', 'orange-card', 'nested-group', 'green-card', 'purple-card'];
+    const ids = ['layer-stage', 'layer-backdrop', 'blue-card', 'orange-card', 'nested-group', 'green-card', 'purple-card', 'zero-child', 'contents-child'];
+    const backdrop = doc.getElementById('layer-backdrop'), backdropStyle = doc.defaultView.getComputedStyle(backdrop);
     return {
       order: [...doc.querySelector('#layer-stage').children].map(node => node.id),
       nestedOrder: [...doc.querySelector('#nested-group').children].map(node => node.id),
       boxes: Object.fromEntries(ids.map(id => { const r = doc.getElementById(id).getBoundingClientRect(); return [id, { x: r.x, y: r.y, width: r.width, height: r.height }]; })),
       outerHit: doc.elementFromPoint(330, 260)?.closest('#blue-card,#orange-card')?.id,
       nestedHit: doc.elementFromPoint(300, 520)?.closest('#green-card,#purple-card')?.id,
+      backdrop: { inlineStyle: backdrop.getAttribute('style'), zIndex: backdropStyle.zIndex, pointerEvents: backdropStyle.pointerEvents },
     };
   });
 }
@@ -98,6 +100,7 @@ async function siteState(driver) {
 function sameLayout(actual, expected) {
   assert.deepEqual(actual.order, expected.order, 'Arranging layers changed source reading order');
   assert.deepEqual(actual.nestedOrder, expected.nestedOrder, 'Arranging a group changed nested reading order');
+  assert.deepEqual(actual.backdrop, expected.backdrop, 'Arranging a card changed its negative, noninteractive backdrop');
   for (const id of Object.keys(expected.boxes)) for (const dimension of ['x', 'y', 'width', 'height']) {
     assert.ok(Math.abs(actual.boxes[id][dimension] - expected.boxes[id][dimension]) <= .5, `Arranging ${id} changed ${dimension}: ${JSON.stringify({ actual, expected })}`);
   }
@@ -191,6 +194,11 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     assert.equal(provider.generationRequests().length, 1); assert.equal(provider.generationRequests()[0].markdown, job.requirements.markdown);
     await previewReady(driver); await driver.click('section[aria-label="Generated changes"] button.primary'); await driver.button('Fit'); await settled(driver);
     baseline = await siteState(driver); assert.equal(baseline.outerHit, 'orange-card'); assert.equal(baseline.nestedHit, 'purple-card');
+    assert.equal(baseline.backdrop.zIndex, '-1'); assert.equal(baseline.backdrop.pointerEvents, 'none');
+    // These wrappers have no selectable box; their visible children still need
+    // actual Layers rows that select the exact current-source child.
+    await selectSite(driver, physical, 'zero-child'); await selectSite(driver, physical, 'contents-child');
+    await closeLayers(driver); await driver.button('Fit'); await settled(driver);
     await clickSite(driver, physical, 330, 260, 'orange-card');
     await physical.captureWindow(join(output, '02-generated-overlap.png'));
   });
@@ -238,7 +246,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await selectSite(driver, physical, 'blue-card'); await arrange(driver, 'Send to back'); await previewReady(driver);
     current = await siteState(driver); sameLayout(current, baseline); assert.equal(current.outerHit, 'orange-card');
     await selectSite(driver, physical, 'blue-card');
-    await changedBy(driver, () => physical.keys('bracketright', 1, ['Control']), 'The trusted Bring forward shortcut did not arrange the selected layer'); await previewReady(driver);
+    await changedBy(driver, () => physical.keys('bracketright', 1, ['Control', 'Shift']), 'The trusted Bring to front shortcut did not arrange the selected layer'); await previewReady(driver);
     current = await siteState(driver); sameLayout(current, baseline); assert.equal(current.outerHit, 'blue-card');
     await changedBy(driver, () => physical.keys('bracketleft', 1, ['Control', 'Shift']), 'The trusted Send to back shortcut did not arrange the selected layer'); await previewReady(driver);
     current = await siteState(driver); sameLayout(current, baseline); assert.equal(current.outerHit, 'orange-card');
