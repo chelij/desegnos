@@ -92,6 +92,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   const extrasRef = useRef<ElementSelection[]>([]);
   // Element requests whose element can no longer be found on the rendered page.
   const [stale, setStale] = useState<Set<string>>(new Set());
+  function refreshStaleTargets() {
+    setStale(new Set(page.content && site.current?.source() ? page.regions.filter(region => !region.completed && regionTargets(region).some(target => !site.current?.contains(target))).map(region => region.id) : []));
+  }
+  useEffect(refreshStaleTargets, [page.id, page.content, page.regions]);
   const [repicking, setRepicking] = useState<string | null>(null);
   function setExtras(value: ElementSelection[]) { extrasRef.current = value; setExtrasState(value); }
   useEffect(() => { multiChanged?.(extras.length ? extras.length + 1 : 0); }, [extras.length, multiChanged]);
@@ -453,10 +457,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     if (syncing.current) return syncing.current;
     const work = async () => {
       const current = pageRef.current;
-      const regions = current.regions.filter(region => !region.completed && regionTargets(region).length);
-      if (!regions.length) { setStale(new Set()); return; }
+      if (!current.regions.some(region => !region.completed && regionTargets(region).length)) { setStale(new Set()); return; }
       await waitForSite(current.id);
       if (JSON.stringify(pageRef.current.content) !== JSON.stringify(current.content) || pageRef.current.id !== current.id) throw new Error('The page changed while measuring its items. Try again.');
+      const regions = pageRef.current.regions.filter(region => !region.completed && regionTargets(region).length);
       const bounds: ElementBounds[] = []; const missing = new Set<string>();
       for (const region of regions) {
         const targets = regionTargets(region);
@@ -679,15 +683,16 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     refreshLayers();
     setExtras(extrasRef.current.flatMap(item => { const found = site.current?.find(item.element); return found ? [found] : []; }));
     setPlaceholders(page.content ? site.current?.placeholders() ?? [] : []);
-    if (page.content && site.current?.source()) setStale(new Set(page.regions.filter(region => !region.completed && regionTargets(region).some(target => !site.current?.contains(target))).map(region => region.id)));
-    else setStale(new Set());
+    refreshStaleTargets();
     const current = elementRef.current;
     if (current) {
       const found = site.current?.find(current.element);
       if (found) { pendingSelection.current = null; storeElement(found); }
       else if (!dialogRef.current && (pendingSelection.current !== current.element || (site.current?.source() && !site.current?.find(current.element)))) deselectElement();
     }
-    void synchronizeBounds().catch(error => setElementError(String(error)));
+    // Missing targets already have an actionable request banner. The Generate
+    // path requires valid bounds and reports an error if any remain unresolved.
+    void synchronizeBounds().catch(() => {});
   }
   function move(event: PointerEvent) {
     const client = { x: event.clientX, y: event.clientY };
