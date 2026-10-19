@@ -14,7 +14,7 @@
     "test:native": "node scripts/native-test.mjs",
     "test:canvas": "node tests/canvas-geometry.test.mjs",
     "test:vault": "node scripts/test-vault.mjs",
-    "test:editor": "node tests/selection-projection.test.mjs && node tests/code-mirror-state.test.mjs"
+    "test:editor": "node tests/selection-projection.test.mjs && node tests/code-mirror-state.test.mjs && node tests/code-draft-lifecycle.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",

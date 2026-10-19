@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, lazy, Suspense, useImperativeHandle, useEffect, useMemo, useRef, useState } from 'react';
+import { synchronizeCodeDrafts, type PendingCodeDraft } from './codeDraftLifecycle';
 import type { CodeEditorHandle, CodeLineMark } from './CodeEditor';
 const CodeEditor = lazy(() => import('./CodeEditor').then(module => ({ default: module.CodeEditor })));
 import { projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition, type HtmlProjection } from './editorHtml';
@@ -15,16 +16,20 @@ type Status = { kind: 'idle' | 'saving' | 'saved' | 'invalid' | 'conflict' | 'er
 type Draft = { text: string; base: string; projection: HtmlProjection };
 const plain = (text: string): HtmlProjection => ({ text, anchors: [], rawToVisible: offset => offset });
 
-export function CodePane({ content, target, map, save, pick }: {
+export type CodePaneHandle = { synchronize: () => Promise<void> };
+export const CodePane = forwardRef<CodePaneHandle, {
   content: SiteContent | null; target: ElementTarget | null; map: SourceMapView | null;
-  save?: (language: Tab, text: string, expected: string) => Promise<SiteContent>; pick?: (selector: string, id?: string) => void;
-}) {
+  save?: (language: Tab, text: string, expected: string) => Promise<SiteContent>; pick?: (selector: string, id?: string) => void; saveProject?: () => void;
+}>(function CodePane({ content, target, map, save, pick, saveProject }, ref) {
   const [tab, setTab] = useState<Tab>('html');
   const [query, setQuery] = useState('');
   const [hit, setHit] = useState(0);
   const [drafts, setDraftState] = useState<Partial<Record<Tab, Draft>>>({});
   const draftRef = useRef(drafts);
   const [statuses, setStatuses] = useState<Partial<Record<Tab, Status>>>({});
+  const statusRef = useRef(statuses);
+  const lastApplied = useRef<Partial<Record<Tab, { previous: string; source: string }>>>({});
+  const synchronizing = useRef<Promise<void> | null>(null);
   const [showMeta, setShowMeta] = useState(() => { try { return localStorage.getItem('desegnos.code-show-meta') === 'yes'; } catch { return false; } });
   const current = useRef({ content, save, showMeta }); current.current = { content, save, showMeta };
   const editors = useRef<Partial<Record<Tab, CodeEditorHandle>>>({});
@@ -62,25 +67,28 @@ export function CodePane({ content, target, map, save, pick }: {
     if (value) next[language] = value; else delete next[language];
     draftRef.current = next; setDraftState(next);
   }
-  function setStatus(language: Tab, value: Status) { setStatuses(current => ({ ...current, [language]: value })); }
+  function setStatus(language: Tab, value: Status) { const next = { ...statusRef.current, [language]: value }; statusRef.current = next; setStatuses(next); }
+  function sourceFor(language: Tab) { const raw = current.current.content?.[language] ?? ''; const own = lastApplied.current[language]; return own?.previous === raw ? own.source : raw; }
   function clearTimer(language: Tab) { if (timers.current[language]) clearTimeout(timers.current[language]); delete timers.current[language]; }
   useEffect(() => () => { for (const timer of Object.values(timers.current)) clearTimeout(timer); }, []);
   // A native save may add IDs without changing visible text. Clear only the draft
   // that actually matches the applied source; keep later typing and rejected text.
   useEffect(() => {
     for (const [language] of TABS) {
+      if (lastApplied.current[language]?.source === (content?.[language] ?? '')) delete lastApplied.current[language];
       const value = draftRef.current[language]; if (!value || flights.current[language]) continue;
-      const source = content?.[language] ?? '';
+      const source = sourceFor(language);
       if (source === value.base) { if (projectText(language, source).text === value.text) draft(language, undefined); }
       else { clearTimer(language); setStatus(language, { kind: 'conflict', message: 'This page changed elsewhere while you were editing.' }); }
     }
   }, [content, drafts]);
   async function commit(language: Tab): Promise<void> {
     clearTimer(language);
+    if (['invalid', 'conflict', 'error'].includes(statusRef.current[language]?.kind ?? '')) return;
     if (flights.current[language]) { queued.current.add(language); return flights.current[language]; }
     const value = draftRef.current[language], save = current.current.save;
     if (!value || !save) return;
-    const source = current.current.content?.[language] ?? '';
+    const source = sourceFor(language);
     if (source !== value.base) { setStatus(language, { kind: 'conflict', message: 'This page changed elsewhere while you were editing.' }); return; }
     if (value.text === projectText(language, source).text) { draft(language, undefined); return; }
     const editor = editors.current[language]; if (!editor) return;
@@ -91,6 +99,7 @@ export function CodePane({ content, target, map, save, pick }: {
     const operation = async () => {
       try {
         const applied = await save(language, rawValue, value.base);
+        lastApplied.current[language] = { previous: value.base, source: applied[language] };
         const projection = projectText(language, applied[language]);
         const rebased = editor.rebase(projection, snapshot);
         const latest = draftRef.current[language];
@@ -115,7 +124,7 @@ export function CodePane({ content, target, map, save, pick }: {
         // never retried automatically.
         const again = queued.current.delete(language);
         const latest = draftRef.current[language];
-        if (latest && current.current.content?.[language] === latest.base && projectText(language, latest.base).text === latest.text) draft(language, undefined);
+        if (latest && sourceFor(language) === latest.base && projectText(language, latest.base).text === latest.text) draft(language, undefined);
         else if (again && latest && latest.text !== snapshot.text) void commit(language);
       }
     };
@@ -124,8 +133,8 @@ export function CodePane({ content, target, map, save, pick }: {
   }
   function change(language: Tab, text: string, projection: HtmlProjection) {
     const previous = draftRef.current[language];
-    draft(language, { text, projection, base: previous?.base ?? current.current.content?.[language] ?? '' });
-    if (statuses[language]?.kind !== 'conflict') setStatus(language, { kind: 'idle' });
+    draft(language, { text, projection, base: previous?.base ?? sourceFor(language) });
+    if (statusRef.current[language]?.kind !== 'conflict') setStatus(language, { kind: 'idle' });
     clearTimer(language); timers.current[language] = setTimeout(() => { void commit(language); }, 700);
   }
   function follow(offset: number) {
@@ -135,7 +144,36 @@ export function CodePane({ content, target, map, save, pick }: {
     const best = inside.sort((a, b) => a.endLine - a.startLine - (b.endLine - b.startLine) || a.endColumn - a.startColumn - (b.endColumn - b.startColumn))[0];
     if (best && (best.id ? best.id !== target?.id : best.selector !== target?.selector)) pick(best.selector, best.id);
   }
-  function reload() { clearTimer(tab); draft(tab, undefined); setStatus(tab, { kind: 'idle' }); }
+  function discard() { clearTimer(tab); queued.current.delete(tab); draft(tab, undefined); setStatus(tab, { kind: 'idle' }); }
+  function pendingDrafts(): PendingCodeDraft[] {
+    return TABS.flatMap<PendingCodeDraft>(([language, label]) => {
+      const value = draftRef.current[language]; if (!value) return [];
+      const status = statusRef.current[language]?.kind;
+      if (status === 'invalid' || status === 'conflict' || status === 'error') return [{ language: label, status }];
+      return value.text === projectText(language, value.base).text ? [] : [{ language: label, status: flights.current[language] ? 'saving' : 'dirty' }];
+    });
+  }
+  function synchronize() {
+    if (synchronizing.current) return synchronizing.current;
+    synchronizing.current = synchronizeCodeDrafts({
+      clearTimers: () => { for (const [language] of TABS) clearTimer(language); },
+      pending: pendingDrafts,
+      flush: async () => {
+        for (const [language, label] of TABS) {
+          if (flights.current[language]) await flights.current[language];
+          if (!pendingDrafts().some(draft => draft.language === label && (draft.status === 'dirty' || draft.status === 'saving'))) continue;
+          await commit(language);
+        }
+      },
+    }).catch(error => {
+      const issue = pendingDrafts().find(draft => ['invalid', 'conflict', 'error'].includes(draft.status));
+      const language = TABS.find(([, label]) => label === issue?.language)?.[0];
+      if (language) { setTab(language); const line = statusRef.current[language]?.diagnostics?.[0]?.line; if (line) requestAnimationFrame(() => editors.current[language]?.reveal(line)); }
+      throw error;
+    }).finally(() => { synchronizing.current = null; });
+    return synchronizing.current;
+  }
+  useImperativeHandle(ref, () => ({ synchronize }));
   const note = status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? 'Saved. Undo works as usual.' : status.kind === 'invalid' ? 'Not saved yet. Fix the highlighted line.' : status.kind === 'error' || status.kind === 'conflict' ? status.message : drafts[tab] ? 'Saving after you pause…' : save && content ? 'Edits save automatically when you pause.' : '';
   return <section className="code-pane" aria-label="Page code">
     <header className="code-pane-bar">
@@ -154,11 +192,12 @@ export function CodePane({ content, target, map, save, pick }: {
         if (matches.length) mark(matches[hit % matches.length].line, 'current');
       }
       for (const error of statuses[language]?.diagnostics ?? []) if (error.language === language) mark(error.line, 'error', error.message);
-      return <CodeEditor key={language} ref={node => { if (node) editors.current[language] = node; else delete editors.current[language]; }} language={language} label={`${label} code`} text={value} projection={drafts[language]?.projection ?? projections[language]} hiddenMetadata={language === 'html' && !showMeta} readOnly={!save} active={language === tab} marks={[...marks.values()]} query={language === tab ? query : ''} focusLine={language === tab ? focusLine : null} change={(text, projection) => change(language, text, projection)} cursor={language === 'html' ? follow : () => {}} flush={() => { void commit(language); }} find={() => searchInput.current?.focus()} />;
+      return <CodeEditor key={language} ref={node => { if (node) editors.current[language] = node; else delete editors.current[language]; }} language={language} label={`${label} code`} text={value} projection={drafts[language]?.projection ?? projections[language]} hiddenMetadata={language === 'html' && !showMeta} readOnly={!save} active={language === tab} marks={[...marks.values()]} query={language === tab ? query : ''} focusLine={language === tab ? focusLine : null} change={(text, projection) => change(language, text, projection)} cursor={language === 'html' ? follow : () => {}} flush={() => { void commit(language); }} saveProject={saveProject ?? (() => { void synchronize().catch(() => {}); })} find={() => searchInput.current?.focus()} />;
     })}</Suspense>}
     <footer className={`code-pane-note status-${status.kind}`} role="status"><span>{note}</span>
       {status.kind === 'invalid' && <ul className="code-errors">{(status.diagnostics ?? []).slice(0, 3).map((item, index) => <li key={index}><button type="button" className="link-button" onClick={() => { const language = item.language === 'css' ? 'css' : item.language === 'javascript' ? 'javascript' : 'html'; setTab(language); requestAnimationFrame(() => editors.current[language]?.reveal(item.line)); }}>Line {item.line}</button> {item.message}</li>)}</ul>}
-      {status.kind === 'conflict' && <button type="button" onClick={reload}>Reload latest code</button>}
+      {drafts[tab] && status.kind === 'error' && <button type="button" onClick={() => { setStatus(tab, { kind: 'idle' }); void commit(tab); }}>Try saving again</button>}
+      {drafts[tab] && ['invalid', 'conflict', 'error'].includes(status.kind) && <button type="button" disabled={!!flights.current[tab]} onClick={discard}>Discard code changes</button>}
     </footer>
   </section>;
-}
+});

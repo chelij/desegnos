@@ -42,7 +42,7 @@ const colours = HighlightStyle.define([
 export const CodeEditor = forwardRef<CodeEditorHandle, {
   language: Tab; label: string; text: string; projection: HtmlProjection; hiddenMetadata: boolean; readOnly: boolean; active: boolean;
   marks: CodeLineMark[]; query: string; focusLine: number | null;
-  change: (text: string, projection: HtmlProjection) => void; cursor: (offset: number) => void; flush: () => void; find: () => void;
+  change: (text: string, projection: HtmlProjection) => void; cursor: (offset: number) => void; flush: () => void; saveProject: () => void; find: () => void;
 }>(function CodeEditor(props, ref) {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<EditorView | null>(null);
@@ -60,7 +60,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, {
       editable.current.of([EditorState.readOnly.of(current.readOnly), EditorView.editable.of(!current.readOnly)]),
       EditorView.contentAttributes.of({ 'aria-label': current.label, role: 'textbox', 'aria-multiline': 'true', spellcheck: 'false', 'data-testid': `source-editor-${current.language}` }),
       keymap.of([
-        { key: 'Mod-s', run: () => { latest.current.flush(); return true; }, stopPropagation: true },
+        { key: 'Mod-s', run: () => { latest.current.saveProject(); return true; }, stopPropagation: true },
         { key: 'Mod-f', run: () => { latest.current.find(); return true; }, stopPropagation: true },
         indentWithTab, ...historyKeymap, ...defaultKeymap, ...searchKeymap,
       ]),

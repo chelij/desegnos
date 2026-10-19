@@ -19,7 +19,7 @@ import { steppedZoom } from './canvasGeometry';
 import { AiSettings } from './AiSettings';
 import { GenerationDialog, GenerationFeedback } from './Generation';
 import { PagePreview } from './Preview';
-import { CodePane, type CodeView, type SourceMapView } from './CodePane';
+import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from './CodePane';
 import { FirstRunTips } from './Onboarding';
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
 import { useHistory } from './useHistory';
@@ -45,6 +45,7 @@ export default function App() {
   const [view, setView] = useState<WorkspaceView | null>(null);
   const current = useRef<WorkspaceView | null>(null);
   const canvas = useRef<CanvasHandle>(null);
+  const code = useRef<CodePaneHandle>(null);
   const tail = useRef<Promise<void>>(Promise.resolve());
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -176,6 +177,10 @@ export default function App() {
   const settle = useCallback(async () => {
     await tail.current;
   }, []);
+  const synchronize = useCallback(async (requireBounds = false) => {
+    try { await code.current?.synchronize(); await canvas.current?.synchronize(requireBounds); }
+    catch (error) { setError(errorMessage(error)); throw error; }
+  }, []);
   useEffect(() => {
     if (!isTauri()) return;
     const heartbeat = () => { void native('editor_heartbeat').catch(() => {}); };
@@ -192,7 +197,7 @@ export default function App() {
       if (closing.current) return;
       closing.current = true;
       try {
-        await canvas.current?.synchronize();
+        await synchronize();
         await settle();
         const identity = await native<import('./types').IdentityAnalysis | null>('get_identity_analysis').catch(() => null);
         const generating = generationRef.current?.status === 'generating' || identity?.status === 'analyzing';
@@ -205,13 +210,13 @@ export default function App() {
       finally { closing.current = false; }
     }).then(stop => { if (disposed) stop(); else unlisten = stop; }, error => setError(errorMessage(error)));
     return () => { disposed = true; unlisten?.(); };
-  }, [settle]);
+  }, [settle, synchronize]);
 
   function chooseSaveConflict(choice: SaveChoice) { const resolve = saveChoice.current; saveChoice.current = null; setSaveConflict(null); resolve?.(choice); }
   function save(saveAs = false): Promise<WorkspaceView | null> {
     if (saveFlight.current) return saveFlight.current;
     const operation = async () => {
-      await canvas.current?.synchronize();
+      await synchronize();
       await settle();
       let outcome = await queue(() => native<SaveOutcome>('save_project_checked', { saveAs }));
       while (outcome.status === 'conflict') {
@@ -227,7 +232,7 @@ export default function App() {
     return saveFlight.current;
   }
   async function replace(label: string, run: Replacement['run']) {
-    await canvas.current?.synchronize();
+    await synchronize();
     await settle();
     if (current.current?.dirty) setReplacement({ label, run });
     else await run(false);
@@ -251,7 +256,7 @@ export default function App() {
     });
   }
   async function exportWebsite() {
-    await canvas.current?.synchronize(); await settle();
+    await synchronize(); await settle();
     setExporting(true); setError('');
     try {
       const project = current.current?.project;
@@ -282,7 +287,7 @@ export default function App() {
     });
   }
   async function travel(command: 'undo_project' | 'redo_project') {
-    await canvas.current?.synchronize();
+    await synchronize();
     await settle();
     await queue(async () => { accept(await native<WorkspaceView>(command)); setNotice(command === 'undo_project' ? 'Change undone.' : 'Change redone.'); });
   }
@@ -307,6 +312,7 @@ export default function App() {
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       const target = event.target;
+      if (event.defaultPrevented || target instanceof HTMLElement && target.closest('.cm-editor')) return;
       const editingText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
       // WebKitGTK lacks these text key bindings with the pinned muda 0.20 stack.
       // Remove when the native stack supplies them and the trusted-input test passes.
@@ -371,7 +377,7 @@ export default function App() {
     return () => { active = false; clearTimeout(timer); };
   }, [mapHtml, project?.id, page?.id]);
   const activeProjectId = project?.id ?? null;
-  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' ? canvas.current?.synchronize(command === 'prepare_generation') : undefined).then(() => queue(async workspace => {
+  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' ? synchronize(command === 'prepare_generation') : undefined).then(() => queue(async workspace => {
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {
       await aiTail.current;
@@ -386,7 +392,7 @@ export default function App() {
     const result = await native<T>(command, args);
     if (command === 'apply_generation') accept(result as WorkspaceView);
     return result;
-  })), [queue, activeProjectId, accept, refreshAiSettings]);
+  })), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
   const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
@@ -395,7 +401,7 @@ export default function App() {
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
   useEffect(() => { setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
-  function changeCodeView(value: CodeView) { setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
+  async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
   function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
     const host = event.currentTarget.parentElement; if (!host) return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -410,7 +416,7 @@ export default function App() {
   async function rejectResult(tryAgain = false) {
     const review = resultReview;
     if (!review) return;
-    await canvas.current?.synchronize(); await settle();
+    await synchronize(); await settle();
     const undone = await queue(async workspace => {
       setResultReview(null);
       if (workspace?.project?.revision !== review.revision || workspace.project.latestGeneration?.jobId !== review.jobId) return false;
@@ -443,7 +449,7 @@ export default function App() {
     setSelected(id); setFocusPrompt(false);
     if (cleanEmpty) void dismissEmpty(id).catch(() => {});
   }
-  async function selectPage(id: string, keep: string | null = null) { await canvas.current?.synchronize(); await settle(); await dismissEmpty(keep); setPageId(id); setSelected(null); }
+  async function selectPage(id: string, keep: string | null = null) { await synchronize(); await settle(); await dismissEmpty(keep); setPageId(id); setSelected(null); }
   async function addRegion(rect: Rect) {
     if (!page) return;
     const id = page.id;
@@ -540,8 +546,9 @@ export default function App() {
     setConfirmation({ title: 'Remove request?', message: 'Remove this request? You can undo this. Remove any linked choices or exceptions from the project brief first.',
       action: async () => { await mutate({ type: 'remove_region', page_id, region_id }); setSelected(null); requestAnimationFrame(() => { if (!document.querySelector('dialog[open]')) document.getElementById('page-canvas')?.focus(); }); } });
   }
-  function removePage() {
+  async function removePage() {
     if (!page) return;
+    await synchronize();
     const page_id = page.id;
     setConfirmation({ title: 'Remove page?', message: `Remove “${page.name}” and its ${page.regions.length} requests? You can undo this. Remove any linked choices or exceptions from the project brief first.`,
       action: async () => { await mutate({ type: 'delete_page', page_id }); setPageId(project!.homePageId); setSelected(null); } });
@@ -613,10 +620,10 @@ export default function App() {
     { id: 'file-divider', label: '', separator: true },
     { id: 'add-page', label: 'Add page', disabled: !project || project.pages.length >= 100, action: () => setPageDialog('new') },
     { id: 'page-settings', label: 'Page settings', disabled: !page, action: () => setPageDialog(page) },
-    { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: removePage },
+    { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: () => run(removePage) },
     { id: 'page-divider', label: '', separator: true },
     { id: 'preview', label: 'Preview website', disabled: !page?.content, action: () => setShowPreview(true) },
-    { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => changeCodeView(value) })) },
+    { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
     { id: 'ai-divider', label: '', separator: true },
@@ -633,7 +640,7 @@ export default function App() {
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
       {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot">●</span>}</button>}
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
-      {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => changeCodeView(value)}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
+      {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
         {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo || pending > 0} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo || pending > 0} onClick={() => run(() => travel('redo_project'))}>Redo</button>
           <MenuButton label="History" className="history-menu" ariaLabel="Change history" title="Go back to an earlier point" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
@@ -683,7 +690,7 @@ export default function App() {
       </div>
       {codeView !== 'design' && <>
         {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}
-        <CodePane key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id); }} />
+        <CodePane ref={code} saveProject={() => run(() => save())} key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id); }} />
       </>}
       </main>
       <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
@@ -701,7 +708,7 @@ export default function App() {
       <DialogError error={error} dismiss={() => setError('')} /><PageForm paths={project.pages.map(item => item.path)} page={pageDialog === 'new' ? null : pageDialog} home={pageDialog !== 'new' && pageDialog.id === project.homePageId} busy={pending > 0} submit={async values => {
         if (pageDialog === 'new') {
           await dismissEmpty(null);
-          await canvas.current?.synchronize();
+          await synchronize();
           const next = await mutate({ type: 'add_page', name: values.name, path: values.path });
           setPageId(next.project!.pages.at(-1)!.id); setSelected(null);
         } else await mutate({ type: 'update_page', page_id: pageDialog.id, ...values });
