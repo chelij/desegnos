@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-identity-analysis"
+description = "Enables the get_identity_analysis command without any pre-configured scope."
+commands.allow = ["get_identity_analysis"]
+
+[[permission]]
+identifier = "deny-get-identity-analysis"
+description = "Denies the get_identity_analysis command without any pre-configured scope."
+commands.deny = ["get_identity_analysis"]

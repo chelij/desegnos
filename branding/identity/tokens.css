@@ -1,0 +1,194 @@
+/* Desegnos design tokens.
+   Derived from the "Blank to built" logo: monochrome ink on neutral grey,
+   dashed = a request in words, solid = the built page, seam = Generate.
+   Every neutral has equal R, G and B channels. Blue is functional only
+   (selection, focus, primary action) and never appears in the logo. */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap");
+
+/* Archivo is self-hosted (variable weight 100–900, width 62–125%). SIL OFL, see fonts/archivo/OFL.txt */
+@font-face {
+  font-family: "Archivo";
+  src: url("fonts/archivo/Archivo-wdth-wght.woff2") format("woff2"),
+       url("fonts/archivo/Archivo-wdth-wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Archivo";
+  src: url("fonts/archivo/Archivo-Italic-wdth-wght.woff2") format("woff2"),
+       url("fonts/archivo/Archivo-Italic-wdth-wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-stretch: 62% 125%;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  /* Neutral scale */
+  --grey-0: #ffffff;
+  --grey-50: #f2f2f2;   /* logo ink on dark */
+  --grey-100: #e8e8e8;
+  --grey-150: #dcdcdc;
+  --grey-200: #d4d4d4;
+  --grey-300: #b1b1b1;
+  --grey-400: #8a8a8a;
+  --grey-500: #626262;
+  --grey-600: #4b4b4b;
+  --grey-700: #383838;
+  --grey-800: #262626;  /* logo ink on light */
+  --grey-900: #1a1a1a;
+  --grey-950: #121212;
+
+  /* Functional blue, shared with the editor */
+  --blue-600: #005a9e;
+  --blue-500: #0070b8;
+  --blue-400: #5291c4;
+  --blue-300: #8ac4f5;
+
+  --red-700: #a4262c;
+  --red-200: #ffb5b5;
+
+  /* Semantic, light */
+  --ink: var(--grey-800);
+  --bg: var(--grey-50);
+  --surface: var(--grey-0);
+  --surface-muted: var(--grey-100);
+  --text: var(--grey-800);
+  --text-muted: var(--grey-600);
+  --line: var(--grey-500);
+  --line-soft: var(--grey-300);
+  --accent: var(--blue-600);
+  --accent-text: var(--grey-0);
+  --guide: var(--blue-500);
+  --focus: var(--blue-600);
+  --danger: var(--red-700);
+
+  /* Type */
+  --font-display: "Archivo", system-ui, sans-serif;
+  --font-text: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --text-xs: 0.75rem;    /* 12 */
+  --text-sm: 0.875rem;   /* 14 */
+  --text-md: 1rem;       /* 16 */
+  --text-lg: 1.25rem;    /* 20 */
+  --text-xl: 1.75rem;    /* 28 */
+  --text-2xl: 2.5rem;    /* 40 */
+  --text-3xl: 3.5rem;    /* 56 */
+  --text-4xl: 5rem;      /* 80 */
+
+  --leading-tight: 1.05;
+  --leading-snug: 1.25;
+  --leading-body: 1.55;
+  --tracking-display: -0.015em;
+
+  /* Space: 8px grid, 4px half-step */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 16px;
+  --space-4: 24px;
+  --space-5: 32px;
+  --space-6: 48px;
+  --space-7: 64px;
+  --space-8: 96px;
+  --space-9: 128px;
+
+  /* Shape: square frames, small radii on controls only */
+  --radius-0: 0;
+  --radius-control: 4px;
+  --radius-card: 6px;
+
+  /* Strokes taken from the mark (seam = 5/78 of mark height) */
+  --stroke-hair: 1px;
+  --stroke-line: 2px;
+  --stroke-seam: 3px;
+  --dash: 6px;          /* dash and gap length for "request" outlines */
+
+  --motion-fast: 120ms;
+  --motion-base: 180ms;
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ink: var(--grey-50);
+    --bg: var(--grey-900);
+    --surface: var(--grey-800);
+    --surface-muted: var(--grey-700);
+    --text: var(--grey-50);
+    --text-muted: var(--grey-300);
+    --line: var(--grey-400);
+    --line-soft: var(--grey-600);
+    --accent: var(--blue-300);
+    --accent-text: #17212b;
+    --guide: var(--blue-400);
+    --focus: var(--blue-300);
+    --danger: var(--red-200);
+  }
+}
+
+:root[data-theme="dark"] {
+  --ink: var(--grey-50);
+  --bg: var(--grey-900);
+  --surface: var(--grey-800);
+  --surface-muted: var(--grey-700);
+  --text: var(--grey-50);
+  --text-muted: var(--grey-300);
+  --line: var(--grey-400);
+  --line-soft: var(--grey-600);
+  --accent: var(--blue-300);
+  --accent-text: #17212b;
+  --guide: var(--blue-400);
+  --focus: var(--blue-300);
+  --danger: var(--red-200);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion-fast: 0ms; --motion-base: 0ms; }
+}
+
+/* Brand primitives */
+
+/* "Request": dashed outline, something still described in words */
+.ds-request {
+  border: var(--stroke-line) dashed var(--line);
+  border-radius: var(--radius-0);
+  background: transparent;
+}
+
+/* "Built": solid fill, the real result */
+.ds-built {
+  background: var(--ink);
+  color: var(--bg);
+  border-radius: var(--radius-0);
+}
+
+/* "Seam": the Generate line, a vertical divider that overshoots its content */
+.ds-seam {
+  width: var(--stroke-seam);
+  background: var(--ink);
+  align-self: stretch;
+  margin-block: calc(var(--space-2) * -1);
+}
+
+/* Wordmark lockup: the mark is the D, followed by "esegnos" in Archivo Bold.
+   The mark's D body (68/78 of its box) matches the font's cap height. */
+.ds-wordmark {
+  display: inline-flex;
+  align-items: baseline;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  line-height: 1;
+}
+.ds-wordmark svg {
+  height: 0.8em;
+  width: auto;
+  align-self: baseline;
+  margin-right: -0.03em;
+  transform: translateY(0.05em);
+}

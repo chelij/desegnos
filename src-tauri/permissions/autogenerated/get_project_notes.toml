@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-project-notes"
+description = "Enables the get_project_notes command without any pre-configured scope."
+commands.allow = ["get_project_notes"]
+
+[[permission]]
+identifier = "deny-get-project-notes"
+description = "Denies the get_project_notes command without any pre-configured scope."
+commands.deny = ["get_project_notes"]

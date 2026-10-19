@@ -1,0 +1,370 @@
+# Desegnos implementation
+
+Updated 19 October 2026. The Linux build is now named **Desegnos** and implements a free workspace with screen guides, browser-style page tabs, single-click element selection with local editing, inline requests opened by double-click, one-click generation with affected-area blur, automatic application, element revision prompts, automatic generation dossiers, and API-key or ChatGPT-plan generation. The latest [brand, direct controls and identity-import record](#brand-direct-controls-and-identity-import-19-october-2026) extends the [canvas generation workflow](#current-canvas-generation-workflow-19-october-2026). The complete 1.0 contract remains in [RELEASE_PLAN.md](../RELEASE_PLAN.md); this update does not complete its remaining export, component, plugin and distribution gates. Automated provider checks use synthetic local services; no live inference was sent in this update.
+
+The earlier integration description below is historical. Dated sections identify their exact build and scope; the current canvas and interaction sections supersede the earlier review/apply interface.
+
+## Earlier integration baseline
+
+Each page has a full scrollable workspace around its reference screen, reached through browser-style tabs. Plain request textareas can sit above, below or beside the guide. Percentage rulers and alignment guides describe placement relative to that screen. The grid starts on at 8px; the Grid and rulers dialog sets pixel/percentage spacing, snapping and rulers independently. Pan with Space and drag or the middle button. No sidebar, inspector or per-request mode exists. One global Fuzzy/Strict setting sits beside Generate. Placement communicates intent; the agent coordinates actual layout.
+
+One nested Menu holds project, editing, page, view, AI and technical commands. The default UI keeps short labels, inline prompts and the generation controls. Model limits, detailed pricing and masked credential diagnostics are under More → Advanced settings. AI settings retain a verified model catalogue, output/reasoning limits, a dated cost estimate allowance, password entry, system/session storage, replacement/removal and a non-generation access test. Native storage owns keys. Failed vault writes do not silently select another storage method. Session storage temporarily overrides a saved system key; Remove deletes both only after vault deletion succeeds.
+
+ChatGPT mode adds Continue with ChatGPT, native signed-identity validation, distinct account registrations, reconnect/select/sign-out, plan-scope gating, model discovery, welcome acknowledgment and Manage usage. It hides unused API output/monetary controls. Each job freezes its account UUID and authentication method; changing preferences cannot redirect its send or retry. Usage limits and terminal failed streams never fall back to API billing. Secure refresh uses a durable operation UUID; failed storage retains the validated replacement privately and blocks generation until Repair secure storage commits it without HTTP. Stale repairs cannot overwrite a peer's newer credentials. Session reconnect retires its registration's old system credential. The [complete ChatGPT contract](CHATGPT_CONTRACT.md) records protocol and limits.
+
+Generate freezes Rust-owned requirements, global mode, source dependencies, relevant dossier context and provider settings. The concise review shows affected requests/pages and cost/plan use. More → Technical exposes the exact REQUIREMENTS.md, digest, model details and attempts. Send and generate stays visible in the sticky header and attaches that exact UTF-8 file to OpenAI Responses, plus the same mode, job ID and digest in a separate record. Menu → Technical → Review requirements remains available without setup or submission. No hosted application proxy is involved.
+
+Jobs expose actual waiting/stream/completion state and elapsed time in the sticky review header and a workspace strip. Closing the review keeps polling; View progress reopens it without sending. Cancel also works from that strip. Native received bytes and usage stay in technical details. Explicit retries preserve the original file/settings and require another paid-send decision. Accepted state remains editable during generation; changed dependencies block stale work. Restoring the exact dependencies can restore a complete candidate without another request.
+
+Candidate review opens on the actual website preview. Project choices and design feedback are optional disclosures; exact HTML/CSS/browser JavaScript and request coverage remain under More. Core requires complete requested coverage before Apply. Compatible identity choices start selected and can be unchecked. Selected decisions and source commit together after a durable pre-apply archive and journal write. Unchecked proposals remain unaccepted. Discard preserves authored state. Undo/redo, Save/Open and crash recovery include actual source. Consumed job IDs survive Undo so duplicate Apply cannot replay the transaction.
+
+Every complete validated draft automatically updates the typed project dossier with its real summary, proposals, criticism, targets, attempt and digests. Draft context remains explicitly nonbinding; accepted/protected choices remain authoritative. Automatic writes are durable and idempotent, preserve ongoing edits and Redo, and add no user Undo item. Applied/undone status follows the real source transaction. PROJECT.md projects these records deterministically rather than accepting a second AI-authored source of truth.
+
+Accepted source appears under the on-canvas requests. Preview site forwards real input to an opaque sandbox. Scripts start paused; explicitly enabling them enables browser interaction and coordinated internal links. Network, forms, external frames and editor/native command authority are denied. Linux permits anonymous CORS for registered preview resources through WebKit's public API, retaining the opaque origin without universal access or CSP bypass. Workspace → Reload workspace, also Ctrl/Cmd+Shift+R, recreates an unresponsive editor with scripts paused while preserving Rust-owned accepted state. A native watchdog also offers recovery; its automatic dialog path has not yet been exercised.
+
+## Work completed in this gate
+
+- [x] Exact requirements-file delivery and one global generation mode.
+- [x] Native credentials, fixed OpenAI HTTPS transport and bounded streaming.
+- [x] Durable jobs, explicit retry/cancellation, uncertain restart recovery and stale checks.
+- [x] Typed candidate review, selected identity acceptance and transactional Apply/Discard.
+- [x] Actual HTML/CSS/JavaScript preview, script isolation and native reload recovery.
+- [x] Source, grid settings and automatic dossier in schema 4 archives, recovery and undo; real schema 1/2/3 migration and format3 frozen-request compatibility.
+- [x] Integrated Linux workflow, actual isolated system vault and normal-build startup checks.
+- [ ] Live OpenAI generation and semantic evaluation with a key entered privately in Desegni.
+
+## Core, provider and plugin boundaries
+
+| Module | Authority |
+| --- | --- |
+| `desegni-core` | Authoritative project/source/candidate state, scoped decisions, exact requirements, hashes, coverage/bounds, transactions and undo/redo. No HTTP or credentials. |
+| `desegni-storage` | Bounded archives, integrity, atomic writes, backups, locks, migration and durable accepted-state recovery. |
+| `desegni-ai` | Fixed OpenAI transport, native credentials, verified capabilities/prices, estimates and bounded parsing. Receives frozen input/schema and returns text/usage; cannot mutate projects, install packages or select filesystem paths. |
+| `src-tauri` | Trusted window permissions, native dialogs/lifecycle, private job ledger/checkpoints, cancellation, preview registration and core-authorized application. |
+| React editor | Transient input, disclosure, review and display of native state. No provider HTTP, persistent keys or authority to fabricate accepted projects. |
+| Future plugins | Versioned extension data is preserved today. There is no executable plugin host. Future adapters/catalogues must pass the requirements, permissions, validation and transaction boundaries. |
+
+The [provider dependency/advisory review](../crates/desegni-ai/README.md) records concrete roles, pinned versions and limits. The Linux preview uses Tauri's existing WebKitGTK binding. Test-only loopback/vault/driver support requires explicit debug features and is rejected in release compilation. Product builds expose no endpoint override or WebDriver server.
+
+## Persistence and recovery
+
+Schema 4 stores actual source, consumed application IDs, grid settings and the latest complete generation dossier. Signed request rectangles and their endpoints are bounded to ±100,000 CSS pixels independently of the guide. Requirements format 4 includes exact user text, one global mode, signed/percentage placement hints, accepted and relevant draft context, routes, current affected-page source/hashes, available native capabilities and the candidate contract. Desegni creates these documents itself. Older frozen format3 documents retain their original bytes/digest when their dependencies still match.
+
+Schema 1/2/3 archives and journals validate original hashes and PROJECT.md before migration. Schema 1 preserves former per-region choices in an extension; schema 2 preserves its global mode; schema 3 preserves actual source and consumed job IDs. Existing grid visibility survives migration. Original bytes are unchanged on open and retained as `.previous` on explicit Save. Canonical fixtures include schema 2 SHA-256 `f828598377bebee41c6c8a00f884d8888cdfc3f76c49c8a95b7228b8004834b2` and a real schema3 source archive/frozen format3 snapshot.
+
+Private generation records preserve frozen Markdown, attempts, usage, complete candidates and pre-apply archives separately from project archives. Intent is persisted before submission. Restart never automatically repeats a request; interrupted in-flight work becomes uncertain. Cancellation prevents late responses becoming candidates. Corrupt optional AI configuration stays visible and leaves ordinary editing available.
+
+Undo retains 200 in-memory steps. Restart restores accepted state and generation records, not the former undo stack. Archives/recovery preserve unknown versioned extension data. Current source archives contain no asset payloads or exported website.
+
+## Original BYOK evidence
+
+| Check | Result and scope |
+| --- | --- |
+| Rust workspace | 102 passed: 19 provider, 22 core, 36 native workspace/preview/coordinator and 25 persistence. The guarded system-vault test is intentionally ignored here and passes separately below. |
+| Canvas geometry | 17 passed: transformed coordinates, clamping, grid/move/resize and zoom-independent minimums. |
+| TypeScript / frontend | Passed. Final native builds embed the spacing correction verified in the screenshots. |
+| Formatting / strict Clippy | Passed, including all targets/features with warnings denied. |
+| Integrated Linux native workflow | 66 steps passed through real Rust commands and WebKitGTK: trusted OS input, native pickers, both legacy formats, actual provider HTTP, Apply/Discard, script isolation and SIGKILL recovery. |
+| UI | Both themes, 760px bounds, native keyboard dismissal/focus return, six canvas zooms and 56 current BYOK palette comparisons pass. See the scoped delivery gate. |
+| Infinite website script | Actual loop entry observed. Native reload recovered in 605ms in this run, preserving accepted state and returning with scripts paused. This is one local case, not a performance guarantee. |
+| Actual Linux vault | Four fresh processes, two private daemon restarts and six authenticated loopback reads pass storage/replacement/session override/removal. Bus/data guards pass; private storage is removed. |
+| Normal debug and optimized startup | Fresh feature-disabled binaries display the initial native project form on separate guarded displays. All IPv4/IPv6 automation-port probes refuse connections. Root reviewed both actual screenshots. |
+| Desktop and credentials | Cleanup preserves original desktop resources/connection. Raw synthetic-key scans of task-owned native data/evidence pass. Mounted editor error/rejection records are empty, including restart. |
+
+Evidence:
+
+- [Workspace checks](../test-results/checks/2026-10-18T12-07-55.092Z/report.json), [final builds](../test-results/builds/2026-10-18T12-08-24.364Z/report.json).
+- [66-step native report](../test-results/native/2026-10-18T12-09-43-312Z-763070/report.json), [wire requests](../test-results/native/2026-10-18T12-09-43-312Z-763070/generation/provider-requests.json), [preview isolation](../test-results/native/2026-10-18T12-09-43-312Z-763070/generation/preview-isolation.json), [infinite-script recovery](../test-results/native/2026-10-18T12-09-43-312Z-763070/generation/infinite-script-recovery.json), [credential scan](../test-results/native/2026-10-18T12-09-43-312Z-763070/credential-nondisclosure.json).
+- [Actual Linux vault](../test-results/system-vault/2026-10-18T11-50-35.468Z-679409/evidence.json), [optimized startup](../test-results/startup/2026-10-18T12-10-34-486Z-768130/report.json), [debug startup](../test-results/startup/2026-10-18T12-10-43-425Z-768475/report.json).
+- [UI delivery gate](UI_VERIFICATION.md), [generation contract](GENERATION_CONTRACT.md), [reproduction/isolation](../tests/native/README.md).
+
+| Local executable at verification | SHA-256 |
+| --- | --- |
+| `target/release/desegni` | `9233f14fe5db2caa35440157880de022cbad0519617c537debb1179b3c53bd16` |
+| `target/debug/desegni` | `7245d5749ccbea5df4486409badc99debb4ab967daadcb3cdcb0428e013f88da` |
+| `src-tauri/target/native-tests/debug/desegni` | `8c7f4a4038db89758524658119daaaa7a44e53e48641274e1b9d78b2b67efeb0` |
+
+These are ignored local artifacts; rebuilding can change hashes. The standard native runner uses absolute `target/native-tests`; this run explicitly selects the recorded instrumented executable above. Earlier reports remain historical evidence.
+
+## NVIDIA/Wayland startup correction
+
+After the BYOK checks above, the user's ordinary Wayland launch exited with `Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.` No Desegni/WebKit coredump or OOM record was found. The original startup checks used isolated X11; they did not establish ordinary Wayland startup. On this machine the loaded NVIDIA driver is 615.78.08, WebKitGTK is 2.54.1, and Hyprland is 0.56.2.
+
+The user confirmed that launching the same executable with `__NV_DISABLE_EXPLICIT_SYNC=1` stays open and draws normally. This agrees with [WebKit bug 324551](https://bugs.webkit.org/show_bug.cgi?id=324551): GTK's first shared-memory frame conflicts with NVIDIA's explicit-sync surface setup. The matching mitigation is now part of native Linux startup, before GTK/Tauri creates a window. It is scoped to a loaded NVIDIA kernel module and an available Wayland connection/backend. X11-only launches, other drivers and explicit user values are preserved. GPU/compositing settings are otherwise unchanged, and no desktop configuration or project data is modified.
+
+Desegni re-executes its own executable once with the process-local setting and the original arguments. The child inherits the setting, preventing a loop. This avoids unsafe mutation of a potentially threaded process environment. Two focused regression tests cover backend/connection/driver/override cases and actual child arguments/environment isolation; all 104 workspace tests pass, and strict native Clippy passes.
+
+The [startup build/check record](../test-results/wayland-startup/2026-10-18T12-22-51.266Z/build-checks.json) supplements the earlier BYOK evidence. The executable hashes in the BYOK table refer to that earlier build. The workaround remains a compatibility bridge: reassess/remove it when the shipped WebKitGTK runtime includes [upstream commit 322671](https://commits.webkit.org/322671@main) and NVIDIA/Wayland startup plus rendering pass without it. The upstream main-branch fix alone does not prove that the installed runtime contains it.
+
+The [startup correction verification](../test-results/wayland-startup/2026-10-18T12-22-51.266Z/report.json) records six actual debugger-observed process cases with no display connection: both rebuilt binaries re-exec with the setting before GTK, and explicit `0`/`1` overrides skip re-execution. Fresh [optimized](../test-results/startup/2026-10-18T12-24-56-926Z-787700/report.json) and [debug](../test-results/startup/2026-10-18T12-25-05-867Z-788433/report.json) X11 startups pass separately, with screenshots inspected and desktop preservation checked. Their hashes are `b0df30648c9d3d6999adafbe6466b1453b8f5c1f0186d4112aecf45c86ddc893` and `c64caa6b47b56f0b4be58069e1fea4d49d2a786fec68b49a7871411d1dc86d38`. These checks establish automatic setting delivery and X11 compatibility; the user's confirmation establishes the rendering mitigation on the actual Wayland desktop.
+
+## Remaining release gates
+
+Live OpenAI acceptance, model behavior and natural-language/placement fidelity remain unverified. A model-access read alone does not establish generation permission or output quality. No paid calls were made. Cost is a conservative dated estimate, not a billing cap; cancellation/retries can incur charges. `store: false` does not guarantee zero retention under provider data controls.
+
+The complete visual document/compiler and targeted subtree revision, archiving/clearing submitted drafts, qualified React catalogue and JSX compilation, fonts/media/assets, image generation, configured service bindings, complete site/React exports, persistent user-facing history, full site diagnostics, executable plugins, signed installers/updates and other release scenarios remain required. This gate renders actual HTML/DOM source and reports unavailable required components as conflicts; it supplies no simulated component implementation.
+
+Windows/macOS preview resource loading and credential stores need their own runners and may require platform-specific integration. Screen readers, IME, broader DPI/text magnification, packaged installation and the watchdog's automatic dialog remain explicit verification gaps. Linux checks do not certify those paths or constitute a whole-repository security audit.
+
+[RELEASE_PLAN.md](../RELEASE_PLAN.md) and [PLUGIN_REVIEW.md](../PLUGIN_REVIEW.md) retain the full scope and no-sidebar constraint. Adding complete ChatGPT-plan lifecycle and release acceptance raises the full-project planning budget to 54 to 72 engineering weeks including reserve. This is not a remaining-work estimate or measured implementation rate.
+
+## Earlier ChatGPT and BYOK verification
+
+The exact final instrumented binary passes [76 integrated Linux steps](../test-results/native/2026-10-18T13-08-09-048Z-900337/report.json), including the original authoring/migration/native-picker/BYOK/preview/recovery gate and ten added ChatGPT steps. The [OAuth record](../test-results/native/2026-10-18T13-08-09-048Z-900337/chatgpt/oauth-http-evidence.json) verifies real loopback dynamic registration, S256 exchange, distinct accounts, stable reconnect, signed identity and revocation. [Actual provider requests](../test-results/native/2026-10-18T13-08-09-048Z-900337/chatgpt/provider-requests.json) carry byte-exact Markdown/global mode with the frozen account after account/preference changes. Pre-stream and terminal-stream plan limits reject output; sign-out blocks late candidates and API fallback. Real UI Repair saves the retained rotation without OAuth, model or generation HTTP. Native restart forgets session credentials and keeps accepted source without resubmitting.
+
+| Final check | Result |
+| --- | --- |
+| Rust workspace | 144 passed: 53 AI/provider/authentication, 22 core, 44 native coordinator/preview/workspace/startup and 25 storage. One guarded integration test is ignored here and passes separately. [Log](../test-results/chatgpt-rust-tests.log). |
+| TypeScript / frontend / geometry | Build passes. The unchanged geometry behavior retains its 17 passing checks. |
+| Strict Clippy / formatting | All workspace targets/features pass with warnings denied; formatting passes. [Lint log](../test-results/chatgpt-clippy.log). |
+| Native UI | 76 steps, 140 current contrast comparisons at 760px in both themes. Minimum text 5.68:1 and focus 6.06:1. Browser/rejection arrays are empty, including recovery. Root inspected actual screenshots. [UI gate](UI_VERIFICATION.md). |
+| Actual Linux secure storage | [Four fresh processes and two daemon restarts](../test-results/system-vault/2026-10-18T12-55-14.099Z-866632/evidence.json) pass API lifecycle plus signed OAuth, complete system token bundles, refresh rotation, authenticated model reads and revocation/removal. Private storage is removed. |
+| Normal release/debug startup | [Release](../test-results/startup/2026-10-18T13-10-47-822Z-908445/report.json) and [debug](../test-results/startup/2026-10-18T13-10-48-910Z-908482/report.json) fresh initialization pass on distinct guarded displays with every automation probe refused. Their actual initial-form PNGs are byte-identical and were reviewed. |
+| Credentials / desktop | [50 synthetic secrets across 155 owned files](../test-results/native/2026-10-18T13-08-09-048Z-900337/credential-nondisclosure.json) pass non-disclosure. Desktop resources/connection and owned-process/display/data cleanup pass. |
+
+| Executable at that verification | SHA-256 |
+| --- | --- |
+| `target/release/desegni` | `819872ac7d094caccd4faf653220916c98eec35b80a12a8adf22bffdef5a8a6c` |
+| `target/debug/desegni` | `3f3ac5c466fc1a4bb803e9a2a12a4ab1c0219a591d48c74ea40d532db99029d6` |
+| `src-tauri/target/native-tests/debug/desegni` | `696f8d09435410188989a4efcab8180e9dd2d77487bf035a782de4344ec8b41b` |
+
+The [named pre-ChatGPT rollback](../test-results/baselines/pre-chatgpt-2026-10-18/manifest.json) retains the prior verified binaries and source. Earlier startup and BYOK hashes above are historical evidence, not the current executables. The NVIDIA/Wayland workaround remains in the current build with unchanged pre-GTK behavior.
+
+These checks use synthetic signed identities and controlled providers. They establish implementation/protocol/native behavior, not live OpenAI rollout eligibility, model entitlement, provider acceptance, generation quality or Windows/macOS acceptance. No real account tokens or paid generation were used. Complete real consent and one reviewed generation privately in AI settings before claiming that live gate.
+
+## Workspace revision baseline verification
+
+The workspace revision delivers signed off-guide placement, screen references, page tabs, nested menus, configurable pixel/percentage grid and rulers, automatic generated dossiers, and visible generation stages/time. The exact final instrumented binary passes [80 integrated native steps](../test-results/native/2026-10-18T16-31-22-849Z-1237999/report.json), including actual dossier Overview and nested review, byte-exact PROJECT.md, ruler visibility, footer zoom, centering and hidden technical source/details. [Settled light](../test-results/native/2026-10-18T16-31-22-849Z-1237999/editor-light-window.png) and [dark](../test-results/native/2026-10-18T16-31-22-849Z-1237999/editor-dark-window.png) owned-window screenshots were reviewed after the renderer correction. Scaling the whole expanded workspace caused missing prompt/control painting after zoom and theme changes. Zoom now projects placements into screen pixels; prompts and grips render at fixed screen sizes. Site preview scaling stays local to its frame, and the canvas retains an isolated stacking context. Saved coordinates and the schema are unchanged by this correction.
+
+| Check | Current result |
+| --- | --- |
+| Rust | 159 passed: 53 provider, 32 core, 46 native and 28 storage. The separate guarded vault test remains intentionally ignored in the ordinary run. [Log](../test-results/workspace-revision-rust-tests.log). |
+| Geometry | 26 passed, including signed bounds, percentage snapping, rulers, transforms and zoom-independent controls. [Log](../test-results/workspace-revision-canvas-tests.log). |
+| Build/lint | TypeScript/Vite, normal debug/release, instrumented native, formatting and all-target/all-feature strict Clippy passed. [Clippy](../test-results/workspace-revision-clippy.log). |
+| Desktop behavior | 80 passed through real native operations and task-owned signed OAuth/HTTP fixtures; no browser errors/rejections, including fresh crash recovery. |
+| Visibility and contrast | 300 current comparisons across 12 contexts pass. Native six-zoom checks retain 14px text, 28px grips and 3px inset focus. [Four-block UI gate](UI_VERIFICATION.md). |
+| Data compatibility | Real schema1/2 native opens/saves preserve original and backup bytes. Rust checks cover a real schema3 source archive and original frozen format3 request, plus schema4 archives/journals and automatic dossier recovery. |
+| Local recovery | Two filesystem-failure regressions preserve zero-proposal results after storage recovery and protect a newer retry from an older completion's failed metadata write. No provider attempt is added by local recovery. [Focused tests](../test-results/workspace-revision-coordinator-tests.log). |
+| Credentials/desktop | 50 synthetic credentials across 181 owned files pass non-disclosure. Original desktop resource/connection checks pass after private display/profile cleanup. |
+| Dependencies | [All eight manifests/locks](../test-results/workspace-revision-dependencies.json) match the pre-revision baseline; no dependency was added. |
+
+| Rebuilt executable | SHA-256 |
+| --- | --- |
+| `target/release/desegni` | `66a9dda16548f0087a24eb5fe36b6c5d2b9dca1dc5eeae99cc3a74e04aa15aa1` |
+| `target/debug/desegni` | `48974d910953174fa8b339f5adcb39fa7c7e2ce010675f2ca73c3e9e617b2f1c` |
+| `src-tauri/target/native-tests/debug/desegni` | `cfa2a29b98efa6ceb469ec609d77bc27968cea80f583f7b22daf5b0d0ef77bd3` |
+
+The [pre-workspace source and binaries](../test-results/baselines/pre-workspace-revision-2026-10-18/manifest.json) are retained and their hashes rechecked. Legacy explicit saves retain the original archive as `.previous`. The current [delivery record](../test-results/workspace-revision-2026-10-18.json) identifies source, binaries and evidence.
+
+Core owns signed placement/grid validation, dossier/decisions, requirements, validation and transactions. Storage owns migration and durable recovery. The provider returns bounded output without project authority; only the native coordinator requests core-approved dossier/application writes. Menus, panning and presentation remain editor responsibilities. The executable plugin host remains separate release work.
+
+The startup path and secure-store implementation are unchanged, so their earlier scoped startup/vault evidence is reused. Current normal builds were rebuilt; fresh initialization and recovery ran in the instrumented native app. Live OpenAI behavior, other platforms and remaining 1.0 work remain the separate gates stated above. No real credentials or paid calls were used.
+
+
+## Response-format correction baseline verification
+
+19 October 2026. The saved live failure was rejected at the previous HTTP 200 content-type guard, before reading the body. Its zero-byte/no-ID/no-HTTP-metadata record cannot establish that site JSON was invalid. The original response type, body and provider reason were not retained. The [diagnosis record](../test-results/response-format-fix-2026-10-18/diagnosis.json) separates that evidence from the deliberately synthetic test replies.
+
+The provider now compares streaming media types without case sensitivity and handles non-stream replies within a 65,536-byte bound. It preserves safe HTTP/code/parameter/request-ID/body-format information and a bounded explanation when no error code exists. Credential-like, unsafe or oversized explanations are withheld; raw bodies are not persisted or rendered. The native coordinator exposes details through the existing Technical menu, records actual error-body bytes, and archives the previous error before an explicit frozen-snapshot retry. Older failures get an honest read-only message. No candidate validation, account binding, billing path or plugin authority was relaxed.
+
+| Check | Result |
+| --- | --- |
+| Rust | 165 passed: 57 provider, 32 core, 48 native coordinator and 28 storage. One separate guarded vault check remains intentionally ignored. [Log](../test-results/response-format-fix-2026-10-18/rust-tests-complete.log). |
+| Native behavior | [38 focused generation/account/recovery steps](../test-results/native/2026-10-18T17-02-04-997Z-1293546/report.json) passed on guarded private display `:90`. Includes JSON errors with and without codes, HTML replies, both themes, explicit retry of byte-identical requirements/mode/account, no automatic resubmission, source application and restart recovery. |
+| Interface | [Four-block UI gate](UI_VERIFICATION.md) passed; 450 contrast comparisons across 18 current contexts pass. Six owned-window diagnostic captures were reviewed. |
+| Credentials and desktop | 50 synthetic credentials across 144 owned files pass nondisclosure. Browser/recovery errors are empty; desktop resources and connection pass cleanup. |
+| Build/lint | Normal debug/release and instrumented native builds, TypeScript/Vite, strict all-target/all-feature Clippy and formatting passed. |
+| Dependencies | [All eight manifests and locks](../test-results/response-format-fix-2026-10-18/dependencies.json) match the pre-fix source archive. |
+
+| Rebuilt executable | SHA-256 |
+| --- | --- |
+| `target/release/desegni` | `eecc7f4595b69dc20756271948538757a080a3c448b9a88e6a9a929535f40228` |
+| `target/debug/desegni` | `e8fb375261ff6989ff5351218ab149190e91b5c77244a9068d869df5c36a41d3` |
+| `src-tauri/target/native-tests/debug/desegni` | `2e42f9f9aea562dc97551160873f73a2dc3970d2eb9e382e88f42c6efee7de8b` |
+
+The [delivery record](../test-results/response-format-fix-2026-10-18/delivery.json) identifies changed sources, binaries and evidence. The [named source/binary backup](../test-results/baselines/pre-response-format-fix-2026-10-18/manifest.json) remains intact. Startup, secure-store implementation, canvas, core/storage schema and plugin interfaces are unchanged; their applicable baseline evidence is reused. No normal startup check was repeated because the launch path is unchanged.
+
+These checks use local HTTP/OAuth fixtures and synthetic credentials. They do not establish that the original OpenAI restriction is resolved. Restart the rebuilt release and explicitly try once; if it stops, the Provider response section under More → Technical → Request details supplies the previously missing evidence. No live provider request or billing fallback was performed.
+
+## Stream-routing correction baseline verification
+
+19 October 2026. The next saved live attempt reached the 65,536-byte diagnostic reader with HTTP 200, no usable Content-Type, no response ID and zero retained body bytes. That record identifies the reader that failed; it cannot establish the original wire format or generated-site size. The [diagnosis record](../test-results/stream-routing-2026-10-19/diagnosis.json) keeps that uncertainty separate from the controlled reproduction. A real local HTTP test reproduced the exact failure with a valid large generation stream whose Content-Type was omitted. The same test passes after the correction.
+
+The native provider now treats the response header as a routing hint and recognizes a fragmented SSE prefix before selecting the diagnostic reader. Missing or mislabeled headers do not divert a recognized stream into the small error-body bound. Its original bytes still pass through the same bounded decoder, typed completion checks, job/digest checks and core validation. No size limits increased, requests were not repeated, and provider/plugin authority did not expand. Oversized non-stream diagnostics now report an uncertain unexpected reply, consumed-byte count, partial status and the actual read limit. Older matching saved failures get a truthful read-only message without rewriting history. Technical details reuse the existing interface.
+
+| Check | Result |
+| --- | --- |
+| Reproduction | The valid large headerless stream fails before the fix in [the retained reproduction](../test-results/stream-routing-2026-10-19/reproduction.log) and passes in [the focused check](../test-results/stream-routing-2026-10-19/focused-fix.log). Coverage also includes mislabeled headers, fragmented standard prefixes, both authentication methods, wrong job IDs, incomplete streams and invalid candidate text. |
+| Rust | 168 passed: 59 provider, 32 core, 49 native coordinator and 28 storage. One separate guarded vault check remains intentionally ignored. [Log](../test-results/stream-routing-2026-10-19/rust-tests-final.log). |
+| Native behavior | [38 focused generation/account/recovery steps](../test-results/native/2026-10-18T17-21-59-558Z-1333875/report.json) passed on guarded private display `:90`. A valid headerless reply larger than 65,536 bytes became a candidate and applied exact source using the frozen requirements/account. A large HTML diagnostic remained uncertain, disclosed the partial count/65,536-byte limit and did not alter source or dossier. |
+| Interface | [Four-block UI gate](UI_VERIFICATION.md) passed. All 450 contrast comparisons across 18 current contexts pass. The primary agent reviewed both changed owned-window diagnostic captures. |
+| Credentials and desktop | [50 synthetic credentials across 144 owned files](../test-results/native/2026-10-18T17-21-59-558Z-1333875/credential-nondisclosure.json) pass nondisclosure. Browser/recovery errors are empty; desktop resources and connection pass cleanup. |
+| Build/lint | Normal [release](../test-results/stream-routing-2026-10-19/release-build.log), [debug](../test-results/stream-routing-2026-10-19/debug-build.log) and [instrumented native](../test-results/stream-routing-2026-10-19/native-build.log) builds, TypeScript/Vite, [strict all-target/all-feature Clippy](../test-results/stream-routing-2026-10-19/clippy.log) and [formatting](../test-results/stream-routing-2026-10-19/fmt.log) passed. |
+| Dependencies | [All eight manifests and locks](../test-results/stream-routing-2026-10-19/dependencies.json) match the existing full source baseline. No dependency was added. |
+
+| Rebuilt executable | SHA-256 |
+| --- | --- |
+| `target/release/desegni` | `29317761e9c2d3c073cfd0984f4831b226e52ba3a248fbddb0ee210424ef11cf` |
+| `target/debug/desegni` | `6e4d6a92f83e73b4b4f18e7e5ba6a4ccf2c1d3820d20b2cd13f7bc7159418978` |
+| `src-tauri/target/native-tests/debug/desegni` | `441eff74c9e97e4baf1beb2ac2994feafc5eae9e7a485683b0a2a65ec5c2cd7e` |
+
+The [delivery record](../test-results/stream-routing-2026-10-19/delivery.json) identifies changed sources, binaries and evidence. The [named source/binary backup](../test-results/baselines/pre-stream-routing-2026-10-19/manifest.json) retains the previous build. The first native run already generated and applied the large headerless reply, then failed a test that assumed locale-dependent thousands punctuation. The assertion now allows either rendering while retaining exact integer checks; no product behavior changed for that test correction. Both runs remain available.
+
+Startup, secure-store implementation, canvas, core/storage schema and plugin interfaces are unchanged, so their applicable baseline evidence is reused. No normal startup check was repeated because the launch path is unchanged. These checks use controlled local HTTP/OAuth and synthetic credentials. A fresh private user attempt is still needed to identify the original unretained live reply and confirm account-specific OpenAI behavior. No live generation, automatic retry or billing fallback was performed.
+
+## Completion and grey-palette baseline verification
+
+19 October 2026. The next saved live attempt reached final completion validation after 67.129 seconds, 789,659 received stream bytes and reported usage of 4,452 input / 3,073 output / 7,525 total tokens. Its error was `malformed` with outcome `received`, HTTP 200, a response ID and no usable Content-Type. The prior routing correction worked; this failure occurred later. The original answer and exact rejection check were not retained, so the specific failed gate remains unknown. The [diagnosis record](../test-results/completion-grey-2026-10-19/diagnosis.json) separates those facts from the controlled reproduction.
+
+The old parser rejected a documented response containing intermediate commentary and a separate final answer split into text parts. A real local HTTP reproduction produced the same late malformed/received classification. The provider now validates text independently by output/content position and item identity, checks every observed delta/done against completion, excludes explicit commentary and selects exactly one final or single unphased answer. It joins ordered final parts and retains credential, JSON, exact job/digest and core validation. Ambiguous answers, unknown phases, inconsistent text and invalid source remain rejected. A joined-text check preserves credential nondisclosure across part boundaries. The existing aggregate text, event, wire, cancellation and deadline bounds remain in force. Single-value schema enums bind the job and digest to the frozen request without changing the generic core schema; per-job schema preprocessing may add provider latency.
+
+Rejected replies now retain a closed enum naming the failed check, rendered through static labels in More → Technical → Request details. Diagnostics contain no raw generated text or invalid values. Older completed rejections get a read-only explanation that their exact check was not recorded; their original history, usage and requirements remain intact. No automatic request, billing switch or provider/plugin authority was introduced.
+
+The user's requested Photoshop-style grey direction replaces warm editor surfaces with neutral greys in both themes, including request boxes. A restrained blue identifies actions, selection and focus. Website appearance and generated source remain independent. The existing no-sidebar canvas, page tabs, nested menus, grid and rulers retain their behavior. [DESIGN.md](../DESIGN.md) records the palette direction and unchanged ENERGY 1 / RHYTHM 2 / MOTION 1.
+
+| Check | Result |
+| --- | --- |
+| Rust | [175 passed](../test-results/completion-grey-2026-10-19/rust-tests-final.log): 64 provider, 32 core, 51 native coordinator and 28 storage. One separate guarded vault check remains intentionally ignored. Real HTTP cases cover phased/split and interleaved text, ambiguous answers, mismatched identity/parts, invalid JSON, incorrect job/digest, combined bounds and credentials split across parts, with both authentication methods where relevant. |
+| Full native workflow | [81 steps passed](../test-results/native/2026-10-18T18-05-30-171Z-1459854/report.json), including authoring, six zooms, page tabs, menus, file pickers, migrations, generation, exact source application, sandbox checks and fresh-process recovery. Its binary predates only the final joined-text credential guard. |
+| Final native generation | [38 steps passed](../test-results/native/2026-10-18T18-07-02-333Z-1467717/report.json) on the final instrumented binary. The actual ChatGPT fixture supplies a large headerless commentary/final response with two final text parts; exact source is applied using frozen requirements/account. Malformed final JSON exposes its persisted `candidateJson` check without raw output or another request. |
+| Interface | [Four-block UI gate](UI_VERIFICATION.md) passed. [500 contrast comparisons across 20 contexts and 180 neutral-grey checks](../test-results/completion-grey-2026-10-19/contrast.json) pass. [Ten guide/background combinations](../test-results/completion-grey-2026-10-19/guide-contrast.json) exceed 3:1. The primary agent inspected actual-screen captures of both editor themes and both changed diagnostic dialogs. |
+| Credentials and desktop | Final-run [50 synthetic credentials across 150 owned files](../test-results/native/2026-10-18T18-07-02-333Z-1467717/credential-nondisclosure.json) pass nondisclosure; the full run scanned 222 owned files. Both runs have empty browser/recovery errors and passing desktop-resource/connection cleanup. All windows used guarded private display `:90`. |
+| Builds and lint | Final normal [release](../test-results/completion-grey-2026-10-19/release-build-final.log), [debug](../test-results/completion-grey-2026-10-19/debug-build-final.log) and [instrumented](../test-results/completion-grey-2026-10-19/native-build-final.log) builds, TypeScript/Vite, [strict all-target/all-feature Clippy](../test-results/completion-grey-2026-10-19/clippy.log) and [formatting](../test-results/completion-grey-2026-10-19/fmt-check.log) pass. |
+| Dependencies | [All eight manifests and locks](../test-results/completion-grey-2026-10-19/dependencies.json) match the existing full source baseline. No dependency was added. |
+
+| Rebuilt executable | SHA-256 |
+| --- | --- |
+| `target/release/desegni` | `c6a3ad2148b88b188030c548a00166ba9d6986024415936a5c07cc98267e9809` |
+| `target/debug/desegni` | `44693c000b05c696ddd8eed2c019975ccf9da9110c6b3968c00e80ac67f7c303` |
+| `src-tauri/target/native-tests/debug/desegni` | `831a745670ce3d35fd43ec4883a1cdf05627d8d490460723b18b3d6502867cf1` |
+
+The [delivery record](../test-results/completion-grey-2026-10-19/delivery.json) indexes the patch, current sources, binaries, evidence and [named backup](../test-results/baselines/pre-completion-grey-2026-10-19/manifest.json). The first native run failed a new test that assumed six-digit CSS colors; the build validly shortened some values. The second diagnostic test incorrectly clicked Generate, preparing a new job instead of reopening the failed job. Both test mistakes were corrected and their evidence retained. Window-drawable captures could omit a native control layer; paired actual-screen captures show both request boxes and are the visual evidence. No product repaint workaround was introduced.
+
+Startup, OS-vault code, core/storage formats and plugin boundaries are unchanged, so their applicable baseline evidence is reused. The original live failed check and account-specific result still need a fresh private user attempt in the rebuilt app. No live generation, automatic retry or user-project repair was performed. Remaining 1.0 release gates listed above remain open.
+
+
+## Item-correlation baseline verification
+
+19 October 2026. The fresh live attempt received 814,553 bytes and reported 4,532 input / 3,149 output / 7,681 total tokens, then failed `textLocation` after a successful terminal response. The raw reply was not retained. Its exact index/omission pattern is unknown. A controlled real-HTTP test reproduced that failure with sparse wire indices and a compact terminal list; the [pre-fix log](../test-results/item-correlation-2026-10-19/reproduction.log) retains the failing evidence.
+
+The provider reader now matches text by unique message ID and unchanged content index. Wire indices stay stable within the stream and may differ from terminal array positions. Added/done items bind identity and validate finalized messages. Explicitly finalized commentary may be omitted from the terminal list while still matching all observed text. Absent/null output may be reconstructed only from finalized items after successful `response.completed`; an explicit empty array cannot trigger reconstruction. Missing final answers, omitted unfinished items, duplicate/changed identities, changed text/phase, refusals and ambiguous identity-less parts remain rejected. Review found a text event could use an ID already bound to another wire index when no item-done followed; the final code checks that binding and a controlled regression covers it. Identity-less legacy fallback also requires no lifecycle bindings and preserves the old explicit terminal-position check; controlled cases verify accepted and rejected legacy positions.
+
+Failure details retain only a fixed cause enum, terminal-output presence, saturated counts and numeric positions. No message ID, raw commentary, prompt or model output is retained in the correlation object. It survives restart and explicit-retry archival. More → Technical → Request details displays it through static labels; default review remains concise. Exact requirements, the global mode, credential boundaries, provider limits and independent core validation remain mandatory. No provider or plugin gains project mutation authority.
+
+| Check | Result |
+| --- | --- |
+| Rust | [180 tests passed](../test-results/item-correlation-2026-10-19/rust-tests-final.log): 69 provider, 51 native coordinator, 32 core and 28 storage. The separate guarded OS-vault test remains ignored; its implementation is unchanged. |
+| Controlled native workflow | [39 steps passed](../test-results/native/2026-10-19T06-00-28-803Z-68141/report.json) on private display `:90`. The large headerless ChatGPT fixture uses sparse indices 5/9, finalized reasoning/commentary omitted from terminal output, and two final text parts; the exact source is reviewed and applied under the frozen account. A nonexistent content part fails with precise diagnostics and leaves the site/dossier unchanged. Restart and explicit retry behavior pass. |
+| Interface | [550 contrast comparisons across 22 contexts and 198 neutral-grey comparisons](../test-results/item-correlation-2026-10-19/contrast.json) pass. Text minimum is 4.970071:1; non-text minimum is 3.111086:1. Both changed 760px diagnostic windows were inspected from actual-screen captures. The [four-block UI gate](UI_VERIFICATION.md#item-correlation-diagnostics-pass) records scope and reused evidence. |
+| Credentials and desktop | [50 synthetic credentials across 159 owned files](../test-results/native/2026-10-19T06-00-28-803Z-68141/credential-nondisclosure.json) pass nondisclosure. Browser/recovery error lists are empty. [Desktop cleanup](../test-results/native/2026-10-19T06-00-28-803Z-68141/desktop-cleanup.json) verifies original display resources and connection. |
+| Builds and checks | Normal [release](../test-results/item-correlation-2026-10-19/release-build-final.log), [debug](../test-results/item-correlation-2026-10-19/debug-build-final.log) and [instrumented](../test-results/item-correlation-2026-10-19/native-build-final.log) builds pass, including TypeScript/Vite. [Strict Clippy](../test-results/item-correlation-2026-10-19/clippy.log) and [format check](../test-results/item-correlation-2026-10-19/fmt-check.log) pass. |
+| Dependencies and scope | [All eight manifests/locks](../test-results/item-correlation-2026-10-19/dependencies.json) match their verified baseline hashes. No dependency, core/storage format, startup change or plugin authority was added. Unchanged authoring/startup/vault evidence is reused from the baseline above. |
+
+| Rebuilt executable | SHA-256 |
+| --- | --- |
+| `target/release/desegni` | `dbf706e84dfb2b528bd2e24a3c9e55cbe9bacec0d07a713b99e0e4e8adf4185c` |
+| `target/debug/desegni` | `820aeddeed33e61b693ae29091759e8f8a14d85ca8e432eddd1397fd5cf88123` |
+| `src-tauri/target/native-tests/debug/desegni` | `9794e4f7c054905547dbbd72c3ae72f2e3ee7dfd8eb9c372d528f38b5231c494` |
+
+The [delivery record](../test-results/item-correlation-2026-10-19/delivery.json) indexes the current sources, patch, builds, evidence and [named rollback](../test-results/baselines/pre-item-correlation-2026-10-19/manifest.json). All three controlled native runs passed; the final run includes the tightened legacy fallback. Earlier runs retain the initial and wording verification evidence. No live generation or user-project repair was performed. Close and reopen the rebuilt app before a fresh private generation; account-specific behavior and the original unretained wire shape remain unverified. The remaining 1.0 release gates above stay open.
+
+
+## Finalized-item output baseline verification
+
+19 October 2026. The fresh user attempt received 791,773 bytes and reported 4,520 input / 2,956 output / 7,476 total tokens. Its successful terminal event contained `output: []`, although one streamed text part and two finalized items had arrived. The previous reader rejected the finalized message at wire index 1 as `textLocation / itemAbsent`. The [controlled pre-fix reproduction](../test-results/finalized-output-2026-10-19/reproduction.log) produces those exact structural diagnostics with a complete valid candidate.
+
+The earlier assumption that a finalized answer must be repeated in the terminal array was too strict. The Python SDK's choice not to reconstruct an explicit empty array was incorrectly treated as a validity rule. OpenAI's [Codex Responses parser and test](https://github.com/openai/codex/blob/main/codex-rs/codex-api/src/sse/responses.rs#L1345-L1435) consume finalized item content independently of an empty terminal output list. The provider now merges every omitted finalized message by stable identity, including final answers. The only production change removes the commentary-only restriction from the existing merge. Overlapping messages still must agree; unfinished items, conflicting answers, changed identities/text, refusals, credentials and invalid frozen job/digest remain rejected. Exactly one answer and independent core validation still control Apply. Deltas alone and failed/incomplete/interrupted streams cannot produce a candidate.
+
+| Check | Result |
+| --- | --- |
+| Rust | [182 tests passed](../test-results/finalized-output-2026-10-19/rust-tests.log): 71 provider, 51 coordinator, 32 core and 28 storage. New real-HTTP cases cover the reported empty terminal list for API keys/ChatGPT, with unphased and explicitly final answers. They retain single-answer, overlap consistency, unfinished/delta-only, credential, JSON, job/digest, refusal and terminal-event checks. The separate OS-vault test remains guarded/ignored; its code is unchanged. |
+| Exact native outcome | [39 native steps passed](../test-results/native/2026-10-19T06-28-15-882Z-98039/report.json). The [independent saved-outcome check](../test-results/finalized-output-2026-10-19/native-outcome.json) confirms a completed headerless ChatGPT fixture with two finalized items, one text part, no empty added items and zero terminal items. The frozen job is recorded as applied and every HTML/CSS/JavaScript source byte equals the fixture's candidate; source exceeds 65,536 bytes. |
+| Safety and recovery | [Credential nondisclosure](../test-results/native/2026-10-19T06-28-15-882Z-98039/credential-nondisclosure.json) passes for 49 synthetic credentials across 159 owned files. Browser/recovery error lists are empty. [Private-display cleanup](../test-results/native/2026-10-19T06-28-15-882Z-98039/desktop-cleanup.json) verifies desktop resources and connection. Explicit retry, rejection, sandbox, source/dossier application and fresh-process recovery pass. |
+| Interface | UI sources are unchanged. The existing [UI gate](UI_VERIFICATION.md) remains applicable. Current native checks retain [550 contrast comparisons across 22 contexts and 198 neutral-grey checks](../test-results/finalized-output-2026-10-19/contrast.json), both 760px themes and real keyboard dismissal/focus. |
+| Builds/checks | Normal [release](../test-results/finalized-output-2026-10-19/release-build.log), [debug](../test-results/finalized-output-2026-10-19/debug-build.log), [instrumented native build](../test-results/finalized-output-2026-10-19/native-build.log), TypeScript/Vite, [strict all-target/all-feature Clippy](../test-results/finalized-output-2026-10-19/clippy.log) and [formatting](../test-results/finalized-output-2026-10-19/fmt-check.log) pass. |
+| Scope | [All eight dependency manifests/locks](../test-results/finalized-output-2026-10-19/dependencies.json) retain their verified hashes. Core/storage formats, UI, credentials, routes, startup and plugin authority are unchanged. |
+
+| Rebuilt executable | SHA-256 |
+| --- | --- |
+| `target/release/desegni` | `fef1e347d63014383a074c59910b0c22a004bfa04da654e93011eab03fb29d5e` |
+| `target/debug/desegni` | `59b8e3be09f7c7649c7246d66468d804076fd03b94c80fea06e0aea0f557f180` |
+| `src-tauri/target/native-tests/debug/desegni` | `1c0fcdf849f6e6c64b3203c6db27c9033cc28df8c921a980e4f911cd4e3a1fd0` |
+
+The [delivery record](../test-results/finalized-output-2026-10-19/delivery.json) indexes the patch, source, checks and [named rollback](../test-results/baselines/pre-finalized-output-2026-10-19/manifest.json). Historical records above retain the earlier behavior for audit; the current generation contract removes that overstrict rule. No user project, saved attempt or credential was repaired or rewritten. The original failed model content was not retained and cannot be recovered. No live inference was sent; close/reopen the normal build and explicitly retry once for account-specific confirmation. Remaining 1.0 release gates above stay open.
+
+
+## Current canvas generation workflow (19 October 2026)
+
+Generate now prepares and sends in one action. The compact progress window uses a transparent backdrop; only the frozen submitted rectangles receive blur masks. Its elapsed time and actual provider activity remain visible. The window can be dismissed and reopened without another request. A valid result passes the existing independent core validation, stale-source checks, durable checkpoint and atomic application, then appears directly on the canvas. The normal flow has no candidate approval screen. Unknown outcomes and explicit retries retain the existing no-automatic-resubmission rule.
+
+Clicking a rendered element creates an inline change prompt next to its outline. The frozen REQUIREMENTS.md includes its bounded structural selector, semantic tag, short label, source SHA-256 and coordinates, alongside the complete affected-page source and global Fuzzy/Strict setting. Real pointer selection works through canvas zoom; keyboard selection deduplicates nested interactive content and supports selecting a parent. Completed requests stay in project history and disappear from the canvas. Empty element selections are archived when selecting another element or applying that page. Undo restores source and request state together; Redo does not submit another provider request. AI identity proposals remain advisory and are not silently accepted during automatic application.
+
+The selectable canvas is a separate same-origin srcDoc iframe with scripts permanently forbidden by its sandbox and a restrictive CSP before authored HTML. The trusted editor reads DOM geometry through its own code; no generated script, message bridge or website node gains editor command authority. Native source fingerprints must match the exact local content before selection can bind to a current project page. Navigation invalidates the mounted document identity. Interactive preview retains its separate opaque-origin package and explicit script switch. Static canvas animations are paused using the browser animation API. Extent is measured once against the reference height; viewport-relative CSS can respond to the enlarged canvas, so this is not a claim of pixel-identical device emulation.
+
+Core owns element targets, completion/history state, Markdown, validation and undo. The native coordinator owns provider lifecycle, frozen drawing metadata, preview registration and durable application. Editor code owns gestures and progress presentation. The provider adapter and plugin authority boundaries are unchanged; no dependencies were added. ChatGPT preparation now reloads model availability using the existing saved credential when the in-memory catalogue is empty, so a fresh process does not require reconnecting merely to populate that list.
+
+Project schema 5 adds optional source-bound element metadata and completion status. Schemas 1–4 remain readable; format-3/4 frozen requirements remain compatible while their original dependencies match. Version-4 completion inference requires the application revision to equal the current revision, preserving any later ungenerated edit. Opening an older archive leaves its bytes intact; explicit Save retains its exact predecessor as `.previous`. New requirements use format 5. A real storage regression verifies both v4 migration cases and exact backup preservation.
+
+| Check | Result |
+| --- | --- |
+| Rust workspace | 187 passed; the separate OS-vault integration test remains intentionally guarded. |
+| Frontend and geometry | TypeScript/Vite production build and 26 canvas geometry checks passed. |
+| Rust static checks | Strict all-target/all-feature Clippy and formatting checks passed. |
+| Native desktop | [79 integrated steps passed](../test-results/native/2026-10-19T07-35-09-569Z-215983/report.json) on the exact final instrumented binary, on guarded private display `:90`. |
+| Actual workflow | One-click sending, exact Markdown/mode/selector/source binding, scoped blur, automatic application, nested-button keyboard traversal, element revision and Undo/Redo passed. |
+| Failure and recovery | Invalid/refused/interrupted/conflicting output, auth/quota/rate errors, cancellation and late output, stale requests, reload followed by explicit retry, real SIGKILL and fresh-process recovery passed without an extra submission. |
+| Preview boundary | Scriptless canvas, invalidated navigation to a retained enabled package, forged messages, explicit opaque interactive preview, denied parent/native IPC and network passed. |
+| Visual checks | Both grey themes fit at 760px. Actual owned-window captures verify the progress, generated canvas, element prompt and element-generation views. Measured text and control contrast passed. |
+| Credentials and cleanup | 50 synthetic credentials across 250 owned files passed nondisclosure checks. Browser and recovery error lists are empty. Original desktop connection/resources passed cleanup verification. |
+| Normal delivery | Feature-disabled debug and optimized release builds completed. The [verification record](../test-results/canvas-generation-2026-10-19/verification.json) contains exact binary hashes and check limits. |
+
+The [delivery record](../test-results/canvas-generation-2026-10-19/delivery.json) indexes changed sources, the patch, evidence and named rollback. No live inference or user-project/credential repair was performed. The earlier user-confirmed live generation success remains the live-provider baseline. This gate still returns full affected-page HTML/CSS/JavaScript; the new target is explicit agent context, not a claim of mechanically enforced canonical-subtree edits. Full canonical document editing, qualified components, exports, persistent version history, signed distribution and the other 1.0 gates in the release plan remain open. Windows/macOS, screen-reader and broader input-method/DPI checks still require their own evidence.
+
+## Desegnos interactions (19 October 2026)
+
+The app/window/title and current product copy now say Desegnos. New ChatGPT registrations request that display name. Existing app identifiers, keyring services, account/client/host registrations, `.desegni` archives, preview protocol, local theme key, and canonical PROJECT.md/REQUIREMENTS.md format bytes retain their original identities. Existing `desegni` launch paths remain valid; successful desktop builds add a same-directory `desegnos` alias. No project or credential migration is required. Name availability has only had a limited web check; public trademark/domain/distribution clearance remains a release gate.
+
+Left-button drag pans; Shift+drag marks an area. A click still selects a site element or places a request. Ctrl+wheel zooms around the pointer while plain and Shift wheels keep vertical/horizontal scrolling. View changes create no project-history entry. Selecting another request or page dismisses abandoned whitespace-only boxes. Core archives their stable records so scoped decisions and Undo remain valid. Cleanup reads the accepted queued state after pending text commits, preserves filled requests, and repeated cleanup adds neither a write nor an Undo entry.
+
+Standard shortcuts cover New/Open/Save/Save as, Undo/Redo, zoom, fit, actual size, 200%, page switching, selected-request removal with confirmation, Escape and F1 help. Text input and clipboard behavior retain their normal scope. Linux text undo uses the existing document editing command because the pinned GTK stack lacks the key bindings ([upstream report](https://github.com/tauri-apps/tauri/issues/16299)); remove that focused fallback once the native stack supplies them and the trusted-key test passes. The physical Tab code disambiguates WebKitGTK's `Unidentified` Ctrl+Shift+Tab event. No dependency was added or changed, and core/plugin/provider authority remains separate.
+
+Verification: [84 native acceptance steps](../test-results/native/2026-10-19T08-23-45-572Z-314737/report.json) passed through the Desegnos alias on the guarded private display. Real input verifies pan without edits, Shift area creation, pointer-anchored Ctrl+wheel, plain/Shift scrolling, empty-box DOM removal, recent typed text, text Undo/Redo, project Undo/Redo, fit/size/help shortcuts and both page-switch families. Legacy archives, saved account selection, synthetic generation, exact source application and crash recovery pass. Browser and recovery errors are empty; the desktop connection and display resources survive cleanup. The primary agent inspected the actual [shortcut-help window](../test-results/native/2026-10-19T08-23-45-572Z-314737/desegnos-shortcuts-window.png).
+
+Rust workspace tests pass 189 cases; the separately guarded OS-vault integration test was not repeated because credential behavior and service identities are unchanged. The 28 geometry/shortcut cases, strict Clippy, Rust format, frontend compilation, normal debug and release builds pass. A fresh [normal release startup](../test-results/startup/2026-10-19T08-25-31-892Z-322306/report.json) confirms the Desegnos window, sustained liveness and disabled automation; its cleanup preserves the original desktop connection and display resources. Detailed dependency and byte-identical compatibility checks live in [the delivery evidence](../test-results/desegnos-interactions-2026-10-19/). Windows/macOS behavior and live provider acceptance were not independently tested in this revision.
+
+## Double-click activation (19 October 2026)
+
+Double-click empty canvas space or a generated element to open its text box. Single clicks open no prompt; clicking outside an abandoned empty prompt dismisses it through the existing queued core cleanup. Left-drag remains pan, Shift-drag draws an area, and keyboard selection/placement and existing text editing remain available. A Shift-click without a drag creates no area. The editor uses the platform's native double-click event and rejects sequences interrupted by a drag or cancellation.
+
+The [84-step native run](../test-results/native/2026-10-19T08-34-25-630Z-340598/report.json) passes with trusted mouse input. It checks single versus double clicks on empty space and generated elements, exactly one focused prompt, no activation after pan plus click, Shift-click versus Shift-drag, source-bound element revision, empty-box cleanup, text/undo shortcuts, generation and crash recovery. Normal debug/release builds and frontend compilation pass. This changes editor gestures and help only; Rust core/provider/plugin contracts, storage, credentials and dependencies are unchanged. Existing Rust verification remains applicable. The launch path is still `target/release/desegnos`. See [the focused delivery record](../test-results/double-click-2026-10-19/verification.json).
+
+## Direct element editing (19 October 2026)
+
+Single-click selects the actual rendered element and draws its outline without creating a prompt or an undo entry. Double-click opens the on-canvas AI prompt. A compact contextual toolbar at the top of the workspace provides Edit, Replace, Move and More; it does not dock into a sidebar or cover neighbouring targets as selection changes. Enter selects the next element and Alt+Enter selects its parent. F2 opens editing. Arrow keys move one CSS pixel; Shift moves ten. The Move handle supports dragging with grid snapping, Alt-drag without snapping, and a click opens horizontal/vertical offsets. More provides earlier/later sibling order, parent selection, deletion with confirmation and Ask AI.
+
+Local forms edit individual text nodes while preserving nested formatting, link addresses and new-tab relationships, local image files and alternative text, accessible names and hover text, text/background colors, font size, dimensions, padding and radius. Replacement offers semantic HTML elements or one custom HTML root, with existing styles optionally retained. Images are embedded locally after file type, size, decoding and dimension checks. These actions call core editing commands and make no provider generation request. Existing source scripts remain paused on the canvas.
+
+Core validates project revision, source fingerprint, structural target, text indexes, attributes, source bounds, duplicate IDs and the resulting browser parse. Replacement parses in the actual parent namespace/context, including table and SVG content. The first effective edit normalizes HTML through the HTML5 serializer; separate CSS and JavaScript remain byte-identical. No-op edits preserve original HTML bytes and history. Journal writes precede commit; failed writes leave project and history intact. Undo/Redo restore exact source and request records, and edited source invalidates previously frozen generation.
+
+Active element requests follow their actual DOM nodes through reordering and other edits. Removing a node with a written request is rejected with a clear message; empty requests are archived. The scriptless, registered preview measures current bounds and records them durably without creating a second Undo step or clearing Redo. Generate and requirements review await measurements; rendering failures cannot block Save, Undo, Open or page switching. Selection uses page/ticket ownership so an old asynchronous completion cannot select an element on another page. Rapid arrow input is accumulated and applied against refreshed source.
+
+Preview HTML and CSS are frozen together with their verified native registration. Updating content no longer navigates the old iframe under its old document identity before the replacement registration is ready. Dragging preserves existing 2D transforms using measured local-to-page translation; perspective and 3D transforms require layout editing. This is local HTML editing, not the remaining canonical component, breakpoint, layer organizer or export release gates.
+
+The implementation reuses exact versions of dom_query 0.28.0 (MIT) and html5ever 0.39.0 (MIT/Apache-2.0) already used by Tauri's resolved parser stack. Only direct core dependency edges were added; no package version or frontend dependency was introduced. Core owns source edits and history, the native shell owns durable coordination and editor-only command permissions, and React owns transient selection and interaction. Provider and future plugin authority remain unchanged. See the [dependency comparison](../test-results/direct-editing-2026-10-19/dependency-review.json).
+
+Verification: [88 full native acceptance steps](../test-results/native/2026-10-19T09-23-22-475Z-443918/report.json), 202 Rust tests, 28 canvas/shortcut checks, strict Clippy, formatting, production frontend, and normal debug/release builds pass. The separate guarded OS-vault test was not repeated. A [fresh normal release launch](../test-results/startup/2026-10-19T09-25-39-748Z-452301/report.json) draws the initial project form and keeps the test automation port closed. Actual selection and edited-site screenshots were inspected. Browser errors are empty and original desktop resources/connections survive cleanup. Native fixtures verify no added generation requests for local edits, the real image picker, filled-request geometry, source replacement, deletion, exact Undo/Redo, archive persistence and crash recovery. Linux is verified; Windows/macOS and live paid inference were not exercised. [Delivery evidence](../test-results/direct-editing-2026-10-19/verification.json) includes named backups, changed-source hashes and the final executable digest.
+
+
+## Brand, direct controls and identity import (19 October 2026)
+
+The editor follows the supplied Desegnos identity: the outlined monochrome wordmark changes ink with the app theme; Archivo headings, neutral grey surfaces, blue functional controls, dashed requests and square screen guides use locally bundled assets. The font's SIL OFL accompanies the build. The dark selected surface is adjusted to retain readable muted text. Generation has static progress feedback rather than a looping decorative animation. All work stays in WebMaker. The separate reference folder is read-only, with all 31 original file hashes preserved in the [reference check](../test-results/project-onboarding-2026-10-19/reference-identity-after.json).
+
+A selected generated element moves by dragging it directly. Four corner handles resize it, keep the opposite corner anchored, obey the configured world grid and permit free movement with Alt. Escape cancels a gesture; one completed drag creates one source edit and Undo entry. Two-dimensional transforms include near-45-degree cases; unsupported perspective and three-dimensional transforms report a local limitation. The accessible icon toolbar follows above the selection's top-left and clamps inside the viewport. Right-click selects the element and opens Edit/Generate; Generate opens an inline request. Native editing menus remain available in actual prompt fields. The static preview is inert; Linux additionally suppresses WebKit's conflicting native site menus. The separately enabled opaque preview retains its script and IPC boundary.
+
+New project first offers New blank page or Import identity from project. Name, Web/Mobile and common resolution presets follow. Creation always produces one empty light page; the footer's Page appearance dropdown changes it afterward. Import accepts Desegnos archives, website folders and ZIPs. Users review files, explicitly analyze identity through their configured API key or ChatGPT account, and choose findings and real portable logos. Low-confidence suggestions start unchecked. Only approved findings and assets enter the blank project, its dossier and subsequent generation requirements. Analysis never copies the source website into the canvas.
+
+Core validates identity and assets, accepted decisions and requirements. Storage collects bounded read-only evidence without executing or extracting imported projects. The provider adapter sees frozen Markdown and supported images but cannot read paths or apply changes. The native coordinator owns authentication, immutable source snapshots, durable analysis intent, strict evidence-bound results, cancellation and recovery. The editor owns the wizard and review. These are implemented boundaries; an executable plugin host remains separate release work. The detailed [identity contract](IDENTITY_IMPORT.md) records limits, privacy, schema 6 and compatible legacy migration.
+
+Verification includes 244 Rust tests, 32 geometry/shortcut tests, strict all-target/all-feature Clippy, formatting, TypeScript/Vite and normal debug/release builds. The [focused native identity run](../test-results/native/2026-10-19T10-50-15-852Z-693764/report.json) passes 13 steps with actual native file/folder pickers, source integrity, streamed analysis, cancellation, malformed output, selected findings/logos, save/reopen, future requirements and forced-crash recovery. The [fresh normal release startup](../test-results/startup/2026-10-19T10-46-42-318Z-676675/report.json) passes on an isolated display with automation disabled; its screenshot was inspected and original desktop resources/connection survive cleanup. Tests use local synthetic provider and OAuth fixtures, with no paid inference. Live identity inference, Windows/macOS, screen-reader and broader input-method/DPI checks remain unverified. The separately guarded system-vault test is intentionally excluded from the ordinary Rust suite.
+
+The final [combined native acceptance run](../test-results/native/2026-10-19T10-54-29-820Z-715292/report.json) passes **100 steps** on the same final instrumented build. It joins actual pointer/corner/context-menu and keyboard controls, percentage and pixel grids, provider failure/cancellation/stale-source checks, script and IPC isolation, real legacy migration, signed ChatGPT/account/rotation tests, identity import through the plan adapter and forced-crash recovery. Browser/recovery errors are empty. All 450 contrast comparisons across 18 contexts pass; 49 synthetic credentials across 309 owned files pass nondisclosure. The original desktop connection and display resources survive cleanup. The [delivery record](../test-results/project-onboarding-2026-10-19/delivery.json) records source/binary hashes, evidence and preserved backups.

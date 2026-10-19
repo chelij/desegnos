@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-requirements"
+description = "Enables the prepare_requirements command without any pre-configured scope."
+commands.allow = ["prepare_requirements"]
+
+[[permission]]
+identifier = "deny-prepare-requirements"
+description = "Denies the prepare_requirements command without any pre-configured scope."
+commands.deny = ["prepare_requirements"]

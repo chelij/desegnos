@@ -1,0 +1,22 @@
+#[cfg(all(feature = "test-support", not(debug_assertions)))]
+compile_error!("desegni-ai test-support cannot be included in a release build");
+
+pub mod chatgpt;
+mod credentials;
+mod error;
+mod identity;
+mod settings;
+mod sse;
+mod transport;
+
+pub use chatgpt::*;
+pub use credentials::*;
+pub use error::*;
+pub use identity::*;
+pub use settings::*;
+pub use transport::*;
+
+pub type Result<T> = std::result::Result<T, ProviderError>;
+
+#[cfg(test)]
+mod tests;

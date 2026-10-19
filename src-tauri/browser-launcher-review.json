@@ -1,0 +1,50 @@
+{
+  "reviewedAt": "2026-10-18",
+  "selection": {
+    "directPin": "open =5.4.4",
+    "enabledFeatures": [
+      "shellexecute-on-windows"
+    ],
+    "insecureFeature": false,
+    "authority": "Native trusted editor commands only; URLs are fixed usage destination or provider-constructed authorization. No renderer URL or opener permission.",
+    "reason": "Maintained established launcher already used by Tauri, without unused file-reveal plugin/D-Bus dependencies."
+  },
+  "packages": [
+    {
+      "name": "open",
+      "version": "5.4.4",
+      "role": "Native trusted-URL launcher; same implementation used by Tauri opener",
+      "license": "MIT",
+      "repository": "https://github.com/Byron/open-rs",
+      "manifestSource": "https://docs.rs/crate/open/5.4.4/source/Cargo.toml"
+    },
+    {
+      "name": "is-wsl",
+      "version": "0.4.0",
+      "role": "Launcher platform detection",
+      "license": "MIT",
+      "repository": "https://github.com/TheLarkInn/is-wsl",
+      "manifestSource": "https://docs.rs/crate/is-wsl/0.4.0/source/Cargo.toml"
+    },
+    {
+      "name": "is-docker",
+      "version": "0.2.0",
+      "role": "Launcher platform detection",
+      "license": "MIT",
+      "repository": "https://github.com/TheLarkInn/is-docker",
+      "manifestSource": "https://docs.rs/crate/is-docker/0.2.0/source/Cargo.toml"
+    }
+  ],
+  "advisoryReview": {
+    "source": "https://github.com/RustSec/advisory-db",
+    "commit": "999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b",
+    "scope": "New native browser-launch dependencies only",
+    "noPackageAdvisoriesFound": [
+      "open",
+      "is-wsl",
+      "is-docker"
+    ],
+    "removedProvisionalDependency": "tauri-plugin-opener2.7.2, which enables standalone zbus_names/zvariant/zvariant_derive with RUSTSEC-2026-0370/0371/0372 unmaintained notices. No provisional plugin/source remains enabled.",
+    "releaseRequirement": "Recheck exact enabled target graphs before publishing; this is not a full repository audit."
+  }
+}

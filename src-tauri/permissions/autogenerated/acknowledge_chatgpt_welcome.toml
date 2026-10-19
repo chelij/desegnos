@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-acknowledge-chatgpt-welcome"
+description = "Enables the acknowledge_chatgpt_welcome command without any pre-configured scope."
+commands.allow = ["acknowledge_chatgpt_welcome"]
+
+[[permission]]
+identifier = "deny-acknowledge-chatgpt-welcome"
+description = "Denies the acknowledge_chatgpt_welcome command without any pre-configured scope."
+commands.deny = ["acknowledge_chatgpt_welcome"]

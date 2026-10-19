@@ -1,0 +1,9 @@
+{
+  "source": "Actual GTK Save from the native test run 2026-10-18T11-05-32-617Z-518070",
+  "sourceFile": "picker-files/saved site 3008f948-10f0-4488-9b3d-9e5a77c77b3e.desegni",
+  "sha256": "f828598377bebee41c6c8a00f884d8888cdfc3f76c49c8a95b7228b8004834b2",
+  "schemaVersion": 2,
+  "revision": 92,
+  "generationMode": "strict",
+  "purpose": "Verify schema 2 migration preserves the saved global mode, exact prompt data, accepted decisions, and unknown extensions while adding empty generated source state."
+}

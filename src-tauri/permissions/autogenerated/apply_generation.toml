@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-apply-generation"
+description = "Enables the apply_generation command without any pre-configured scope."
+commands.allow = ["apply_generation"]
+
+[[permission]]
+identifier = "deny-apply-generation"
+description = "Denies the apply_generation command without any pre-configured scope."
+commands.deny = ["apply_generation"]

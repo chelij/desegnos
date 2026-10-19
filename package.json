@@ -1,0 +1,34 @@
+{
+  "name": "desegni",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "GPL-3.0-only",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "desktop": "node scripts/tauri.mjs",
+    "test": "node scripts/cargo.mjs test --workspace",
+    "check:rust": "node scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",
+    "test:native": "node scripts/native-test.mjs",
+    "test:canvas": "node tests/canvas-geometry.test.mjs",
+    "test:vault": "node scripts/test-vault.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.12.4",
+    "@tauri-apps/plugin-dialog": "2.8.3",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.3",
+    "@types/node": "^26.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "typescript": "7.0.2",
+    "vite": "8.3.4"
+  }
+}
+

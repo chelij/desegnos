@@ -1,0 +1,15 @@
+/* The supplied Desegnos identity is copied verbatim under branding/identity.
+   Desktop controls deliberately keep system UI fonts. All font/logo assets are local. */
+@font-face { font-family: Archivo; src: url('./assets/brand/archivo-variable.woff2') format('woff2'); font-weight: 100 900; font-stretch: 62% 125%; font-display: swap; }
+:root { --background: #f2f2f2; --surface: #ffffff; --surface-raised: #f2f2f2; --surface-muted: #e8e8e8; --canvas-bed: #d4d4d4; --text: #262626; --muted: #4b4b4b; --border: #626262; --border-soft: #b1b1b1; --accent: #005a9e; --accent-text: #ffffff; --focus: #005a9e; --danger: #a4262c; }
+:root[data-theme='dark'] { --selected: #263e52; --background: #1a1a1a; --surface: #262626; --surface-raised: #383838; --surface-muted: #383838; --canvas-bed: #121212; --text: #f2f2f2; --muted: #b1b1b1; --border: #8a8a8a; --border-soft: #4b4b4b; --accent: #8ac4f5; --accent-text: #17212b; --focus: #8ac4f5; --danger: #ffb5b5; --warning-surface: #383838; }
+h1,h2,h3 { font-family: Archivo, system-ui, sans-serif; font-weight: 650; letter-spacing: -.015em; }
+.wordmark { display: flex; align-items: center; padding: 6px; flex-shrink: 0; }
+.wordmark img { display: block; width: auto; height: 24px; }
+.wordmark .brand-dark { display: none; }
+:root[data-theme='dark'] .wordmark .brand-light { display: none; }
+:root[data-theme='dark'] .wordmark .brand-dark { display: block; }
+.free-workspace .annotation textarea { border: 2px dashed var(--annotation-border); border-radius: 0; }
+.free-workspace .annotation.selected textarea { border-color: var(--annotation-focus); }
+.free-workspace .screen-guide { border-radius: 0; }
+@media (prefers-reduced-motion: no-preference) { button { transition: background-color 120ms, border-color 120ms, color 120ms; } }

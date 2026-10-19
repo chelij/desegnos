@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-retry-chatgpt-secure-storage"
+description = "Enables the retry_chatgpt_secure_storage command without any pre-configured scope."
+commands.allow = ["retry_chatgpt_secure_storage"]
+
+[[permission]]
+identifier = "deny-retry-chatgpt-secure-storage"
+description = "Denies the retry_chatgpt_secure_storage command without any pre-configured scope."
+commands.deny = ["retry_chatgpt_secure_storage"]

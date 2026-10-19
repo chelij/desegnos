@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-inspect-element"
+description = "Enables the inspect_element command without any pre-configured scope."
+commands.allow = ["inspect_element"]
+
+[[permission]]
+identifier = "deny-inspect-element"
+description = "Denies the inspect_element command without any pre-configured scope."
+commands.deny = ["inspect_element"]

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "app": {
+    "withGlobalTauri": true,
+    "security": {
+      "capabilities": [
+        "editor",
+        {
+          "identifier": "native-test-driver",
+          "description": "Enabled only for the explicit native-tests build.",
+          "windows": ["editor"],
+          "permissions": ["wdio-webdriver:default"]
+        }
+      ]
+    }
+  },
+  "bundle": { "active": false }
+}

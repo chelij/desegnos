@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="28 25 78 78">
+  <title>Desegnos</title>
+  <path class="ink" d="M36 30H48V36H42V42H36Z M36 48H42V61H36Z M36 67H42V80H36Z M36 98H48V92H42V86H36Z" fill="#262626"/>
+  <path class="ink" d="M58 30A40 34 0 0 1 58 98V82A23 18 0 0 0 58 46Z" fill="#262626"/>
+  <path class="seam" d="M56.5 25V103" stroke="#262626" stroke-width="5"/>
+</svg>

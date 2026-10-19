@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-recover-project"
+description = "Enables the recover_project command without any pre-configured scope."
+commands.allow = ["recover_project"]
+
+[[permission]]
+identifier = "deny-recover-project"
+description = "Denies the recover_project command without any pre-configured scope."
+commands.deny = ["recover_project"]

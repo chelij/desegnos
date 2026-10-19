@@ -1,0 +1,166 @@
+{
+  "reviewedAt": "2026-10-18",
+  "primaryManifest": "https://raw.githubusercontent.com/Keats/jsonwebtoken/v11.1.0/Cargo.toml",
+  "selection": {
+    "directPin": "=11.1.0",
+    "defaultFeatures": false,
+    "enabledFeatures": [
+      "aws_lc_rs"
+    ],
+    "disabledFeatures": [
+      "use_pem",
+      "rust_crypto"
+    ],
+    "excludedOptionalParsersOrBackends": [
+      "pem",
+      "simple_asn1",
+      "rsa",
+      "p256",
+      "p384",
+      "ed25519-dalek"
+    ],
+    "reason": "Established JWT implementation using the existing AWS-LC backend; no second RSA implementation or PEM parsing dependency is needed for JWKS validation."
+  },
+  "packages": [
+    {
+      "name": "jsonwebtoken",
+      "version": "11.1.0",
+      "newLockEntry": true,
+      "role": "ID-token signature and claims validation; aws_lc_rs feature only",
+      "license": "MIT",
+      "repository": "https://github.com/Keats/jsonwebtoken",
+      "manifestSource": "https://docs.rs/crate/jsonwebtoken/11.1.0/source/Cargo.toml",
+      "rustVersion": "1.88.0"
+    },
+    {
+      "name": "signature",
+      "version": "2.2.0",
+      "newLockEntry": true,
+      "role": "JWT signature traits",
+      "license": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/RustCrypto/traits/tree/master/signature",
+      "manifestSource": "https://docs.rs/crate/signature/2.2.0/source/Cargo.toml",
+      "rustVersion": "1.60"
+    },
+    {
+      "name": "untrusted",
+      "version": "0.7.1",
+      "newLockEntry": true,
+      "role": "AWS-LC signing/verifying parser dependency enabled through JWT feature unification",
+      "license": "ISC",
+      "repository": "https://github.com/briansmith/untrusted",
+      "manifestSource": "https://docs.rs/crate/untrusted/0.7.1/source/Cargo.toml",
+      "rustVersion": null
+    },
+    {
+      "name": "aws-lc-rs",
+      "version": "1.18.2",
+      "newLockEntry": false,
+      "role": "Established workspace TLS crypto backend reused by JWT",
+      "license": "ISC AND (Apache-2.0 OR ISC)",
+      "repository": "https://github.com/aws/aws-lc-rs",
+      "manifestSource": "https://docs.rs/crate/aws-lc-rs/1.18.2/source/Cargo.toml",
+      "rustVersion": "1.71.0"
+    },
+    {
+      "name": "aws-lc-sys",
+      "version": "0.46.0",
+      "newLockEntry": false,
+      "role": "Established native AWS-LC implementation reused by JWT",
+      "license": "ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND (Apache-2.0 OR ISC OR MIT-0)",
+      "repository": "https://github.com/aws/aws-lc-rs",
+      "manifestSource": "https://docs.rs/crate/aws-lc-sys/0.46.0/source/Cargo.toml",
+      "rustVersion": "1.71.0"
+    },
+    {
+      "name": "serde_urlencoded",
+      "version": "0.7.1",
+      "newLockEntry": false,
+      "role": "Existing lock entry enabled for OAuth form posts",
+      "license": "MIT/Apache-2.0",
+      "repository": "https://github.com/nox/serde_urlencoded",
+      "manifestSource": "https://docs.rs/crate/serde_urlencoded/0.7.1/source/Cargo.toml",
+      "rustVersion": null
+    },
+    {
+      "name": "ryu",
+      "version": "1.0.23",
+      "newLockEntry": false,
+      "role": "Existing lock entry enabled by serde_urlencoded",
+      "license": "Apache-2.0 OR BSL-1.0",
+      "repository": "https://github.com/dtolnay/ryu",
+      "manifestSource": "https://docs.rs/crate/ryu/1.0.23/source/Cargo.toml",
+      "rustVersion": "1.71"
+    }
+  ],
+  "advisoryReview": {
+    "source": "https://github.com/RustSec/advisory-db",
+    "commit": "999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b",
+    "commitDate": "2026-10-17T15:19:28Z",
+    "scope": "Newly enabled authentication dependencies and reused AWS-LC; not a repository-wide audit",
+    "noPackageAdvisoriesFound": [
+      "jsonwebtoken",
+      "signature",
+      "serde_urlencoded",
+      "ryu",
+      "aws-lc-rs"
+    ],
+    "applicablePackageAdvisories": [
+      {
+        "id": "RUSTSEC-2018-0001",
+        "package": "untrusted",
+        "enabledVersion": "0.7.1",
+        "patched": ">=0.6.2",
+        "affected": false,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2018-0001.html"
+      },
+      {
+        "id": "RUSTSEC-2026-0044",
+        "package": "aws-lc-sys",
+        "enabledVersion": "0.46.0",
+        "patched": ">=0.39.0",
+        "affected": false,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0044.html"
+      },
+      {
+        "id": "RUSTSEC-2026-0045",
+        "package": "aws-lc-sys",
+        "enabledVersion": "0.46.0",
+        "patched": ">=0.38.0",
+        "affected": false,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0045.html"
+      },
+      {
+        "id": "RUSTSEC-2026-0046",
+        "package": "aws-lc-sys",
+        "enabledVersion": "0.46.0",
+        "patched": ">=0.38.0",
+        "affected": false,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0046.html"
+      },
+      {
+        "id": "RUSTSEC-2026-0047",
+        "package": "aws-lc-sys",
+        "enabledVersion": "0.46.0",
+        "patched": ">=0.38.0",
+        "affected": false,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0047.html"
+      },
+      {
+        "id": "RUSTSEC-2026-0048",
+        "package": "aws-lc-sys",
+        "enabledVersion": "0.46.0",
+        "patched": ">=0.39.0",
+        "affected": false,
+        "source": "https://rustsec.org/advisories/RUSTSEC-2026-0048.html"
+      }
+    ],
+    "result": "No matching vulnerability in the reviewed enabled versions at this database commit. Optional rust_crypto RSA backend is not enabled. Recheck the current complete graph before release."
+  },
+  "featureChanges": {
+    "reqwest": "Enable form alongside existing rustls/json/stream",
+    "tokio": "Enable rt/net/io-util alongside existing sync/time/macros",
+    "sha2": "Reuse workspace0.10.9 for S256 PKCE",
+    "uuid": "Reuse workspace1.28.0 for native registration/host identities and OS-backed random state"
+  }
+}
