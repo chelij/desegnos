@@ -263,6 +263,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.button('Fit');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
     await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'My unfinished edit must survive' });
+    await waitFor(() => driver.execute(() => document.querySelector('.inline-text-editor')?.textContent === 'My unfinished edit must survive'), 'The native typing did not settle in the inline editor');
     provider.release(held.jobId);
     await waitFor(async () => (await driver.invoke('get_generation', { projectId }))?.receivedBytes > 0, 'The draft-test reply did not start streaming');
     provider.release(held.jobId); await jobAt(driver, projectId, ['blocked']);
@@ -274,6 +275,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.ready('section[aria-label="Generated changes"]');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
     await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Result review preserves newer typing' });
+    await waitFor(() => driver.execute(() => document.querySelector('.inline-text-editor')?.textContent === 'Result review preserves newer typing'), 'The native typing did not settle in the inline editor');
     await physical.click(await physical.center('section[aria-label="Generated changes"] button:nth-child(2)'));
     await previewReady(driver, 'Result review preserves newer typing');
     assert.equal((await workspace(driver)).project.latestGeneration.jobId, applied.jobId, 'Result Undo undid a newer local edit');

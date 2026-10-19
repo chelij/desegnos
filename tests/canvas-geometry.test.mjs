@@ -13,7 +13,7 @@ try {
     '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
-    initialWorkspaceBounds, expandWorkspace, percent, percentageTicks, pixelTicks, elementToolbarPosition, alignmentLines, WORLD_MIN, WORLD_MAX, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
+    workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
   await test('canvas tool shortcuts never interrupt text input and AI stays explicit', () => {
     const event = key => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
@@ -59,7 +59,8 @@ try {
     assert.deepEqual(crossed,{x:13,y:-7,width:1,height:1});
     for(const corner of ['nw','ne','sw','se']) {
       const result=elementResizeRect(initial,{x:corner.includes('w')?-1e9:1e9,y:corner.includes('n')?-1e9:1e9},corner,{x:1,y:1},false);
-      assert.ok(result.x>=WORLD_MIN && result.y>=WORLD_MIN && result.x+result.width<=WORLD_MAX && result.y+result.height<=WORLD_MAX);
+      assert.ok(Object.values(result).every(Number.isFinite));
+      assert.ok(result.width>1e8 && result.height>1e8);
     }
   });
   await test('cursor-anchored wheel zoom preserves the world point through coalesced zoom changes', () => {
@@ -142,12 +143,12 @@ try {
     assert.deepEqual(geometryForGesture(gesture, { x: -40, y: 80 }, guide, free), { ...initial, x: -60 });
     assert.deepEqual(geometryForGesture(gesture, { x: 25, y: 80 }, guide, free), { ...initial, x: 5 });
   });
-  await test('the technical workspace limits clamp both rectangle endpoints', () => {
+  await test('drawing, moving and resizing cross the former world edge without clipping', () => {
     const initial = { x: 99900, y: -99900, width: 100, height: 80 };
-    assert.deepEqual(geometryForGesture({ kind: 'move', start: { x: 0, y: 0 }, initial }, { x: 500, y: -500 }, guide, grid), { ...initial, x: 99900, y: -100000 });
+    assert.deepEqual(geometryForGesture({ kind: 'move', start: { x: 0, y: 0 }, initial }, { x: 500, y: -500 }, guide, free), { ...initial, x: 100400, y: -100400 });
     const lowerRight = { x: 99980, y: 99980, width: 17, height: 17 };
-    assert.deepEqual(geometryForGesture({ kind: 'resize', start: { x: 0, y: 0 }, initial: lowerRight }, { x: 500, y: 500 }, guide, grid), { ...lowerRight, width: 20, height: 20 });
-    assert.deepEqual(geometryForGesture({ kind: 'new', start: { x: 0, y: 0 }, initial }, { x: -200000, y: 200000 }, guide, free), { x: -100000, y: 0, width: 100000, height: 100000 });
+    assert.deepEqual(geometryForGesture({ kind: 'resize', start: { x: 0, y: 0 }, initial: lowerRight }, { x: 500, y: 500 }, guide, free), { ...lowerRight, width: 517, height: 517 });
+    assert.deepEqual(geometryForGesture({ kind: 'new', start: { x: 0, y: 0 }, initial }, { x: -2000000, y: 3000000 }, guide, free), { x: -2000000, y: 0, width: 2000000, height: 3000000 });
   });
   await test('queued keyboard changes accumulate against the accepted rectangle', async () => {
     let accepted = { x: -10, y: -20, width: 100, height: 80 };
@@ -170,26 +171,11 @@ try {
     const settings = { ...grid, spacing: 5, unit: 'percent' };
     assert.deepEqual(keyboardRectChange({ x: 1, y: 1 }, guide, settings, true, false, { x: 1, y: 1 })(initial), { ...initial, width: 147, height: 103 });
   });
-  await test('bounded keyboard changes retain object identity for a no-op', () => {
+  await test('keyboard changes continue past the old edge and retain identity only for a real no-op', () => {
     const accepted = { x: 99900, y: 99920, width: 100, height: 80 };
-    assert.equal(rectDelta({ x: 8, y: 8 }, guide)(accepted), accepted);
-    assert.equal(rectDelta({ x: 8, y: 8 }, guide, true)(accepted), accepted);
-  });
-  await test('all gestures stay in the signed technical world for narrow and non-grid screen guides', () => {
-    for (const width of [1, 7, 390, 1440]) {
-      const screen = { width, height: 844 };
-      const initial = { x: -99990, y: 99990, width: 10, height: 10 };
-      for (const settings of [free, grid, { ...grid, spacing: 2.5, unit: 'percent' }]) {
-        for (const kind of ['new', 'move', 'resize']) {
-          for (const point of [{ x: -200000, y: -200000 }, { x: -3, y: 7 }, { x: 200000, y: 200000 }]) {
-            const rect = geometryForGesture({ kind, start: { x: -99990, y: 99990 }, initial }, point, screen, settings);
-            assert.ok(rect.x >= WORLD_MIN && rect.y >= WORLD_MIN);
-            assert.ok(rect.width >= 0 && rect.height >= 0);
-            assert.ok(rect.x + rect.width <= WORLD_MAX && rect.y + rect.height <= WORLD_MAX);
-          }
-        }
-      }
-    }
+    assert.deepEqual(rectDelta({ x: 8, y: 8 }, guide)(accepted), { ...accepted, x: 99908, y: 99928 });
+    assert.deepEqual(rectDelta({ x: 8, y: 8 }, guide, true)(accepted), { ...accepted, width: 108, height: 88 });
+    assert.equal(rectDelta({ x: 0, y: 0 }, guide)(accepted), accepted);
   });
   await test('request text boxes stay readable at every zoom without being constrained to mobile screen width', () => {
     for (const zoom of [0.25, 0.5, 0.75, 1, 1.5, 2]) {
@@ -200,9 +186,9 @@ try {
       assert.equal(box.y, -64);
     }
   });
-  await test('tiny requests gain usable dimensions and clamp gracefully at the technical world edge', () => {
-    assert.deepEqual(requestPlacement({ x: 99999, y: 99999, width: 1, height: 1 }, 1), { x: 99840, y: 99920, width: 160, height: 80 });
-    assert.deepEqual(requestAt({ x: -100001, y: -100001 }, 0.25), { x: -100000, y: -100000, width: 1280, height: 640 });
+  await test('tiny requests gain usable dimensions without moving their requested origin', () => {
+    assert.deepEqual(requestPlacement({ x: 99999, y: 99999, width: 1, height: 1 }, 1), { x: 99999, y: 99999, width: 160, height: 80 });
+    assert.deepEqual(requestAt({ x: -100001, y: -100001 }, 0.25), { x: -100001, y: -100001, width: 1280, height: 640 });
   });
   await test('pointer and keyboard resizing preserve the readable minimum', () => {
     const initial = { x: -16, y: -32, width: 320, height: 160 };
@@ -212,26 +198,41 @@ try {
     const smallest = { ...initial, width: 160, height: 80 };
     assert.equal(rectDelta({ x: -8, y: -8 }, guide, true, minimum)(smallest), smallest);
   });
-  await test('initial workspace surrounds the screen guide and every off-screen request', () => {
-    const rects = [{ x: -3000, y: -2000, width: 100, height: 100 }, { x: 4000, y: 5000, width: 200, height: 300 }];
-    assert.deepEqual(initialWorkspaceBounds(guide, rects, { x: 1200, y: 800 }), { left: -4200, top: -2800, right: 5400, bottom: 6100 });
-  });
-  await test('scrolling near each edge dynamically extends workspace without shifting world coordinates', () => {
-    const bounds = { left: -600, top: -600, right: 2040, bottom: 1500 };
-    const visible = { left: -580, top: -550, right: 2000, bottom: 1450 };
-    const extended = expandWorkspace(bounds, visible, { x: 1200, y: 800 });
-    assert.deepEqual(extended, { left: -1780, top: -1350, right: 3200, bottom: 2250 });
-    for (const zoom of [0.25, 0.75, 1, 2]) {
-      const oldScroll = (visible.left - bounds.left) * zoom;
-      const newScroll = (visible.left - extended.left) * zoom;
-      const target = -300;
-      assert.equal((target - bounds.left) * zoom - oldScroll, (target - extended.left) * zoom - newScroll);
+  await test('the browser window stays small at distant signed canvas positions and every zoom', () => {
+    for (const zoom of [.001,.25,.75,1,2,4]) for (const origin of [{x:0,y:0},{x:-1e9,y:2e9}]) {
+      const size={x:1200/zoom,y:800/zoom}, bounds=workspaceWindow(origin,size);
+      assert.ok((bounds.right-bounds.left)*zoom <= Math.max(3600,1200+1200*zoom)+.001);
+      assert.ok((bounds.bottom-bounds.top)*zoom <= Math.max(2400,800+1200*zoom)+.001);
+      assert.ok(bounds.left<origin.x && bounds.top<origin.y && bounds.right>origin.x+size.x && bounds.bottom>origin.y+size.y);
     }
   });
-  await test('workspace expansion stops at technical limits and does not shrink existing working space', () => {
-    const bounds = { left: -99900, top: -99900, right: 99900, bottom: 99900 };
-    assert.deepEqual(expandWorkspace(bounds, { left: -99900, top: -99900, right: 99900, bottom: 99900 }, { x: 1200, y: 800 }), { left: -100000, top: -100000, right: 100000, bottom: 100000 });
-    assert.deepEqual(expandWorkspace(bounds, { left: -500, top: -500, right: 500, bottom: 500 }, { x: 1200, y: 800 }), bounds);
+  await test('repeated window rebasing keeps a captured world point at its screen position', () => {
+    for (const zoom of [.001,.25,.75,1,2,4]) {
+      const size={x:1200/zoom,y:800/zoom}; let bounds=workspaceWindow({x:0,y:0},size);
+      for(let index=0;index<30;index++) {
+        const origin={x:bounds.left+12/zoom,y:bounds.bottom-size.y-12/zoom},visible={left:origin.x,top:origin.y,right:origin.x+size.x,bottom:origin.y+size.y};
+        const next=expandWorkspace(bounds,visible,{x:Math.max(600,size.x),y:Math.max(600,size.y)}),target={x:origin.x+100/zoom,y:origin.y+200/zoom};
+        const projected=b=>({x:(target.x-b.left)*zoom-(origin.x-b.left)*zoom,y:(target.y-b.top)*zoom-(origin.y-b.top)*zoom});
+        const before=projected(bounds),after=projected(next);
+        assert.ok(Math.abs(before.x-after.x)<1e-6 && Math.abs(before.y-after.y)<1e-6);
+        assert.ok((next.right-next.left)*zoom<7000 && (next.bottom-next.top)*zoom<7000);
+        bounds=next;
+      }
+    }
+  });
+  await test('off-window content is hidden without dropping huge intersecting requests', () => {
+    const bounds=workspaceWindow({x:0,y:0},{x:1200,y:800});
+    assert.equal(intersectsWorkspace({x:1e9,y:1e9,width:100,height:100},bounds),false);
+    assert.equal(intersectsWorkspace({x:-1e6,y:-1e6,width:2e6,height:2e6},bounds),true);
+    assert.equal(expandWorkspace(bounds,{left:0,top:0,right:1200,bottom:800},{x:1200,y:800}),bounds);
+  });
+  await test('enormous intersecting rectangles paint only the bounded window without changing logical geometry', () => {
+    const bounds=workspaceWindow({x:0,y:0},{x:1200,y:800}),rect={x:-1e9,y:-1e9,width:2e9,height:2e9};
+    assert.deepEqual(clipToWorkspace(rect,bounds),{x:bounds.left,y:bounds.top,width:bounds.right-bounds.left,height:bounds.bottom-bounds.top});
+    assert.equal(rect.width,2e9);
+    assert.equal(clipToWorkspace({x:1e10,y:1e10,width:10,height:10},bounds),null);
+    assert.equal(validWorkspace(bounds,{x:1200,y:800}),true);
+    assert.equal(validWorkspace(workspaceWindow({x:1e308,y:1e308},{x:1200,y:800}),{x:1200,y:800}),false);
   });
   await test('alignment guides use the screen and other requests independently of grid snapping', () => {
     const other = { x: -100, y: -200, width: 100, height: 200 };

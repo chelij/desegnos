@@ -78,13 +78,13 @@ fn invalid_geometry_and_stale_edits_do_not_mutate_project() {
     let p = project();
     for rect in [
         Rect {
-            x: MIN_CANVAS_COORDINATE - 1.0,
+            x: f64::MAX,
             y: 0.0,
-            width: 20.0,
+            width: f64::MAX,
             height: 20.0,
         },
         Rect {
-            x: MAX_CANVAS_COORDINATE - 10.0,
+            x: f64::MAX,
             y: 0.0,
             width: 50.0,
             height: 20.0,
@@ -513,10 +513,10 @@ fn signed_canvas_areas_preserve_exact_placement_and_percentages_beyond_the_guide
             height: 1000.0,
         },
         Rect {
-            x: MIN_CANVAS_COORDINATE,
-            y: MIN_CANVAS_COORDINATE,
-            width: 200_000.0,
-            height: 200_000.0,
+            x: -1_000_000.0,
+            y: -1_000_000.0,
+            width: 3_000_000.0,
+            height: 4_000_000.0,
         },
     ] {
         p = p
@@ -558,26 +558,20 @@ fn signed_canvas_areas_preserve_exact_placement_and_percentages_beyond_the_guide
     assert_eq!(snapshot.region_count, 3);
     for rect in [
         Rect {
-            x: -100_001.0,
+            x: f64::MAX,
             y: 0.0,
-            width: 1.0,
+            width: f64::MAX,
             height: 1.0,
         },
         Rect {
             x: 0.0,
-            y: -100_001.0,
+            y: f64::MAX,
             width: 1.0,
-            height: 1.0,
+            height: f64::MAX,
         },
         Rect {
-            x: 99_999.5,
+            x: f64::MAX,
             y: 0.0,
-            width: 1.0,
-            height: 1.0,
-        },
-        Rect {
-            x: 0.0,
-            y: 100_000.0,
             width: 1.0,
             height: 1.0,
         },

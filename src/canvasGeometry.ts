@@ -5,8 +5,6 @@ export type GeometryGesture = { kind: 'new' | 'move' | 'resize'; start: Point; i
 export type RectChange = Rect | ((current: Rect) => Rect);
 export type CanvasGridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: boolean; rulers: boolean };
 export type WorkspaceBounds = { left: number; top: number; right: number; bottom: number };
-export const WORLD_MIN = -100000;
-export const WORLD_MAX = 100000;
 export const DEFAULT_GRID: CanvasGridSettings = { spacing: 8, unit: 'pixels', snap: true, rulers: true };
 export const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 export const sameRect = (first: Rect, second: Rect) => first.x === second.x && first.y === second.y && first.width === second.width && first.height === second.height;
@@ -28,17 +26,17 @@ export function geometryForGesture(gesture: GeometryGesture, point: Point, guide
   const dx = point.x - start.x;
   const dy = point.y - start.y;
   if (kind === 'move') return { ...initial,
-    x: clamp(snap(initial.x + dx, step.x), WORLD_MIN, WORLD_MAX - initial.width),
-    y: clamp(snap(initial.y + dy, step.y), WORLD_MIN, WORLD_MAX - initial.height),
+    x: snap(initial.x + dx, step.x),
+    y: snap(initial.y + dy, step.y),
   };
   if (kind === 'resize') return { ...initial,
-    width: clamp(snap(initial.x + initial.width + dx, step.x) - initial.x, Math.min(minimum.x, WORLD_MAX - initial.x), WORLD_MAX - initial.x),
-    height: clamp(snap(initial.y + initial.height + dy, step.y) - initial.y, Math.min(minimum.y, WORLD_MAX - initial.y), WORLD_MAX - initial.y),
+    width: Math.max(minimum.x, snap(initial.x + initial.width + dx, step.x) - initial.x),
+    height: Math.max(minimum.y, snap(initial.y + initial.height + dy, step.y) - initial.y),
   };
-  const x1 = clamp(snap(start.x, step.x), WORLD_MIN, WORLD_MAX);
-  const y1 = clamp(snap(start.y, step.y), WORLD_MIN, WORLD_MAX);
-  const x2 = clamp(snap(point.x, step.x), WORLD_MIN, WORLD_MAX);
-  const y2 = clamp(snap(point.y, step.y), WORLD_MIN, WORLD_MAX);
+  const x1 = snap(start.x, step.x);
+  const y1 = snap(start.y, step.y);
+  const x2 = snap(point.x, step.x);
+  const y2 = snap(point.y, step.y);
   return { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) };
 }
 
@@ -64,32 +62,41 @@ export function keyboardRectChange(direction: Point, guide: Viewport, settings: 
 }
 
 export function requestPlacement(rect: Rect, zoom: number): Rect {
-  const width = Math.min(WORLD_MAX - WORLD_MIN, Math.max(160 / zoom, rect.width));
-  const height = Math.min(WORLD_MAX - WORLD_MIN, Math.max(80 / zoom, rect.height));
-  return { x: clamp(rect.x, WORLD_MIN, WORLD_MAX - width), y: clamp(rect.y, WORLD_MIN, WORLD_MAX - height), width, height };
+  const width = Math.max(160 / zoom, rect.width);
+  const height = Math.max(80 / zoom, rect.height);
+  return { x: rect.x, y: rect.y, width, height };
 }
 
 export function requestAt(point: Point, zoom: number): Rect {
   return requestPlacement({ x: point.x, y: point.y, width: 320 / zoom, height: 160 / zoom }, zoom);
 }
 
-export function initialWorkspaceBounds(guide: Viewport, regions: Rect[], visible: Point): WorkspaceBounds {
+// Keep browser scroll coordinates small. Rebase the window around the camera
+// instead of growing a DOM element across the entire logical canvas.
+export function workspaceWindow(origin: Point, visible: Point): WorkspaceBounds {
   const padding = { x: Math.max(600, visible.x), y: Math.max(600, visible.y) };
-  return {
-    left: Math.max(WORLD_MIN, Math.min(0, ...regions.map(rect => rect.x)) - padding.x),
-    top: Math.max(WORLD_MIN, Math.min(0, ...regions.map(rect => rect.y)) - padding.y),
-    right: Math.min(WORLD_MAX, Math.max(guide.width, ...regions.map(rect => rect.x + rect.width)) + padding.x),
-    bottom: Math.min(WORLD_MAX, Math.max(guide.height, ...regions.map(rect => rect.y + rect.height)) + padding.y),
-  };
+  return { left: origin.x - padding.x, top: origin.y - padding.y,
+    right: origin.x + visible.x + padding.x, bottom: origin.y + visible.y + padding.y };
 }
 
 export function expandWorkspace(bounds: WorkspaceBounds, visible: WorkspaceBounds, padding: Point): WorkspaceBounds {
-  return {
-    left: visible.left - bounds.left < padding.x / 3 ? Math.max(WORLD_MIN, visible.left - padding.x) : bounds.left,
-    top: visible.top - bounds.top < padding.y / 3 ? Math.max(WORLD_MIN, visible.top - padding.y) : bounds.top,
-    right: bounds.right - visible.right < padding.x / 3 ? Math.min(WORLD_MAX, visible.right + padding.x) : bounds.right,
-    bottom: bounds.bottom - visible.bottom < padding.y / 3 ? Math.min(WORLD_MAX, visible.bottom + padding.y) : bounds.bottom,
-  };
+  const nearEdge = visible.left - bounds.left < padding.x / 3 || bounds.right - visible.right < padding.x / 3
+    || visible.top - bounds.top < padding.y / 3 || bounds.bottom - visible.bottom < padding.y / 3;
+  return nearEdge ? workspaceWindow({ x: visible.left, y: visible.top }, { x: visible.right - visible.left, y: visible.bottom - visible.top }) : bounds;
+}
+
+export function intersectsWorkspace(rect: Rect, bounds: WorkspaceBounds): boolean {
+  return rect.x + rect.width >= bounds.left && rect.x <= bounds.right && rect.y + rect.height >= bounds.top && rect.y <= bounds.bottom;
+}
+
+export function clipToWorkspace(rect: Rect, bounds: WorkspaceBounds): Rect | null {
+  if (!intersectsWorkspace(rect, bounds)) return null;
+  const x = Math.max(rect.x, bounds.left), y = Math.max(rect.y, bounds.top);
+  return { x, y, width: Math.min(rect.x + rect.width, bounds.right) - x, height: Math.min(rect.y + rect.height, bounds.bottom) - y };
+}
+
+export function validWorkspace(bounds: WorkspaceBounds, visible: Point): boolean {
+  return Object.values(bounds).every(Number.isFinite) && bounds.right - bounds.left >= visible.x && bounds.bottom - bounds.top >= visible.y;
 }
 
 export function percent(value: number, reference: number): string {
@@ -173,22 +180,21 @@ export function resizedElementSize(initial: Point, minimum: Point, matrix: [numb
   if (norm < 1e-12) return null;
   if (Math.abs(determinant) > .01 * norm) {
     const result = { x: initial.x + (d * delta.x - c * delta.y) / determinant, y: initial.y + (a * delta.y - b * delta.x) / determinant };
-    if (result.x >= minimum.x && result.y >= minimum.y && result.x <= WORLD_MAX && result.y <= WORLD_MAX) return result;
+    if (result.x >= minimum.x && result.y >= minimum.y && Number.isFinite(result.x) && Number.isFinite(result.y)) return result;
   }
   const u = a * initial.x + c * initial.y, v = b * initial.x + d * initial.y;
   const magnitude = u * u + v * v;
   if (magnitude < 1e-12) return null;
   const low = Math.max(minimum.x / initial.x, minimum.y / initial.y);
-  const high = Math.min(WORLD_MAX / initial.x, WORLD_MAX / initial.y, WORLD_MAX / Math.max(Math.abs(u), Math.abs(v)));
-  if (low > high) return null;
-  const scale = clamp(1 + (u * delta.x + v * delta.y) / magnitude, low, high);
-  return { x: initial.x * scale, y: initial.y * scale };
+  const scale = Math.max(low, 1 + (u * delta.x + v * delta.y) / magnitude);
+  const result = { x: initial.x * scale, y: initial.y * scale };
+  return Number.isFinite(result.x) && Number.isFinite(result.y) ? result : null;
 }
 export function elementResizeRect(initial: Rect, delta: Point, corner: ResizeCorner, step: Point, snap: boolean): Rect {
   const west = corner.includes('w'); const north = corner.includes('n');
   const align = (value: number, spacing: number) => snap ? Math.round(value / spacing) * spacing : value;
   const opposite = { x: initial.x + (west ? initial.width : 0), y: initial.y + (north ? initial.height : 0) };
-  const x = clamp(align(initial.x + (west ? 0 : initial.width) + delta.x, step.x), west ? WORLD_MIN : opposite.x + 1, west ? opposite.x - 1 : WORLD_MAX);
-  const y = clamp(align(initial.y + (north ? 0 : initial.height) + delta.y, step.y), north ? WORLD_MIN : opposite.y + 1, north ? opposite.y - 1 : WORLD_MAX);
+  const x = (west ? Math.min : Math.max)(align(initial.x + (west ? 0 : initial.width) + delta.x, step.x), opposite.x + (west ? -1 : 1));
+  const y = (north ? Math.min : Math.max)(align(initial.y + (north ? 0 : initial.height) + delta.y, step.y), opposite.y + (north ? -1 : 1));
   return { x: Math.min(x, opposite.x), y: Math.min(y, opposite.y), width: Math.abs(x - opposite.x), height: Math.abs(y - opposite.y) };
 }

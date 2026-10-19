@@ -1,5 +1,5 @@
 export function translatedStyle(inlineStyle: string, translate: string, x: number, y: number): string {
-  if (![x, y].every(Number.isFinite) || Math.abs(x) > 100000 || Math.abs(y) > 100000) throw new Error('Move this item within the supported workspace.');
+  if (![x, y].every(Number.isFinite)) throw new Error('Enter a finite position offset.');
   const values: string[] = []; let start = 0; let depth = 0;
   const source = translate === 'none' ? '0px 0px' : translate;
   for (let index = 0; index <= source.length; index++) {

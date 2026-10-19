@@ -12,7 +12,7 @@ The desktop build script removes a recognized old `desegnos → desegni` link **
 
 After a successful build, the old `desegni` path becomes a compatibility link to `desegnos`. Windows uses a verified compatibility copy. Before replacing a managed old executable, the script retains it under `desegni.before-desegnos-` followed by its fingerprint prefix, or the equivalent `.exe` name, and prints the exact backup path. Unrecognized files, links, receipts and changed binaries are preserved and reported instead of overwritten.
 
-For rollback, close Desegnos and restore that preserved executable at the canonical `desegnos` launch path. On Windows, restore the compatibility copy too. Older executables may require the `.desegni` filename extension even though the archive protocol is unchanged. The task's pre-change release backup is an additional rollback copy.
+For rollback, close Desegnos and restore that preserved executable at the canonical `desegnos` launch path. On Windows, restore the compatibility copy too. Older executables may require the `.desegni` filename extension even though the archive protocol is unchanged, and may reject newly enlarged areas outside their former canvas range. The task's pre-change release backup is an additional rollback copy.
 
 ## Focused checks
 

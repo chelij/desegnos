@@ -10,7 +10,7 @@ To reuse a test build:
 node scripts/native-test.mjs --skip-build --binary /absolute/path/to/test-build/desegnos
 ```
 
-Standalone browser checks use the installed Chromium and matching ChromeDriver; the separate export matrix also uses installed Firefox. No browser or driver is downloaded. A normal binary has no WebDriver server. `--ux-audit-only` runs the current core loop without the separate identity-import flow; `--identity-only` creates a real source website then exercises import. The historical `--generation-only` option aliases `--ux-audit-only`.
+Standalone browser checks use the installed Chromium and matching ChromeDriver; the separate export matrix also uses installed Firefox. No browser or driver is downloaded. A normal binary has no WebDriver server. `--ux-audit-only` runs the current core loop without the separate identity-import flow; `--identity-only` creates a real source website then exercises import. The historical `--generation-only` option aliases `--ux-audit-only`. `--canvas-input-only` runs the focused pointer, edge placement, long-pan rebasing, uncapped box drawing/moving/resizing, Save/Open, Undo/Redo and crash-recovery checks.
 
 ## Current workflow
 

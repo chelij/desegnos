@@ -14,9 +14,10 @@
 }
 :root[data-theme="dark"] .free-workspace { --workspace-grid-line: #b0b0b038; --alignment-color: #5291c4; }
 .free-workspace.with-rulers { grid-template-columns: var(--ruler-size) minmax(0, 1fr); grid-template-rows: var(--ruler-size) minmax(0, 1fr); }
-.free-workspace .workspace-scroll { grid-area: 1 / 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scroll-behavior: auto; scrollbar-color: var(--border) var(--surface-muted); }
+.free-workspace .workspace-scroll { grid-area: 1 / 1; min-width: 0; min-height: 0; overflow: auto; overscroll-behavior: contain; scroll-behavior: auto; scrollbar-width: none; overflow-anchor: none; }
 .free-workspace.with-rulers .workspace-scroll { grid-area: 2 / 2; }
-.free-workspace .canvas-size { position: relative; margin: 0; }
+.free-workspace .workspace-scroll::-webkit-scrollbar { display: none; }
+.free-workspace .canvas-size { position: relative; margin: 0; overflow: clip; }
 .free-workspace .canvas.light, .free-workspace .canvas.dark { top: 0; left: 0; background: var(--canvas-bed); box-shadow: none; isolation: isolate; }
 .free-workspace .canvas:focus-visible { outline: none; }
 .free-workspace .workspace-scroll:has(.canvas:focus-visible) { outline: 2px solid var(--focus); outline-offset: -3px; }
@@ -111,3 +112,7 @@
 .free-workspace .annotation textarea { overflow: hidden; }
 .free-workspace .request-expand { display: block; width: 100%; min-height: 30px; height: 30px; padding: 3px 10px; text-align: left; border-top: 0; border-radius: 0 0 3px 3px; background: var(--annotation-surface); color: var(--annotation-text); border-color: var(--annotation-border); }
 .free-workspace .inline-text-editor { min-width: 24px; white-space: pre-wrap; overflow-wrap: break-word; cursor: text; background: var(--surface); outline: 2px solid var(--focus); outline-offset: 3px; border: 0; padding: 0; margin: 0; }
+
+.free-workspace .request-frame { position: absolute; inset: 0; border: 2px dashed var(--annotation-border); pointer-events: none; }
+.free-workspace .annotation.selected .request-frame { border-color: var(--annotation-focus); }
+.free-workspace .annotation:focus-within .request-frame { outline: 3px solid var(--annotation-focus); outline-offset: -3px; }

@@ -9,8 +9,6 @@ use uuid::Uuid;
 pub const SCHEMA_VERSION: u32 = 6;
 pub const MAX_PAGES: usize = 100;
 pub const MAX_PROMPT_CHARS: usize = 16_384;
-pub const MIN_CANVAS_COORDINATE: f64 = -100_000.0;
-pub const MAX_CANVAS_COORDINATE: f64 = 100_000.0;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -104,11 +102,15 @@ impl Rect {
             "An area must be at least 1 pixel wide and high.",
         )?;
         ensure(
-            self.x >= MIN_CANVAS_COORDINATE
-                && self.y >= MIN_CANVAS_COORDINATE
-                && self.x + self.width <= MAX_CANVAS_COORDINATE
-                && self.y + self.height <= MAX_CANVAS_COORDINATE,
-            "Areas must fit within the supported canvas range of -100,000 to 100,000 pixels.",
+            (self.x + self.width).is_finite()
+                && (self.y + self.height).is_finite()
+                && self.x + self.width > self.x
+                && self.y + self.height > self.y
+                && self.x + 1.0 > self.x
+                && self.y + 1.0 > self.y
+                && self.x + self.width + 1.0 > self.x + self.width
+                && self.y + self.height + 1.0 > self.y + self.height,
+            "Area endpoints must be finite and precise enough to distinguish individual pixels.",
         )
     }
 }

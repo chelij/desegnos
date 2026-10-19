@@ -1,9 +1,10 @@
 import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { flushSync } from 'react-dom';
 import { useDraftText } from './DraftText';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, MenuButton } from './Menus';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type InlineText } from './Preview';
-import { alignmentLines, elementResizeRect, elementToolbarPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, initialWorkspaceBounds, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, WORLD_MAX, WORLD_MIN, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
+import { alignmentLines, elementResizeRect, elementToolbarPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, Page, Rect, Region, Viewport } from './types';
 import './canvas.css';
 
@@ -16,6 +17,16 @@ const isTextInput = (target: EventTarget | null) => target instanceof HTMLElemen
 
 function viewStyle(rect: Rect, origin: Point, zoom: number): CSSProperties {
   return { left: (rect.x - origin.x) * zoom, top: (rect.y - origin.y) * zoom, width: rect.width * zoom, height: rect.height * zoom };
+}
+function windowStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSProperties {
+  const origin = { x: bounds.left, y: bounds.top };
+  return intersectsWorkspace(rect, bounds) ? viewStyle(rect, origin, zoom)
+    : { ...viewStyle({ ...rect, x: origin.x, y: origin.y }, origin, zoom), visibility: 'hidden' };
+}
+
+function paintStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSProperties {
+  const clipped = clipToWorkspace(rect, bounds);
+  return clipped ? viewStyle(clipped, { x: bounds.left, y: bounds.top }, zoom) : { visibility: 'hidden', left: 0, top: 0, width: 0, height: 0 };
 }
 
 type CanvasProps = {
@@ -35,7 +46,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   useEffect(() => setSiteHeight(page.viewport.height), [page.id, page.content?.html, page.content?.css, page.content?.javascript, page.viewport.width, page.viewport.height]);
   const stage = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
-  const pan = useRef<{ pointerId: number; last: Point; start: Point; click: boolean; active: boolean } | null>(null);
+  const pan = useRef<{ pointerId: number; origin: Point; start: Point; click: boolean; active: boolean } | null>(null);
   const plainClicks = useRef(0);
   const lastPlainClick = useRef<{ at: number; point: Point } | null>(null);
   const [element, setElement] = useState<ElementSelection | null>(null);
@@ -64,10 +75,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   live.current = { zoom, changeZoom, pageId: page.id };
   const panKey = useRef(false);
   const lastPointer = useRef<Point | null>(null);
-  const savedViews = useRef(new Map<string, { bounds: WorkspaceBounds; center: Point }>());
-  const [workspace, setWorkspace] = useState(() => ({ pageId: page.id, bounds: initialWorkspaceBounds(page.viewport, page.regions.map(region => region.rect), { x: 1200 / zoom, y: 800 / zoom }) }));
+  const savedViews = useRef(new Map<string, { center: Point }>());
+  const [workspace, setWorkspace] = useState(() => ({ pageId: page.id, bounds: workspaceWindow({ x: 0, y: 0 }, { x: 1200 / zoom, y: 800 / zoom }) }));
   const bounds = workspace.bounds;
   const origin = { x: bounds.left, y: bounds.top };
+  function positioned(rect: Rect): CSSProperties {
+    return windowStyle(rect, bounds, zoom);
+  }
   const boundsRef = useRef(bounds);
   boundsRef.current = bounds;
   const previous = useRef({ pageId: '', zoom, bounds });
@@ -80,10 +94,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const [panReady, setPanReady] = useState(false);
   const [panning, setPanning] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [atEdge, setAtEdge] = useState(false);
   const overlayLayer = Math.max(0, ...page.regions.map(region => region.zIndex)) + 3;
   const minimum = { x: 160 / zoom, y: 80 / zoom };
-  const previewHeight = Math.min(WORLD_MAX, Math.max(page.viewport.height, siteHeight, ...page.regions.map(region => region.rect.y + region.rect.height + 64)));
+  const previewHeight = Math.max(page.viewport.height, siteHeight);
   const acceptedVersion = useMemo(() => JSON.stringify([page.content, page.viewport, page.appearance]),
     [page.content?.html, page.content?.css, page.content?.javascript, page.viewport.width, page.viewport.height, page.appearance]);
   const acceptedVersionRef = useRef(acceptedVersion); acceptedVersionRef.current = acceptedVersion;
@@ -99,13 +112,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   function visibleBounds(origin: Point, size: Point): WorkspaceBounds {
     return { left: origin.x, top: origin.y, right: origin.x + size.x, bottom: origin.y + size.y };
   }
-  function seek(origin: Point, available = boundsRef.current) {
+  function seek(origin: Point) {
     const node = scroll.current;
     if (!node) return;
     const size = { x: node.clientWidth / zoom, y: node.clientHeight / zoom };
-    const start = { x: clamp(origin.x, WORLD_MIN, WORLD_MAX - size.x), y: clamp(origin.y, WORLD_MIN, WORLD_MAX - size.y) };
-    const next = expandWorkspace(available, visibleBounds(start, size), { x: Math.max(600, size.x), y: Math.max(600, size.y) });
-    pendingOrigin.current = { origin: start, bounds: next, pageId: page.id, zoom };
+    const next = workspaceWindow(origin, size);
+    if (!validWorkspace(next, size)) { setElementError('That position is too distant to display accurately.'); return; }
+    pendingOrigin.current = { origin, bounds: next, pageId: page.id, zoom };
     setWorkspace({ pageId: page.id, bounds: next });
   }
   function show(kind: CanvasViewAction['kind']) {
@@ -131,7 +144,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     if (elementDrag.current) { elementDrag.current.mover?.cancel(); elementDrag.current.resizer?.cancel(); if (elementDrag.current.pageId === pageRef.current.id && elementDrag.current.version === acceptedVersionRef.current) storeElement(elementDrag.current.original); else deselectElement(); elementDrag.current = null; }
     gesture.current = null; pan.current = null; lastPointer.current = null;
     if (pointerId !== undefined && stage.current?.hasPointerCapture(pointerId)) stage.current.releasePointerCapture(pointerId);
-    setPreview(null); setDragging(false); setPanning(false); setAtEdge(false);
+    setPreview(null); setDragging(false); setPanning(false);
   }
 
   useLayoutEffect(() => {
@@ -140,15 +153,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     const prior = previous.current;
     const measured = measurementsRef.current;
     if (prior.pageId !== page.id) {
-      if (prior.pageId) savedViews.current.set(prior.pageId, { bounds: prior.bounds,
-        center: { x: prior.bounds.left + (measured.left + measured.width / 2) / prior.zoom, y: prior.bounds.top + (measured.top + measured.height / 2) / prior.zoom } });
+      if (prior.pageId) savedViews.current.set(prior.pageId, { center: { x: prior.bounds.left + (measured.left + measured.width / 2) / prior.zoom, y: prior.bounds.top + (measured.top + measured.height / 2) / prior.zoom } });
       cancel(); zoomIntent.current = null; setCursor(null); setFocused(null);
       const saved = savedViews.current.get(page.id);
-      const content = initialWorkspaceBounds(page.viewport, page.regions.map(region => region.rect), { x: node.clientWidth / zoom, y: node.clientHeight / zoom });
-      const available = saved ? { left: Math.min(content.left, saved.bounds.left), top: Math.min(content.top, saved.bounds.top), right: Math.max(content.right, saved.bounds.right), bottom: Math.max(content.bottom, saved.bounds.bottom) } : content;
-      previous.current = { pageId: page.id, zoom, bounds: available };
+      previous.current = { pageId: page.id, zoom, bounds };
       seek(saved ? { x: saved.center.x - node.clientWidth / zoom / 2, y: saved.center.y - node.clientHeight / zoom / 2 }
-        : { x: page.viewport.width / 2 - node.clientWidth / zoom / 2, y: -64 / zoom }, available);
+        : { x: page.viewport.width / 2 - node.clientWidth / zoom / 2, y: -64 / zoom });
     } else if (prior.zoom !== zoom) {
       cancel(); setCursor(null);
       const center = { x: prior.bounds.left + (measured.left + measured.width / 2) / prior.zoom, y: prior.bounds.top + (measured.top + measured.height / 2) / prior.zoom };
@@ -169,15 +179,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     previous.current = { pageId: page.id, zoom, bounds };
     measure();
   }, [workspace, zoom]);
-  useLayoutEffect(() => {
-    if (workspace.pageId !== page.id || pendingOrigin.current) return;
-    const content = initialWorkspaceBounds(page.viewport, page.regions.map(region => region.rect), { x: 0, y: 0 });
-    const next = { left: Math.min(bounds.left, content.left), top: Math.min(bounds.top, content.top), right: Math.max(bounds.right, content.right), bottom: Math.max(bounds.bottom, content.bottom) };
-    if (!sameBounds(bounds, next)) {
-      const measured = measurementsRef.current;
-      seek({ x: bounds.left + measured.left / zoom, y: bounds.top + measured.top / zoom }, next);
-    }
-  }, [page.regions, page.viewport.width, page.viewport.height, workspace.pageId]);
   useEffect(() => {
     const node = scroll.current;
     if (!node) return;
@@ -227,14 +228,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     const origin = { x: current.left + node.scrollLeft / zoom, y: current.top + node.scrollTop / zoom };
     const size = { x: node.clientWidth / zoom, y: node.clientHeight / zoom };
     const next = expandWorkspace(current, visibleBounds(origin, size), { x: Math.max(600, size.x), y: Math.max(600, size.y) });
-    if (!sameBounds(current, next)) { pendingOrigin.current = { origin, bounds: next, pageId: page.id, zoom }; setWorkspace({ pageId: page.id, bounds: next }); }
+    if (!sameBounds(current, next)) {
+      // Commit a scroll rebase before another wheel or drag-edge delta arrives.
+      pendingOrigin.current = { origin, bounds: next, pageId: page.id, zoom };
+      flushSync(() => setWorkspace({ pageId: page.id, bounds: next }));
+    }
   }
   function startPan(event: PointerEvent, click: boolean) {
     if (gesture.current || pan.current || elementDrag.current) return;
     event.preventDefault(); event.stopPropagation();
     if (!click) plainClicks.current = 0;
     const client = { x: event.clientX, y: event.clientY };
-    pan.current = { pointerId: event.pointerId, last: client, start: client, click, active: false };
+    pan.current = { pointerId: event.pointerId, origin: { x: boundsRef.current.left + scroll.current!.scrollLeft / zoom, y: boundsRef.current.top + scroll.current!.scrollTop / zoom }, start: client, click, active: false };
     stage.current!.focus({ preventScroll: true });
     stage.current!.setPointerCapture(event.pointerId); setCursor(null);
   }
@@ -245,8 +250,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   function begin(event: PointerEvent, kind: Gesture['kind'], region?: Region) {
     if (event.button !== 0 || gesture.current || pan.current || panKey.current) return;
     event.preventDefault(); event.stopPropagation();
-    const raw = point({ x: event.clientX, y: event.clientY });
-    const start = { x: clamp(raw.x, WORLD_MIN, WORLD_MAX), y: clamp(raw.y, WORLD_MIN, WORLD_MAX) };
+    const start = point({ x: event.clientX, y: event.clientY });
     gesture.current = { kind, start, initial: region?.rect ?? { x: start.x, y: start.y, width: 0, height: 0 }, pointerId: event.pointerId, region, active: false };
     lastPointer.current = { x: event.clientX, y: event.clientY };
     plainClicks.current = 0;
@@ -257,7 +261,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   }
   function currentRect(client: Point, current: Gesture): Rect | null {
     const now = point(client);
-    setAtEdge(now.x < WORLD_MIN || now.x > WORLD_MAX || now.y < WORLD_MIN || now.y > WORLD_MAX);
     setCursor(now);
     if (!current.active) current.active = Math.hypot((now.x - current.start.x) * zoom, (now.y - current.start.y) * zoom) >= 3;
     return current.active ? geometryForGesture(current, now, page.viewport, gridSettings, minimum) : null;
@@ -399,15 +402,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     const region = pageRef.current.regions.find(item => item.id === id && !item.completed); if (!region) return;
     const node = scroll.current; if (!node) return;
     deselectElement(); select(id);
-    seek({ x: region.rect.x + region.rect.width / 2 - node.clientWidth / zoom / 2, y: region.rect.y + region.rect.height / 2 - node.clientHeight / zoom / 2 });
+    seek({ x: region.rect.width * zoom > node.clientWidth - 96 ? region.rect.x - 48 / zoom : region.rect.x + region.rect.width / 2 - node.clientWidth / zoom / 2,
+      y: region.rect.height * zoom > node.clientHeight - 96 ? region.rect.y - 48 / zoom : region.rect.y + region.rect.height / 2 - node.clientHeight / zoom / 2 });
     setRequestFocus(current => ({ id, serial: current.serial + 1 }));
-  }
-  function makeRoom(rect: Rect) {
-    const current = boundsRef.current;
-    const next = { ...current, right: Math.min(WORLD_MAX, Math.max(current.right, rect.x + rect.width + 64 / zoom)), bottom: Math.min(WORLD_MAX, Math.max(current.bottom, rect.y + rect.height + 64 / zoom)) };
-    if (!sameBounds(current, next)) {
-      const node = scroll.current; if (node) seek({ x: current.left + node.scrollLeft / zoom, y: current.top + node.scrollTop / zoom }, next);
-    }
   }
   function askAI() { const current = elementRef.current; if (current && !editingElement && !nudging) { setContext(null); pickElement(current); } }
   useImperativeHandle(ref, () => ({ addRequest: addRequestInView, focusRequest: focusRegion, askAI, async synchronize(requireBounds = false) {
@@ -489,8 +486,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
         if (Math.hypot(client.x - currentPan.start.x, client.y - currentPan.start.y) < 3) return;
         currentPan.active = true; plainClicks.current = 0; setPanning(true);
       }
-      scroll.current!.scrollBy(currentPan.last.x - client.x, currentPan.last.y - client.y);
-      currentPan.last = client; return;
+      seek({ x: currentPan.origin.x + (currentPan.start.x - client.x) / zoom, y: currentPan.origin.y + (currentPan.start.y - client.y) / zoom });
+      return;
     }
     if (!gesture.current) { if (!panReady) setCursor(point(client)); return; }
     if (gesture.current.pointerId !== event.pointerId) return;
@@ -512,7 +509,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
       return;
     }
     if (pan.current?.pointerId === event.pointerId) {
-      const current = pan.current; cancel(false);
+      const current = pan.current;
+      if (current.active) seek({ x: current.origin.x + (current.start.x - event.clientX) / zoom, y: current.origin.y + (current.start.y - event.clientY) / zoom });
+      cancel(false);
       if (!current.active && current.click) finishPlainClick({ x: event.clientX, y: event.clientY }, !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey);
       else { plainClicks.current = 0; lastPlainClick.current = null; }
       return;
@@ -638,34 +637,34 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
           onPointerLeave={() => { if (!gesture.current) setCursor(null); }} onPointerCancel={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
           onLostPointerCapture={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
           onKeyDown={event => { if (event.target === event.currentTarget || event.key === 'Escape') keyboard(event); }}>
-          {page.content && <div className="accepted-canvas-preview" data-testid="accepted-canvas-preview" style={viewStyle({ x: 0, y: 0, width: page.viewport.width, height: previewHeight }, origin, zoom)} aria-hidden="true">
+          {page.content && <div className="accepted-canvas-preview" data-testid="accepted-canvas-preview" style={positioned({ x: 0, y: 0, width: page.viewport.width, height: previewHeight })} aria-hidden="true">
             <div className="accepted-canvas-content" style={{ width: page.viewport.width, height: previewHeight, transform: `scale(${zoom})` }}>
               <PreviewFrame ref={site} content={page.content} referenceHeight={page.viewport.height} onHeight={setSiteHeight} onReady={refreshElement} pageId={page.id} revision={acceptedVersion} title={`${page.name} accepted static preview`} staticView />
             </div>
           </div>}
-          <div className={`screen-guide ${page.content ? 'has-preview' : ''}`} data-testid="screen-guide" style={viewStyle({ x: 0, y: 0, ...page.viewport }, origin, zoom)} aria-hidden="true">
+          <div className={`screen-guide ${page.content ? 'has-preview' : ''}`} data-testid="screen-guide" style={positioned({ x: 0, y: 0, ...page.viewport })} aria-hidden="true">
             <span className="screen-guide-label">Screen · {page.viewport.width} × {page.viewport.height}</span>
           </div>
-          {grid && <div className="canvas-grid" aria-hidden="true" style={{ backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: `${-bounds.left * zoom}px ${-bounds.top * zoom}px` }} />}
-          {!page.content && !page.regions.some(region => !region.completed) && <div className="canvas-empty-hint" style={viewStyle({ x: 0, y: 0, ...page.viewport }, origin, zoom)}>
+          {grid && <div className="canvas-grid" aria-hidden="true" style={{ backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: `${(-bounds.left % displayStep.x) * zoom}px ${(-bounds.top % displayStep.y) * zoom}px` }} />}
+          {!page.content && !page.regions.some(region => !region.completed) && <div className="canvas-empty-hint" style={positioned({ x: 0, y: 0, ...page.viewport })}>
             <p>Double-click anywhere to describe what goes here.</p><button type="button" onClick={addRequestInView}>Add request</button>
           </div>}
           {page.regions.map((region, index) => {
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
-            return <RequestBox key={region.id} region={region} number={index + 1} rect={rect} origin={origin} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
-              layer={focused === region.id ? overlayLayer : region.zIndex + 2} select={() => { deselectElement(); setFocused(region.id); select(region.id); }} blur={() => setFocused(null)} begin={begin} keyboard={keyboard} extent={makeRoom} change={patch => change(region.id, patch)} />;
+            return <RequestBox key={region.id} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
+              layer={focused === region.id ? overlayLayer : region.zIndex + 2} select={() => { deselectElement(); setFocused(region.id); select(region.id); }} blur={() => setFocused(null)} begin={begin} keyboard={keyboard} change={patch => change(region.id, patch)} />;
           })}
-          {element && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-source-hash={element.element.sourceSha256} style={{ ...viewStyle(element.rect, origin, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
+          {element && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
             <span className="element-type-tag">{elementName(element.element.tag)}</span>
             {element.element.selector !== 'body' && (['nw','ne','sw','se'] as const).map(corner => <button key={corner} type="button" className={`element-resize-corner corner-${corner}`} data-corner={corner} aria-label={`Resize ${corner.includes('n') ? 'top' : 'bottom'}-${corner.includes('w') ? 'left' : 'right'}`} title="Drag to resize; press Enter for size settings" disabled={editingElement || nudging} onPointerDown={event => beginElementGesture(event, corner)} onClick={event => { if (event.detail === 0) setElementDialog('edit'); }} />)}
           </div>}
           {inlineText && <InlineTextEditor key={`${inlineText.selection.element.sourceSha256}:${inlineText.index}`} text={inlineText} origin={origin} zoom={zoom} layer={overlayLayer + 4} disabled={editingElement} finish={finishText} />}
-          {changing.map((rect, index) => <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...viewStyle(rect, origin, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
-          {highlighted.map((rect, index) => <div key={index} className="generation-highlight" data-testid="generation-highlight" style={{ ...viewStyle(rect, origin, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
+          {changing.map((rect, index) => <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
+          {highlighted.map((rect, index) => <div key={index} className="generation-highlight" data-testid="generation-highlight" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
           {guides.x.map(x => <div key={`x${x}`} className="alignment-guide alignment-x" aria-hidden="true" style={{ left: (x - bounds.left) * zoom, zIndex: overlayLayer + 1 }} />)}
           {guides.y.map(y => <div key={`y${y}`} className="alignment-guide alignment-y" aria-hidden="true" style={{ top: (y - bounds.top) * zoom, zIndex: overlayLayer + 1 }} />)}
-          {preview && gesture.current?.kind === 'new' && <div className="annotation-draft" style={{ ...viewStyle(preview, origin, zoom), zIndex: overlayLayer }} />}
+          {preview && gesture.current?.kind === 'new' && <div className="annotation-draft" style={{ ...paintStyle(preview, bounds, zoom), zIndex: overlayLayer }} />}
         </div>
       </div>
     </div>
@@ -691,7 +690,6 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     {selectedRect && coordinate && measurementRect && gridSettings.rulers && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
       style={(() => { const position = elementToolbarPosition(measurementRect, { x: 245, y: 28 }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupied.map(inViewport), ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]); return { left: position.x, top: position.y }; })()}>
       {px(coordinate.x)}, {px(coordinate.y)} px{selectedRect && <span>{px(selectedRect.width)} × {px(selectedRect.height)} px</span>}</div>}
-    {atEdge && <div className="workspace-edge" role="status">Workspace edge reached</div>}
   </div>;
 });
 
@@ -707,10 +705,10 @@ function Ruler({ axis, unit, start, length, reference, zoom, cursor, selection }
   </div>;
 }
 
-function RequestBox({ region, number, rect, origin, zoom, maxHeight, selected, focus, focusToken, layer, select, blur, begin, keyboard, extent, change }: {
-  region: Region; number: number; rect: Rect; origin: Point; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; select: () => void; blur: () => void;
+function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, select, blur, begin, keyboard, change }: {
+  region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; select: () => void; blur: () => void;
   begin: (event: PointerEvent, kind: Gesture['kind'], region?: Region) => void;
-  keyboard: (event: KeyboardEvent, region?: Region, resize?: boolean) => void; extent: (rect: Rect) => void; change: (patch: RequestPatch) => Promise<Region>;
+  keyboard: (event: KeyboardEvent, region?: Region, resize?: boolean) => void; change: (patch: RequestPatch) => Promise<Region>;
 }) {
   const text = useRef<HTMLTextAreaElement>(null);
   const move = useRef<HTMLButtonElement>(null);
@@ -722,7 +720,6 @@ function RequestBox({ region, number, rect, origin, zoom, maxHeight, selected, f
     const requested = focus || focusToken !== focusedToken.current && focusToken > 0; focusedToken.current = focusToken;
     if (!requested) return;
     text.current?.focus({ preventScroll: true });
-    text.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [focus, focusToken]);
   const target = !!region.element;
   const promptRect = target ? { x: rect.x, y: rect.y + rect.height + 10 / zoom, width: Math.max(260 / zoom, Math.min(rect.width, 420 / zoom)), height: 112 / zoom } : rect;
@@ -732,24 +729,35 @@ function RequestBox({ region, number, rect, origin, zoom, maxHeight, selected, f
     const height = node.scrollHeight + (Number.parseFloat(style.borderTopWidth) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0); node.style.height = old;
     setNaturalHeight(current => current === height ? current : height);
   }, [draft, promptRect.width, zoom]);
-  const minimumHeight = Math.min(maxHeight, promptRect.height * zoom);
+  const minimumHeight = promptRect.height * zoom;
+  const collapseHeight = Math.max(minimumHeight, maxHeight);
   const fullHeight = Math.max(minimumHeight, naturalHeight);
-  const hasMore = fullHeight > maxHeight;
+  const hasMore = fullHeight > collapseHeight;
   useLayoutEffect(() => { if (hasMore && document.activeElement === text.current) setExpanded(true); }, [hasMore, draft]);
-  const displayHeight = expanded ? fullHeight : Math.min(maxHeight, fullHeight);
+  const displayHeight = expanded ? fullHeight : Math.min(collapseHeight, fullHeight);
   const shown = { ...promptRect, height: (displayHeight + (hasMore ? 30 : 0)) / zoom };
-  useLayoutEffect(() => extent(shown), [shown.x, shown.y, shown.width, shown.height]);
+  // Bound the painted area while keeping the text and grips anchored to their
+  // original world positions. Expanding text never changes placement intent.
+  const painted = clipToWorkspace(shown, bounds);
+  const at = (x: number, y: number) => x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
+  const moveVisible = at(rect.x, rect.y);
+  const resizeVisible = at(rect.x + rect.width, rect.y + rect.height);
   return <>
-  {target && <div className="element-selection" data-testid="element-selection" style={{ ...viewStyle(rect, origin, zoom), zIndex: layer }} aria-hidden="true" />}
-  <div data-region-id={region.id} className={`annotation ${target ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...viewStyle(shown, origin, zoom), zIndex: layer }}
+  {selected && !target && displayHeight > minimumHeight + 1 && <div className="element-selection request-placement" style={{ ...paintStyle(rect, bounds, zoom), zIndex: layer + 1 }} aria-hidden="true" />}
+  {target && <div className="element-selection" data-testid="element-selection" style={{ ...paintStyle(rect, bounds, zoom), zIndex: layer }} aria-hidden="true" />}
+  <div data-region-id={region.id} className={`annotation ${target ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...paintStyle(shown, bounds, zoom), zIndex: layer, background: 'var(--annotation-surface)' }}
+    onPointerDown={event => { if (event.target === event.currentTarget) { event.preventDefault(); event.stopPropagation(); text.current?.focus({ preventScroll: true }); } }}
     onFocusCapture={select} onBlurCapture={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) blur(); }}>
+    <div className="request-frame" aria-hidden="true" />
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={target ? "Describe the change…" : "Describe what belongs here…"}
-      style={{ height: displayHeight }} onFocus={() => { if (hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
-      onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (move.current ?? document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
-    {hasMore && <button type="button" className="request-expand" aria-expanded={expanded} onClick={() => { setExpanded(value => !value); if (expanded) text.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }}>{expanded ? 'Less' : '… More'}</button>}
+      style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, background: 'transparent', outline: 'none' }} onFocus={() => { if (hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
+      onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
+    {hasMore && <button type="button" className="request-expand" style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom + displayHeight, width: shown.width * zoom }} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
     {selected && !target && <><button ref={move} className="annotation-grip move-grip" aria-label={`Move request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag to move. Arrow keys change placement."
+      style={{ visibility: moveVisible ? undefined : 'hidden', left: (rect.x - (painted?.x ?? rect.x)) * zoom - 28, top: (rect.y - (painted?.y ?? rect.y)) * zoom }}
       onPointerDown={event => begin(event, 'move', region)} onKeyDown={event => keyboard(event, region)}><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1"/><circle cx="11" cy="4" r="1"/><circle cx="5" cy="8" r="1"/><circle cx="11" cy="8" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="11" cy="12" r="1"/></svg></button>
       <button className="annotation-grip resize-grip" aria-label={`Resize request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag or use arrow keys to resize the placement hint."
+        style={{ visibility: resizeVisible ? undefined : 'hidden', right: 'auto', bottom: 'auto', left: (rect.x + rect.width - (painted?.x ?? rect.x)) * zoom, top: (rect.y + rect.height - (painted?.y ?? rect.y)) * zoom - 28 }}
         onPointerDown={event => begin(event, 'resize', region)} onKeyDown={event => keyboard(event, region, true)}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 12L12 4M8 12H12V8M4 8V4H8" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg></button></>}
   </div></>;
 }

@@ -50,7 +50,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       parts.unshift(`${current.localName}:nth-of-type(${siblings.filter(sibling => sibling.localName === current!.localName).indexOf(current) + 1})`);
     }
     const box = Element.prototype.getBoundingClientRect.call(node);
-    if (![box.x, box.y, box.width, box.height].every(Number.isFinite) || box.width < 1 || box.height < 1 || box.x < -100000 || box.y < -100000 || box.right > 100000 || box.bottom > 100000) return null;
+    if (![box.x, box.y, box.width, box.height].every(Number.isFinite) || box.width < 1 || box.height < 1 || !Number.isFinite(box.right) || !Number.isFinite(box.bottom)) return null;
     if (remember) picked.current = node;
     let label = '';
     const walker = Document.prototype.createTreeWalker.call(doc, node, NodeFilter.SHOW_TEXT);

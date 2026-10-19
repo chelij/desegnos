@@ -16,6 +16,7 @@ import { chooseFile, savedState } from '../tests/native/file-dialog-workflow.mjs
 import { startProviderServer, assertNoSyntheticKeys } from '../tests/native/provider-server.mjs';
 import { identityWorkflow } from '../tests/native/identity-workflow.mjs';
 import { uxAuditWorkflow } from '../tests/native/ux-audit-workflow.mjs';
+import { canvasInputWorkflow } from '../tests/native/canvas-input-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const guardedXvfb = '~/.local/bin/xvfb-run';
@@ -167,7 +168,10 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity') {
+    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'canvas-input') {
+      report.scope = 'Focused canvas input, zoom, pan and unlimited box sizing.';
+      project = await canvasInputWorkflow(driver, physical, step, evidence, provider);
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity') {
       report.scope = 'Focused native brand import and recovery.';
       await step('Create a real source website for brand import', async () => {
         await driver.button('Blank website');
@@ -191,6 +195,18 @@ async function runIsolated() {
     }
     if (!process.env.DESEGNI_NATIVE_TEST_SCOPE || process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity') {
       project = await identityWorkflow(driver, physical, step, evidence, provider);
+    }
+    // A saved-only workflow correctly has no unsaved journal to recover.
+    // Make one real acknowledged edit so this runner tests crash recovery.
+    if (!(await driver.invoke('get_workspace')).dirty) {
+      await step('Leave an acknowledged unsaved canvas edit for crash recovery', async () => {
+        const before = (await driver.invoke('get_workspace')).project;
+        await driver.menu(['View', 'Show grid']);
+        project = await waitFor(async () => {
+          const state = await driver.invoke('get_workspace');
+          return state.dirty && state.project.revision > before.revision && state.project.showGrid !== before.showGrid && state.project;
+        }, 'The unsaved grid edit was not journaled');
+      });
     }
     await step('The native editor workflow reports no browser errors or unhandled rejections', async () => {
       const errors = await driver.execute(() => window.__desegniTestErrors);
@@ -249,20 +265,21 @@ async function runIsolated() {
 
 async function main() {
   if (args.includes('--help')) {
-    console.log('node scripts/native-test.mjs [--skip-build] [--ux-audit-only|--identity-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery.');
+    console.log('node scripts/native-test.mjs [--skip-build] [--ux-audit-only|--identity-only|--canvas-input-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery.');
     return;
   }
   if (process.platform !== 'linux') throw new Error('This runner requires the guarded Linux Xvfb route. Native Windows/macOS isolation must be configured on those runners.');
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
+  if (args.includes('--canvas-input-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'canvas-input';
   if (args.includes('--identity-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'identity';
   if (args.includes('--generation-only') || args.includes('--ux-audit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'audit';
   process.chdir(root);
   const target = resolve('target/native-tests');
-  const binary = resolve(binaryIndex === -1 ? join(target, 'debug/desegni') : args[binaryIndex + 1]);
+  const binary = resolve(binaryIndex === -1 ? join(target, 'debug/desegnos') : args[binaryIndex + 1]);
   if (!skipBuild) {
     const build = spawn(process.execPath, ['scripts/tauri.mjs', 'build', '--debug', '--no-bundle', '--features', 'native-tests', '--config', 'src-tauri/tauri.test.conf.json'],
       { cwd: root, env: { ...toolchainEnvironment(), CARGO_TARGET_DIR: target }, stdio: 'inherit' });
