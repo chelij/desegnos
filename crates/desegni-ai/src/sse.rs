@@ -134,6 +134,7 @@ struct StreamedText {
 enum ItemKind {
     Message,
     Reasoning,
+    WebSearch,
 }
 
 struct StreamedItem {
@@ -311,6 +312,7 @@ impl<'a> ResponseStream<'a> {
         match item.get("type").and_then(Value::as_str) {
             Some("message") => Ok(ItemKind::Message),
             Some("reasoning") => Ok(ItemKind::Reasoning),
+            Some("web_search_call") => Ok(ItemKind::WebSearch),
             _ => Err(self.reject(ResponseRejection::OutputShape, outcome)),
         }
     }
@@ -820,7 +822,7 @@ impl<'a> ResponseStream<'a> {
         let mut terminal_bytes = 0_usize;
         let mut refused = self.refused;
         for (output_position, item) in resolved.into_iter().enumerate() {
-            if self.item_kind(item, outcome)? == ItemKind::Reasoning {
+            if self.item_kind(item, outcome)? != ItemKind::Message {
                 continue;
             }
             let message = self.message(item, outcome)?;

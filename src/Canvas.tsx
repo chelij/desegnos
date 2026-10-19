@@ -751,13 +751,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ca
 
   const editBusy = layerBusy || editingElement || nudging;
   const arrangeItems: MenuItem[] = (['front', 'forward', 'backward', 'back'] as const).map((direction, index) => ({ id: direction, label: ['Bring to front', 'Bring forward', 'Send backward', 'Send to back'][index], disabled: editBusy, action: () => { void arrangeLayer(direction); } }));
-  const historyItems: MenuItem[] = [{ id: 'history-divider', label: '', separator: true }, { id: 'undo', label: 'Undo', disabled: !canUndo || editBusy, shortcut: 'Ctrl/Cmd+Z', action: undo }, { id: 'redo', label: 'Redo', disabled: !canRedo || editBusy, shortcut: 'Ctrl/Cmd+Shift+Z', action: redo }];
   const contextItems: MenuItem[] = context ? [
     ...(context.kind === 'element' ? [
       { id: 'edit', label: 'Edit', disabled: editBusy, action: () => setElementDialog('edit') },
       { id: 'generate', label: 'Ask AI', disabled: editBusy, action: askAI },
       { id: 'replace', label: 'Replace', disabled: editBusy, action: () => setElementDialog('replace') },
-      { id: 'position', label: 'Move or resize', disabled: editBusy, children: [{ id: 'move', label: 'Move', action: () => setElementDialog('position') }, { id: 'resize', label: 'Resize', action: () => setElementDialog('edit') }] },
     ] : context.kind === 'request' ? [{ id: 'edit', label: 'Edit request', disabled: editBusy, action: () => focusRegion(context.regionId) }] : [{ id: 'add', label: 'Add request here', action: () => { deselectElement(); add(requestAt(context.at, zoom)); } }]),
     ...(context.kind !== 'canvas' ? [
       { id: 'copy', label: 'Copy', disabled: editBusy, shortcut: 'Ctrl/Cmd+C', action: () => { void copyLayer(); } },
@@ -769,13 +767,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ca
       ...(context.kind === 'element' ? [{ id: 'parent', label: 'Select parent', action: () => chooseElement(site.current?.next(true, elementRef.current?.element) ?? null) }] : []),
       { id: 'delete', label: 'Delete', disabled: editBusy, action: () => { if (context.kind === 'element') setElementDialog('remove'); else if (context.kind === 'request') remove(context.regionId); } },
     ] : [
-      { id: 'fit', label: 'Fit screen guide', action: () => show('fit') },
-      { id: 'center', label: 'Center screen guide', action: () => show('guide') },
+      { id: 'fit', label: 'Fit to screen', action: () => show('fit') },
       { id: 'grid', label: 'Show grid', checked: grid, action: toggleGrid },
-      { id: 'grid-settings', label: 'Grid and rulers', action: configureGrid },
     ]),
     { id: 'layers', label: 'Layers', action: () => setLayersOpen(true) },
-    ...historyItems,
   ] : [];
   return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''}`}
     onKeyDownCapture={event => { if (event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
@@ -823,10 +818,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ca
       </div>
     </div>
     {toolbarRect && !inlineText && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
-      <button data-layers-trigger aria-label="Layers" title="Layers" aria-haspopup="dialog" aria-expanded={layersOpen} onClick={() => setLayersOpen(!layersOpen)}><LayerIcon /></button>
-      <button aria-label="Copy layer" title="Copy · Ctrl/⌘ C" disabled={layerBusy || editingElement || nudging || element?.element.selector === 'body'} onClick={() => { void copyLayer(); }}><QuickIcon name="copy" /></button>
-      <button aria-label="Cut layer" title="Cut · Ctrl/⌘ X" disabled={layerBusy || editingElement || nudging || element?.element.selector === 'body'} onClick={() => { void cutLayer(); }}><QuickIcon name="cut" /></button>
-      <button aria-label="Delete layer" title="Delete" disabled={layerBusy || editingElement || nudging || element?.element.selector === 'body'} onClick={() => { if (element) setElementDialog('remove'); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
+      {element && <button className="ask-ai" title="Change text, links, images and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>}
+      {element && <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>}
+      <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) setElementDialog('remove'); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
     </div>}
     {context && <ContextMenu key={`${context.kind}:${context.point.x}:${context.point.y}`} label={context.kind === 'element' ? 'Element actions' : context.kind === 'request' ? 'Request actions' : 'Canvas actions'} point={context.point} close={closeContext} items={contextItems} />}
     <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element?.element.selector ?? null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady} anchor={toolbarPoint ? { x: toolbarPoint.x, y: toolbarPoint.y, height: toolbarSize.height } : null} contextElement={openElementContext} contextRequest={openRequestContext}

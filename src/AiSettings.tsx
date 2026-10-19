@@ -103,11 +103,14 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     {pollingError && <p className="message error" role="alert">{pollingError}</p>}
     {status && <p className="operation-status" role="status">{status}</p>}
     {loading ? <p role="status">Reading AI settings…</p> : !view || !settings ? <button onClick={() => { void load(); }}>Retry AI settings</button> : <>
-      <fieldset className="authentication-method" disabled={busy || pending || dirty}><legend>Generation method</legend>
-        <div className="inline-actions">{(['apiKey', 'chatgpt'] as AuthenticationMethod[]).map(method => <label className="check-label" key={method}>
-          <input type="radio" name="authentication" value={method} checked={view.authentication === method} onChange={() => { setKey(''); void action('set_ai_authentication', { authentication: method }); }} />{method === 'apiKey' ? 'API key' : 'ChatGPT plan'}
-        </label>)}</div>
-      </fieldset>
+      <label>AI provider<select disabled={busy || pending || dirty} value={view.authentication} onChange={event => { setKey(''); void action('set_ai_authentication', { authentication: event.target.value as AuthenticationMethod }); }}>
+        <option value="apiKey">OpenAI (API key)</option>
+        <option value="chatgpt">ChatGPT plan (testing)</option>
+        <option disabled>Anthropic Claude — coming soon</option>
+        <option disabled>Google Gemini — coming soon</option>
+        <option disabled>OpenRouter — coming soon</option>
+        <option disabled>Local model — coming soon</option>
+      </select></label>
       {dirty && <p className="field-help">Save or reset your changes below before changing the generation method.</p>}
       {view.configurationError && <p className="message error" role="alert">{view.configurationError} Review and save your generation settings before sending a request.</p>}
       {usesChatgpt && <section className="chatgpt-accounts" aria-label="ChatGPT account settings">
