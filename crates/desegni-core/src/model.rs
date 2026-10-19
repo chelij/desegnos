@@ -169,10 +169,8 @@ impl ElementTarget {
 fn valid_tag(tag: &str) -> bool {
     !tag.is_empty()
         && tag.len() <= 80
-        && tag.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
-        && tag
-            .bytes()
-            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        && tag.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
+        && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
 }
 
 fn is_false(value: &bool) -> bool {
@@ -332,6 +330,11 @@ pub enum Command {
     RemoveRegion {
         page_id: Uuid,
         region_id: Uuid,
+    },
+    ArrangeRegion {
+        page_id: Uuid,
+        region_id: Uuid,
+        direction: crate::LayerDirection,
     },
     SetBrief {
         brief: Brief,
@@ -594,6 +597,52 @@ impl Project {
                 return Ok(self.clone());
             }
         }
+        if let Command::ArrangeRegion {
+            page_id,
+            region_id,
+            direction,
+        } = &command
+        {
+            self.validate()?;
+            let page = self.page(*page_id)?;
+            let mut order = page
+                .regions
+                .iter()
+                .enumerate()
+                .filter(|(_, region)| !region.completed)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            order.sort_by_key(|index| page.regions[*index].z_index);
+            let position = order
+                .iter()
+                .position(|index| page.regions[*index].id == *region_id)
+                .ok_or_else(|| {
+                    Error("This request no longer exists or is already in history.".into())
+                })?;
+            let destination = match direction {
+                crate::LayerDirection::Forward => (position + 1).min(order.len() - 1),
+                crate::LayerDirection::Backward => position.saturating_sub(1),
+                crate::LayerDirection::Front => order.len() - 1,
+                crate::LayerDirection::Back => 0,
+            };
+            if destination == position {
+                return Ok(self.clone());
+            }
+            let index = order.remove(position);
+            order.insert(destination, index);
+            let mut next = self.clone();
+            next.revision = next
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| Error("Project revision limit reached.".into()))?;
+            let page = next.page_mut(*page_id)?;
+            for (rank, index) in order.into_iter().enumerate() {
+                page.regions[index].z_index = i32::try_from(rank)
+                    .map_err(|_| Error("This page has too many request layers.".into()))?;
+            }
+            next.validate()?;
+            return Ok(next);
+        }
         let mut next = self.clone();
         next.revision = next
             .revision
@@ -715,6 +764,9 @@ impl Project {
                     "This area no longer exists.",
                 )?;
                 page.regions.retain(|r| r.id != region_id);
+            }
+            Command::ArrangeRegion { .. } => {
+                unreachable!("Layer arrangements are handled before ordinary edits")
             }
             Command::SetBrief { brief } => next.brief = brief,
             Command::SetDecision {
