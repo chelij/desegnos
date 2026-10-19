@@ -137,7 +137,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     assert.deepEqual((await workspace(driver)).project,before);
   });
   await step('Split and Code views search, select, validate and save through the real source editor',async()=>{
-    await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Split"]','xpath');await driver.ready('textarea[aria-label="HTML code"]');
+    await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Split"]','xpath');await driver.ready('[contenteditable="true"][aria-label="HTML code"]');
     await driver.fill('Find in code','About');assert.ok(await driver.execute(()=>document.querySelectorAll('.code-line.match').length)>0);
     await driver.fill('Find in code','');
     await physical.click(await pointFor(driver,'h1'));
@@ -146,7 +146,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     await driver.click('.code-tabs button:nth-child(3)');await driver.fill('JavaScript code','const okay=1;\nconst bad = ;');
     await waitFor(()=>driver.execute(()=>!!document.querySelector('.code-pane-note.status-invalid')),'Invalid code did not show line diagnostics');
     assert.equal((await workspace(driver)).project.pages.find(page=>page.id===about).content.javascript,before.javascript);
-    assert.match(await driver.execute(()=>document.querySelector('textarea[aria-label="JavaScript code"]').value),/const bad = ;/);
+    assert.match(await driver.execute(()=>document.querySelector('[contenteditable="true"][aria-label="JavaScript code"]').textContent),/const bad = ;/);
     await driver.fill('JavaScript code',before.javascript+'\n// Verified local edit');
     await waitFor(async()=>(await workspace(driver)).project.pages.find(page=>page.id===about).content.javascript.endsWith('// Verified local edit'),'Valid code did not save');
     await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Code"]','xpath');assert.equal(await driver.execute(()=>document.querySelector('.design-pane').getClientRects().length),0);

@@ -137,12 +137,23 @@ export class WebDriver {
 
   field(label) {
     const name = xpathString(label);
-    return `//label[normalize-space(text())=${name}]/*[self::input or self::textarea or self::select] | //*[@aria-label=${name}][self::input or self::textarea or self::select]`;
+    return `//label[normalize-space(text())=${name}]/*[self::input or self::textarea or self::select] | //*[@aria-label=${name}][self::input or self::textarea or self::select or @contenteditable="true"]`;
   }
 
   async fill(label, text) {
     const id = await this.ready(this.field(label), 'xpath');
-    await this.command('POST', `/element/${id}/clear`, {});
+    const editable = await this.execute(name => {
+      const node = document.querySelector(`[contenteditable="true"][aria-label="${CSS.escape(name)}"]`);
+      return !!node;
+    }, label);
+    if (editable) {
+      await this.command('POST', `/element/${id}/click`, {});
+      await this.command('POST', '/actions', { actions: [{ type: 'key', id: 'keyboard', actions: [
+        { type: 'keyDown', value: '\uE009' }, { type: 'keyDown', value: 'a' }, { type: 'keyUp', value: 'a' }, { type: 'keyUp', value: '\uE009' },
+        { type: 'keyDown', value: '\uE003' }, { type: 'keyUp', value: '\uE003' },
+      ] }] });
+      await this.command('DELETE', '/actions');
+    } else await this.command('POST', `/element/${id}/clear`, {});
     await this.command('POST', `/element/${id}/value`, { text: String(text) });
   }
 

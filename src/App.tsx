@@ -572,7 +572,10 @@ export default function App() {
       // Never write over code that changed elsewhere since this draft began.
       if (!workspace?.project || workspace.project.id !== projectId || !target || (target.content?.[language] ?? '') !== expected) throw { conflict: true, message: 'This page changed elsewhere while you were editing.' };
       const next = await native<WorkspaceView>('edit_page_source', { projectId, pageId, revision: workspace.project.revision, [language]: text });
-      accept(next); return next.project?.pages.find(item => item.id === pageId)?.content ?? undefined;
+      accept(next);
+      const applied = next.project?.pages.find(item => item.id === pageId)?.content;
+      if (!applied) throw new Error('The edited page is no longer available. Your draft is still here.');
+      return applied;
     }, false);
   }
   // Retarget atomically so the request description and linked brief rules stay together.
