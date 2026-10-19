@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "date": "2026-10-19",
+  "quality": "UNVERIFIED",
+  "scenarioCount": 18,
+  "persistedInputs": 18,
+  "paidProviderCalls": 0,
+  "ownerCredentialsLoaded": false,
+  "checks": [
+    "All fixed archives match SHA-256 manifest",
+    "Current core and storage load, validation and requirements preparation",
+    "Persisted project state equals exact fixed scenario definitions",
+    "CLI help, list, imported-brand and element-revision dry runs",
+    "Missing explicit paid-call consent rejected before stdin",
+    "Empty evidence stays UNVERIFIED with denominator 18",
+    "Fixture helper strict Clippy and formatting",
+    "No new dependency versions compared with root lockfile"
+  ],
+  "notExercised": [
+    "Owner-run live provider/native benchmark execution",
+    "Owner usability and strict placement ratings",
+    "Observed provider usage, billing and duration"
+  ]
+}

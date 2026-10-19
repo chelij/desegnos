@@ -1,0 +1,167 @@
+{
+  "scenarios": [
+    {
+      "affectedPages": 1,
+      "id": "01-hero",
+      "path": "projects/01-hero.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000010000",
+      "requirementsBytes": 14137,
+      "sha256": "0d8e6eb0671c166557e88ba97217282edff6e3fd6cb6eb528074ea4ab04de0e2"
+    },
+    {
+      "affectedPages": 1,
+      "id": "02-pricing",
+      "path": "projects/02-pricing.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000020000",
+      "requirementsBytes": 14169,
+      "sha256": "05eb0f85cebae6447f3be97dc67cd40465dac36719e7754e2f5d3b605cafad7f"
+    },
+    {
+      "affectedPages": 1,
+      "id": "03-contact",
+      "path": "projects/03-contact.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000030000",
+      "requirementsBytes": 14177,
+      "sha256": "1e4409f7992488d5d3ee91c79cfca6963243eeddb35e0cf800a6a011ee0faf32"
+    },
+    {
+      "affectedPages": 1,
+      "id": "04-about",
+      "path": "projects/04-about.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000040000",
+      "requirementsBytes": 14127,
+      "sha256": "a950f7f0ca06bea3864e1a9d09c5681f67a1c88282ead1b89ecfdfc599c70309"
+    },
+    {
+      "affectedPages": 1,
+      "id": "05-mobile-home",
+      "path": "projects/05-mobile-home.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000050000",
+      "requirementsBytes": 14133,
+      "sha256": "82a74bdf3128c60fd63b47c959e45318053e3069e22f2e823296ae62c2e193f3"
+    },
+    {
+      "affectedPages": 1,
+      "id": "06-button-revision",
+      "path": "projects/06-button-revision.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000060000",
+      "requirementsBytes": 15154,
+      "sha256": "99815ddd9caa98ef3c900af822f1b6369fafe871cfde71db515c4a1e51c73815"
+    },
+    {
+      "affectedPages": 1,
+      "id": "07-multi-flexible",
+      "path": "projects/07-multi-flexible.desegni",
+      "pendingRequests": 4,
+      "projectId": "d35e6000-0000-4000-8000-000000070000",
+      "requirementsBytes": 16060,
+      "sha256": "8f71bc92dba11a85330a12d683413a662e5a2944e103e3df49ad7238b7bd78b6"
+    },
+    {
+      "affectedPages": 1,
+      "id": "08-multi-precise",
+      "path": "projects/08-multi-precise.desegni",
+      "pendingRequests": 4,
+      "projectId": "d35e6000-0000-4000-8000-000000080000",
+      "requirementsBytes": 16060,
+      "sha256": "a7a11462ff73c56d12f041b87b63eb68cce46ccc9430aba2947d4ed420c0a9b7"
+    },
+    {
+      "affectedPages": 1,
+      "id": "09-imported-brand",
+      "path": "projects/09-imported-brand.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000090000",
+      "requirementsBytes": 15870,
+      "sha256": "16c1a04fdaa22d6e029e15b93f699201afc06a4c04ad00c12a1bff00d118f041"
+    },
+    {
+      "affectedPages": 1,
+      "id": "10-faq",
+      "path": "projects/10-faq.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-0000000a0000",
+      "requirementsBytes": 14100,
+      "sha256": "b739326d3a9973c23fbd0106cb32184d3cef89ca6f08be8d114cb30899f33269"
+    },
+    {
+      "affectedPages": 1,
+      "id": "11-testimonials",
+      "path": "projects/11-testimonials.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-0000000b0000",
+      "requirementsBytes": 14091,
+      "sha256": "d46a99afc2abbb66a8f6aa2ed5049e7d5f7df00af08cf60e57568786397f772c"
+    },
+    {
+      "affectedPages": 1,
+      "id": "12-navigation-footer",
+      "path": "projects/12-navigation-footer.desegni",
+      "pendingRequests": 2,
+      "projectId": "d35e6000-0000-4000-8000-0000000c0000",
+      "requirementsBytes": 14827,
+      "sha256": "d4595dde71bbdee26ec81fbf225c3c946ba434fe21690f064891a0d8694aed31"
+    },
+    {
+      "affectedPages": 1,
+      "id": "13-mobile-contact",
+      "path": "projects/13-mobile-contact.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-0000000d0000",
+      "requirementsBytes": 14147,
+      "sha256": "80d53d2d6b9e47f45d464e1045649a99e23430f6e837fc8a9083a56ec6627b42"
+    },
+    {
+      "affectedPages": 1,
+      "id": "14-dashboard",
+      "path": "projects/14-dashboard.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-0000000e0000",
+      "requirementsBytes": 14131,
+      "sha256": "0b997576b694638a8c868951082c43779007bb70a6d1ec430cbeb6eb5df984de"
+    },
+    {
+      "affectedPages": 1,
+      "id": "15-long-copy",
+      "path": "projects/15-long-copy.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-0000000f0000",
+      "requirementsBytes": 14200,
+      "sha256": "99ec55999a39d8fca7c8495e9d2312c8a3854a79cf7c3a8e43158cecb10c75aa"
+    },
+    {
+      "affectedPages": 2,
+      "id": "16-two-pages",
+      "path": "projects/16-two-pages.desegni",
+      "pendingRequests": 2,
+      "projectId": "d35e6000-0000-4000-8000-000000100000",
+      "requirementsBytes": 15080,
+      "sha256": "48e49d6f81ade1ac37d9f74a3cb1b7415a741493a80b5a0201eb0e613f73134a"
+    },
+    {
+      "affectedPages": 1,
+      "id": "17-responsive-layout",
+      "path": "projects/17-responsive-layout.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000110000",
+      "requirementsBytes": 14179,
+      "sha256": "f562625732a5333e691b16f79208f922970467750b8dc9932d132bd2810a4d5e"
+    },
+    {
+      "affectedPages": 1,
+      "id": "18-preserve-revision",
+      "path": "projects/18-preserve-revision.desegni",
+      "pendingRequests": 1,
+      "projectId": "d35e6000-0000-4000-8000-000000120000",
+      "requirementsBytes": 15186,
+      "sha256": "bb6d20a2f4ea61947c526ebfb972e666e11cbd25d27f3c7e8c2f019d350cc0ec"
+    }
+  ],
+  "schemaVersion": 1
+}

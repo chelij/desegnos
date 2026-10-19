@@ -1,0 +1,706 @@
+{
+  "version": 1,
+  "status": "UNVERIFIED",
+  "scenarios": [
+    {
+      "id": "01-hero",
+      "title": "Studio landing hero",
+      "mode": "fuzzy",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a polished landing hero for Northstar Studio: heading “Ideas made clear”, one concise description, and a “See our work” link to #work. Use a self-contained abstract visual made with CSS. Do not fetch remote images.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 340
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "02-pricing",
+      "title": "Three-tier pricing",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create three clearly comparable pricing cards: Starter $19/month, Studio $49/month, Team $99/month. Each lists three distinct benefits and an accessible choose button. Mark Studio as recommended. Buttons should reveal the chosen plan locally; do not pretend to take payment.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 540
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "03-contact",
+      "title": "Contact form",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a contact section with labeled Name, Email and Message fields and Send message. Validate required fields and email in the browser. Explain clearly that this demonstration does not send messages; show a local validation/ready state rather than a fake sent confirmation.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 580
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "04-about",
+      "title": "Two-column about",
+      "mode": "fuzzy",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a balanced two-column About section. Left: “A small studio for clear ideas” and two short paragraphs. Right: three values: Clarity, Craft, Care. Use sensible source order and stack the columns on narrow screens.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 520
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "05-mobile-home",
+      "title": "Mobile studio homepage",
+      "mode": "fuzzy",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Build a complete mobile homepage: compact navigation, readable hero, three stacked service cards and a contact link. Use “Northstar Studio” and “Ideas made clear”. Avoid horizontal scrolling at 390px. No remote media.",
+              "rect": {
+                "x": 16,
+                "y": 32,
+                "width": 358,
+                "height": 740
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "06-button-revision",
+      "title": "Bigger green button",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Make this button bigger and green: at least 52px tall, comfortable horizontal padding, dark green #216e39 with accessible light text. Preserve its text, click behavior and the rest of the page.",
+              "rect": {
+                "x": 48,
+                "y": 150,
+                "width": 160,
+                "height": 42
+              },
+              "element": {
+                "selector": "body > main:nth-of-type(1) > button:nth-of-type(1)",
+                "tag": "button",
+                "label": "Book a visit"
+              }
+            }
+          ],
+          "source": {
+            "html": "<main><h1>Book a studio visit</h1><p>Choose a time to discuss your project.</p><button id=\"book-visit\" type=\"button\">Book a visit</button><p id=\"booking-status\" aria-live=\"polite\"></p></main>",
+            "css": "body{margin:0;font:18px system-ui;background:#faf8f2;color:#18232a}main{padding:48px}button{padding:10px 16px;background:#225577;color:white;border:0}",
+            "javascript": "document.getElementById(\"book-visit\").addEventListener(\"click\",()=>{document.getElementById(\"booking-status\").textContent=\"Contact the studio to arrange a visit.\"})"
+          }
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "07-multi-flexible",
+      "title": "Multiple requests — Flexible",
+      "mode": "fuzzy",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Add a compact navigation header with Northstar Studio, Work, About and Contact. Use internal section links.",
+              "rect": {
+                "x": 48,
+                "y": 24,
+                "width": 1344,
+                "height": 72
+              }
+            },
+            {
+              "prompt": "Add a hero headed “Ideas made clear” with a short studio description and a link to #services.",
+              "rect": {
+                "x": 48,
+                "y": 128,
+                "width": 1344,
+                "height": 290
+              }
+            },
+            {
+              "prompt": "Below the hero, group three service cards together: Strategy, Design, Build. Give each a short explanation and the section id services.",
+              "rect": {
+                "x": 48,
+                "y": 466,
+                "width": 1344,
+                "height": 290
+              }
+            },
+            {
+              "prompt": "Finish with a simple footer containing hello@example.test and copyright Northstar Studio. Email is sample contact information.",
+              "rect": {
+                "x": 48,
+                "y": 804,
+                "width": 1344,
+                "height": 72
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180,
+      "comparisonPair": "multi-order"
+    },
+    {
+      "id": "08-multi-precise",
+      "title": "Multiple requests — Precise",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Add a compact navigation header with Northstar Studio, Work, About and Contact. Use internal section links.",
+              "rect": {
+                "x": 48,
+                "y": 24,
+                "width": 1344,
+                "height": 72
+              }
+            },
+            {
+              "prompt": "Add a hero headed “Ideas made clear” with a short studio description and a link to #services.",
+              "rect": {
+                "x": 48,
+                "y": 128,
+                "width": 1344,
+                "height": 290
+              }
+            },
+            {
+              "prompt": "Below the hero, group three service cards together: Strategy, Design, Build. Give each a short explanation and the section id services.",
+              "rect": {
+                "x": 48,
+                "y": 466,
+                "width": 1344,
+                "height": 290
+              }
+            },
+            {
+              "prompt": "Finish with a simple footer containing hello@example.test and copyright Northstar Studio. Email is sample contact information.",
+              "rect": {
+                "x": 48,
+                "y": 804,
+                "width": 1344,
+                "height": 72
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180,
+      "comparisonPair": "multi-order",
+      "strictOrder": [
+        "navigation",
+        "hero",
+        "three grouped service cards",
+        "footer"
+      ]
+    },
+    {
+      "id": "09-imported-brand",
+      "title": "Approved imported brand",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a studio landing page using the imported Northstar Studio identity. Reuse the supplied star logo image, exact palette and clear welcoming tone. Include a hero and two service summaries. Do not redraw or substitute the approved logo.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 700
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180,
+      "importedBrand": true
+    },
+    {
+      "id": "10-faq",
+      "title": "Accessible FAQ",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a FAQ with five concise questions about a design studio process. Use native disclosure controls that open and close with the keyboard. Include a descriptive heading and clear focus styling.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 620
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "11-testimonials",
+      "title": "Sample testimonial cards",
+      "mode": "fuzzy",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create three sample testimonial cards with realistic length variation. Clearly label all quotes and names as sample content. Provide no real-client claims, stock portraits or external images.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 540
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "12-navigation-footer",
+      "title": "Navigation and footer",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Build an accessible main navigation for Northstar Studio, with About, Services and Contact links to sections with those ids. Include a visible focus style and skip link.",
+              "rect": {
+                "x": 48,
+                "y": 24,
+                "width": 1344,
+                "height": 88
+              }
+            },
+            {
+              "prompt": "Build a footer after simple About, Services and Contact sections. Repeat the navigation, add sample email hello@example.test and a back-to-top link. Keep all links usable locally.",
+              "rect": {
+                "x": 48,
+                "y": 520,
+                "width": 1344,
+                "height": 280
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180,
+      "strictOrder": [
+        "navigation",
+        "About / Services / Contact sections",
+        "footer"
+      ]
+    },
+    {
+      "id": "13-mobile-contact",
+      "title": "Mobile contact form",
+      "mode": "strict",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a mobile contact page with one-column labeled Name, Email and Message controls, touch-friendly focus states, native validation and a local “Ready to send” review. Explain it does not actually send messages. No horizontal overflow.",
+              "rect": {
+                "x": 16,
+                "y": 32,
+                "width": 358,
+                "height": 740
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "14-dashboard",
+      "title": "Summary dashboard",
+      "mode": "fuzzy",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a clear static project dashboard with three labeled summary cards (6 active projects, 2 due this week, 4 completed), followed by a short project list. Label the numbers as demonstration data. No simulated live service.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 650
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "15-long-copy",
+      "title": "Long-copy reading layout",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create an accessible reading page headed “How we work” with an introduction and five substantial sections of 80–100 words each, on discovery, structure, visual design, feedback and delivery. Use a readable line length, clear headings, sufficient contrast and in-page navigation.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 1600
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180,
+      "strictOrder": [
+        "introduction",
+        "discovery",
+        "structure",
+        "visual design",
+        "feedback",
+        "delivery"
+      ]
+    },
+    {
+      "id": "16-two-pages",
+      "title": "Linked Home and About",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a home page for Northstar Studio with a concise hero, one service summary and a visible link to /about. Use native links and no remote content.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 600
+              }
+            }
+          ]
+        },
+        {
+          "name": "About",
+          "path": "/about",
+          "requests": [
+            {
+              "prompt": "Create an About page describing Northstar Studio’s Clarity, Craft and Care values. Add a visible link back to /. Use native links.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 600
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    },
+    {
+      "id": "17-responsive-layout",
+      "title": "Wide page with narrow-screen adaptation",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Create a desktop product hero with text on the left, a CSS illustration on the right and three feature cards beneath. Use CSS media queries so the layout stacks without horizontal scrolling at 390px; maintain readable text and 44px targets. No external resources.",
+              "rect": {
+                "x": 48,
+                "y": 64,
+                "width": 1344,
+                "height": 720
+              }
+            }
+          ]
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180,
+      "strictOrder": [
+        "hero text and illustration as one group",
+        "three grouped feature cards"
+      ]
+    },
+    {
+      "id": "18-preserve-revision",
+      "title": "Preserve unrelated content on revision",
+      "mode": "strict",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "pages": [
+        {
+          "name": "Home",
+          "path": "/",
+          "requests": [
+            {
+              "prompt": "Change only the selected booking button: rename it “Plan a visit”, increase height to 52px and use green #216e39. Preserve heading, paragraph text, status behavior, CSS elsewhere and all other elements.",
+              "rect": {
+                "x": 48,
+                "y": 150,
+                "width": 160,
+                "height": 42
+              },
+              "element": {
+                "selector": "body > main:nth-of-type(1) > button:nth-of-type(1)",
+                "tag": "button",
+                "label": "Book a visit"
+              }
+            }
+          ],
+          "source": {
+            "html": "<main><h1>Book a studio visit</h1><p>Choose a time to discuss your project.</p><button id=\"book-visit\" type=\"button\">Book a visit</button><p id=\"booking-status\" aria-live=\"polite\"></p></main>",
+            "css": "body{margin:0;font:18px system-ui;background:#faf8f2;color:#18232a}main{padding:48px}button{padding:10px 16px;background:#225577;color:white;border:0}",
+            "javascript": "document.getElementById(\"book-visit\").addEventListener(\"click\",()=>{document.getElementById(\"booking-status\").textContent=\"Contact the studio to arrange a visit.\"})"
+          }
+        }
+      ],
+      "criteria": [
+        "The requested content is complete and readable.",
+        "The page is usable with keyboard and at the chosen guide size.",
+        "No unavailable service, invented claim or asset is presented as working."
+      ],
+      "maxDurationSeconds": 180
+    }
+  ]
+}
