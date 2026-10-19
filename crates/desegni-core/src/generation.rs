@@ -28,10 +28,6 @@ pub struct SiteContent {
 
 impl SiteContent {
     pub fn validate(&self) -> Result<()> {
-        ensure(
-            !self.html.trim().is_empty(),
-            "Generated page HTML is required.",
-        )?;
         for (label, source) in [
             ("HTML", &self.html),
             ("CSS", &self.css),
@@ -188,6 +184,10 @@ impl GenerationCandidate {
             )?;
         }
         for page in &self.pages {
+            ensure(
+                !page.content.html.trim().is_empty(),
+                "Generated page HTML is required.",
+            )?;
             page.content.validate()?;
         }
         for request in &self.component_requests {

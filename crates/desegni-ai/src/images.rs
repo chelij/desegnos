@@ -465,13 +465,20 @@ mod capacity_benchmark {
             "../../desegni-core/tests/fixtures/requirements8.json"
         ))
         .unwrap();
-        let project: Project = serde_json::from_value(fixture["project"].clone()).unwrap();
+        let mut project: Project = serde_json::from_value(fixture["project"].clone()).unwrap();
+        project.schema_version = desegni_core::SCHEMA_VERSION;
         let legacy: RequirementsSnapshot =
             serde_json::from_value(fixture["requirements"].clone()).unwrap();
+        let nine: Value = serde_json::from_str(include_str!(
+            "../../desegni-core/tests/fixtures/requirements9.json"
+        ))
+        .unwrap();
+        let nine: RequirementsSnapshot =
+            serde_json::from_value(nine["requirements"].clone()).unwrap();
         let current = project.prepare_requirements().unwrap();
         let client = OpenAiClient::for_loopback(&format!("{origin}/v1")).unwrap();
         let mut measurements = vec![];
-        for snapshot in [legacy, current] {
+        for snapshot in [legacy, nine, current] {
             let before = count.load(Ordering::Relaxed);
             let id = project.pages[0].regions[0].id;
             let candidate=GenerationCandidate {job_id:snapshot.job_id,requirements_sha256:snapshot.sha256.clone(),summary:"Eight requested images.".into(),regions:vec![RegionOutcome{region_id:id,status:RegionStatus::Implemented,explanation:"Placed the requested images.".into()}],pages:vec![GeneratedPage{page_id:project.home_page_id,content:SiteContent{html:format!("<main data-desegnos-region='{id}'>{}</main>",(0..8).map(|index|format!("<img data-desegnos-download src='{origin}/images/photo-{index}.png' alt='Reference image {index}'>")).collect::<String>()),css:String::new(),javascript:String::new()}}],component_requests:vec![],decision_proposals:vec![],criticism:vec![]};
@@ -494,6 +501,8 @@ mod capacity_benchmark {
         assert_eq!(measurements[0]["placeholdersPerPage"], json!([4]));
         assert_eq!(measurements[1]["downloadedImages"], 8);
         assert_eq!(measurements[1]["placeholdersPerPage"], json!([0]));
+        assert_eq!(measurements[2]["downloadedImages"], 8);
+        assert_eq!(measurements[2]["placeholdersPerPage"], json!([0]));
         println!(
             "Image capacity benchmark: {}",
             json!({"generationRequests":0,"sameImageSet":true,"measurements":measurements})

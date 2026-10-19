@@ -101,7 +101,12 @@ impl GenerationCandidate {
                 validate_stable_scope(original, &page.content, &regions)?;
                 continue;
             }
-            if original.content.is_some() && !targeted {
+            if original
+                .content
+                .as_ref()
+                .is_some_and(|source| !source.html.trim().is_empty())
+                && !targeted
+            {
                 continue;
             }
             let document = crate::editing::parse(&page.content.html)?;
@@ -187,6 +192,47 @@ fn validate_stable_scope(
     let after = crate::editing::parse(&candidate.html)?;
     crate::stable_targets::validate_ids(&before)?;
     crate::stable_targets::validate_ids(&after)?;
+    let shared_code = |doc: &dom_query::Document| {
+        doc.select("style, script, link")
+            .nodes()
+            .iter()
+            .copied()
+            .map(canonical)
+            .collect::<Vec<_>>()
+    };
+    ensure(
+        shared_code(&before) == shared_code(&after),
+        "The AI changed embedded shared styling or scripts. Your page is unchanged.",
+    )?;
+    let handlers = |doc: &dom_query::Document| {
+        let body = crate::editing::body(doc)?;
+        let mut result = BTreeMap::new();
+        for node in doc.select("*").nodes() {
+            for attribute in node
+                .attrs()
+                .into_iter()
+                .filter(|attribute| attribute.name.local.as_ref().starts_with("on"))
+            {
+                let key = node
+                    .attr(crate::ELEMENT_ID_ATTRIBUTE)
+                    .map(|id| id.to_string())
+                    .or_else(|| crate::editing::selector(*node, body))
+                    .unwrap_or_default();
+                result.insert(
+                    (key, attribute.name.local.to_string()),
+                    attribute.value.to_string(),
+                );
+            }
+        }
+        Ok::<_, crate::Error>(result)
+    };
+    let previous_handlers = handlers(&before)?;
+    ensure(
+        handlers(&after)?
+            .iter()
+            .all(|(key, value)| previous_handlers.get(key) == Some(value)),
+        "The AI changed shared script behavior through an event handler. Your page is unchanged.",
+    )?;
     let new_areas: BTreeSet<_> = regions
         .iter()
         .filter(|region| !region.has_targets())
@@ -288,7 +334,7 @@ fn validate_stable_scope(
         root.remove_from_parent();
     }
     ensure(
-        canonical(crate::editing::body(&before)?) == canonical(crate::editing::body(&after)?),
+        canonical(before.root()) == canonical(after.root()),
         "The AI changed content outside the selected elements. Your page is unchanged.",
     )
 }

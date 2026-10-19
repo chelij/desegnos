@@ -97,8 +97,16 @@ fn candidate(p: &Project, snapshot: &RequirementsSnapshot, html: String) -> Gene
             page_id: p.home_page_id,
             content: SiteContent {
                 html,
-                css: p.pages[0].content.as_ref().unwrap().css.clone(),
-                javascript: p.pages[0].content.as_ref().unwrap().javascript.clone(),
+                css: p.pages[0]
+                    .content
+                    .as_ref()
+                    .map(|source| source.css.clone())
+                    .unwrap_or_default(),
+                javascript: p.pages[0]
+                    .content
+                    .as_ref()
+                    .map(|source| source.javascript.clone())
+                    .unwrap_or_default(),
             },
         }],
         component_requests: vec![],
@@ -475,4 +483,141 @@ fn paste_assigns_fresh_editor_ids_without_rebinding_existing_requests() {
     for node in ids.nodes() {
         assert!(seen.insert(node.attr(ELEMENT_ID_ATTRIBUTE).unwrap().to_string()));
     }
+}
+
+#[test]
+fn native_multi_target_commands_keep_the_existing_command_discriminator_and_casing() {
+    let p = project();
+    let target = target(&p, "article:nth-of-type(1)");
+    for (kind, extra) in [
+        (
+            "add_element_regions",
+            serde_json::json!({"elements":[target.clone()],"bounds":[bounds(&target,0.)]}),
+        ),
+        (
+            "retarget_region",
+            serde_json::json!({"region_id":Uuid::new_v4(),"elements":[target.clone()],"bounds":[bounds(&target,0.)]}),
+        ),
+        (
+            "set_region_target_removal",
+            serde_json::json!({"region_id":Uuid::new_v4(),"allow_target_removal":true}),
+        ),
+        (
+            "delete_elements",
+            serde_json::json!({"elements":[target.clone()]}),
+        ),
+    ] {
+        let mut value = extra;
+        value["type"] = serde_json::json!(kind);
+        value["page_id"] = serde_json::json!(p.home_page_id);
+        let command: Command = serde_json::from_value(value).unwrap();
+        let serialized = serde_json::to_value(command).unwrap();
+        assert_eq!(serialized["type"], kind);
+        assert!(serialized.get("kind").is_none());
+    }
+}
+
+#[test]
+fn targeted_generation_rejects_embedded_global_style_script_and_head_bypasses() {
+    let p = project();
+    let selected = target(&p, "article:nth-of-type(1)");
+    let p = describe(p, std::slice::from_ref(&selected));
+    let snapshot = p.prepare_requirements().unwrap();
+    let html = p.pages[0].content.as_ref().unwrap().html.clone();
+    for injection in [
+        "<style>p{display:none}</style>",
+        "<script>document.querySelector('p').remove()</script>",
+        "<link rel='stylesheet' href='https://example.com/global.css'>",
+        "<button onclick=\"document.querySelector('p').remove()\">Do it</button>",
+    ] {
+        let altered = html.replacen("First", &format!("First{injection}"), 1);
+        assert!(
+            candidate(&p, &snapshot, altered)
+                .validate(&snapshot, &p)
+                .is_err(),
+            "{injection}"
+        );
+    }
+    let altered = format!(
+        "<html style='color:red'><head><style>p{{display:none}}</style></head><body>{html}</body></html>"
+    );
+    assert!(
+        candidate(&p, &snapshot, altered)
+            .validate(&snapshot, &p)
+            .is_err()
+    );
+    let altered = format!("<html style='color:red'><body>{html}</body></html>");
+    assert!(
+        candidate(&p, &snapshot, altered)
+            .validate(&snapshot, &p)
+            .is_err()
+    );
+    let safe = html.replacen("<h2 ", "<h2 style='color:red' ", 1);
+    candidate(&p, &snapshot, safe)
+        .validate(&snapshot, &p)
+        .unwrap();
+}
+
+#[test]
+fn empty_generated_html_is_rejected_in_legacy_and_current_packets() {
+    for fixture in [
+        include_str!("fixtures/requirements8.json"),
+        include_str!("fixtures/requirements9.json"),
+    ] {
+        let fixture: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        let mut p: Project = serde_json::from_value(fixture["project"].clone()).unwrap();
+        p.schema_version = SCHEMA_VERSION;
+        let old: RequirementsSnapshot =
+            serde_json::from_value(fixture["requirements"].clone()).unwrap();
+        for snapshot in [old, p.prepare_requirements().unwrap()] {
+            for html in ["", "  \n\t"] {
+                let c = candidate(&p, &snapshot, html.into());
+                assert!(
+                    c.validate(&snapshot, &p)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("Generated page HTML")
+                );
+                assert!(
+                    GenerationCandidate::from_json(&serde_json::to_string(&c).unwrap()).is_err()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn migration_preserves_frozen_receipts_but_never_rebinds_them_to_changed_source() {
+    let golden: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/requirements9.json")).unwrap();
+    let mut original: Project = serde_json::from_value(golden["project"].clone()).unwrap();
+    original.schema_version = SCHEMA_VERSION;
+    original.pages[0].content = Some(SiteContent {
+        html: "<h1>Before upgrade</h1>".into(),
+        css: String::new(),
+        javascript: String::new(),
+    });
+    let snapshot = original.prepare_requirements().unwrap();
+    let receipt = serde_json::to_vec(&snapshot).unwrap();
+    let id = original.pages[0].regions[0].id;
+    let c = candidate(
+        &original,
+        &snapshot,
+        format!("<h1 data-desegnos-region='{id}'>Generated earlier</h1>"),
+    );
+    c.validate(&snapshot, &original).unwrap();
+    original.schema_version = 6;
+    let decoded = decode_project(&serde_json::to_vec(&original).unwrap()).unwrap();
+    let preserved = decoded.project.clone();
+    assert!(snapshot.validate_current(&preserved).is_err());
+    assert!(preserved.apply_generation(&snapshot, &c, &[]).is_err());
+    assert_eq!(decoded.project, preserved);
+    assert_eq!(serde_json::to_vec(&snapshot).unwrap(), receipt);
+    let new = preserved.prepare_requirements().unwrap();
+    assert_ne!(new.sha256, snapshot.sha256);
+    assert_eq!(new.format_version().unwrap(), 10);
+    assert_eq!(
+        preserved.pages[0].regions[0].prompt,
+        original.pages[0].regions[0].prompt
+    );
 }

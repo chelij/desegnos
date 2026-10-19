@@ -1,4 +1,5 @@
-//! Authored source stays byte-exact. Parsers inspect it; they never execute it.
+//! Only editor ID attributes are inserted; authored formatting and code stay intact.
+//! Parsers inspect source; they never execute it.
 use crate::{Error, Project, SiteContent};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

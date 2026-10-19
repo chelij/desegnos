@@ -362,3 +362,56 @@ fn a_saved_format_nine_packet_reconstructs_without_changing_its_bytes() {
     assert_eq!(snapshot.sha256, digest(snapshot.markdown.as_bytes()));
     snapshot.validate_current(&project).unwrap();
 }
+
+#[test]
+fn clearing_authored_html_is_exact_durable_undoable_and_never_a_fake_wrapper() {
+    let p = project();
+    let id = p.home_page_id;
+    let accepted = p
+        .edit_page_source(
+            0,
+            id,
+            &edit(
+                "<main>Remove me</main>",
+                "main{color:red}",
+                "const enabled=true;",
+            ),
+        )
+        .unwrap();
+    let mut session = Session::new(accepted.clone()).unwrap();
+    let clear = edit("", "", "");
+    assert!(
+        session
+            .edit_page_source(accepted.revision, id, &clear, |_| Err(Error(
+                "Disk full".into()
+            )))
+            .is_err()
+    );
+    assert_eq!(session.project(), &accepted);
+    session
+        .edit_page_source(accepted.revision, id, &clear, |_| Ok(()))
+        .unwrap();
+    let empty = session.project().clone();
+    let content = empty.pages[0].content.as_ref().unwrap();
+    assert_eq!(content.html, "");
+    assert_eq!(content.css, "");
+    assert_eq!(content.javascript, "");
+    empty.validate().unwrap();
+    let map = empty.page_source_map(id).unwrap();
+    assert_eq!(map.html_sha256, digest(b""));
+    session
+        .edit_page_source(empty.revision, id, &clear, |_| {
+            panic!("No-op must not write")
+        })
+        .unwrap();
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages, accepted.pages);
+    session.redo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages, empty.pages);
+    assert_eq!(
+        decode_project(&serde_json::to_vec(&empty).unwrap())
+            .unwrap()
+            .project,
+        empty
+    );
+}
