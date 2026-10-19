@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { native } from './api';
 import { translatedStyle } from './elementEditing';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
@@ -16,7 +16,8 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
 
 export type ElementMover = { preview: (x: number, y: number) => ElementSelection | null; style: (x: number, y: number) => string; cancel: () => void };
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
-export type CanvasPreviewHandle = { source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
+export type CanvasPreviewHandle = { source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
@@ -72,6 +73,58 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     const style = getComputedStyle(node);
     return { translate: style.translate, color: style.color, backgroundColor: style.backgroundColor, fontSize: style.fontSize, width: style.width, height: style.height, borderRadius: style.borderRadius, padding: style.padding };
   }
+  function textNodes(node: Node): Text[] {
+    const result: Text[] = []; const pending = [node];
+    while (pending.length) {
+      const current = pending.pop()!;
+      if (['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE', 'SVG'].includes(current.nodeName)) continue;
+      if (current.nodeType === Node.TEXT_NODE) result.push(current as Text);
+      else pending.push(...Array.from(current.childNodes).reverse());
+    }
+    return result;
+  }
+  function textAt(x: number, y: number): InlineText | null {
+    const doc = frame.current?.contentDocument;
+    const selection = selected(doc?.elementFromPoint(x, y) ?? null, true);
+    if (!doc || !selection || ['input', 'textarea', 'select', 'svg', 'body'].includes(selection.element.tag)) return null;
+    const node = findNode(selection.element); if (!node) return null;
+    const nodes = textNodes(node);
+    for (let index = 0; index < nodes.length; index++) {
+      const text = nodes[index]; if (!text.data.trim()) continue;
+      const range = doc.createRange(); range.selectNodeContents(text);
+      if (!Array.from(range.getClientRects()).some(rect => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom)) continue;
+      const box = range.getBoundingClientRect(); const style = getComputedStyle(text.parentElement!);
+      let backgroundColor = '#ffffff';
+      for (let parent = text.parentElement; parent; parent = parent.parentElement) {
+        const value = getComputedStyle(parent).backgroundColor;
+        if (value !== 'transparent' && !/^rgba\([^)]*,\s*0(?:\.0+)?\)$/.test(value)) { backgroundColor = value; break; }
+      }
+      return { selection, index, text: text.data, rect: { x: box.x, y: box.y, width: box.width, height: box.height }, style: {
+        fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight, fontStyle: style.fontStyle,
+        lineHeight: style.lineHeight, letterSpacing: style.letterSpacing, textAlign: style.textAlign as CSSProperties['textAlign'],
+        textTransform: style.textTransform, textDecoration: style.textDecoration, direction: style.direction as 'ltr' | 'rtl', color: style.color, backgroundColor,
+      } };
+    }
+    return null;
+  }
+  function occupied(target: ElementTarget): Rect[] {
+    const doc = frame.current?.contentDocument; const node = findNode(target); if (!doc || !node) return [];
+    const result: Rect[] = [];
+    // Text and replaced controls represent content, rather than their large
+    // layout containers. Ignore the selected subtree and its own ancestor text.
+    const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    let current: Node | null; let visited = 0;
+    while ((current = walker.nextNode()) && visited++ < 8192) {
+      if (node.contains(current)) continue;
+      if (current.nodeType === Node.TEXT_NODE && current.textContent?.trim() && !current.parentElement?.closest('script,style,noscript,template,svg')) {
+        const range = doc.createRange(); range.selectNodeContents(current);
+        for (const box of range.getClientRects()) if (box.width && box.height) result.push({ x: box.x, y: box.y, width: box.width, height: box.height });
+      } else if (current instanceof doc.defaultView!.Element && current.matches('img,input,textarea,select,video,canvas,svg')) {
+        const box = current.getBoundingClientRect(); if (box.width && box.height) result.push({ x: box.x, y: box.y, width: box.width, height: box.height });
+      }
+    }
+    return result;
+  }
   function transformEditor(target: ElementTarget) {
     const node = findNode(target); const values = visual(target);
     if (!node || !values || target.selector === 'body') return null;
@@ -98,6 +151,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     source() { return registeredVersion.current?.pageId === pageId && registeredVersion.current.revision === revision && mounted.current?.session === descriptor?.sessionId && mounted.current?.document === frame.current?.contentDocument && !invalidated.current ? descriptor?.sourceSha256 ?? null : null; },
     find(target) { return selected(findNode(target)); },
     visual,
+    textAt,
+    occupied,
     beginMove(target) {
       const edit = transformEditor(target); if (!edit) return null;
       const style = (x: number, y: number) => edit.offset(edit.original, x, y);

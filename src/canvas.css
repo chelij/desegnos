@@ -57,12 +57,13 @@
 .free-workspace .alignment-x { top: 0; bottom: 0; border-left: 1px dashed var(--alignment-color); }
 .free-workspace .alignment-y { left: 0; right: 0; border-top: 1px dashed var(--alignment-color); }
 .free-workspace .workspace-measurement, .free-workspace .workspace-edge { position: absolute; bottom: 20px; margin: 0; padding: 4px 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; pointer-events: none; }
-.free-workspace .workspace-measurement { right: 20px; }
+.free-workspace .workspace-measurement { bottom: auto; white-space: nowrap; pointer-events: auto; z-index: 11; }
 .free-workspace .workspace-measurement span { margin-left: 10px; }
 .free-workspace .workspace-edge { left: 40px; }
 @media (prefers-reduced-motion: reduce) { .free-workspace *, .free-workspace *::before, .free-workspace *::after { scroll-behavior: auto; transition: none; animation: none; } }
 
 .free-workspace .generation-blur { position: absolute; pointer-events: none; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); background: #88888818; outline: 1px solid var(--annotation-border); }
+.free-workspace .generation-highlight { position: absolute; pointer-events: none; outline: 2px solid var(--focus); outline-offset: 3px; }
 .free-workspace .element-selection { position: absolute; pointer-events: none; outline: 2px solid var(--annotation-focus); outline-offset: -1px; }
 .free-workspace .element-prompt { box-shadow: 0 6px 20px #00000030; }
 
@@ -85,6 +86,7 @@
 .free-workspace.pan-ready .canvas.element-hover { cursor: grab; }
 .free-workspace .element-toolbar { gap: 2px; }
 .free-workspace .element-toolbar > button, .free-workspace .element-toolbar .menu-anchor > button { width: 32px; min-height: 32px; padding: 6px; display: grid; place-items: center; }
+.free-workspace .element-toolbar > .ask-ai { width: auto; padding-inline: 10px; white-space: nowrap; }
 .free-workspace .element-toolbar svg { display: block; pointer-events: none; }
 .free-workspace .element-resize-corner { position: absolute; width: 24px; height: 24px; min-height: 0; padding: 0; margin: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; pointer-events: auto; touch-action: none; }
 .free-workspace .element-resize-corner::after { content: ''; position: absolute; width: 8px; height: 8px; box-sizing: border-box; background: var(--surface); border: 2px solid var(--annotation-focus); }
@@ -96,3 +98,16 @@
 .free-workspace .corner-ne::after { left: -4px; bottom: -4px; }
 .free-workspace .corner-sw::after { right: -4px; top: -4px; }
 .free-workspace .corner-se::after { left: -4px; top: -4px; }
+.free-workspace .element-type-tag { position: absolute; right: 0; top: -21px; padding: 2px 5px; color: var(--text); background: var(--surface); border: 1px solid var(--annotation-focus); border-radius: 2px; font-size: 10px; line-height: 14px; white-space: nowrap; }
+.free-workspace .canvas-empty-hint { position: absolute; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 24px; text-align: center; pointer-events: none; z-index: 2; color: var(--muted); font-size: 14px; }
+.free-workspace .canvas-empty-hint p { margin: 0; max-width: 320px; }
+.free-workspace .canvas-empty-hint button { pointer-events: auto; }
+.free-workspace.tool-select .canvas { cursor: default; }
+.free-workspace.tool-select .canvas.element-hover { cursor: move; }
+.free-workspace.tool-request .canvas, .free-workspace.tool-request .canvas.element-hover { cursor: crosshair; }
+.free-workspace.tool-pan .canvas, .free-workspace.tool-pan .canvas.element-hover { cursor: grab; }
+.free-workspace.pan-ready .canvas, .free-workspace.pan-ready .canvas.element-hover { cursor: grab; }
+.free-workspace.panning .canvas, .free-workspace.panning .canvas.element-hover { cursor: grabbing; }
+.free-workspace .annotation textarea { overflow: hidden; }
+.free-workspace .request-expand { display: block; width: 100%; min-height: 30px; height: 30px; padding: 3px 10px; text-align: left; border-top: 0; border-radius: 0 0 3px 3px; background: var(--annotation-surface); color: var(--annotation-text); border-color: var(--annotation-border); }
+.free-workspace .inline-text-editor { min-width: 24px; white-space: pre-wrap; overflow-wrap: break-word; cursor: text; background: var(--surface); outline: 2px solid var(--focus); outline-offset: 3px; border: 0; padding: 0; margin: 0; }

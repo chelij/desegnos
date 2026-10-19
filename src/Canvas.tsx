@@ -2,8 +2,8 @@ import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, u
 import { useDraftText } from './DraftText';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, MenuButton } from './Menus';
-import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer } from './Preview';
-import { alignmentLines, elementResizeRect, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, initialWorkspaceBounds, keyboardRectChange, percent, percentageTicks, requestAt, requestPlacement, sameBounds, sameRect, WORLD_MAX, WORLD_MIN, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
+import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type InlineText } from './Preview';
+import { alignmentLines, elementResizeRect, elementToolbarPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, initialWorkspaceBounds, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, WORLD_MAX, WORLD_MIN, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, Page, Rect, Region, Viewport } from './types';
 import './canvas.css';
 
@@ -19,13 +19,13 @@ function viewStyle(rect: Rect, origin: Point, zoom: number): CSSProperties {
 }
 
 type CanvasProps = {
-  page: Page; grid: boolean; gridSettings?: CanvasGridSettings; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: Rect[];
+  page: Page; grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: Rect[]; highlighted?: Rect[];
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>;
   changeZoom: (zoom: number) => void; select: (id: string | null) => void; add: (rect: Rect) => void; pickElement: (selection: ElementSelection) => void; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void;
 };
-export type CanvasHandle = { synchronize: (requireBounds?: boolean) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ page, grid, gridSettings = DEFAULT_GRID, zoom, selected, focusRequest, viewAction, changing = [], inspectElement, editElement, refreshElementBounds, changeZoom, select, add, pickElement, change, remove }, ref) {
+export type CanvasHandle = { synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void };
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ page, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, changeZoom, select, add, pickElement, change, remove }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
   const [context, setContext] = useState<{ selection: ElementSelection; point: Point } | null>(null);
@@ -40,6 +40,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const [element, setElement] = useState<ElementSelection | null>(null);
   const [elementDialog, setElementDialog] = useState<ElementDialogMode | null>(null);
   const [elementError, setElementError] = useState('');
+  const [inlineText, setInlineText] = useState<InlineText | null>(null);
+  const inlineTextRef = useRef(inlineText); inlineTextRef.current = inlineText;
+  const inlineTicket = useRef(0);
+  const inlineSaving = useRef<Promise<void> | null>(null);
+  const [requestFocus, setRequestFocus] = useState({ id: '', serial: 0 });
   const elementDrag = useRef<{ pointerId: number; pageId: string; version: string; start: Point; world: Point; original: ElementSelection; mover: ElementMover | null; resizer: ElementResizer | null; corner?: ResizeCorner; active: boolean; fine: boolean; x: number; y: number; rect: Rect } | null>(null);
   const [editingElement, setEditingElement] = useState(false);
   const [nudging, setNudging] = useState(false);
@@ -51,7 +56,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const nudge = useRef({ x: 0, y: 0, promise: null as Promise<void> | null });
   const syncing = useRef<Promise<void> | null>(null);
   function storeElement(value: ElementSelection | null) { elementRef.current = value; setElement(value); }
-  function deselectElement() { setContext(null); selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; storeElement(null); }
+  function deselectElement() { setContext(null); inlineTicket.current++; selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; storeElement(null); }
   useLayoutEffect(() => { deselectElement(); setElementDialog(null); setElementError(''); }, [page.id]);
   const zoomIntent = useRef<{ pageId: string; zoom: number; origin: Point } | null>(null);
   const live = useRef({ zoom, changeZoom, pageId: page.id });
@@ -81,7 +86,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const acceptedVersion = useMemo(() => JSON.stringify([page.content, page.viewport, page.appearance]),
     [page.content?.html, page.content?.css, page.content?.javascript, page.viewport.width, page.viewport.height, page.appearance]);
   const acceptedVersionRef = useRef(acceptedVersion); acceptedVersionRef.current = acceptedVersion;
-  useLayoutEffect(() => { if (elementDrag.current) cancel(); }, [acceptedVersion]);
+  useLayoutEffect(() => { if (elementDrag.current) cancel(); inlineTicket.current++; inlineTextRef.current = null; setInlineText(null); }, [acceptedVersion]);
 
   function measure() {
     const node = scroll.current;
@@ -232,7 +237,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     stage.current!.setPointerCapture(event.pointerId); setCursor(null);
   }
   function beginPan(event: PointerEvent) {
-    if (event.button === 1 || event.button === 0 && panKey.current) startPan(event, false);
+    if (event.target instanceof Element && event.target.closest('.canvas-empty-hint button')) return;
+    if (event.button === 1 || event.button === 0 && (panKey.current || tool === 'pan')) startPan(event, false);
   }
   function begin(event: PointerEvent, kind: Gesture['kind'], region?: Region) {
     if (event.button !== 0 || gesture.current || pan.current || panKey.current) return;
@@ -283,15 +289,40 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   async function applyElement(change: ElementEdit, selected = elementRef.current) {
     if (!selected) throw new Error('Select an element first.');
     const ticket = selectionSerial.current; const pageId = page.id;
+    const ownsSelection = elementRef.current?.element.selector === selected.element.selector && elementRef.current?.element.sourceSha256 === selected.element.sourceSha256;
     setEditingElement(true); setElementError('');
     try {
       const target = await editElement(selected.element, change);
-      if (pageRef.current.id === pageId && selectionSerial.current === ticket) {
+      if (ownsSelection && pageRef.current.id === pageId && selectionSerial.current === ticket) {
         pendingSelection.current = target;
         storeElement(target ? { ...selected, element: target } : null);
       }
     } catch (error) { if (pageRef.current.id === pageId && selectionSerial.current === ticket) setElementError(error instanceof Error ? error.message : String(error)); throw error; }
     finally { setEditingElement(false); }
+  }
+  async function editTextAt(at: Point) {
+    const text = site.current?.textAt(at.x, at.y);
+    if (!text) { if (elementRef.current) setElementDialog('edit'); return; }
+    chooseElement(text.selection);
+    const ticket = ++inlineTicket.current; const pageId = page.id;
+    try {
+      const details = await inspectElement(text.selection.element);
+      if (ticket !== inlineTicket.current || pageRef.current.id !== pageId || site.current?.source() !== text.selection.element.sourceSha256) return;
+      if (!details.texts.some(item => item.index === text.index && item.text === text.text)) { setElementDialog('edit'); return; }
+      setInlineText(text);
+    } catch (error) { if (ticket === inlineTicket.current) setElementError(String(error)); }
+  }
+  function finishText(value: string | null, restoreFocus = false): Promise<void> {
+    if (inlineSaving.current) return inlineSaving.current;
+    const text = inlineTextRef.current; if (!text) return Promise.resolve();
+    inlineTicket.current++;
+    const work = async () => {
+      if (value !== null && value !== text.text) await applyElement({ kind: 'update', texts: [{ index: text.index, text: value }], attributes: {}, style: null }, text.selection);
+      if (inlineTextRef.current === text) { inlineTextRef.current = null; setInlineText(null); }
+      if (restoreFocus) stage.current?.focus({ preventScroll: true });
+    };
+    const pending = work().finally(() => { if (inlineSaving.current === pending) inlineSaving.current = null; });
+    inlineSaving.current = pending; return pending;
   }
   async function moveElement(x: number, y: number) {
     const selected = elementRef.current;
@@ -352,7 +383,35 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     syncing.current = work().finally(() => { syncing.current = null; });
     return syncing.current;
   }
-  useImperativeHandle(ref, () => ({ async synchronize(requireBounds = false) {
+  function addRequestInView() {
+    const node = scroll.current; if (!node) return;
+    const current = boundsRef.current;
+    const start = { x: current.left + node.scrollLeft / zoom, y: current.top + node.scrollTop / zoom };
+    const end = { x: start.x + node.clientWidth / zoom, y: start.y + node.clientHeight / zoom };
+    const withinGuide = end.x > 0 && start.x < page.viewport.width && end.y > 0 && start.y < page.viewport.height;
+    const center = withinGuide ? { x: (Math.max(0, start.x) + Math.min(page.viewport.width, end.x)) / 2, y: (Math.max(0, start.y) + Math.min(page.viewport.height, end.y)) / 2 }
+      : { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+    deselectElement(); add(requestAt({ x: center.x - 160 / zoom, y: center.y - 80 / zoom }, zoom));
+  }
+  function focusRegion(id: string) {
+    const region = pageRef.current.regions.find(item => item.id === id && !item.completed); if (!region) return;
+    const node = scroll.current; if (!node) return;
+    deselectElement(); select(id);
+    seek({ x: region.rect.x + region.rect.width / 2 - node.clientWidth / zoom / 2, y: region.rect.y + region.rect.height / 2 - node.clientHeight / zoom / 2 });
+    setRequestFocus(current => ({ id, serial: current.serial + 1 }));
+  }
+  function makeRoom(rect: Rect) {
+    const current = boundsRef.current;
+    const next = { ...current, right: Math.min(WORLD_MAX, Math.max(current.right, rect.x + rect.width + 64 / zoom)), bottom: Math.min(WORLD_MAX, Math.max(current.bottom, rect.y + rect.height + 64 / zoom)) };
+    if (!sameBounds(current, next)) {
+      const node = scroll.current; if (node) seek({ x: current.left + node.scrollLeft / zoom, y: current.top + node.scrollTop / zoom }, next);
+    }
+  }
+  function askAI() { const current = elementRef.current; if (current && !editingElement && !nudging) { setContext(null); pickElement(current); } }
+  useImperativeHandle(ref, () => ({ addRequest: addRequestInView, focusRequest: focusRegion, askAI, async synchronize(requireBounds = false) {
+    if (inlineSaving.current) await inlineSaving.current;
+    const text = inlineTextRef.current;
+    if (text) { const node = stage.current?.querySelector<HTMLElement>('.inline-text-editor'); await finishText(node?.innerText ?? text.text); }
     while (nudge.current.promise) await nudge.current.promise;
     if (elementDrag.current) cancel();
     try { await synchronizeBounds(); } catch (error) { setElementError(String(error)); if (requireBounds) throw error; }
@@ -360,14 +419,16 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   function beginWorkspace(event: PointerEvent) {
     if (event.button === 2) { contextMenu(event); return; }
     if (event.target !== event.currentTarget || event.button !== 0) return;
-    if (event.shiftKey) { begin(event, 'new'); return; }
+    if (panKey.current || tool === 'pan') { startPan(event, false); return; }
+    if (event.shiftKey || tool === 'request') { begin(event, 'new'); return; }
     const at = point({ x: event.clientX, y: event.clientY }); const current = elementRef.current;
     if (!panKey.current && current && current.element.selector !== 'body' && at.x >= current.rect.x && at.x <= current.rect.x + current.rect.width && at.y >= current.rect.y && at.y <= current.rect.y + current.rect.height) beginElementGesture(event);
     else startPan(event, !panKey.current);
   }
   function beginElementGesture(event: PointerEvent, corner?: ResizeCorner) {
     if (event.button !== 0 || !element || editingElement || nudging || gesture.current || pan.current || elementDrag.current) return;
-    if (panKey.current) { startPan(event, false); return; }
+    if (panKey.current || tool === 'pan') { startPan(event, false); return; }
+    if (tool === 'request') { begin(event, 'new'); return; }
     if (event.shiftKey && !corner) { begin(event, 'new'); return; }
     event.preventDefault(); event.stopPropagation(); setContext(null);
     const mover = corner ? null : site.current?.beginMove(element.element) ?? null;
@@ -461,15 +522,16 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     cancel();
     if (current.kind === 'new') {
       if (current.active && rect) add(requestPlacement(rect, zoom));
+      else if (tool === 'request') add(requestAt(current.start, zoom));
       return;
     }
     if (current.region && rect && !sameRect(rect, current.initial)) void change(current.region.id, { rect }).catch(() => {});
   }
   function activate(event: ReactMouseEvent) {
-    if (event.target !== event.currentTarget || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || plainClicks.current < 2) return;
+    if (tool !== 'select' || event.target !== event.currentTarget || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || plainClicks.current < 2) return;
     event.preventDefault(); event.stopPropagation(); plainClicks.current = 0;
     const at = point({ x: event.clientX, y: event.clientY });
-    if (page.content) { const hit = site.current?.pick(at.x, at.y); if (hit) { pickElement(hit); return; } }
+    if (page.content) { const hit = site.current?.pick(at.x, at.y); if (hit && hit.element.tag !== 'body') { chooseElement(hit); void editTextAt(at); return; } }
     const snapped = geometryForGesture({ kind: 'new', start: at, initial: { ...at, width: 0, height: 0 } }, at, page.viewport, gridSettings);
     add(requestAt({ x: snapped.x, y: snapped.y }, zoom));
   }
@@ -533,20 +595,22 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const coordinate = selectedRect ?? cursor;
   const overElement = !!element && element.element.selector !== 'body' && !!cursor && cursor.x >= element.rect.x && cursor.x <= element.rect.x + element.rect.width && cursor.y >= element.rect.y && cursor.y <= element.rect.y + element.rect.height;
   const inset = { x: scroll.current?.offsetLeft ?? 0, y: scroll.current?.offsetTop ?? 0 };
-  const toolbarPosition = element ? {
-    left: clamp((element.rect.x - bounds.left) * zoom - measurements.left + inset.x, inset.x + 8, Math.max(inset.x + 8, inset.x + measurements.width - toolbarSize.width - 8)),
-    top: clamp((element.rect.y - bounds.top) * zoom - measurements.top + inset.y - toolbarSize.height - 8, inset.y + 8, Math.max(inset.y + 8, inset.y + measurements.height - toolbarSize.height - 8)),
-  } : {};
+  const occupied = useMemo(() => element ? site.current?.occupied(element.element) ?? [] : [], [element, acceptedVersion]);
+  const inViewport = (rect: Rect): Rect => ({ x: (rect.x - bounds.left) * zoom - measurements.left + inset.x, y: (rect.y - bounds.top) * zoom - measurements.top + inset.y, width: rect.width * zoom, height: rect.height * zoom });
+  const toolbarPoint = element ? elementToolbarPosition(inViewport(element.rect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupied.map(inViewport)) : null;
+  const toolbarPosition = toolbarPoint ? { left: toolbarPoint.x, top: toolbarPoint.y } : {};
+  const measurementRect = coordinate ? inViewport(selectedRect ?? { ...coordinate, width: 0, height: 0 }) : null;
+  const px = (value: number) => `${Math.round(value * 10) / 10}`;
 
-  return <div className={`free-workspace ${page.appearance} ${gridSettings.rulers ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''}`}
+  return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''}`}
     onKeyDownCapture={event => { if (event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
-    <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Drag the selected element to move it; drag a corner to resize it. Right-click offers Edit or Generate. Its icon bar follows above the top-left corner. Use its action bar to edit, replace, move or delete without AI. Double-click anywhere in the workspace to open a prompt. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. The screen outline is a size guide. Double-click a website element to describe a change. F2 edits the selected element. Arrow keys move it one pixel; Shift moves ten pixels. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a new area request in view. Type directly in its text box. Escape from text focuses the move grip. Arrow keys on a grip move by the grid setting; Shift and arrow keys resize. Arrow keys on the resize grip change size. Hold Alt for one-pixel changes without snapping. Delete on a grip removes a request. Scroll in either direction, use Shift and the wheel to scroll sideways, or hold Space and drag to pan. Middle-button dragging also pans. Arrow keys on the workspace scroll; Home returns to the screen guide. Escape cancels a drag.</p>
-    {gridSettings.rulers && <><div className="ruler-corner" aria-hidden="true">%</div>
-      <Ruler axis="x" start={visible.x} length={measurements.width} reference={page.viewport.width} zoom={zoom} cursor={cursor?.x} selection={selectedRect ? [selectedRect.x, selectedRect.x + selectedRect.width] : undefined} />
-      <Ruler axis="y" start={visible.y} length={measurements.height} reference={page.viewport.height} zoom={zoom} cursor={cursor?.y} selection={selectedRect ? [selectedRect.y, selectedRect.y + selectedRect.height] : undefined} /></>}
+    <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the element toolbar, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
+    {gridSettings.rulers && <><div className="ruler-corner" aria-hidden="true">{rulerUnit === 'percent' ? '%' : 'px'}</div>
+      <Ruler axis="x" unit={rulerUnit} start={visible.x} length={measurements.width} reference={page.viewport.width} zoom={zoom} cursor={cursor?.x} selection={selectedRect ? [selectedRect.x, selectedRect.x + selectedRect.width] : undefined} />
+      <Ruler axis="y" unit={rulerUnit} start={visible.y} length={measurements.height} reference={page.viewport.height} zoom={zoom} cursor={cursor?.y} selection={selectedRect ? [selectedRect.y, selectedRect.y + selectedRect.height] : undefined} /></>}
     <div ref={scroll} className="workspace-scroll" data-testid="workspace-scroll" onScroll={scrolled} onPointerDownCapture={beginPan}>
       <div className="canvas-size" style={{ width: (bounds.right - bounds.left) * zoom, height: (bounds.bottom - bounds.top) * zoom }}>
-        <div id="page-canvas" ref={stage} data-testid="canvas" data-world-left={bounds.left} data-world-top={bounds.top} data-zoom={zoom} className={`canvas ${page.appearance} ${overElement ? 'element-hover' : ''} ${elementDrag.current ? 'element-transforming' : ''}`} tabIndex={0} role="group" aria-label="Page workspace. Click to select an element. Double-click to open a prompt. Drag selected elements to move; drag their corners to resize. Drag empty space to pan, Shift-drag to draw an area." aria-describedby="canvas-keyboard-help"
+        <div id="page-canvas" ref={stage} data-testid="canvas" data-world-left={bounds.left} data-world-top={bounds.top} data-zoom={zoom} className={`canvas ${page.appearance} ${overElement ? 'element-hover' : ''} ${elementDrag.current ? 'element-transforming' : ''}`} tabIndex={0} role="group" aria-label="Page workspace. Click to select, double-click text to edit. Double-click empty canvas to add a request. Drag selected elements to move; drag corners to resize." aria-describedby="canvas-keyboard-help"
           style={{ width: (bounds.right - bounds.left) * zoom, height: (bounds.bottom - bounds.top) * zoom }}
           onPointerDown={beginWorkspace} onPointerMove={move} onPointerUp={finish} onDoubleClick={activate} onContextMenu={contextMenu}
           onPointerLeave={() => { if (!gesture.current) setCursor(null); }} onPointerCancel={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
@@ -561,28 +625,34 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
             <span className="screen-guide-label">Screen · {page.viewport.width} × {page.viewport.height}</span>
           </div>
           {grid && <div className="canvas-grid" aria-hidden="true" style={{ backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: `${-bounds.left * zoom}px ${-bounds.top * zoom}px` }} />}
+          {!page.content && !page.regions.some(region => !region.completed) && <div className="canvas-empty-hint" style={viewStyle({ x: 0, y: 0, ...page.viewport }, origin, zoom)}>
+            <p>Double-click anywhere to describe what goes here.</p><button type="button" onClick={addRequestInView}>Add request</button>
+          </div>}
           {page.regions.map((region, index) => {
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
-            return <RequestBox key={region.id} region={region} number={index + 1} rect={rect} origin={origin} zoom={zoom} selected={selected === region.id} focus={focusRequest === region.id}
-              layer={focused === region.id ? overlayLayer : region.zIndex + 2} select={() => { deselectElement(); setFocused(region.id); select(region.id); }} blur={() => setFocused(null)} begin={begin} keyboard={keyboard} change={patch => change(region.id, patch)} />;
+            return <RequestBox key={region.id} region={region} number={index + 1} rect={rect} origin={origin} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
+              layer={focused === region.id ? overlayLayer : region.zIndex + 2} select={() => { deselectElement(); setFocused(region.id); select(region.id); }} blur={() => setFocused(null)} begin={begin} keyboard={keyboard} extent={makeRoom} change={patch => change(region.id, patch)} />;
           })}
           {element && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-source-hash={element.element.sourceSha256} style={{ ...viewStyle(element.rect, origin, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
+            <span className="element-type-tag">{elementName(element.element.tag)}</span>
             {element.element.selector !== 'body' && (['nw','ne','sw','se'] as const).map(corner => <button key={corner} type="button" className={`element-resize-corner corner-${corner}`} data-corner={corner} aria-label={`Resize ${corner.includes('n') ? 'top' : 'bottom'}-${corner.includes('w') ? 'left' : 'right'}`} title="Drag to resize; press Enter for size settings" disabled={editingElement || nudging} onPointerDown={event => beginElementGesture(event, corner)} onClick={event => { if (event.detail === 0) setElementDialog('edit'); }} />)}
           </div>}
+          {inlineText && <InlineTextEditor key={`${inlineText.selection.element.sourceSha256}:${inlineText.index}`} text={inlineText} origin={origin} zoom={zoom} layer={overlayLayer + 4} disabled={editingElement} finish={finishText} />}
           {changing.map((rect, index) => <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...viewStyle(rect, origin, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
+          {highlighted.map((rect, index) => <div key={index} className="generation-highlight" data-testid="generation-highlight" style={{ ...viewStyle(rect, origin, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
           {guides.x.map(x => <div key={`x${x}`} className="alignment-guide alignment-x" aria-hidden="true" style={{ left: (x - bounds.left) * zoom, zIndex: overlayLayer + 1 }} />)}
           {guides.y.map(y => <div key={`y${y}`} className="alignment-guide alignment-y" aria-hidden="true" style={{ top: (y - bounds.top) * zoom, zIndex: overlayLayer + 1 }} />)}
           {preview && gesture.current?.kind === 'new' && <div className="annotation-draft" style={{ ...viewStyle(preview, origin, zoom), zIndex: overlayLayer }} />}
         </div>
       </div>
     </div>
-    {element && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label="Selected element" style={toolbarPosition}>
+    {element && !inlineText && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label="Selected element" style={toolbarPosition}>
+      <button className="ask-ai" title="Describe a change with AI · Ctrl/⌘ K" disabled={editingElement || nudging} onClick={askAI}>Ask AI</button>
       <button aria-label="Edit" title="Edit element · F2" disabled={editingElement || nudging} onClick={() => setElementDialog('edit')}><ElementIcon name="edit" /></button>
       <button aria-label="Replace" title="Replace element" disabled={editingElement || nudging || element.element.selector === 'body'} onClick={() => setElementDialog('replace')}><ElementIcon name="replace" /></button>
       <button aria-label="Move" title="Position offsets" disabled={editingElement || nudging || element.element.selector === 'body'} onClick={() => setElementDialog('position')}><ElementIcon name="move" /></button>
       <MenuButton label={<ElementIcon name="more" />} ariaLabel="Element options" title="More element actions" showChevron={false} items={[
-        { id: 'ask', label: 'Ask AI', action: () => pickElement(element) },
         { id: 'before', label: 'Move earlier', disabled: editingElement || nudging || element.element.selector === 'body', action: () => { void applyElement({ kind: 'reorder', direction: 'before' }).catch(() => {}); } },
         { id: 'after', label: 'Move later', disabled: editingElement || nudging || element.element.selector === 'body', action: () => { void applyElement({ kind: 'reorder', direction: 'after' }).catch(() => {}); } },
         { id: 'parent', label: 'Select parent', action: () => chooseElement(site.current?.next(true, elementRef.current?.element) ?? null) },
@@ -592,54 +662,104 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     </div>}
     {context && <ContextMenu key={`${context.point.x}:${context.point.y}:${context.selection.element.selector}`} label="Element actions" point={context.point} close={closeContext} items={[
       { id: 'edit', label: 'Edit', disabled: editingElement || nudging, action: () => setElementDialog('edit') },
-      { id: 'generate', label: 'Generate', disabled: editingElement || nudging, action: () => pickElement(context.selection) },
+      { id: 'generate', label: 'Ask AI', disabled: editingElement || nudging, action: () => pickElement(context.selection) },
     ]} />}
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
-    {coordinate && gridSettings.rulers && <div className="workspace-measurement" aria-label="Placement as a percentage of the screen guide">{percent(coordinate.x, page.viewport.width)} · {percent(coordinate.y, page.viewport.height)}{selectedRect && <span> {percent(selectedRect.width, page.viewport.width)} × {percent(selectedRect.height, page.viewport.height)}</span>}</div>}
+    {coordinate && measurementRect && gridSettings.rulers && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)}${selectedRect ? ` · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}` : ''}`}
+      style={{ left: clamp(measurementRect.x, inset.x + 8, Math.max(inset.x + 8, inset.x + measurements.width - 260)), top: clamp(measurementRect.y + measurementRect.height + 8, inset.y + 8, Math.max(inset.y + 8, inset.y + measurements.height - 30)) }}>
+      {px(coordinate.x)}, {px(coordinate.y)} px{selectedRect && <span>{px(selectedRect.width)} × {px(selectedRect.height)} px</span>}</div>}
     {atEdge && <div className="workspace-edge" role="status">Workspace edge reached</div>}
   </div>;
 });
 
-function Ruler({ axis, start, length, reference, zoom, cursor, selection }: { axis: 'x' | 'y'; start: number; length: number; reference: number; zoom: number; cursor?: number; selection?: [number, number] }) {
+function Ruler({ axis, unit, start, length, reference, zoom, cursor, selection }: { axis: 'x' | 'y'; unit: 'pixels' | 'percent'; start: number; length: number; reference: number; zoom: number; cursor?: number; selection?: [number, number] }) {
   const offset = (value: number) => (value - start) * zoom;
   const style = (position: number, size?: number): CSSProperties => axis === 'x' ? { left: position, width: size } : { top: position, height: size };
   const band = (from: number, to: number) => { const first = clamp(offset(from), 0, length); return style(first, Math.max(0, clamp(offset(to), 0, length) - first)); };
   return <div className={`workspace-ruler ruler-${axis}`} aria-hidden="true">
     <div className="ruler-screen-band" style={band(0, reference)} />
     {selection && <div className="ruler-selection-band" style={band(selection[0], selection[1])} />}
-    {percentageTicks(start, length, reference, zoom).map(tick => <span key={tick.value} className="ruler-tick" style={style(tick.position)}><span className="ruler-label">{percent(tick.value, reference)}</span></span>)}
+    {(unit === 'percent' ? percentageTicks(start, length, reference, zoom) : pixelTicks(start, length, zoom)).map(tick => <span key={tick.value} className="ruler-tick" style={style(tick.position)}><span className="ruler-label">{unit === 'percent' ? percent(tick.value, reference) : tick.value}</span></span>)}
     {cursor !== undefined && offset(cursor) >= 0 && offset(cursor) <= length && <span className="ruler-cursor" style={style(offset(cursor))} />}
   </div>;
 }
 
-function RequestBox({ region, number, rect, origin, zoom, selected, focus, layer, select, blur, begin, keyboard, change }: {
-  region: Region; number: number; rect: Rect; origin: Point; zoom: number; selected: boolean; focus: boolean; layer: number; select: () => void; blur: () => void;
+function RequestBox({ region, number, rect, origin, zoom, maxHeight, selected, focus, focusToken, layer, select, blur, begin, keyboard, extent, change }: {
+  region: Region; number: number; rect: Rect; origin: Point; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; select: () => void; blur: () => void;
   begin: (event: PointerEvent, kind: Gesture['kind'], region?: Region) => void;
-  keyboard: (event: KeyboardEvent, region?: Region, resize?: boolean) => void; change: (patch: RequestPatch) => Promise<Region>;
+  keyboard: (event: KeyboardEvent, region?: Region, resize?: boolean) => void; extent: (rect: Rect) => void; change: (patch: RequestPatch) => Promise<Region>;
 }) {
   const text = useRef<HTMLTextAreaElement>(null);
   const move = useRef<HTMLButtonElement>(null);
   const [draft, changeDraft] = useDraftText(region.prompt, value => change({ prompt: value }).then(updated => updated.prompt));
+  const [expanded, setExpanded] = useState(false);
+  const [naturalHeight, setNaturalHeight] = useState(0);
+  const focusedToken = useRef(0);
   useLayoutEffect(() => {
-    if (!focus) return;
+    const requested = focus || focusToken !== focusedToken.current && focusToken > 0; focusedToken.current = focusToken;
+    if (!requested) return;
     text.current?.focus({ preventScroll: true });
     text.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-  }, [focus]);
+  }, [focus, focusToken]);
   const target = !!region.element;
   const promptRect = target ? { x: rect.x, y: rect.y + rect.height + 10 / zoom, width: Math.max(260 / zoom, Math.min(rect.width, 420 / zoom)), height: 112 / zoom } : rect;
+  useLayoutEffect(() => {
+    const node = text.current; if (!node) return;
+    const old = node.style.height; node.style.height = '0px'; const style = getComputedStyle(node);
+    const height = node.scrollHeight + (Number.parseFloat(style.borderTopWidth) || 0) + (Number.parseFloat(style.borderBottomWidth) || 0); node.style.height = old;
+    setNaturalHeight(current => current === height ? current : height);
+  }, [draft, promptRect.width, zoom]);
+  const minimumHeight = Math.min(maxHeight, promptRect.height * zoom);
+  const fullHeight = Math.max(minimumHeight, naturalHeight);
+  const hasMore = fullHeight > maxHeight;
+  useLayoutEffect(() => { if (hasMore && document.activeElement === text.current) setExpanded(true); }, [hasMore, draft]);
+  const displayHeight = expanded ? fullHeight : Math.min(maxHeight, fullHeight);
+  const shown = { ...promptRect, height: (displayHeight + (hasMore ? 30 : 0)) / zoom };
+  useLayoutEffect(() => extent(shown), [shown.x, shown.y, shown.width, shown.height]);
   return <>
   {target && <div className="element-selection" data-testid="element-selection" style={{ ...viewStyle(rect, origin, zoom), zIndex: layer }} aria-hidden="true" />}
-  <div data-region-id={region.id} className={`annotation ${target ? 'element-prompt' : ''} ${selected ? 'selected' : ''}`} style={{ ...viewStyle(promptRect, origin, zoom), zIndex: layer }}
+  <div data-region-id={region.id} className={`annotation ${target ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...viewStyle(shown, origin, zoom), zIndex: layer }}
     onFocusCapture={select} onBlurCapture={event => { if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) blur(); }}>
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={target ? "Describe the change…" : "Describe what belongs here…"}
-      onChange={event => changeDraft(event.target.value)} onPointerDown={event => event.stopPropagation()}
+      style={{ height: displayHeight }} onFocus={() => { if (hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (move.current ?? document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
+    {hasMore && <button type="button" className="request-expand" aria-expanded={expanded} onClick={() => { setExpanded(value => !value); if (expanded) text.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }}>{expanded ? 'Less' : '… More'}</button>}
     {selected && !target && <><button ref={move} className="annotation-grip move-grip" aria-label={`Move request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag to move. Arrow keys change placement."
       onPointerDown={event => begin(event, 'move', region)} onKeyDown={event => keyboard(event, region)}><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1"/><circle cx="11" cy="4" r="1"/><circle cx="5" cy="8" r="1"/><circle cx="11" cy="8" r="1"/><circle cx="5" cy="12" r="1"/><circle cx="11" cy="12" r="1"/></svg></button>
       <button className="annotation-grip resize-grip" aria-label={`Resize request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag or use arrow keys to resize the placement hint."
         onPointerDown={event => begin(event, 'resize', region)} onKeyDown={event => keyboard(event, region, true)}><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 12L12 4M8 12H12V8M4 8V4H8" fill="none" stroke="currentColor" strokeWidth="1.5"/></svg></button></>}
   </div></>;
+}
+
+function InlineTextEditor({ text, origin, zoom, layer, disabled, finish }: { text: InlineText; origin: Point; zoom: number; layer: number; disabled: boolean; finish: (value: string | null, restoreFocus?: boolean) => Promise<void> }) {
+  const editor = useRef<HTMLDivElement>(null);
+  const done = useRef(false);
+  function complete(value: string | null, restoreFocus = false) { if (!done.current) { done.current = true; void finish(value, restoreFocus).catch(() => { done.current = false; editor.current?.focus({ preventScroll: true }); }); } }
+  useLayoutEffect(() => {
+    const node = editor.current; if (!node) return;
+    node.textContent = text.text; node.focus({ preventScroll: true });
+    const range = document.createRange(); range.selectNodeContents(node);
+    const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+  }, []);
+  return <div ref={editor} className="inline-text-editor" role="textbox" aria-label="Edit text in place" aria-multiline="true" aria-busy={disabled} contentEditable={!disabled} suppressContentEditableWarning spellCheck
+    style={{ ...text.style, position: 'absolute', left: (text.rect.x - origin.x) * zoom, top: (text.rect.y - origin.y) * zoom, width: Math.max(24 / zoom, text.rect.width), minHeight: text.rect.height, transform: `scale(${zoom})`, transformOrigin: 'top left', zIndex: layer }}
+    onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onContextMenu={event => event.stopPropagation()}
+    onBlur={() => complete(editor.current?.innerText ?? text.text)}
+    onKeyDown={event => {
+      event.stopPropagation();
+      if (event.key === 'Escape') { event.preventDefault(); complete(null, true); }
+      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); complete(editor.current?.innerText ?? text.text, true); }
+    }}
+    onPaste={event => {
+      event.preventDefault(); const value = event.clipboardData.getData('text/plain');
+      const selection = window.getSelection(); if (!selection?.rangeCount || !editor.current?.contains(selection.anchorNode)) return;
+      const range = selection.getRangeAt(0); range.deleteContents(); const node = document.createTextNode(value); range.insertNode(node); range.setStartAfter(node); range.collapse(true); selection.removeAllRanges(); selection.addRange(range);
+    }} />;
+}
+
+function elementName(tag: string): string {
+  return ({ a: 'Link', button: 'Button', img: 'Image', input: 'Input', textarea: 'Text area', select: 'Dropdown', h1: 'Heading', h2: 'Heading', h3: 'Heading', h4: 'Heading', h5: 'Heading', h6: 'Heading', p: 'Paragraph', span: 'Text', div: 'Container', section: 'Section', nav: 'Navigation', header: 'Header', footer: 'Footer', main: 'Main', body: 'Page', ul: 'List', ol: 'List', li: 'List item', form: 'Form' } as Record<string, string>)[tag] ?? tag.charAt(0).toUpperCase() + tag.slice(1);
 }
 
 function ElementIcon({ name }: { name: 'edit' | 'replace' | 'move' | 'more' }) {

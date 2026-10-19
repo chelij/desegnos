@@ -13,7 +13,7 @@ try {
     '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
-    initialWorkspaceBounds, expandWorkspace, percent, percentageTicks, alignmentLines, WORLD_MIN, WORLD_MAX, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
+    initialWorkspaceBounds, expandWorkspace, percent, percentageTicks, pixelTicks, elementToolbarPosition, alignmentLines, WORLD_MIN, WORLD_MAX, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
   await test('local resize resolves independent axes and scaled or rotated layouts', () => {
     assert.deepEqual(resizedElementSize({x:200,y:80},{x:1,y:1},[1,0,0,1],{x:30,y:-12}),{x:230,y:68});
@@ -243,6 +243,29 @@ try {
         assert.ok(tick.position >= 0 && tick.position <= 1200);
         assert.equal(tick.position, (tick.value + 2000) * zoom);
       }
+    }
+  });
+  await test('pixel rulers stay sparse, signed and aligned at every supported zoom', () => {
+    for (const zoom of [0.001, 0.1, 0.25, 0.75, 1, 2, 4]) {
+      const ticks = pixelTicks(-2000, 1200, zoom);
+      assert.ok(ticks.length > 0 && ticks.length < 20);
+      for (const tick of ticks) {
+        assert.ok(tick.position >= 0 && tick.position <= 1200);
+        assert.equal(tick.position, (tick.value + 2000) * zoom);
+      }
+      if (zoom >= 0.25) assert.ok(ticks.some(tick => tick.value < 0));
+    }
+  });
+  await test('element toolbar flips below nearby content and stays inside the visible canvas', () => {
+    const selection = { x: 200, y: 180, width: 300, height: 100 }, size = { x: 240, y: 42 }, viewport = { x: 28, y: 28, width: 800, height: 600 };
+    assert.deepEqual(elementToolbarPosition(selection, size, viewport), { x: 200, y: 130 });
+    assert.deepEqual(elementToolbarPosition(selection, size, viewport, [{ x: 180, y: 125, width: 340, height: 45 }]), { x: 200, y: 288 });
+    const nearTop = elementToolbarPosition({ ...selection, y: 35 }, size, viewport);
+    assert.deepEqual(nearTop, { x: 200, y: 143 });
+    for (const rect of [{ x: -50, y: -30, width: 10, height: 10 }, { x: 820, y: 620, width: 40, height: 40 }]) {
+      const position = elementToolbarPosition(rect, size, viewport);
+      assert.ok(position.x >= viewport.x + 8 && position.x + size.x <= viewport.x + viewport.width - 8);
+      assert.ok(position.y >= viewport.y + 8 && position.y + size.y <= viewport.y + viewport.height - 8);
     }
   });
 } finally {

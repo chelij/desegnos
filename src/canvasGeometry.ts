@@ -109,6 +109,32 @@ export function percentageTicks(start: number, screenLength: number, reference: 
   }).filter(tick => tick.position >= 0 && tick.position <= screenLength);
 }
 
+export function pixelTicks(start: number, screenLength: number, zoom: number): { value: number; position: number }[] {
+  const needed = 70 / zoom;
+  const power = 10 ** Math.floor(Math.log10(needed));
+  const spacing = [1, 2, 5, 10].map(value => value * power).find(value => value >= needed)!;
+  const first = Math.ceil(start / spacing) * spacing;
+  return Array.from({ length: Math.ceil(screenLength / zoom / spacing) + 1 }, (_, index) => {
+    const value = (first + index * spacing) || 0;
+    return { value, position: (value - start) * zoom };
+  }).filter(tick => tick.position >= 0 && tick.position <= screenLength);
+}
+
+// Search above and below first, then beside the selection, and finally along
+// the viewport edges. Score actual nearby content as well as viewport clipping.
+export function elementToolbarPosition(rect: Rect, size: Point, viewport: Rect, occupied: Rect[] = []): Point {
+  const gap = 8;
+  const at = (x: number, y: number) => ({ x: clamp(x, viewport.x + gap, Math.max(viewport.x + gap, viewport.x + viewport.width - size.x - gap)),
+    y: clamp(y, viewport.y + gap, Math.max(viewport.y + gap, viewport.y + viewport.height - size.y - gap)) });
+  const candidates = [at(rect.x, rect.y - size.y - gap), at(rect.x, rect.y + rect.height + gap),
+    at(rect.x - size.x - gap, rect.y), at(rect.x + rect.width + gap, rect.y),
+    at(viewport.x + gap, viewport.y + gap), at(viewport.x + viewport.width - size.x - gap, viewport.y + viewport.height - size.y - gap)];
+  const intersection = (point: Point, other: Rect) => Math.max(0, Math.min(point.x + size.x, other.x + other.width) - Math.max(point.x, other.x))
+    * Math.max(0, Math.min(point.y + size.y, other.y + other.height) - Math.max(point.y, other.y));
+  const score = (point: Point) => intersection(point, rect) * 2 + occupied.reduce((sum, other) => sum + intersection(point, other), 0);
+  return candidates.reduce((best, point) => score(point) < score(best) ? point : best);
+}
+
 export function alignmentLines(rect: Rect | undefined, guide: Viewport, others: Rect[], zoom: number): { x: number[]; y: number[] } {
   if (!rect) return { x: [], y: [] };
   const targetX = [0, guide.width / 2, guide.width];
