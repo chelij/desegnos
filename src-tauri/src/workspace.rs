@@ -2323,3 +2323,12 @@ pub fn open_recent_project(
     state.open_document(file, document)?;
     Ok(state.view())
 }
+
+#[cfg(test)]
+pub(super) fn open_archive_for_tests(directory: PathBuf, path: &std::path::Path) -> Workspace {
+    let file = ProjectFile::acquire(path).unwrap();
+    let document = file.load_document().unwrap();
+    let mut workspace = Workspace::from_directory(directory).unwrap();
+    workspace.open_document(file, document).unwrap();
+    workspace
+}
