@@ -1,6 +1,6 @@
 # Desegnos feature priorities
 
-Date: 2026-10-19. Companion to [UX_AUDIT.md](UX_AUDIT.md). This file re-orders work; it does not replace [RELEASE_PLAN.md](RELEASE_PLAN.md) or relax its safety contracts.
+Date: 2026-10-19. Companion to [UX_AUDIT.md](UX_AUDIT.md). Product direction (Dreamweaver with AI, placement and control first, BYOK now and paid hosted generation later, all major AI providers, all platforms) is in [PRODUCT.md](PRODUCT.md). This file re-orders work; it does not replace [RELEASE_PLAN.md](RELEASE_PLAN.md) or relax its safety contracts.
 
 ## Why re-order
 
@@ -33,8 +33,9 @@ Work in this order instead. Each tier should leave the app more useful on its ow
 | 8 | Global styles popover | 2 | Stage 4 (shared tokens) | S–M |
 | 9 | Images: generated and stock | 2 | Stage 5 (approved images) | M |
 | 10 | One-click publish | 2 | FEATURE_RESEARCH candidate | M–L |
-| 11 | Additional AI providers | 3 | Not planned (plugin boundary exists) | M |
+| 11 | Additional AI providers | 2 | Not planned (plugin boundary exists) | M |
 | 12 | Starter sections | 3 | Not planned | S |
+| 13 | Split design / code view | 2 | Read-only source views only | M–L |
 
 ---
 
@@ -58,9 +59,11 @@ Work in this order instead. Each tier should leave the app more useful on its ow
 - **Who runs it.** The project owner runs it with their own key; Codex must not make paid calls itself. Codex prepares the projects and the runner and reviews the results.
 - **Iterate.** Change the requirements Markdown and system instructions based on what fails. Keep a short log of each change and its effect in the benchmark doc.
 
+- **Placement fidelity score.** For each request box and the element generated for it, the runner records relative order, alignment, size ratio and containment (see PRODUCT.md, "Success measure"). This is the main quality number.
+
 **Done when.**
-- At least 80% of scenarios produce output the owner rates "usable without manual fixes".
-- Placement in Strict mode matches the request boxes' relative order and grouping.
+- At least 80% of scenarios produce output the owner rates "looks like what I imagined".
+- Placement in Strict mode matches the request boxes' relative order and grouping, and its fidelity score is recorded for every run.
 - Each result's cost and duration are recorded.
 
 ### 2. Export website folder
@@ -196,20 +199,40 @@ Work in this order instead. Each tier should leave the app more useful on its ow
 - Republishing after an edit updates it.
 - No token appears in the project, logs or export.
 
----
-
-## Tier 3: reach and convenience
-
 ### 11. Additional AI providers
 
+**Why.** The product targets every major AI provider (PRODUCT.md). Paid hosted generation will later be one more adapter, so the boundary must be provider-neutral now.
+
 **Scope.**
-- **Adapters.** Add provider adapters behind the existing `desegni-ai` boundary. Start with Anthropic (Claude) and OpenRouter. A local OpenAI-compatible endpoint (Ollama, LM Studio) is optional.
+- **Adapters.** Add provider adapters behind the existing `desegni-ai` boundary. Start with Anthropic (Claude) and OpenRouter, then Google. A local OpenAI-compatible endpoint (Ollama, LM Studio) is optional.
+- **Capabilities.** Each provider declares its capabilities (vision, image generation, streaming). Features 3, 5 and 9 ask for a capability, not a provider.
 - **Behavior.** Each adapter uses the same frozen requirements, streaming, cancellation and cost estimate. Show an estimate only where pricing is known.
 - **Settings.** AI settings gains a provider choice. The model list comes from the verified catalogue for each provider.
 
 **Done when.**
 - The benchmark from item 1 runs through at least one non-OpenAI provider with results logged.
 - Switching providers never redirects a job that has already been prepared.
+
+### 13. Split design / code view
+
+**Why.** Dreamweaver's defining feature, and the strongest form of "more control" (PRODUCT.md).
+
+**Scope.**
+- **Code view.** A **Design / Split / Code** toggle in the top bar. Split shows the canvas and the page source together, divided either top/bottom or side by side. It is a view mode, not a docked panel, so it is consistent with the no-sidebar rule.
+- **Two-way selection.** Selecting an element on the canvas highlights its source, and placing the cursor in the source selects the element.
+- **Editing source.** Edits to HTML, CSS and JS go through the same validation and transactional apply as direct edits. Invalid source shows an inline error and is not applied. Undo/Redo cover source edits.
+- **Requests stay linked.** AI requests still target elements by source fingerprint, and a source edit updates those fingerprints.
+- **Step 1:** syntax highlighting and two-way selection, read-only.
+- **Step 2:** editing.
+
+**Done when.**
+- Selecting a button on the canvas scrolls to and highlights its markup.
+- Editing its text in code updates the canvas after validation.
+- Undo restores the previous source byte-for-byte.
+
+---
+
+## Tier 3: reach and convenience
 
 ### 12. Starter sections
 
