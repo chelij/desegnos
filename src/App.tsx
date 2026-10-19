@@ -18,7 +18,7 @@ import { AiSettings, ChatgptWelcome } from './AiSettings';
 import { GenerationDialog, GenerationFeedback } from './Generation';
 import { PagePreview, SourceView } from './Preview';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AiSettingsView, Appearance, Brief, Command, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, NewProjectIdentity, Page, Project, Rect, RecoveryInfo, Region, RequirementsSnapshot, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport } from './types';
+import type { AiSettingsView, Appearance, Brief, Command, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, NewProjectIdentity, Page, Project, Rect, RecoveryInfo, Region, RequirementsSnapshot, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport } from './types';
 
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
@@ -54,6 +54,8 @@ export default function App() {
   const [exporting, setExporting] = useState(false);
   const [resultReview, setResultReview] = useState<{ jobId: string; revision: number } | null>(null);
   const [highlightResult, setHighlightResult] = useState(false);
+  const [showLayers, setShowLayers] = useState(false);
+  const [activeLayer, setActiveLayer] = useState<ElementTarget | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [showNotes, setShowNotes] = useState<DossierSection | null>(null);
   const [showGridSettings, setShowGridSettings] = useState(false);
@@ -299,6 +301,11 @@ export default function App() {
       } else if (shortcut === 'zoomIn' || shortcut === 'zoomOut') { event.preventDefault(); setZoom(value => steppedZoom(value, shortcut === 'zoomIn' ? 1 : -1)); return; }
       else if (shortcut === 'actualSize' || shortcut === 'doubleSize') { event.preventDefault(); setZoom(shortcut === 'actualSize' ? 1 : 2); return; }
       else if (shortcut === 'selectTool' || shortcut === 'requestTool' || shortcut === 'panTool') { event.preventDefault(); setTool(shortcut === 'selectTool' ? 'select' : shortcut === 'requestTool' ? 'request' : 'pan'); return; }
+      else if (shortcut === 'copyLayer') { if (activeLayer || selected) { event.preventDefault(); void canvas.current?.copyLayer(); } return; }
+      else if (shortcut === 'pasteLayer') { event.preventDefault(); void canvas.current?.pasteLayer(); return; }
+      else if (shortcut === 'layerForward' || shortcut === 'layerBackward' || shortcut === 'layerFront' || shortcut === 'layerBack') {
+        if (activeLayer || selected) { event.preventDefault(); void canvas.current?.arrangeLayer(({ layerForward: 'forward', layerBackward: 'backward', layerFront: 'front', layerBack: 'back' } as const)[shortcut]); } return;
+      }
       else if (shortcut === 'askAI') { event.preventDefault(); canvas.current?.askAI(); return; }
       else if (shortcut === 'fit') { event.preventDefault(); recenter('fit'); return; }
       else if (shortcut === 'remove' && selected) { event.preventDefault(); removeRegion(selected); return; }
@@ -380,9 +387,9 @@ export default function App() {
     return mutate(project => project.pages.some(page => page.regions.some(region => !region.completed && region.id !== keep && !region.prompt.trim()))
       ? { type: 'dismiss_empty_regions', keep_region_id: keep } : null);
   }
-  function selectRequest(id: string | null) {
+  function selectRequest(id: string | null, cleanEmpty = true) {
     setSelected(id); setFocusPrompt(false);
-    void dismissEmpty(id).catch(() => {});
+    if (cleanEmpty) void dismissEmpty(id).catch(() => {});
   }
   async function selectPage(id: string, keep: string | null = null) { await canvas.current?.synchronize(); await settle(); await dismissEmpty(keep); setPageId(id); setSelected(null); }
   async function addRegion(rect: Rect) {
@@ -414,6 +421,28 @@ export default function App() {
       const result = await native<ElementEditView>('edit_element', { projectId, pageId, revision: workspace.project.revision, target, change });
       accept(result.workspace); setNotice('Element updated.'); return result.element;
     }, false);
+  }
+  async function copyLayerNative(target: LayerTarget, styles: ElementStyleEdit[]) {
+    const projectId = project?.id, targetPageId = page?.id;
+    await settle();
+    await queue(async workspace => {
+      if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was copied.');
+      await native<void>('copy_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, target, visualStyles: styles });
+      setNotice('Layer copied.');
+    }, false);
+  }
+  async function pasteLayerNative(after: ElementTarget | null): Promise<LayerPasteView> {
+    const projectId = project?.id, targetPageId = page?.id;
+    await settle();
+    return queue(async workspace => {
+      if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was pasted.');
+      const result = await native<LayerPasteView>('paste_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, after });
+      accept(result.workspace); setNotice('Layer pasted.'); return result;
+    }, false);
+  }
+  async function arrangeRequest(id: string, direction: LayerDirection) {
+    if (!page) return;
+    await mutate({ type: 'arrange_region', page_id: page.id, region_id: id, direction });
   }
   async function refreshElementBounds(pageId: string, viewport: Viewport, bounds: ElementBounds[]) {
     const projectId = project?.id;
@@ -463,6 +492,14 @@ export default function App() {
     { id: 'edit', label: 'Edit', disabled: !project, children: [
       { id: 'undo', label: 'Undo', shortcut: 'Ctrl/Cmd+Z', disabled: !view?.canUndo, action: () => run(() => travel('undo_project')) },
       { id: 'redo', label: 'Redo', shortcut: 'Ctrl/Cmd+Shift+Z', disabled: !view?.canRedo, action: () => run(() => travel('redo_project')) },
+      { id: 'copy-layer', label: 'Copy layer', shortcut: 'Ctrl/Cmd+C', disabled: !region && (!activeLayer || activeLayer.selector === 'body'), action: () => run(() => canvas.current!.copyLayer()) },
+      { id: 'paste-layer', label: 'Paste layer', shortcut: 'Ctrl/Cmd+V', action: () => run(() => canvas.current!.pasteLayer()) },
+      { id: 'arrange', label: 'Arrange layer', disabled: !region && (!activeLayer || activeLayer.selector === 'body'), children: [
+        { id: 'layer-front', label: 'Bring to front', shortcut: 'Ctrl/Cmd+Shift+]', action: () => run(() => canvas.current!.arrangeLayer('front')) },
+        { id: 'layer-forward', label: 'Bring forward', shortcut: 'Ctrl/Cmd+]', action: () => run(() => canvas.current!.arrangeLayer('forward')) },
+        { id: 'layer-backward', label: 'Send backward', shortcut: 'Ctrl/Cmd+[', action: () => run(() => canvas.current!.arrangeLayer('backward')) },
+        { id: 'layer-back', label: 'Send to back', shortcut: 'Ctrl/Cmd+Shift+[', action: () => run(() => canvas.current!.arrangeLayer('back')) },
+      ] },
       { id: 'remove-request', label: 'Remove request', shortcut: 'Delete', disabled: !region, action: () => removeRegion() },
     ] },
     { id: 'page', label: 'Page', disabled: !page, children: [
@@ -476,6 +513,7 @@ export default function App() {
       { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: removePage },
     ] },
     { id: 'view', label: 'View', children: [
+      { id: 'layers', label: 'Layers', checked: showLayers, disabled: !project, action: () => setShowLayers(value => !value) },
       { id: 'grid', label: 'Show grid', checked: project?.showGrid, disabled: !project, action: () => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid }))) },
       { id: 'grid-settings', label: 'Grid and rulers', disabled: !project, action: () => setShowGridSettings(true) },
       { id: 'fit-screen', label: 'Fit screen guide', shortcut: 'Ctrl/Cmd+0', disabled: !project, action: () => recenter('fit') },
@@ -542,8 +580,8 @@ export default function App() {
       </GenerationFeedback></div>}
       {resultReview && <section className="result-review" aria-label="Generated changes"><strong>Website updated</strong><button className="primary" onClick={() => setResultReview(null)}>Keep</button><button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button><button disabled={pending > 0} title="Undo this result and generate a new version; this uses your AI account again" onClick={() => run(() => rejectResult(true))}>Try again</button><button onClick={openGeneration}>Details</button></section>}
       <main className="workspace" id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined}>
-      {page && <Canvas ref={canvas} page={page} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
-      <CanvasTools tool={tool} setTool={setTool} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
+      {page && <Canvas ref={canvas} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
       </main>
       <footer className="status-bar"><span title={view.path ?? undefined}>{region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{page && <button className="page-appearance-toggle" aria-label={`Page appearance: ${page.appearance === 'light' ? 'Light' : 'Dark'}`} title={`Switch page to ${page.appearance === 'light' ? 'dark' : 'light'}`} onClick={() => run(() => mutate(current => { const target = current.pages.find(item => item.id === page.id); return target ? { type: 'update_page', page_id: target.id, name: target.name, path: target.path, viewport: target.viewport, appearance: target.appearance === 'light' ? 'dark' : 'light', included: target.included } : null; }))}>{page.appearance === 'light' ? '☀ Light' : '☾ Dark'}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
     </>}

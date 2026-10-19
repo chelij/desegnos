@@ -1,8 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { native } from './api';
+import { siteLayerTree, siteLayerStyles, siteCopyStyles, type SiteLayer } from './siteLayers';
 import { translatedStyle } from './elementEditing';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
-import type { ElementSelection, ElementTarget, ElementVisual, Page, PreviewDescriptor, Rect, SiteContent } from './types';
+import type { ElementSelection, ElementTarget, ElementStyleEdit, LayerDirection, ElementVisual, Page, PreviewDescriptor, Rect, SiteContent } from './types';
 
 function validLocation(descriptor: PreviewDescriptor, pageId: string) {
   try {
@@ -17,7 +18,7 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
 export type ElementMover = { preview: (x: number, y: number) => ElementSelection | null; style: (x: number, y: number) => string; cancel: () => void };
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
-export type CanvasPreviewHandle = { source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type CanvasPreviewHandle = { layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
@@ -38,20 +39,17 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   const registeredVersion = useRef<{ pageId: string; revision: number | string } | null>(null);
   // Canvas documents share DOM access only while all scripts remain forbidden by sandbox.
   // Interactive previews keep their separate opaque-origin, explicitly enabled sandbox.
-  function selected(node: Element | null, remember = false): ElementSelection | null {
+  function identify(node: Element | null, exact = true): { node: Element; target: ElementTarget } | null {
     const doc = frame.current?.contentDocument;
     if (!doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || !node || !descriptor?.sourceSha256 || !doc.body.contains(node)) return null;
-    node = Element.prototype.closest.call(node, 'button, a, input, select, textarea, label, summary') ?? node;
-    if (!/^[a-z][a-z0-9-]{0,79}$/.test(node.localName)) return null;
+    if (!exact) node = Element.prototype.closest.call(node, 'button, a, input, select, textarea, label, summary') ?? node;
+    if (!/^[A-Za-z][A-Za-z0-9-]{0,79}$/.test(node.localName)) return null;
     const parts: string[] = [];
     for (let current: Element | null = node; current && current !== doc.body; current = current.parentElement) {
-      if (!/^[a-z][a-z0-9-]{0,79}$/.test(current.localName) || parts.length >= 63) return null;
+      if (!/^[A-Za-z][A-Za-z0-9-]{0,79}$/.test(current.localName) || parts.length >= 63) return null;
       const siblings: Element[] = Array.from(current.parentElement?.children ?? []);
       parts.unshift(`${current.localName}:nth-of-type(${siblings.filter(sibling => sibling.localName === current!.localName).indexOf(current) + 1})`);
     }
-    const box = Element.prototype.getBoundingClientRect.call(node);
-    if (![box.x, box.y, box.width, box.height].every(Number.isFinite) || box.width < 1 || box.height < 1 || !Number.isFinite(box.right) || !Number.isFinite(box.bottom)) return null;
-    if (remember) picked.current = node;
     let label = '';
     const walker = Document.prototype.createTreeWalker.call(doc, node, NodeFilter.SHOW_TEXT);
     let visits = 0;
@@ -59,10 +57,18 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       const text = walker.nextNode(); if (!text) break;
       if (!['SCRIPT', 'STYLE'].includes(text.parentElement?.tagName ?? '')) label += ` ${text.nodeValue?.slice(0, 240) ?? ''}`;
     }
-    return { element: { selector: ['body', ...parts].join(' > '), tag: node.localName,
-      label: Array.from(label.replace(/\s+/g, ' ').trim()).slice(0, 240).join(''), sourceSha256: descriptor.sourceSha256 },
-      rect: { x: box.x, y: box.y, width: box.width, height: box.height } };
+    label = node.getAttribute('aria-label') || label.trim() || node.getAttribute('alt') || node.getAttribute('title') || '';
+    return { node, target: { selector: ['body', ...parts].join(' > '), tag: node.localName,
+      label: Array.from(label.replace(/\s+/g, ' ').trim()).slice(0, 240).join(''), sourceSha256: descriptor.sourceSha256 } };
   }
+  function selected(node: Element | null, remember = false, exact = false): ElementSelection | null {
+    const found = identify(node, exact); if (!found) return null;
+    const box = Element.prototype.getBoundingClientRect.call(found.node);
+    if (![box.x, box.y, box.width, box.height, box.right, box.bottom].every(Number.isFinite) || box.width < 1 || box.height < 1) return null;
+    if (remember) picked.current = found.node;
+    return { element: found.target, rect: { x: box.x, y: box.y, width: box.width, height: box.height } };
+  }
+
   function findNode(target: ElementTarget): Element | null {
     const doc = frame.current?.contentDocument;
     if (!doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || target.sourceSha256 !== descriptor?.sourceSha256) return null;
@@ -149,14 +155,17 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   }
   useImperativeHandle(ref, () => ({
     source() { return registeredVersion.current?.pageId === pageId && registeredVersion.current.revision === revision && mounted.current?.session === descriptor?.sessionId && mounted.current?.document === frame.current?.contentDocument && !invalidated.current ? descriptor?.sourceSha256 ?? null : null; },
-    find(target) { return selected(findNode(target)); },
+    find(target) { return selected(findNode(target), false, true); },
+    layers() { const doc = frame.current?.contentDocument; return doc && identify(doc.body) ? siteLayerTree(doc, node => selected(node, false, true)) : []; },
+    layerStyles(target, direction) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteLayerStyles(node, direction, value => identify(value)?.target ?? null); },
+    copyStyles(target) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteCopyStyles(node, value => identify(value)?.target ?? null); },
     visual,
     textAt,
     occupied,
     beginMove(target) {
       const edit = transformEditor(target); if (!edit) return null;
       const style = (x: number, y: number) => edit.offset(edit.original, x, y);
-      return { style, cancel: edit.restore, preview(x, y) { if (!findNode(target)) return null; edit.set(style(x, y)); return selected(edit.node); } };
+      return { style, cancel: edit.restore, preview(x, y) { if (!findNode(target)) return null; edit.set(style(x, y)); return selected(edit.node, false, true); } };
     },
     beginResize(target, corner) {
       const edit = transformEditor(target); if (!edit) return null;
@@ -199,7 +208,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
           return offset(css,x,y);
         } finally { restore(); }
       };
-      return { style, cancel:restore, preview(rect) { if (!findNode(target)) return null; set(style(rect)); return selected(node); } };
+      return { style, cancel:restore, preview(rect) { if (!findNode(target)) return null; set(style(rect)); return selected(node, false, true); } };
     },
     pick(x, y) { try { return selected(frame.current?.contentDocument?.elementFromPoint(x, y) ?? null, true); } catch { return null; } },
     next(parent = false, target) {
@@ -270,7 +279,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
           if (invalidated.current || !doc?.head || !doc.body || doc.URL !== 'about:srcdoc' || (mounted.current && mounted.current.document !== doc) || doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') !== staticPolicy) throw new Error('The page navigated away from its editable preview.');
           mounted.current = { document: doc, session: descriptor.sessionId };
           const style = Document.prototype.createElement.call(doc, 'style'); style.textContent = previewSource.css; doc.head.append(style);
-          const still = Document.prototype.createElement.call(doc, 'style'); still.textContent = '*,*::before,*::after{animation-play-state:paused!important;transition:none!important}'; doc.head.append(still);
+          const still = Document.prototype.createElement.call(doc, 'style'); still.setAttribute('data-desegnos-editor-paused', ''); still.textContent = '*,*::before,*::after{animation-play-state:paused!important;transition:none!important}'; doc.head.append(still);
           // Measure once against the reference viewport. Observing our own iframe resize would create a vh/percentage-height feedback loop.
           const height = Math.min(100000, Math.max(referenceHeight, doc.body.scrollHeight, doc.documentElement.scrollHeight));
           Document.prototype.getAnimations?.call(doc).forEach(animation => animation.pause());

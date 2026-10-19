@@ -116,3 +116,6 @@
 .free-workspace .request-frame { position: absolute; inset: 0; border: 2px dashed var(--annotation-border); pointer-events: none; }
 .free-workspace .annotation.selected .request-frame { border-color: var(--annotation-focus); }
 .free-workspace .annotation:focus-within .request-frame { outline: 3px solid var(--annotation-focus); outline-offset: -3px; }
+
+.free-workspace .request-controls { position: absolute; pointer-events: none; }
+.free-workspace .request-controls > button { pointer-events: auto; }

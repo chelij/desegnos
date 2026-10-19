@@ -19,6 +19,10 @@ Work in this order instead. Each tier should leave the app more useful on its ow
 - **Keep existing invariants:** project validation, transactional apply, Undo/Redo, recovery, and keys kept out of project files.
 - **Keep checks proportional.** Each feature needs one native workflow test plus screenshots of its key states. Skip the full light/dark/760px matrix unless the feature changes layout.
 
+## Owner-prioritized layer editing
+
+The owner requested floating Layers, local bring forward/send backward controls and layer copy/paste before the remaining tiers. This slice covers website hierarchy selection, pending request order, front/back commands, system clipboard copy/paste and durable undo. The rest of the full organizer—rename, group/ungroup, compatible reparenting, lock and hide—remains deferred. This explicit priority does not mark those operations or the paid generation-quality gate complete.
+
 ## Summary
 
 | # | Feature | Tier | Release plan today | Effort |
@@ -257,7 +261,7 @@ These release-plan and FEATURE_RESEARCH items remain valid but should not take e
 - client review packages
 - redirects
 - animation authoring
-- the full layer organizer
+- the remaining full layer organizer operations (rename, group/ungroup, reparent, lock and hide)
 - user-added breakpoints
 - signed installers, notarization and auto-updates
 - Windows/macOS certification

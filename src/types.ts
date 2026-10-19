@@ -10,9 +10,14 @@ export type Viewport = { width: number; height: number };
 export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: boolean; rulers: boolean };
 export type Rect = { x: number; y: number; width: number; height: number };
 export type ElementTarget = { selector: string; tag: string; label: string; sourceSha256: string };
+export type LayerDirection = 'forward' | 'backward' | 'front' | 'back';
+export type LayerPseudoStyle = { pseudo: 'before' | 'after' | 'marker'; style: string };
+export type ElementStyleEdit = { target: ElementTarget; style: string; pseudoStyles?: LayerPseudoStyle[] };
+export type LayerTarget = { kind: 'request'; regionId: string } | { kind: 'element'; target: ElementTarget };
+export type LayerPasteView = { workspace: WorkspaceView; selection: { element: ElementTarget | null; regionId: string | null } };
 export type ElementSelection = { element: ElementTarget; rect: Rect };
 export type ElementEdit = { kind: 'update'; texts: { index: number; text: string }[]; attributes: Record<string, string | null>; style: string | null }
-  | { kind: 'replace'; html: string; keepStyle: boolean } | { kind: 'reorder'; direction: 'before' | 'after' } | { kind: 'remove' };
+  | { kind: 'replace'; html: string; keepStyle: boolean } | { kind: 'reorder'; direction: 'before' | 'after' } | { kind: 'layerStyles'; styles: ElementStyleEdit[] } | { kind: 'remove' };
 export type ElementBounds = { regionId: string; target: ElementTarget; rect: Rect };
 export type ElementDetails = { target: ElementTarget; texts: { index: number; text: string }[]; textsTruncated: boolean; attributes: Record<string, string>; inlineStyle: string; html: string; canMove: boolean; canMoveBefore: boolean; canMoveAfter: boolean };
 export type ElementEditView = { workspace: WorkspaceView; element: ElementTarget | null };
@@ -89,6 +94,7 @@ export type Command =
   | { type: 'add_element_region'; page_id: string; rect: Rect; element: ElementTarget }
   | { type: 'update_region'; page_id: string; region_id: string; rect: Rect; prompt: string }
   | { type: 'dismiss_empty_regions'; keep_region_id: string | null }
+  | { type: 'arrange_region'; page_id: string; region_id: string; direction: LayerDirection }
   | { type: 'remove_region'; page_id: string; region_id: string }
   | { type: 'set_brief'; brief: Brief }
   | { type: 'set_decision'; topic: string; value: string; scope: Scope; protected: boolean }

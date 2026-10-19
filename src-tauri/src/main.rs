@@ -99,6 +99,8 @@ fn main() {
             inspect_element,
             refresh_element_bounds,
             edit_element,
+            copy_layer,
+            paste_layer,
             undo_project,
             redo_project,
             open_project,

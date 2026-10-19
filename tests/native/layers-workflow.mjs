@@ -35,10 +35,16 @@ async function closeLayers(driver) {
   if (await driver.execute(() => !!document.querySelector('section[aria-label="Layers"]'))) await driver.click(`${panel} button[aria-label="Close Layers"]`);
 }
 
+async function clickLayerRow(driver, physical, selector) {
+  await driver.ready(selector);
+  await driver.execute(value => { document.querySelector(value).scrollIntoView({ block: 'nearest', inline: 'nearest' }); return true; }, selector);
+  await settled(driver); await physical.click(await physical.center(selector));
+}
+
 async function selectRequest(driver, physical, id) {
   await openLayers(driver);
   const selector = `${panel} .layer-row[data-region-id=${JSON.stringify(id)}] button.layer-select`;
-  await driver.ready(selector); await physical.click(await physical.center(selector));
+  await clickLayerRow(driver, physical, selector);
   await waitFor(() => driver.execute(regionId => document.querySelector(`section[aria-label="Layers"] .layer-row[data-region-id="${regionId}"]`)?.dataset.selected === 'true', id), 'The requested layer did not own selection');
 }
 
@@ -59,7 +65,7 @@ async function selectSite(driver, physical, id) {
   await previewReady(driver); await openLayers(driver);
   const target = await selectorForId(driver, id);
   const row = `${panel} button[data-layer-selector=${JSON.stringify(target)}]`;
-  await driver.ready(row); await physical.click(await physical.center(row));
+  await clickLayerRow(driver, physical, row);
   await waitFor(() => driver.execute(selector => {
     const selection = document.querySelector('[data-testid="direct-element-selection"]');
     return selection?.dataset.selector === selector && selection.dataset.sourceHash === document.querySelector('.static-preview')?.dataset.sourceHash;
@@ -145,7 +151,10 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     const view = await physical.rect('.workspace-scroll');
     for (const [index, offset] of [0, 90].entries()) {
       await driver.click('[aria-label="Canvas tools"] button[title^="Add request"]');
-      await physical.drag({ x: view.left + 140 + offset, y: view.top + 130 + offset / 2 }, { x: view.left + 440 + offset, y: view.top + 300 + offset / 2 });
+      const from = { x: view.left + 140 + offset, y: view.top + 130 + offset / 2 }, to = { x: view.left + 440 + offset, y: view.top + 300 + offset / 2 };
+      // Start the second gesture on empty canvas; an existing textarea owns
+      // text selection when a gesture begins inside its surface.
+      await physical.drag(index ? to : from, index ? from : to);
       await driver.fill(`Request ${index + 1}`, index ? 'Place an orange card in front and a nested green and purple group below.' : 'Create a blue card with a name field, local link, graphic and badge.');
       await waitFor(async () => pending((await workspace(driver)).project).length === index + 1 && pending((await workspace(driver)).project)[index].prompt.trim(), 'The described request did not persist');
     }
@@ -303,6 +312,24 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await changedBy(driver, () => driver.button('Redo'), 'Redo did not restore the copied website layer'); await previewReady(driver);
     assert.deepEqual(await appearance(driver, copiedId), copiedAppearance);
     assert.equal(provider.generationRequests().length, 1, 'Layer editing must not request AI generation');
+  });
+
+  await step('Paste onto a different blank page keeps the copied appearance without another generation', async () => {
+    const home = (await workspace(driver)).project.pages[0].id;
+    await closeLayers(driver); await driver.button('Add page'); await driver.fill('Page name', 'Copied page'); await driver.button('Add page');
+    await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'The new destination page did not open');
+    const destination = await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.name === 'Copied page'), 'The destination page was not persisted');
+    await waitFor(() => driver.execute(id => document.getElementById(`page-tab-${id}`)?.getAttribute('aria-selected') === 'true' && !document.querySelector('[data-testid="direct-element-selection"]'), destination.id), 'The blank destination did not own the canvas');
+    await physical.keys('V', 1, ['Control']);
+    const pastedId = await waitFor(() => driver.execute(() => {
+      const preview = document.querySelector('.static-preview'), selection = document.querySelector('[data-testid="direct-element-selection"]');
+      if (preview?.dataset.previewReady !== 'true' || !selection || selection.dataset.sourceHash !== preview.dataset.sourceHash) return false;
+      return preview.querySelector('iframe').contentDocument.querySelector(selection.dataset.selector)?.id;
+    }), 'The cross-page paste did not select the new current-source layer');
+    assert.notEqual(pastedId, copiedId); assert.deepEqual(await appearance(driver, pastedId), copiedAppearance);
+    assert.equal(provider.generationRequests().length, 1);
+    await physical.captureWindow(join(output, 'cross-page-copy.png'));
+    await driver.click(`#page-tab-${home}`); await previewReady(driver);
   });
 
   await step('Trusted text Ctrl+C and Ctrl+V stay native and plain-text clipboard data cannot paste a site layer', async () => {

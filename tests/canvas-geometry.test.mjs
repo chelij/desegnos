@@ -10,11 +10,12 @@ const temporary = await mkdtemp(join(root, '.canvas-geometry-'));
 try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--jsx', 'react-jsx', '--module', 'esnext',
-    '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts'], { cwd: root, encoding: 'utf8' });
+    '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts', 'src/layerOrder.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
     workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
+  const { reorderedLayers } = await import(pathToFileURL(join(temporary, 'layerOrder.js')).href);
   await test('canvas tool shortcuts never interrupt text input and AI stays explicit', () => {
     const event = key => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
     for (const [key, action] of [['v','selectTool'], ['r','requestTool'], ['h','panTool']]) {
@@ -25,6 +26,27 @@ try {
     assert.equal(editorShortcut({ ...event('k'), ctrlKey: true }, false), 'askAI');
     assert.equal(editorShortcut({ ...event('k'), metaKey: true }, false), 'askAI');
     assert.equal(editorShortcut({ ...event('k'), ctrlKey: true }, true), null);
+  });
+  await test('layer moves change one step or an end without mutating input, and ends are true no-ops', () => {
+    const input=['a','b','c'];
+    assert.deepEqual(reorderedLayers(input,'a','forward'),['b','a','c']);
+    assert.deepEqual(reorderedLayers(input,'c','backward'),['a','c','b']);
+    assert.deepEqual(reorderedLayers(input,'a','front'),['b','c','a']);
+    assert.deepEqual(reorderedLayers(input,'c','back'),['c','a','b']);
+    for(const direction of ['front','forward'])assert.equal(reorderedLayers(input,'c',direction),null);
+    for(const direction of ['back','backward'])assert.equal(reorderedLayers(input,'a',direction),null);
+    assert.deepEqual(input,['a','b','c']);
+  });
+  await test('layer clipboard and stacking shortcuts preserve all text editing and composition', () => {
+    const input={key:'c',ctrlKey:true,metaKey:false,shiftKey:false,altKey:false};
+    for(const [key,action] of [['c','copyLayer'],['v','pasteLayer'],[']','layerForward'],['[','layerBackward']]) {
+      assert.equal(editorShortcut({...input,key},false),action); assert.equal(editorShortcut({...input,key},true),null);
+      assert.equal(editorShortcut({...input,key,isComposing:true},false),null);
+      assert.equal(editorShortcut({...input,key,defaultPrevented:true},false),null);
+    }
+    assert.equal(editorShortcut({...input,key:'}',code:'BracketRight',shiftKey:true},false),'layerFront');
+    assert.equal(editorShortcut({...input,key:'{',code:'BracketLeft',shiftKey:true},false),'layerBack');
+    assert.equal(editorShortcut({...input,key:'c',ctrlKey:false,metaKey:true},false),'copyLayer');
   });
   await test('local resize resolves independent axes and scaled or rotated layouts', () => {
     assert.deepEqual(resizedElementSize({x:200,y:80},{x:1,y:1},[1,0,0,1],{x:30,y:-12}),{x:230,y:68});

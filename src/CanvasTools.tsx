@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { LayerIcon } from './Layers';
 import { MenuButton } from './Menus';
 import { steppedZoom, zoomLabel, ZOOM_LEVELS, MIN_ZOOM } from './canvasGeometry';
 import type { Project } from './types';
 
 export type CanvasTool = 'select' | 'request' | 'pan';
-export function CanvasTools({ tool, setTool, zoom, setZoom, fit }: {
-  tool: CanvasTool; setTool: (tool: CanvasTool) => void; zoom: number; setZoom: (value: number) => void; fit: () => void;
+export function CanvasTools({ tool, setTool, zoom, setZoom, fit, layersOpen, toggleLayers }: {
+  tool: CanvasTool; setTool: (tool: CanvasTool) => void; zoom: number; setZoom: (value: number) => void; fit: () => void; layersOpen: boolean; toggleLayers: () => void;
 }) {
   return <div className="canvas-tools" role="toolbar" aria-label="Canvas tools">
     {([
@@ -15,6 +16,7 @@ export function CanvasTools({ tool, setTool, zoom, setZoom, fit }: {
     ] as const).map(([value, label, shortcut, path]) => <button key={value} type="button" aria-pressed={tool === value} title={`${label} · ${shortcut}${value === 'request' ? ' · Click or drag to place' : ''}`} onClick={() => setTool(value)}>
       <svg viewBox="0 0 18 18" aria-hidden="true"><path d={path} /></svg><span>{label}</span>
     </button>)}
+    <button type="button" data-layers-trigger aria-label="Layers" title="Layers" aria-haspopup="dialog" aria-expanded={layersOpen} onClick={toggleLayers}><LayerIcon /><span>Layers</span></button>
     <span className="tool-divider" aria-hidden="true" />
     <button type="button" aria-label="Zoom out" title="Zoom out · Ctrl/Cmd+−" disabled={zoom <= MIN_ZOOM} onClick={() => setZoom(steppedZoom(zoom, -1))}>−</button>
     <MenuButton label={zoomLabel(zoom)} ariaLabel="Canvas zoom" items={ZOOM_LEVELS.map(value => ({ id: `zoom-${value}`, label: zoomLabel(value), checked: zoom === value, action: () => setZoom(value) }))} />

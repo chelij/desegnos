@@ -665,6 +665,79 @@ pub fn edit_element(
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LayerPasteView {
+    workspace: WorkspaceView,
+    selection: desegni_core::LayerPasteSelection,
+}
+
+#[tauri::command]
+pub async fn copy_layer(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    target: desegni_core::LayerTarget,
+    visual_styles: Vec<desegni_core::ElementStyleEdit>,
+) -> NativeResult<()> {
+    let packet = {
+        let state = state.lock().map_err(message)?;
+        let project = state
+            .session
+            .as_ref()
+            .ok_or("Open a project first.")?
+            .project();
+        if project.id != project_id || project.revision != revision {
+            return Err("The project changed before the layer was copied. Select it again.".into());
+        }
+        project
+            .copy_layer(page_id, &target, &visual_styles)
+            .map_err(message)?
+            .to_json()
+            .map_err(message)?
+    };
+    // OS clipboard owners can need their GUI thread to answer a transfer.
+    // Never hold the workspace lock or use the GUI thread while waiting.
+    tauri::async_runtime::spawn_blocking(move || crate::clipboard::write(&app, packet))
+        .await
+        .map_err(message)?
+}
+
+#[tauri::command]
+pub async fn paste_layer(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    after: Option<desegni_core::ElementTarget>,
+) -> NativeResult<LayerPasteView> {
+    let text = tauri::async_runtime::spawn_blocking(move || crate::clipboard::read(&app))
+        .await
+        .map_err(message)??;
+    let packet = desegni_core::LayerClipboard::from_json(&text).map_err(message)?;
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let session = session.as_mut().ok_or("Open a project first.")?;
+    if session.project().id != project_id {
+        return Err("Return to the project where you want to paste this layer.".into());
+    }
+    let journal = journal.as_ref().ok_or("Open a project first.")?;
+    let selection = session
+        .paste_layer(revision, page_id, &packet, after.as_ref(), |next| {
+            journal.append(next)
+        })
+        .map_err(message)?;
+    Ok(LayerPasteView {
+        workspace: state.view(),
+        selection,
+    })
+}
+
 #[tauri::command]
 pub fn refresh_element_bounds(
     state: WorkspaceState<'_>,

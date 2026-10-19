@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-copy-layer"
+description = "Enables the copy_layer command without any pre-configured scope."
+commands.allow = ["copy_layer"]
+
+[[permission]]
+identifier = "deny-copy-layer"
+description = "Denies the copy_layer command without any pre-configured scope."
+commands.deny = ["copy_layer"]
