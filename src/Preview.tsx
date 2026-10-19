@@ -18,7 +18,7 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
 export type ElementMover = { preview: (x: number, y: number) => ElementSelection | null; style: (x: number, y: number) => string; cancel: () => void };
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
-export type CanvasPreviewHandle = { layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type CanvasPreviewHandle = { layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; documentOrder: (targets: ElementTarget[]) => ElementTarget[]; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
@@ -220,6 +220,11 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       } catch { return null; }
     },
     // Content the AI found online carries its source URL (editor metadata, removed on export).
+    // Sort targets as they appear in the page, so several can be removed back to front without shifting the rest.
+    documentOrder(targets) {
+      const nodes = targets.map(target => ({ target, node: findNode(target) }));
+      return nodes.filter(item => item.node).sort((a, b) => a.node!.compareDocumentPosition(b.node!) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1).map(item => item.target);
+    },
     foundSource(target) { return findNode(target)?.getAttribute('data-desegnos-found') ?? null; },
     found() {
       const doc = frame.current?.contentDocument; if (!doc) return [];

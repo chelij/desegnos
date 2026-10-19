@@ -214,3 +214,8 @@
 .code-pane-note.status-invalid, .code-pane-note.status-error, .code-pane-note.status-conflict { color: #b3261e; }
 .code-pane-note button { min-height: 24px; padding: 1px 8px; font-size: 11px; }
 .code-errors { flex-basis: 100%; margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; color: var(--text); }
+/* Editor-only attributes stay in the code (removing them would detach requests) but fade into the background. */
+.tok-meta { color: var(--muted); }
+.code-pane.quiet-meta .tok-meta { opacity: .28; }
+.code-meta-toggle { display: flex; flex-direction: row; align-items: center; gap: 5px; margin: 0; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.code-meta-toggle input { width: auto; min-height: 0; margin: 0; }

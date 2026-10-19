@@ -68,6 +68,7 @@ export default function App() {
   const [showGridSettings, setShowGridSettings] = useState(false);
   const [codeView, setCodeView] = useState<CodeView>('design');
   const [showCheck, setShowCheck] = useState(false);
+  const [multiCount, setMultiCount] = useState(0);
   const history = useHistory();
   const [sourceMap, setSourceMap] = useState<SourceMapView | null>(null);
   const [codeWidth, setCodeWidth] = useState(readCodeWidth);
@@ -545,6 +546,21 @@ export default function App() {
       accept(await native<WorkspaceView>('edit_page_source', { projectId, pageId, revision: workspace.project.revision, [language]: text }));
     }, false);
   }
+  // Move a stale element request to a newly picked element, keeping its description.
+  async function repickRequest(regionId: string, selection: ElementSelection) {
+    const target = current.current?.project?.pages.find(item => item.regions.some(region => region.id === regionId));
+    const old = target?.regions.find(region => region.id === regionId);
+    if (!target || !old) return;
+    const existing = target.regions.find(region => !region.completed && region.id !== regionId && region.element?.sourceSha256 === selection.element.sourceSha256 && region.element.selector === selection.element.selector);
+    const before = new Set(target.regions.map(region => region.id));
+    const added = existing ?? await mutate({ type: 'add_element_region', page_id: target.id, ...selection })
+      .then(next => next.project!.pages.find(item => item.id === target.id)!.regions.find(region => !before.has(region.id)));
+    if (!added) return;
+    const prompt = [added.prompt.trim(), old.prompt.trim()].filter(Boolean).join('\n');
+    if (prompt !== added.prompt) await changeRegion(target.id, added.id, { prompt });
+    await mutate({ type: 'remove_region', page_id: target.id, region_id: regionId });
+    setSelected(added.id); setNotice('Request moved to the new element.');
+  }
   async function fixCheckItem(item: CheckItem) {
     const found = await showCheckItem(item);
     const target = current.current?.project?.pages.find(entry => entry.id === item.pageId);
@@ -623,7 +639,7 @@ export default function App() {
       </div><button className="add-page-tab" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}>+</button></div>
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
-      {page && <Canvas projectImages={project.importedIdentity?.assets ?? []} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas projectImages={project.importedIdentity?.assets ?? []} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} repick={repickRequest} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {(showGenerationStatus || resultReview) && <div className="canvas-pill" role="region" aria-label="Generation status">
         {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
@@ -645,7 +661,7 @@ export default function App() {
         <CodePane key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={selector => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0]); }} />
       </>}
       </main>
-      <footer className="status-bar"><span title={view.path ?? undefined}>{region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
+      <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
     </>}
     {showShortcuts && <Modal title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><p className="field-help">Text selection, copy, paste and text undo keep their normal behavior inside prompts.</p><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></Modal>}
     {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} /></Modal>}

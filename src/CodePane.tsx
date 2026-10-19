@@ -19,7 +19,7 @@ function colour(line: string, tab: Tab) {
       comment ? span('comment', comment) : `${indent}${span('attr', property)}${colon}`);
   }
   if (tab === 'html') return escape(line).replace(/(&lt;!--.*?--&gt;)|(&lt;\/?)([a-zA-Z][\w-]*)|([\w:-]+)=("[^"]*"|'[^']*')/g,
-    (match, comment, open, tag, attribute, value) => comment ? span('comment', comment) : open ? open + span('tag', tag) : `${span('attr', attribute)}=${span('string', value)}`);
+    (match, comment, open, tag, attribute, value) => comment ? span('comment', comment) : open ? open + span('tag', tag) : attribute.startsWith('data-desegnos-') ? span('meta', `${attribute}=${value}`) : `${span('attr', attribute)}=${span('string', value)}`);
   return escape(line).replace(/(\/\/.*$)|("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)|\b([a-z]+)\b/g,
     (match, comment, string, word) => comment ? span('comment', comment) : string ? span('string', string) : KEYWORDS.test(word) ? span('tag', word) : word);
 }
@@ -97,6 +97,7 @@ export function CodePane({ content, target, map, save, pick }: {
   const [hit, setHit] = useState(0);
   const [drafts, setDrafts] = useState<Partial<Record<Tab, string>>>({});
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const [showMeta, setShowMeta] = useState(() => { try { return localStorage.getItem('desegnos.code-show-meta') === 'yes'; } catch { return false; } });
   const base = useRef<Partial<Record<Tab, string>>>({});
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
@@ -158,11 +159,12 @@ export function CodePane({ content, target, map, save, pick }: {
   }
   const editing = !!save && !!content;
   const note = status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? 'Saved. Undo works as usual.' : status.kind === 'invalid' ? 'Not saved yet. Fix the highlighted line.' : status.kind === 'error' ? status.message : status.kind === 'conflict' ? status.message : drafts[tab] !== undefined ? 'Saving after you pause…' : editing && shown !== content?.[tab] ? 'This code was compacted. It’s shown tidied, and your first edit saves that tidy layout.' : editing ? 'Edits save automatically when you pause.' : '';
-  return <section className="code-pane" aria-label="Page code">
+  return <section className={`code-pane${showMeta ? '' : ' quiet-meta'}`} aria-label="Page code">
     <header className="code-pane-bar">
       <div className="code-tabs" role="tablist" aria-label="Code files">{TABS.map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { flush(); setTab(value); }}>{label}{drafts[value] !== undefined ? ' •' : ''}</button>)}</div>
       <input className="code-search" type="search" placeholder="Find in code" aria-label="Find in code" value={query} onChange={event => setQuery(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter' && matches.length) { event.preventDefault(); setHit(value => value + (event.shiftKey ? matches.length - 1 : 1)); } }} />
+      {tab === 'html' && content?.html.includes('data-desegnos-') && <label className="code-meta-toggle" title="Desegnos uses these to keep track of elements. They are removed when you export."><input type="checkbox" checked={showMeta} onChange={event => { setShowMeta(event.target.checked); try { localStorage.setItem('desegnos.code-show-meta', event.target.checked ? 'yes' : 'no'); } catch {} }} />Show editor attributes</label>}
       {query.trim() && <span className="code-count" aria-live="polite">{matches.length ? `${(hit % matches.length) + 1}/${matches.length}` : '0'}</span>}
     </header>
     {!content ? <p className="code-empty">Generate the page to see its code here.</p> : <div ref={scroller} className="code-scroll">
