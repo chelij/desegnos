@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {waitFor, xpathString} from './webdriver.mjs';
@@ -151,9 +151,31 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     await waitFor(()=>driver.execute(()=>!!document.querySelector('.code-pane-note.status-invalid')),'Invalid code did not show line diagnostics');
     assert.equal((await workspace(driver)).project.pages.find(page=>page.id===about).content.javascript,before.javascript);
     assert.match(await driver.execute(()=>document.querySelector('[contenteditable="true"][aria-label="JavaScript code"]').textContent),/const bad = ;/);
+    const savedBytes=await readFile(projectPath);
+    for(const action of [()=>driver.button('Save'),()=>driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Design"]','xpath'),()=>driver.page(home)]){
+      await action();await waitFor(()=>driver.execute(()=>document.querySelector('.message.error')?.textContent.includes('unsaved changes')),'Invalid code did not block leaving the draft');
+      assert.match(await driver.execute(()=>document.querySelector('[aria-label="JavaScript code"]').textContent),/const bad = ;/);
+      assert.equal(await driver.execute(id=>document.getElementById(`page-tab-${id}`).getAttribute('aria-selected'),about),'true');
+      assert.ok(await driver.execute(()=>document.querySelector('.code-pane').getClientRects().length));
+      await driver.button('Dismiss error');
+    }
+    assert.deepEqual(await readFile(projectPath),savedBytes);
+    await physical.captureWindow(join(output,'invalid-code-retained.png'));
+    await driver.button('Discard code changes');
+    assert.equal((await workspace(driver)).project.pages.find(page=>page.id===about).content.javascript,before.javascript);
     await driver.fill('JavaScript code',before.javascript+'\n// Verified local edit');
     await waitFor(async()=>(await workspace(driver)).project.pages.find(page=>page.id===about).content.javascript.endsWith('// Verified local edit'),'Valid code did not save');
-    await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Code"]','xpath');assert.equal(await driver.execute(()=>document.querySelector('.design-pane').getClientRects().length),0);
+    const position=(await workspace(driver)).history.position;
+    const editor='[contenteditable="true"][aria-label="JavaScript code"]';
+    const text=await driver.execute(query=>document.querySelector(query).innerText,editor);
+    await driver.click(editor);await physical.keys('End',1,['Control']);await physical.keys('Return');await physical.raw({action:'text',text:'// Immediate project save'});
+    const typed=await waitFor(()=>driver.execute(query=>{const value=document.querySelector(query).innerText;return value.endsWith('// Immediate project save')&&value;},editor),'Native typing did not reach the editor');
+    await physical.keys('Z',1,['Control']);
+    assert.notEqual(await driver.execute(query=>document.querySelector(query).innerText,editor),typed);assert.notEqual(typed,text);assert.equal((await workspace(driver)).history.position,position);
+    await physical.keys('Z',1,['Control','Shift']);assert.equal(await driver.execute(query=>document.querySelector(query).innerText,editor),typed);await physical.keys('S',1,['Control']);
+    await waitFor(async()=>{const state=await workspace(driver);return !state.dirty&&state.project.pages.find(page=>page.id===about).content.javascript.endsWith('// Immediate project save');},'Ctrl+S did not flush the newest code into the actual archive');
+    const saved=(await workspace(driver)).project;await verifyArchive(projectPath,saved,await driver.invoke('get_project_notes'));
+    await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Code"]','xpath');await waitFor(()=>driver.execute(()=>document.querySelector('.design-pane').getClientRects().length===0),'Code view did not finish flushing drafts before hiding the canvas');
     await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Design"]','xpath');await canvasReady(driver,'About');
     assert.equal(provider.generationRequests().length,0);await physical.captureWindow(join(output,'code-editing.png'));
   });

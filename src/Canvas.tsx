@@ -606,7 +606,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     if (text) { const node = stage.current?.querySelector<HTMLElement>('.inline-text-editor'); await finishText(node?.innerText ?? text.text); }
     while (nudge.current.promise) await nudge.current.promise;
     if (elementDrag.current) cancel();
-    try { await synchronizeBounds(); } catch (error) { setElementError(String(error)); if (requireBounds) throw error; }
+    try { await synchronizeBounds(); } catch (error) { if (requireBounds) { setElementError(String(error)); throw error; } }
   } }));
   function beginWorkspace(event: PointerEvent) {
     if (event.button === 2) { contextMenu(event); return; }

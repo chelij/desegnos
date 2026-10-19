@@ -17,9 +17,11 @@ export async function sourceEditWorkflow(driver,physical,step,evidence) {
     original=(await driver.invoke('get_workspace')).project;project=original;
     await physical.initialize(evidence);
     accepted=await driver.invoke('edit_page_source',{projectId:project.id,pageId:project.homePageId,revision:project.revision,html,css,javascript});project=accepted.project;
-    assert.equal(project.revision,original.revision+1);assert.equal(accepted.canUndo,true);assert.deepEqual(project.pages[0].content,{html,css,javascript});
+    const content=project.pages[0].content;
+    assert.equal(project.revision,original.revision+1);assert.equal(accepted.canUndo,true);
+    assert.equal(content.html.replace(/ data-desegnos-id="[^"]+"/g,''),html);assert.equal(content.css,css);assert.equal(content.javascript,javascript);
     const map=await driver.invoke('get_page_source_map',{projectId:project.id,pageId:project.homePageId});
-    assert.equal(map.htmlSha256,digest(html));assert.equal(map.sourceSha256,digest(JSON.stringify({html,css,javascript})));
+    assert.equal(map.htmlSha256,digest(content.html));assert.equal(map.sourceSha256,digest(JSON.stringify(content)));
     const range=map.ranges.find(r=>r.selector==='body > main:nth-of-type(1) > h1:nth-of-type(1)');assert.equal(range.startLine,2);assert.equal(range.endLine,2);
     await writeFile(join(output,'source-map.json'),JSON.stringify(map,null,2));
     await chooseFile(physical,()=>driver.button('Save'),projectPath,output,'typed-first-save');
@@ -44,12 +46,12 @@ export async function sourceEditWorkflow(driver,physical,step,evidence) {
     await driver.button('Save');
     project=(await savedState(driver,path)).project;await verifyArchive(path,project,await driver.invoke('get_project_notes'));
     await chooseFile(physical,()=>driver.button('Open project'),path,output,'typed-open');project=(await driver.invoke('get_workspace')).project;
-    assert.deepEqual(project.pages[0].content,{html,css,javascript});
+    assert.deepEqual(project.pages[0].content,accepted.project.pages[0].content);
     const parent=join(output,'export-parent');await mkdir(parent);
     await chooseFolder(physical,()=>driver.button('Export'),parent,output,'typed-export');
     const folders=await waitFor(async()=>{const entries=await readdir(parent,{withFileTypes:true});return entries.filter(e=>e.isDirectory()).length===1&&entries;},'The export did not complete');
     const directory=join(parent,folders[0].name);
-    const file=await readFile(join(directory,'index.html'),'utf8');assert.ok(file.includes('Typed creation 💡'));assert.ok(file.includes('source credit'));assert.ok(!file.includes('data-desegnos-found'));
+    const file=await readFile(join(directory,'index.html'),'utf8');assert.ok(file.includes('Typed creation 💡'));assert.ok(file.includes('source credit'));assert.ok(!file.includes('data-desegnos-found'));assert.ok(!file.includes('data-desegnos-id'));
     assert.ok((await readFile(join(directory,'styles.css'),'utf8')).includes('#245583'));
     return project;
   });

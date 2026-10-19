@@ -33,15 +33,17 @@ Codex owns the implementation in the isolated `cleanup-codex` worktree. Frontend
 
 ## Requirements compatibility
 
-New generation packets use **format 9**. Format 8 was already released before this cleanup, so its bytes and capability defaults remain frozen along with formats 3–7. Format 9 captures the chosen provider's capabilities, requests found-content metadata and offers up to eight downloads within unchanged image/source byte budgets. Do not relabel an old packet or reconstruct it from current defaults.
+The provider cleanup introduced **format 9**. The stable-selection update now creates **format 10**, described below. Formats 3–9 keep their original bytes and capability defaults. Format 9 captures the chosen provider's capabilities, requests found-content metadata and offers up to eight downloads within unchanged image/source byte budgets. Do not relabel an old packet or reconstruct it from current defaults.
 
 ## Frontend handoff
 
-The native interfaces are implemented and have focused core/storage/native checks. Claude still owns C5 badges, C9 editable CodeMirror/source-map wiring and C4's provider-list consumption. The current frontend snapshot keeps these pending controls disabled/read-only; backend availability is not a claim that those UI items are finished.
+The combined editor consumes the provider list and found-content controls, and uses reviewed CodeMirror 6 for editable HTML/CSS/JavaScript. Design remains the default. Hidden editor attributes are projected out of the text while exact editor transactions retain their attachment to surviving tags, including text Undo/Redo and in-flight saves. Code drafts flush before Save, project/page/view changes, export, generation, project History and native close. Invalid or conflicting drafts block those transitions and offer explicit per-file discard. A failed source save never silently discards the draft. The stable-selection and safe-save interfaces below are wired through the same editor.
 
 ## Exact History positions
 
 WorkspaceView.history is null without a project; otherwise it contains `{sessionId,start,position,end,version}`. Session IDs change on open/recover, including reopening the same project. Position is the native undo cursor; start advances only when the 200-step retained limit evicts an entry. Version changes only for a newly committed edit, so branching at the same depth is distinct from Redo. Background bounds/dossier refreshes do not create History steps. The frontend uses these coordinates instead of comparing content. History jumps hold the mutation queue and flush drafts first. These are session metadata and do not change project archives or requirements formats.
+
+Explicitly reopening the currently held archive shares its owned writer lock while staging a separate save baseline and fresh session. Activation commits only after the journal and recovery pointer succeed. A failed reopen preserves the active session, its original baseline and its lock; another window cannot write during reopening.
 ## Safe save and recovery (2026-10-20)
 
 The editor should use `save_project_checked({ saveAs: boolean })` rather than the older `save_project`. It opens the native Save dialog when requested or when no saved path exists. Both commands now refuse a changed archive; the older command reports a plain error and has no replacement bypass.

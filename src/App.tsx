@@ -294,7 +294,7 @@ export default function App() {
   // Hold the mutation queue while travelling so edits cannot interleave with the jump.
   async function jumpTo(position: number) {
     const sessionId = current.current?.history?.sessionId;
-    await canvas.current?.synchronize(); await settle();
+    await synchronize(); await settle();
     await queue(async workspace => {
       let next = workspace;
       if (!next?.history || next.history.sessionId !== sessionId || position < next.history.start || position > next.history.end) throw new Error('That change is no longer available in this history.');

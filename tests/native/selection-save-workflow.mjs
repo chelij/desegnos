@@ -50,25 +50,50 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
   await waitFor(async()=>(await workspace(driver)).project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId).prompt.includes('matching typography'),'Multi request did not persist');
  });
  await step('Local text edits preserve pending target identity and preparation succeeds without another selection',async()=>{
-  await driver.press('[data-testid="canvas"]','\uE00C');
-  const location=await point(driver,'h1');await physical.doubleClick(location);
-  await waitFor(()=>driver.execute(()=>!!document.querySelector('.inline-text-editor')),'Heading did not open for local editing');
-  await driver.execute(()=>{const e=document.querySelector('.inline-text-editor');e.textContent='About our studio';});
-  await physical.keys('Return');
+  // The written request covers the heading on the canvas. Edit the same element
+  // through the real source pane, without hiding the request or rebinding its IDs.
+  await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Split"]','xpath');
+  await driver.ready('[contenteditable="true"][aria-label="HTML code"]');
+  await driver.click('[contenteditable="true"][aria-label="HTML code"]');
+  await physical.keys('Home',1,['Control']);await physical.keys('Down');await physical.keys('Home');await physical.keys('Right',4);await physical.keys('Right',5,['Shift']);
+  await physical.raw({action:'text',text:'About our studio'});
   await waitFor(()=>driver.execute(()=>document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('h1')?.textContent==='About our studio'),'Local heading edit did not apply');
+  await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Design"]','xpath');await ready(driver);
   const project=(await workspace(driver)).project,region=project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId);assert.deepEqual(region.elements.map(t=>t.id),stableIds);
   await driver.invoke('set_ai_key',{key:provider.key(),storage:'session'});
   const job=await driver.invoke('prepare_generation');assert.match(job.requirements.markdown,/format/i);for(const id of stableIds)assert.ok(job.requirements.markdown.includes(id));
   await driver.invoke('discard_generation',{jobId:job.jobId});assert.equal(provider.generationRequests().length,0);
  });
  await step('Multiple local deletions make one undo step and restore both exact identities',async()=>{
+  await driver.page(home);await ready(driver);
   await select(driver,physical,'#picture');await select(driver,physical,'#action',true);
   const before=await workspace(driver);await driver.button('Delete selected items');
+  const dialog=await waitFor(async()=>(await physical.inspect()).windows.find(w=>w.title==='Delete items'),'The delete confirmation did not appear');
+  await physical.captureWindow(join(output,'delete-confirmation.png'));
+  await physical.raw({action:'key',key:'Return',windowId:dialog.id});
   await waitFor(()=>driver.execute(()=>!document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#action')),'Selected items were not deleted');
   assert.equal((await workspace(driver)).history.position,before.history.position+1);
   await driver.button('Undo last change');await ready(driver);
   assert.deepEqual((await workspace(driver)).project.pages,before.project.pages);
   await physical.captureWindow(join(output,'multi-selection.png'));
+  await driver.page(about);await ready(driver);
+ });
+ await step('A removed target offers Pick again and Remove request without losing the written prompt',async()=>{
+  const before=await workspace(driver),request=before.project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId);
+  await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Split"]','xpath');
+  await driver.ready('[contenteditable="true"][aria-label="HTML code"]');await driver.click('[contenteditable="true"][aria-label="HTML code"]');
+  await physical.keys('Home',1,['Control']);await physical.keys('Down');await physical.keys('Home');await physical.keys('Down',1,['Shift']);await physical.keys('BackSpace');
+  await waitFor(()=>driver.execute(()=>!document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('h1')),'Deleting a source line did not remove its element');
+  await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Design"]','xpath');await ready(driver);
+  const stale=`[data-region-id="${multiId}"] .request-stale`;
+  await driver.ready(stale);assert.match(await driver.execute(q=>document.querySelector(q).textContent,stale),/This element was removed/);
+  await driver.click(`${stale} button:first-of-type`);await select(driver,physical,'#action');
+  await waitFor(async()=>{const next=(await workspace(driver)).project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId);return next.elements.length===1&&next.elements[0].tag==='button';},'Pick again did not retarget the original request');
+  assert.equal((await workspace(driver)).project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId).prompt,request.prompt);
+  await driver.button('Undo last change');await driver.ready(stale);await driver.click(`${stale} button:last-of-type`);
+  await waitFor(async()=>!(await workspace(driver)).project.pages.find(p=>p.id===about).regions.some(r=>r.id===multiId),'Remove request did not remove only the stale request');
+  await driver.button('Undo last change');await driver.button('Undo last change');await ready(driver);
+  assert.deepEqual((await workspace(driver)).project.pages,before.project.pages);
  });
  await step('Save conflict Cancel and a cancelled copy picker preserve external bytes and the current draft',async()=>{
   await driver.button('Save');const before=(await workspace(driver)).project;
