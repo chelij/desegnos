@@ -75,6 +75,7 @@ function candidateFor(record, endpoint, options) {
       let content = sourceFor(record, endpoint, options);
       const areas = requests.filter(value => value.pageId === pageId);
       const existing=jsonBlocks(record.markdown).find(value=>value?.pageId===pageId && value.content)?.content;
+      if (existing && areas.every(area => area.elements?.length)) return {pageId, content: structuredClone(existing)};
       if(existing && areas.every(area=>area.elementTarget && ['h1','button'].includes(area.elementTarget.tag))) {
         content=structuredClone(existing);
         for(const area of areas) {
@@ -84,7 +85,7 @@ function candidateFor(record, endpoint, options) {
         }
         return {pageId,content};
       }
-      if (/^Requirements format: [89]$/m.test(record.markdown)) {
+      if (/^Requirements format: (?:8|9|10)$/m.test(record.markdown)) {
         content.html = content.html.replace('<main', `<main data-desegnos-region="${areas[0].regionId}"`);
         content.html += areas.slice(1).map(area => `<section data-desegnos-region="${area.regionId}"><p>Requested supporting content</p></section>`).join('');
       }
@@ -146,7 +147,7 @@ function readRequest(bytes, ordinal, mode, authentication) {
   const decoded = Buffer.from(encoded[1], 'base64');
   assert.equal(decoded.toString('base64'), encoded[1], 'Non-canonical Base64 file');
   const markdown = decoded.toString('utf8');
-  const webSearch = purpose === 'generation' && /^Requirements format: [89]$/m.test(markdown);
+  const webSearch = purpose === 'generation' && /^Requirements format: (?:8|9|10)$/m.test(markdown);
   assert.deepEqual(body.tools, webSearch ? [{type:'web_search'}] : []); assert.equal(body.tool_choice, webSearch ? 'auto' : 'none');
   assert.deepEqual(Buffer.from(markdown, 'utf8'), decoded, 'Requirements are not exact valid UTF-8');
   assert.deepEqual(body.text.format.schema.properties.jobId.enum, [metadata.jobId]);

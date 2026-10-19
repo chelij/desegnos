@@ -8,6 +8,7 @@ import sys
 import gi
 
 gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
 from gi.repository import Gdk, GLib, Gtk
 
 if not re.fullmatch(r':(?:9[0-9]|[1-9][0-9]{2,})(?:\.\d+)?', os.environ.get('DISPLAY', '')) or os.environ.get('GDK_BACKEND') != 'x11':
@@ -22,6 +23,8 @@ window.move(1410, 80)
 button = Gtk.Button(label=file.name)
 button.drag_source_set(Gdk.ModifierType.BUTTON1_MASK, [Gtk.TargetEntry.new('text/uri-list', 0, 0)], Gdk.DragAction.COPY)
 button.connect('drag-data-get', lambda widget, context, selection, info, time: selection.set_uris([file.as_uri()]))
+button.connect('drag-failed', lambda widget, context, result: (print(json.dumps({'dragFailed': str(result)}), flush=True), False)[1])
+button.connect('drag-begin', lambda *args: print(json.dumps({'dragBegan': True}), flush=True))
 button.connect('drag-end', lambda *args: print(json.dumps({'dragEnded': True}), flush=True))
 window.add(button)
 window.connect('destroy', Gtk.main_quit)

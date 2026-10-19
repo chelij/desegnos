@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-refresh-element-target-bounds"
+description = "Enables the refresh_element_target_bounds command without any pre-configured scope."
+commands.allow = ["refresh_element_target_bounds"]
+
+[[permission]]
+identifier = "deny-refresh-element-target-bounds"
+description = "Denies the refresh_element_target_bounds command without any pre-configured scope."
+commands.deny = ["refresh_element_target_bounds"]

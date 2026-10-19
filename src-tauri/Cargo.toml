@@ -23,6 +23,7 @@ desegni-ai = { path = "../crates/desegni-ai" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-clipboard-manager = "=2.5.0"

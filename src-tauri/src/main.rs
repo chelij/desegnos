@@ -8,6 +8,7 @@ mod clipboard;
 mod export;
 mod generation;
 mod identity;
+mod image_drop;
 #[cfg(target_os = "linux")]
 mod linux_startup;
 mod preview;
@@ -32,6 +33,7 @@ fn main() {
     #[cfg(feature = "native-tests")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
+        .on_window_event(image_drop::handle)
         .register_uri_scheme_protocol("desegni-preview", |context, request| {
             if context.webview_label() != "editor" {
                 return tauri::http::Response::builder()

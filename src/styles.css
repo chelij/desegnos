@@ -336,5 +336,5 @@ p { margin-bottom: 12px; }
 .device-switch button[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); }
 .device-stage { position: relative; overflow: hidden; }
 .device-frame { position: absolute; top: 0; transform-origin: top left; }
-.device-frame .preview-frame iframe { height: var(--device-height); min-height: 0; }
+.device-frame .preview-frame iframe { height: var(--device-height); min-height: 0; border: 0; outline: 1px solid var(--border); }
 .device-frame.device-phone .preview-frame iframe, .device-frame.device-tablet .preview-frame iframe { border-radius: 14px; }

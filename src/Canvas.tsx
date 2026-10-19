@@ -1,4 +1,6 @@
 import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { isTauri } from '@tauri-apps/api/core';
 import { flushSync } from 'react-dom';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { canonicalSelections, regionTargets, sameTarget, unionRect } from './elementTargets';
@@ -95,6 +97,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   useEffect(() => { multiChanged?.(extras.length ? extras.length + 1 : 0); }, [extras.length, multiChanged]);
   const [dropTarget, setDropTarget] = useState<Rect | null>(null);
   const imagePicker = useRef<HTMLInputElement>(null);
+  const nativeDrop = useRef<{ id: string; pageId: string; source: string | null; selection: ElementSelection | null } | null>(null);
+  const nativeDrag = useRef<(value: { phase: string; id: string; position: Point | null; picture: { name: string; mime: string; data: string } | null; message: string | null }) => void>(() => {});
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false; let stop: (() => void) | undefined;
+    void getCurrentWindow().listen<Parameters<typeof nativeDrag.current>[0]>('desegnos://image-drag', event => nativeDrag.current(event.payload)).then(unlisten => { if (disposed) unlisten(); else stop = unlisten; });
+    return () => { disposed = true; stop?.(); };
+  }, []);
   const browseFor = useRef<ElementSelection | null>(null);
   // Fill a picture from a file: dropped from the file manager, or chosen with Browse.
   async function replaceImage(selection: ElementSelection, file: File) {
@@ -107,7 +117,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
       // A placeholder carries a marker that ordinary attribute edits can't remove, so swap in a fresh <img> with the same styling.
       if (site.current?.placeholders().some(item => item.element.selector === selection.element.selector)) {
         const css = document.createElement('div').style; css.cssText = details.inlineStyle;
-        await applyElement({ kind: 'replace', html: `<img ${Object.entries(details.attributes).filter(([name]) => !['src', 'alt', 'style'].includes(name) && !name.startsWith('data-desegnos-')).map(([name, value]) => `${name}="${escapeHtml(value)}"`).join(' ')} src="${escapeHtml(src)}" alt="${escapeHtml(description)}" style="${escapeHtml(css.cssText)}">`, keepStyle: true }, selection);
+        // The edit form exposes only editable fields; authored dimensions and loading hints live in the full element HTML.
+        const original = document.createElement('template'); original.innerHTML = details.html;
+        const attributes = Array.from(original.content.firstElementChild?.attributes ?? []).filter(attribute => !['src', 'srcset', 'sizes', 'alt', 'style'].includes(attribute.name) && !attribute.name.startsWith('data-desegnos-'));
+        await applyElement({ kind: 'replace', html: `<img ${attributes.map(attribute => `${attribute.name}="${escapeHtml(attribute.value)}"`).join(' ')} src="${escapeHtml(src)}" alt="${escapeHtml(description)}" style="${escapeHtml(css.cssText)}">`, keepStyle: true }, selection);
       } else await applyElement({ kind: 'update', texts: [], attributes: description === alt ? { src } : { src, alt: description }, style: null }, selection);
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
   }
@@ -840,6 +853,28 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
 
   const editBusy = layerBusy || editingElement || nudging;
+  nativeDrag.current = value => {
+    if (value.phase === 'leave') { setDropTarget(null); return; }
+    if (value.phase === 'drop') {
+      const pending = nativeDrop.current; if (!pending || pending.id !== value.id) return;
+      nativeDrop.current = null; setDropTarget(null);
+      if (pending.pageId !== pageRef.current.id || pending.source !== site.current?.source()) return;
+      if (value.message) { setElementError(value.message); return; }
+      if (!pending.selection) { setElementError('Drop the picture onto an image on the page.'); return; }
+      if (value.picture) {
+        const picture = value.picture; const bytes = Uint8Array.from(atob(picture.data), character => character.charCodeAt(0));
+        chooseElement(pending.selection); void replaceImage(pending.selection, new File([bytes], picture.name, { type: picture.mime }));
+      }
+      return;
+    }
+    const at = value.position; const visible = scroll.current?.getBoundingClientRect();
+    const allowed = at && visible && at.x >= visible.left && at.x <= visible.right && at.y >= visible.top && at.y <= visible.bottom && !document.querySelector('dialog[open]') && !editBusy;
+    const world = allowed ? point(at) : null;
+    const hit = world && page.content ? site.current?.imageAt(world.x, world.y) ?? null : null;
+    setDropTarget(hit?.rect ?? null);
+    if (value.phase === 'pending') nativeDrop.current = { id: value.id, pageId: page.id, source: site.current?.source() ?? null, selection: hit };
+  };
+
   const foundUrl = element ? site.current?.foundSource(element.element) ?? null : null;
   const foundHost = (() => { try { return foundUrl ? new URL(foundUrl).hostname.replace(/^www\./, '') : ''; } catch { return ''; } })();
   const arrangeItems: MenuItem[] = (['front', 'forward', 'backward', 'back'] as const).map((direction, index) => ({ id: direction, label: ['Bring to front', 'Bring forward', 'Send backward', 'Send to back'][index], disabled: editBusy, action: () => { void arrangeLayer(direction); } }));

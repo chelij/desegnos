@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {waitFor, xpathString} from './webdriver.mjs';
 import {chooseFile, savedState, verifyArchive} from './file-dialog-workflow.mjs';
+import {PhysicalInput} from './physical-workflow.mjs';
 import {selectionSaveWorkflow} from './selection-save-workflow.mjs';
 import {assertCanvasOnly} from './workflow.mjs';
 
@@ -105,18 +106,18 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
   await step('A real GTK file drag reaches the canvas as trusted drop input and changes only the picture',async()=>{
     await driver.page(about);await canvasReady(driver,'About');
     const before=(await workspace(driver)).project.pages.find(page=>page.id===about).content;
-    await driver.execute(()=>{window.__nativeFileDrops=[];for(const name of ['dragover','drop'])document.addEventListener(name,event=>window.__nativeFileDrops.push({type:event.type,trusted:event.isTrusted,files:event.dataTransfer.files.length}),true);});
+    await driver.executeAsync(async()=>{window.__nativeFileDrops=[];await window.__TAURI__.event.listen('desegnos://image-drag',event=>{const p=event.payload;window.__nativeFileDrops.push({type:`native-${p.phase}`,files:p.picture?1:0,position:p.position,message:p.message});});for(const name of ['dragenter','dragover','drop'])document.addEventListener(name,event=>window.__nativeFileDrops.push({type:event.type,trusted:event.isTrusted,files:event.dataTransfer.files.length,types:[...event.dataTransfer.types],x:event.clientX,y:event.clientY,target:event.target?.className}),true);});
     const source=spawn('/usr/bin/python3',[fileURLToPath(new URL('./file-drag-source.py',import.meta.url)),picture],{env:process.env,stdio:['ignore','pipe','pipe']});
     let log='',errors='';source.stdout.on('data',chunk=>log+=chunk);source.stderr.on('data',chunk=>errors+=chunk);
     try{
       await waitFor(()=>{if(source.exitCode!==null)throw new Error(errors);return log.includes('"ready": true');},'GTK file drag source did not open');
-      const snapshot=await physical.raw({action:'inspect',pid:source.pid});const window=snapshot.window;
+      const snapshot=await new PhysicalInput(driver,source.pid).inspect();const window=snapshot.window;
       await physical.raw({action:'drag',sourcePid:source.pid,from:{x:window.x+window.width/2,y:window.y+window.height/2},to:physical.rootPoint(await pointFor(driver,'#picture'))});
       await waitFor(async()=>{const content=(await workspace(driver)).project.pages.find(page=>page.id===about).content;return content.html!==before.html;},'A native file drop did not change the picture');
-      const events=await driver.execute(()=>window.__nativeFileDrops);assert.ok(events.some(event=>event.type==='drop'&&event.trusted&&event.files===1),JSON.stringify(events));
+      const events=await driver.execute(()=>window.__nativeFileDrops);assert.ok(events.some(event=>event.type==='native-drop'&&event.files===1),JSON.stringify(events));
       const after=(await workspace(driver)).project.pages.find(page=>page.id===about).content;assert.equal(after.css,before.css);assert.equal(after.javascript,before.javascript);
       await writeFile(join(output,'native-file-drop.json'),JSON.stringify({events,log},null,2));
-    }finally{source.kill('SIGTERM');}
+    }finally{await writeFile(join(output,'native-file-drop.json'),JSON.stringify({events:await driver.execute(()=>window.__nativeFileDrops),log,errors,elementError:await driver.execute(()=>document.querySelector('.element-edit-error')?.textContent)},null,2));source.kill('SIGTERM');}
     await physical.captureWindow(join(output,'picture-drop.png'));
   });
   await step('Device preview uses real layout widths, runs enabled interactions and leaves authored source unchanged',async()=>{
