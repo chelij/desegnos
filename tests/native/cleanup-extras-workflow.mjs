@@ -74,7 +74,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     for(const [pageId,name] of [[home,'Home'],[about,'About']]){
       project=(await workspace(driver)).project;
       const html=`<main>\n<h1>${name}</h1>\n<p id="unfinished">${name==='About'?'Sample text':'Welcome to the studio.'}</p>\n<img id="picture" width="240" height="120" alt="${name==='Home'?'Image placeholder: Studio photo':'Studio photo'}" ${name==='Home'?'data-desegnos-placeholder="image"':''} src="data:image/png;base64,${pngOther}">\n<button id="action">Try action</button>\n</main>\n`;
-      await driver.invoke('edit_page_source',{projectId:project.id,pageId,revision:project.revision,html,css:'body { margin: 0; font: 16px sans-serif; }\nmain { padding: 24px; }\nimg { display: block; object-fit: cover; }\nbutton { margin-top: 16px; }',javascript:"const report=()=>parent.postMessage({type:'native-device-check',width:innerWidth},'*');\nreport();addEventListener('resize',report);\ndocument.getElementById('action').addEventListener('click',()=>parent.postMessage({type:'native-device-action'},'*'));"});
+      await driver.invoke('edit_page_source',{projectId:project.id,pageId,revision:project.revision,html,css:'body { margin: 0; font: 16px sans-serif; }\nmain { padding: 24px; }\nimg { display: block; object-fit: cover; }\nbutton { margin-top: 16px; }',javascript:"const report=()=>{const r=document.getElementById('action').getBoundingClientRect();parent.postMessage({type:'native-device-check',width:innerWidth,action:{x:r.x,y:r.y,width:r.width,height:r.height}},'*');};\nreport();addEventListener('resize',report);\ndocument.getElementById('action').addEventListener('click',()=>parent.postMessage({type:'native-device-action'},'*'));"});
     }
     await driver.button('Save');await driver.page(home);await canvasReady(driver,'Home');
     await physical.captureWindow(join(output,'fixture-pages.png'));
@@ -129,9 +129,13 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
       await driver.click(`//div[@aria-label="Preview device"]/button[normalize-space(.)=${xpathString(name)}]`,'xpath');
       await waitFor(()=>driver.execute(value=>window.__deviceMessages.some(message=>message.type==='native-device-check'&&message.width===value),width),`${name} did not lay out at ${width}px`);
     }
-    const at=await driver.execute(()=>{const frame=document.querySelector('.device-stage iframe'),rect=frame.getBoundingClientRect();const scale=rect.width/frame.offsetWidth;return{x:rect.left+80*scale,y:rect.top+260*scale};});
-    // Use WebDriver's frame context for the native preview button, which runs in an opaque sandbox.
-    const frame=await driver.find('.device-stage iframe');await driver.command('POST','/frame',{id:{'element-6066-11e4-a52e-4f735466cecf':frame}});await driver.click('#action');await driver.command('POST','/frame',{id:null});
+    const at=await driver.execute(()=>{
+      const frame=document.querySelector('.device-stage iframe'),rect=frame.getBoundingClientRect();
+      const scale=rect.width/frame.offsetWidth;
+      const action=window.__deviceMessages.filter(message=>message.type==='native-device-check'&&message.width===390).at(-1).action;
+      return{x:rect.left+(action.x+action.width/2)*scale,y:rect.top+(action.y+action.height/2)*scale};
+    });
+    await physical.click(at);
     await waitFor(()=>driver.execute(()=>window.__deviceMessages.some(message=>message.type==='native-device-action')),'Enabled preview button did not run');
     assert.ok(Number.isFinite(at.x));await physical.captureWindow(join(output,'device-preview.png'));await closeDialog(driver);
     assert.deepEqual((await workspace(driver)).project,before);
