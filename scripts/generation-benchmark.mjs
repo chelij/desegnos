@@ -64,7 +64,7 @@ async function validateFixtures() {
     assert.ok(scenario.criteria.length >= 3 && scenario.pages.length > 0);
   }
   const checked = spawnSync(process.execPath, ['scripts/cargo.mjs', 'run', '--offline', '--locked', '--manifest-path', 'benchmarks/generation/fixture-builder/Cargo.toml', '--', '--check', fixtureRoot], { cwd: root, env: { ...toolchainEnvironment(), CARGO_TARGET_DIR: join(root, 'target/benchmark-fixtures') }, encoding: 'utf8', timeout: 120_000, maxBuffer: 1024 * 1024 });
-  if (checked.error) throw checked.error;
+  if (checked.error && checked.status !== 0) throw checked.error;
   assert.equal(checked.status, 0, `Core/storage fixture validation failed: ${checked.stderr}`);
   assert.deepEqual(JSON.parse(checked.stdout), fixtures);
   return { valid: true, scenarios: 18, providerCalls: 0, credentialsRead: false, coreAndStorageValidation: 'passed' };
@@ -74,7 +74,10 @@ async function summarize(directory) {
   const found = [];
   async function visit(path, depth) {
     if (depth > 4) return;
-    for (const entry of await readdir(path, { withFileTypes: true })) {
+    let entries;
+    try { entries = await readdir(path, { withFileTypes: true }); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    for (const entry of entries) {
       assert.equal(entry.isSymbolicLink(), false, 'Benchmark evidence traversal rejects symlinks');
       const file = join(path, entry.name);
       if (entry.isDirectory()) { if (!entry.name.startsWith('.')) await visit(file, depth + 1); }

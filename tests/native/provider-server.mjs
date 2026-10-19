@@ -21,7 +21,9 @@ function sourceFor(record, endpoint, options) {
   const html = `<main><h1>Generated native preview</h1><p id="fixture-status">Scripts are paused until enabled.</p><button id="fixture-action" type="button"><span>${options.buttonLabel ?? 'Try generated interaction'}</span></button><a id="fixture-retained" href="${retained.replaceAll('&', '&amp;').replaceAll('"', '&quot;')}">Open retained preview</a><form id="fixture-form" action="${probe}/form" method="post"><input name="probe" value="blocked"></form><img alt="" src="${probe}/image"><script>parent.postMessage({type:'desegni-native-inline-script-ran'},'*')</script><script src="${probe}/external-script"></script></main>`;
   const css = 'html,body{margin:0;background:#162329;color:#f4f0e8;font:16px system-ui}main{padding:20px}h1{font-size:22px;margin:0 0 12px}#fixture-action,#fixture-retained{position:fixed;left:20px;box-sizing:border-box;width:240px;height:42px;padding:10px;background:#e9bd7c;color:#18232a;border:1px solid #e9bd7c;border-radius:6px;text-align:center;font:15px system-ui}#fixture-action{top:116px}#fixture-retained{top:174px}img{display:none}';
   const common = `const marker=${JSON.stringify(marker)};const send=(event,detail={})=>parent.postMessage({type:'desegni-native-fixture',marker,event,detail},'*');const rect=id=>{const r=document.getElementById(id).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};`;
-  const javascript = options.hang
+  const javascript = options.editorAudit
+    ? "document.getElementById('fixture-action')?.addEventListener('click',()=>{document.getElementById('fixture-status').textContent='The local action worked.'});"
+    : options.hang
     ? `${common}send('hang-armed',{delayMs:1500});setTimeout(()=>{send('hang-entering');console.log('DESEGNI_NATIVE_HANG_ENTERING:'+marker);while(true){}},1500);`
     : `${common}
 const report={parentDenied:false,tauriAbsent:!window.__TAURI__,internalsAbsent:!window.__TAURI_INTERNALS__,ipcAbsent:!window.ipc,inlineScriptRan:false,violations:[]};

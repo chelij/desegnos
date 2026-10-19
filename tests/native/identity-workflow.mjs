@@ -77,7 +77,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     sourceProjectHash = hash(await readFile(sourceProjectPath));
     await driver.button('New project');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] input[name="projectName"]')), false);
-    await driver.ready('//dialog[@open]//button[normalize-space(.)="Blank website"]', 'xpath');
+    await driver.ready('//dialog[@open]//button[@aria-label="Blank website"]', 'xpath');
     await driver.button('Use my existing brand');
     await driver.fill('Project name', 'Imported Northstar website');
     await driver.button('Web');

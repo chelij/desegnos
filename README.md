@@ -43,4 +43,6 @@ pnpm desktop build --debug --no-bundle
 pnpm desktop build --no-bundle
 ```
 
+The [generation benchmark](docs/GENERATION_BENCHMARK.md) provides 18 fixed owner-run scenarios. Its offline checks make no AI requests; live quality remains unverified until you run and rate the results.
+
 For protocol, storage, security, recovery, dependencies, and verification details, see the [technical guide](docs/USER_TECHNICAL.md). The [release plan](RELEASE_PLAN.md) tracks remaining work. The editor uses GPL-3.0-only; see [LICENSE](LICENSE).

@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
-import { join, resolve, relative, sep } from 'node:path';
+import { basename, dirname, join, resolve, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { chooseFile, chooseFolder, savedState, verifyArchive } from './file-dialog-workflow.mjs';
 import { assertCanvasOnly } from './workflow.mjs';
 import { waitFor, xpathString } from './webdriver.mjs';
+import { inspectChromiumPage } from '../export/chromium.mjs';
 
 const workspace = driver => driver.invoke('get_workspace');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const requestCount = provider => provider.generationRequests().length;
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQCi3/DwADeQHuOPZfDAAAAABJRU5ErkJggg==';
+const png2 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQCi3/D8IMMAYAP/QHtZw6VX0AAAAASUVORK5CYII=';
 
 async function closed(driver) {
   await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'The dialog did not close');
@@ -88,26 +89,17 @@ async function allFiles(directory) {
   return files;
 }
 
-async function chromium(url, profile, evidencePath) {
-  await mkdir(profile, { recursive: true, mode: 0o700 });
-  const result = await new Promise((accept, reject) => {
-    const child = spawn('/usr/bin/chromium', ['--headless', '--password-store=basic', '--use-mock-keychain', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking', '--no-first-run', '--no-default-browser-check', '--allow-file-access-from-files', '--virtual-time-budget=2000', `--user-data-dir=${profile}`, '--dump-dom', url], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-    const stop = () => { try { process.kill(-child.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; } };
-    let output = '', error = '';
-    const timeout = setTimeout(() => { stop(); accept({ code: 'timeout', output, error }); }, 25_000);
-    child.stdout.on('data', chunk => { output += chunk; if (output.length > 2 * 1024 * 1024) stop(); });
-    child.stderr.on('data', chunk => { error += chunk; if (error.length > 256 * 1024) stop(); });
-    child.once('error', problem => { clearTimeout(timeout); reject(problem); });
-    child.once('close', code => { clearTimeout(timeout); stop(); accept({ code, output, error }); });
-  });
-  await writeFile(evidencePath, result.output);
-  await writeFile(`${evidencePath}.log`, result.error);
-  assert.equal(result.code, 0, `Ordinary Chromium could not open the exported website: ${result.error.slice(-2000)}`);
-  return result.output;
+async function chromium(url, evidencePath) {
+  const result = await inspectChromiumPage({ url, outputDirectory: dirname(evidencePath), label: basename(evidencePath, '.html'),
+    waitForExpression: "document.documentElement.dataset.localClick === 'passed' && document.documentElement.dataset.localImage === 'true' && document.documentElement.dataset.localCss === 'true' && document.documentElement.dataset.localStylesheet === 'true'",
+    expression: 'document.documentElement.outerHTML' });
+  await writeFile(evidencePath, result.value);
+  await writeFile(`${evidencePath}.report.json`, JSON.stringify({ ...result, value: undefined }, null, 2));
+  return result.value;
 }
 
 function exportBody(about) {
-  return `<main><h1>${about ? 'About our standalone website' : 'Our standalone website'}</h1><p id="fixture-status">Local website preview</p><button id="fixture-action" type="button">Existing generated action</button><a id="fixture-retained" href="#retained">Retained page action</a><form id="fixture-form"><input name="probe" value="local"></form><a id="export-navigation" href="${about ? '/' : '/about'}">${about ? 'Home' : 'About'}</a><img id="export-image" alt="Portable local pixel" src="${png}" srcset="${png} 1x, ${png} 2x" style="display:block;width:32px;height:32px"><style>.export-css-image{width:32px;height:32px;background-color:#225577;background-image:url("${png}")}</style><div class="export-css-image" aria-label="Portable background"></div><button id="export-action" type="button">Try local action</button><p id="export-script-status">Waiting for local action</p><script>addEventListener('DOMContentLoaded',()=>{document.documentElement.dataset.desegnosRuntime=String(!!(window.__TAURI__||window.__TAURI_INTERNALS__||window.ipc));document.getElementById('export-action').addEventListener('click',()=>{document.getElementById('export-script-status').textContent='Local click script works';document.documentElement.dataset.localClick='passed'});document.getElementById('export-action').click();setTimeout(()=>{const image=document.getElementById('export-image');document.documentElement.dataset.localImage=String(image.complete&&image.naturalWidth===1);document.documentElement.dataset.localCss=String(getComputedStyle(document.querySelector('.export-css-image')).backgroundImage.includes('url('));document.documentElement.dataset.localStylesheet=String(getComputedStyle(document.body).backgroundColor==='rgb(22, 35, 41)');},100);if(location.hash==='#follow-navigation')document.getElementById('export-navigation').click();});</script></main>`;
+  return `<main><h1>${about ? 'About our standalone website' : 'Our standalone website'}</h1><p id="fixture-status">Local website preview</p><button id="fixture-action" type="button">Existing generated action</button><a id="fixture-retained" href="#retained">Retained page action</a><form id="fixture-form"><input name="probe" value="local"></form><a id="export-navigation" href="${about ? '/' : '/about'}">${about ? 'Home' : 'About'}</a><img id="export-image" alt="Portable local pixel" src="${png}" srcset="${png} 1x, ${png2} 2x" style="display:block;width:32px;height:32px"><style>.export-css-image{width:32px;height:32px;background-color:#225577;background-image:url("${png}")}</style><div class="export-css-image" aria-label="Portable background"></div><button id="export-action" type="button">Try local action</button><p id="export-script-status">Waiting for local action</p><script>addEventListener('DOMContentLoaded',()=>{document.documentElement.dataset.desegnosRuntime=String(!!(window.__TAURI__||window.__TAURI_INTERNALS__||window.ipc));document.getElementById('export-action').addEventListener('click',()=>{document.getElementById('export-script-status').textContent='Local click script works';document.documentElement.dataset.localClick='passed'});document.getElementById('export-action').click();setTimeout(()=>{const image=document.getElementById('export-image');document.documentElement.dataset.localImage=String(image.complete&&image.naturalWidth===1);document.documentElement.dataset.localCss=String(getComputedStyle(document.querySelector('.export-css-image')).backgroundImage.includes('url('));document.documentElement.dataset.localStylesheet=String(getComputedStyle(document.body).backgroundColor==='rgb(22, 35, 41)');},100);if(location.hash==='#follow-navigation')document.getElementById('export-navigation').click();});</script></main>`;
 }
 
 async function replaceMain(driver, physical, about) {
@@ -217,7 +209,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
 
   await step('Cancel stops a held generation visibly and preserves the current website and requests', async () => {
     const before = (await workspace(driver)).project;
-    provider.setMode('waiting'); await driver.button('Generate');
+    provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     cancelled = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The held generation did not reach the provider');
     await driver.ready('section[aria-label="Generation status"]');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
@@ -228,7 +220,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   });
 
   await step('Generation stays in a non-modal strip while real panning works, then applies both pages with the exact instructions', async () => {
-    provider.setMode('waiting'); await driver.button('Generate');
+    provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     const held = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && value.jobId !== cancelled.jobId && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The second generation did not reach the held provider');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
     assert.match(await driver.execute(() => document.querySelector('section[aria-label="Generation status"]').textContent), /\d+:\d{2}|elapsed/i);
@@ -266,7 +258,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA'), 'Ask AI did not focus its request');
     await physical.raw({ action: 'text', text: 'Refine this heading while keeping its meaning.' });
     await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === homeId).regions.some(region => region.prompt === 'Refine this heading while keeping its meaning.'), 'Typing in Ask AI lost focus or failed to persist');
-    provider.setMode('waiting'); await driver.button('Generate');
+    provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     const held = await waitFor(async () => { const job = await driver.invoke('get_generation', { projectId }); return job?.status === 'generating' && provider.generationRequests().some(item => item.metadata.jobId === job.jobId) && job; }, 'Draft preservation generation did not start');
     await driver.button('Fit');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
@@ -277,7 +269,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await previewReady(driver, 'My unfinished edit must survive');
     await physical.captureWindow(join(output, '09b-draft-preserved-window.png'));
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview');
-    provider.setMode('complete'); await driver.button('Generate'); applied = await jobAt(driver, projectId, ['applied']);
+    provider.setMode('complete', { editorAudit: true }); await driver.button('Generate'); applied = await jobAt(driver, projectId, ['applied']);
     await previewReady(driver, 'Generated native preview');
     await driver.ready('section[aria-label="Generated changes"]');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
@@ -388,9 +380,9 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
 
   await step('Ordinary Chromium opens exported files with working local images, scripts and internal navigation, without Desegnos runtime', async () => {
     const index = pathToFileURL(join(exportedRoot, 'index.html')).href;
-    const home = await chromium(index, join(output, 'browser-profile-home'), join(output, 'exported-home-browser.html'));
+    const home = await chromium(index, join(output, 'exported-home-browser.html'));
     assert.match(home, /<h1>Our standalone website<\/h1>/); assert.match(home, /data-desegnos-runtime="false"/); assert.match(home, /data-local-click="passed"/); assert.match(home, /data-local-image="true"/); assert.match(home, /data-local-css="true"/); assert.match(home, /data-local-stylesheet="true"/);
-    const about = await chromium(`${index}#follow-navigation`, join(output, 'browser-profile-navigation'), join(output, 'exported-navigation-browser.html'));
+    const about = await chromium(`${index}#follow-navigation`, join(output, 'exported-navigation-browser.html'));
     assert.match(about, /<h1>About our standalone website<\/h1>/); assert.match(about, /data-local-click="passed"/); assert.match(about, /data-desegnos-runtime="false"/);
   });
 

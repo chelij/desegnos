@@ -40,7 +40,7 @@ Run one scenario at a time. The runner submits once; it never retries. A new exp
 1. Build the current **debug-only native-tests** app. This build exposes local automation and must not be distributed or used as the normal editor:
 
    ```sh
-   CARGO_TARGET_DIR=target/benchmark-native node scripts/tauri.mjs build --debug --no-bundle --features native-tests --config src-tauri/tauri.test.conf.json
+   CARGO_TARGET_DIR="$PWD/target/benchmark-native" node scripts/tauri.mjs build --debug --no-bundle --features native-tests --config src-tauri/tauri.test.conf.json
    ```
 
 2. Validate the inputs and inspect the chosen case without connecting AI:
