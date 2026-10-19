@@ -26,6 +26,14 @@ pub struct TextEdit {
     pub text: String,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ElementStyleEdit {
+    pub target: ElementTarget,
+    pub style: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pseudo_styles: Vec<crate::LayerPseudoStyle>,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ElementOrder {
     Before,
@@ -51,6 +59,9 @@ pub enum ElementEdit {
     Reorder {
         direction: ElementOrder,
     },
+    LayerStyles {
+        styles: Vec<ElementStyleEdit>,
+    },
     Remove,
 }
 #[derive(Debug, Clone, Serialize)]
@@ -67,14 +78,14 @@ pub struct ElementDetails {
     pub can_move_after: bool,
 }
 
-fn parse(html: &str) -> Result<Document> {
+pub(crate) fn parse(html: &str) -> Result<Document> {
     let doc = Document::from(format!(
         "<!doctype html><html><head></head><body>{html}</body></html>"
     ));
     bounded(&doc)?;
     Ok(doc)
 }
-fn bounded(doc: &Document) -> Result<()> {
+pub(crate) fn bounded(doc: &Document) -> Result<()> {
     let mut pending = vec![(doc.root(), 0)];
     let mut count = 0;
     while let Some((node, depth)) = pending.pop() {
@@ -87,14 +98,14 @@ fn bounded(doc: &Document) -> Result<()> {
     }
     Ok(())
 }
-fn body(doc: &Document) -> Result<NodeRef<'_>> {
+pub(crate) fn body(doc: &Document) -> Result<NodeRef<'_>> {
     doc.html_root()
         .element_children()
         .into_iter()
         .find(|node| node.node_name().as_deref() == Some("body"))
         .ok_or_else(|| Error("The page has no editable body.".into()))
 }
-fn locate<'a>(doc: &'a Document, target: &ElementTarget) -> Result<NodeRef<'a>> {
+pub(crate) fn locate<'a>(doc: &'a Document, target: &ElementTarget) -> Result<NodeRef<'a>> {
     target.validate()?;
     let mut node = body(doc)?;
     for part in target.selector.split(" > ").skip(1) {
@@ -108,12 +119,17 @@ fn locate<'a>(doc: &'a Document, target: &ElementTarget) -> Result<NodeRef<'a>> 
         node = node
             .element_children()
             .into_iter()
-            .filter(|child| child.node_name().as_deref() == Some(tag))
+            .filter(|child| {
+                child
+                    .node_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(tag))
+            })
             .nth(index - 1)
             .ok_or_else(|| Error("This element no longer exists. Select it again.".into()))?;
     }
     ensure(
-        node.node_name().as_deref() == Some(target.tag.as_str()),
+        node.node_name()
+            .is_some_and(|name| name.eq_ignore_ascii_case(&target.tag)),
         "The selected element changed. Select it again.",
     )?;
     Ok(node)
@@ -122,12 +138,16 @@ fn selector(node: NodeRef<'_>, body: NodeRef<'_>) -> Option<String> {
     let mut node = node;
     let mut parts = vec![];
     while node.id != body.id {
-        let tag = node.node_name()?;
+        let tag = node.node_name()?.to_string();
         let parent = node.parent()?;
         let index = parent
             .element_children()
             .into_iter()
-            .filter(|child| child.node_name().as_deref() == Some(tag.as_ref()))
+            .filter(|child| {
+                child
+                    .node_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&tag))
+            })
             .position(|child| child.id == node.id)?
             + 1;
         parts.push(format!("{tag}:nth-of-type({index})"));
@@ -158,7 +178,7 @@ fn text_nodes(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
     }
     result
 }
-fn target(node: NodeRef<'_>, body: NodeRef<'_>, hash: &str) -> Option<ElementTarget> {
+pub(crate) fn target(node: NodeRef<'_>, body: NodeRef<'_>, hash: &str) -> Option<ElementTarget> {
     let result = ElementTarget {
         selector: selector(node, body)?,
         tag: node.node_name()?.to_string(),
@@ -194,18 +214,18 @@ fn sibling<'a>(node: NodeRef<'a>, direction: &ElementOrder) -> Option<NodeRef<'a
     }
     None
 }
-fn serialized(doc: &Document) -> Result<String> {
+pub(crate) fn serialized(doc: &Document) -> Result<String> {
     doc.try_html()
         .map(|value| value.to_string())
         .ok_or_else(|| Error("The edited HTML could not be saved.".into()))
 }
-fn check_value(value: &str, max: usize) -> Result<()> {
+pub(crate) fn check_value(value: &str, max: usize) -> Result<()> {
     ensure(
         value.len() <= max && !value.contains('\0'),
         "This edit exceeds the supported text size or contains a null character.",
     )
 }
-fn ids(doc: &Document) -> BTreeMap<String, usize> {
+pub(crate) fn ids(doc: &Document) -> BTreeMap<String, usize> {
     let mut ids = BTreeMap::new();
     for node in doc.root().descendants_it() {
         if let Some(id) = node.attr("id") {
@@ -213,6 +233,24 @@ fn ids(doc: &Document) -> BTreeMap<String, usize> {
         }
     }
     ids
+}
+
+pub(crate) fn tracked<'a>(
+    doc: &'a Document,
+    page: &crate::Page,
+    hash: &str,
+) -> Result<Vec<(Uuid, NodeRef<'a>)>> {
+    page.regions
+        .iter()
+        .filter(|region| {
+            !region.completed
+                && region
+                    .element
+                    .as_ref()
+                    .is_some_and(|element| element.source_sha256 == hash)
+        })
+        .map(|region| Ok((region.id, locate(doc, region.element.as_ref().unwrap())?)))
+        .collect()
 }
 
 impl Project {
@@ -296,18 +334,7 @@ impl Project {
         let node = locate(&doc, selected)?;
         let before = serialized(&doc)?;
         let before_ids = ids(&doc);
-        let tracked = page
-            .regions
-            .iter()
-            .filter(|region| {
-                !region.completed
-                    && region
-                        .element
-                        .as_ref()
-                        .is_some_and(|element| element.source_sha256 == selected.source_sha256)
-            })
-            .map(|region| Ok((region.id, locate(&doc, region.element.as_ref().unwrap())?)))
-            .collect::<Result<Vec<_>>>()?;
+        let tracked = tracked(&doc, page, &selected.source_sha256)?;
         let mut retained = Some(node);
         match edit {
             ElementEdit::Update {
@@ -449,6 +476,9 @@ impl Project {
                     ElementOrder::After => adjacent.insert_after(&node),
                 }
             }
+            ElementEdit::LayerStyles { styles } => {
+                crate::layers::apply_layer_styles(&doc, node, selected, styles)?;
+            }
             ElementEdit::Remove => {
                 ensure(
                     selected.selector != "body",
@@ -469,18 +499,39 @@ impl Project {
                 "This replacement introduces a duplicate element ID. Use unique IDs.",
             )?;
         }
+        self.finish_element_edit(revision, page_id, &doc, retained, tracked, None)
+    }
+
+    pub(crate) fn finish_element_edit(
+        &self,
+        revision: u64,
+        page_id: Uuid,
+        doc: &Document,
+        retained: Option<NodeRef<'_>>,
+        tracked: Vec<(Uuid, NodeRef<'_>)>,
+        css: Option<String>,
+    ) -> Result<(Self, Option<ElementTarget>)> {
+        bounded(doc)?;
+        let html = serialized(doc)?;
         ensure(
             serialized(&parse(&html)?)? == html,
             "This edit would be repaired differently by the browser. Choose valid markup for this layout.",
         )?;
+        let original = self.page(page_id)?.content.as_ref();
         let content = SiteContent {
             html,
-            css: original.css.clone(),
-            javascript: original.javascript.clone(),
+            css: css.unwrap_or_else(|| {
+                original
+                    .map(|content| content.css.clone())
+                    .unwrap_or_default()
+            }),
+            javascript: original
+                .map(|content| content.javascript.clone())
+                .unwrap_or_default(),
         };
         content.validate()?;
         let hash = content.sha256()?;
-        let body = body(&doc)?;
+        let body = body(doc)?;
         let mut next = self.clone();
         next.revision = revision
             .checked_add(1)

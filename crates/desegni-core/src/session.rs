@@ -56,12 +56,31 @@ impl Session {
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<Option<crate::ElementTarget>> {
         self.assert_revision(revision)?;
-        let (next, target) = self.project.edit_element(revision, page_id, target, edit)?;
+        let (next, target) =
+            self.project
+                .edit_element(self.project.revision, page_id, target, edit)?;
         if next.revision != self.project.revision {
             durable(&next)?;
             self.commit(next);
         }
         Ok(target)
+    }
+
+    pub fn paste_layer(
+        &mut self,
+        revision: u64,
+        page_id: uuid::Uuid,
+        clipboard: &crate::LayerClipboard,
+        insertion: Option<&crate::ElementTarget>,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<crate::LayerPasteSelection> {
+        self.assert_revision(revision)?;
+        let (next, selection) =
+            self.project
+                .paste_layer(self.project.revision, page_id, clipboard, insertion)?;
+        durable(&next)?;
+        self.commit(next);
+        Ok(selection)
     }
 
     pub fn refresh_element_bounds(
