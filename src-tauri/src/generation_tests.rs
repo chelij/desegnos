@@ -1393,3 +1393,23 @@ fn identity_access_rechecks_account_selection_plan_storage_and_model_after_async
         );
     }
 }
+
+#[cfg(all(debug_assertions, feature = "native-tests"))]
+#[test]
+fn benchmark_capture_is_opt_in_and_preserves_exact_output_per_attempt() {
+    let temp = Temp::new();
+    let directory = temp.0.join("benchmark-output");
+    let text = "{\n  \"summary\": \"Exact Unicode café\"\n}\n";
+    capture_benchmark_output(&directory, 1, text, false).unwrap();
+    assert!(!directory.exists());
+    capture_benchmark_output(&directory, 1, text, true).unwrap();
+    capture_benchmark_output(&directory, 2, "Second attempt", true).unwrap();
+    assert_eq!(
+        fs::read_to_string(directory.join("provider-output-1.txt")).unwrap(),
+        text
+    );
+    assert_eq!(
+        fs::read_to_string(directory.join("provider-output-2.txt")).unwrap(),
+        "Second attempt"
+    );
+}

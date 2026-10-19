@@ -51,17 +51,17 @@ export function GenerationFeedback({ controller, compact = false, children }: {
   controller: GenerationController; compact?: boolean; children?: ReactNode;
 }) {
   const { job: currentJob, operation, elapsedSeconds, error } = controller;
-  const job = operation === 'Preparing requirements…' ? null : currentJob;
+  const job = operation === 'Preparing AI instructions…' ? null : currentJob;
   if (!job && !operation && !error) return null;
   const headings = { prepared: 'Preparing your design', generating: job?.receivedBytes ? 'Receiving AI response' : (elapsedSeconds ?? 0) >= 30 ? 'Still waiting for OpenAI' : 'Waiting for OpenAI',
     ready: 'Updating your canvas', blocked: 'Generation needs review', failed: 'Generation failed', unknown: 'Generation outcome uncertain',
-    cancelled: 'Generation cancelled', discarded: 'Candidate discarded', applying: 'Updating your canvas…', applied: 'Changes applied' };
+    cancelled: 'Generation cancelled', discarded: 'Result discarded', applying: 'Updating your canvas…', applied: 'Changes applied' };
   const heading = operation ?? (job ? headings[job.status] : 'Generation could not start');
   const detail = operation ? 'Your changes will appear on the canvas.'
     : job?.status === 'prepared' ? 'Checking your requests and project choices.'
     : job?.status === 'generating' ? 'Your changes will appear here when ready.'
     : job?.status === 'ready' ? 'Your changes are being put in place.'
-    : job?.status === 'applied' ? 'Your site and project dossier are up to date.'
+    : job?.status === 'applied' ? 'Your site and project brief are up to date.'
     : job?.message ?? 'Read the error, then review AI settings or prepare the request again.';
   return <section className={`generation-status${compact ? ' compact' : ''}`} data-job-status={job?.status} aria-label="Generation status">
     <div className="generation-status-copy"><p className="generation-heading" role="status" aria-atomic="true"><strong>{heading}</strong></p>
@@ -95,7 +95,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   const canRetry = !!job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status);
   const canDiscard = !!job && ['prepared', 'ready', 'blocked', 'failed', 'unknown', 'cancelled'].includes(job.status);
   const alreadyApplied = !!job && project.appliedJobIds.includes(job.jobId);
-  const title = job?.status === 'prepared' ? 'Review generation request' : job?.status === 'ready' ? 'Review generated site' : 'Generation';
+  const title = job?.status === 'prepared' ? 'Generation details' : job?.status === 'ready' ? 'Generation details' : 'Generation';
   const pricing = settings?.catalogue.find(model => model.id === job?.settings.model);
   const usesChatgpt = job?.authentication === 'chatgpt';
   const frozenAccount = settings?.chatgpt.accounts.find(account => account.id === job?.chatgptAccountId);
@@ -112,8 +112,8 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   }
   const more: MenuItem[] = [
     { id: 'result', label: 'Overview', action: () => setTab('review') },
-    { id: 'technical', label: 'Technical', children: [
-      { id: 'requirements', label: job?.status === 'prepared' ? 'What will be sent' : 'Frozen requirements', action: () => setTab('requirements') },
+    { id: 'technical', label: 'Advanced', children: [
+      { id: 'requirements', label: job?.status === 'prepared' ? 'What will be sent' : 'AI instructions sent', action: () => setTab('requirements') },
       { id: 'request-details', label: 'Request details', action: () => setTab('details') },
       { id: 'source', label: showSource ? 'Hide source code' : 'Source code', disabled: !candidate?.pages.length, action: () => { setTab('review'); setShowSource(value => !value); } },
       { id: 'attempts', label: 'Attempts', action: () => setTab('attempts') },
@@ -129,7 +129,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
       </GenerationFeedback>}><div className="generation-dialog">
       {error && <p className="message error" role="alert">{error}</p>}
       {usageError && <p className="message error" role="alert">{usageError}</p>}
-      {job?.dossierError && <p className="message warning" role="alert">Your result is saved, but the dossier needs attention: {job.dossierError}</p>}
+      {job?.dossierError && <p className="message warning" role="alert">Your result is saved, but the project brief needs attention: {job.dossierError}</p>}
       {!job ? <><p>{operation ? 'Desegnos is freezing your current requests and project requirements.' : 'No generation request is prepared.'}</p><div className="form-actions">
         <button onClick={openSettings}>AI settings</button>{!operation && <button onClick={() => { void controller.prepare().catch(() => {}); }}>Prepare request again</button>}
       </div></> : <>
@@ -167,14 +167,14 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
           <strong>Attempt {attempt.ordinal} · {readable(attempt.status)}</strong><p className="small">Started {attempt.startedAt}{attempt.finishedAt ? ` · Finished ${attempt.finishedAt}` : ''}</p>
           {attempt.responseId && <p className="small response-id">Response: {attempt.responseId}</p>}{attempt.usage && <p className="small">{attempt.usage.inputTokens} input · {attempt.usage.outputTokens} output · {attempt.usage.totalTokens} total tokens</p>}
         </li>)}</ol>}</section>}
-        {tab === 'review' && <section className="generation-section">{!candidate ? <p className="muted">{job.status === 'prepared' ? 'Your requests and project dossier are ready to send.' : job.status === 'generating' ? 'Your site will appear here when it is ready.' : 'No completed site to review.'}</p> : <>
+        {tab === 'review' && <section className="generation-section">{!candidate ? <p className="muted">{job.status === 'prepared' ? 'Your requests and project brief are ready to send.' : job.status === 'generating' ? 'Your site will appear here when it is ready.' : 'No completed site to review.'}</p> : <>
           <h3>{candidate.summary || 'Candidate review'}</h3>
           {candidate.regions.some(region => region.status !== 'implemented') && <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul>}
           {source && <><div className="candidate-page-picker"><label>Result page<select value={source.pageId} onChange={event => setPageId(event.target.value)}>{candidate.pages.map(item => <option key={item.pageId} value={item.pageId}>{project.pages.find(page => page.id === item.pageId)?.name ?? item.pageId}</option>)}</select></label></div>
             {page && <PagePreview key={`${job.jobId}:${source.pageId}`} page={page} revision={job.baseRevision} jobId={job.jobId} />}
             {showSource && <section className="candidate-source"><h3>Source code</h3><SourceView key={source.pageId} content={source.content} label="Generated" /></section>}
           </>}
-          {candidate.decisionProposals.length > 0 && <details className="proposal-list"><summary>Project choices ({candidate.decisionProposals.length})</summary><p className="small muted">Compatible choices are selected for your dossier. Uncheck anything you want to leave out.</p>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
+          {candidate.decisionProposals.length > 0 && <details className="proposal-list"><summary>Project choices ({candidate.decisionProposals.length})</summary><p className="small muted">{alreadyApplied ? 'These suggestions are recorded. Add a choice in Project brief to guide future generations.' : 'Choose which suggestions to keep in your project brief.'}</p>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
             <input type="checkbox" checked={selected.includes(index)} disabled={job.status !== 'ready' || alreadyApplied || !!operation} onChange={event => setSelected(previous => event.target.checked ? [...previous, index] : previous.filter(value => value !== index))} />
             <span><strong>{proposal.topic}</strong><span className="preserve-text">{proposal.value}</span><span className="small muted">{scopeLabel(project, proposal.scope)} · {proposal.rationale}</span></span>
           </label>)}</details>}
@@ -201,26 +201,5 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
 export function GenerationDialog(props: {
   controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; close: () => void;
 }) {
-  const { controller, close } = props;
-  const { job, operation, error } = controller;
-  const [details, setDetails] = useState(false);
-  const working = !!operation || !!job && ['prepared', 'generating', 'ready', 'applying'].includes(job.status) && !error;
-  return <>
-    <Modal title={working ? 'Generating' : job?.status === 'applied' ? 'Website updated' : 'Generation'} className="generation-progress-modal" close={close}>
-      <div className="dialog-body generation-progress" data-testid="generation-progress">
-        {working && <div className="generation-seam" aria-hidden="true" />}
-        <GenerationFeedback controller={controller} />
-        {error && <p role="alert" className="message error">{error}</p>}
-        {job?.status === 'blocked' && <p>The AI needs more direction. Update your requests, then generate again.</p>}
-        {job?.status === 'unknown' && <p>The request may have been processed. Another generation may use your plan or incur another charge.</p>}
-        {job?.dossierError && <p role="alert">Your project notes need attention: {job.dossierError}</p>}
-        <div className="form-actions">
-          <button onClick={() => setDetails(true)}>Details</button>
-          {job?.status === 'generating' && <button disabled={!!operation} onClick={() => { void controller.cancel().catch(() => {}); }}>Cancel generation</button>}
-          {!working && <button className="primary" onClick={close}>Back to canvas</button>}
-        </div>
-      </div>
-    </Modal>
-    {details && <GenerationDetails {...props} close={() => setDetails(false)} />}
-  </>;
+  return <GenerationDetails {...props} />;
 }

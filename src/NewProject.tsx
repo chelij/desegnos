@@ -114,7 +114,7 @@ export function NewProject({ busy, create, open, recentProjects = [], openRecent
     <h1>{mode === 'identity' ? 'Use your existing brand' : mode === 'blank' ? 'Start with a blank website' : 'Create your website'}</h1>
     {!mode ? <>
       <p className="new-project-intro">Describe what goes where, generate your website, then edit and export it.</p>
-      <div className="project-start-choices"><button type="button" disabled={locked} onClick={() => setMode('blank')}><strong>Blank website</strong><span>Start from an empty page.</span></button><button type="button" disabled={locked} onClick={() => setMode('identity')}><strong>Use my existing brand</strong><span>Read colors, fonts and logos from a website or project.</span></button></div>
+      <div className="project-start-choices"><button type="button" aria-label="Blank website" disabled={locked} onClick={() => setMode('blank')}><strong>Blank website</strong><span>Start from an empty page.</span></button><button type="button" aria-label="Use my existing brand" disabled={locked} onClick={() => setMode('identity')}><strong>Use my existing brand</strong><span>Read colors, fonts and logos from a website or project.</span></button></div>
       <button type="button" onClick={() => { void run(open); }} disabled={locked}>Open project</button>
       {recentProjects.length > 0 && openRecent && <section className="recent-projects" aria-label="Recent projects"><h2>Recent projects</h2><ul>{recentProjects.map(project => <li key={project.path}><button type="button" disabled={locked} title={project.path} onClick={() => { void run(() => openRecent(project.path)); }}><strong>{project.name}</strong><span>{project.path}</span></button></li>)}</ul></section>}
     </> : <>

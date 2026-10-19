@@ -15,6 +15,17 @@ try {
   const { resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
     initialWorkspaceBounds, expandWorkspace, percent, percentageTicks, pixelTicks, elementToolbarPosition, alignmentLines, WORLD_MIN, WORLD_MAX, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
+  await test('canvas tool shortcuts never interrupt text input and AI stays explicit', () => {
+    const event = key => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
+    for (const [key, action] of [['v','selectTool'], ['r','requestTool'], ['h','panTool']]) {
+      assert.equal(editorShortcut(event(key), false), action);
+      assert.equal(editorShortcut(event(key), true), null);
+      assert.equal(editorShortcut({ ...event(key), isComposing: true }, false), null);
+    }
+    assert.equal(editorShortcut({ ...event('k'), ctrlKey: true }, false), 'askAI');
+    assert.equal(editorShortcut({ ...event('k'), metaKey: true }, false), 'askAI');
+    assert.equal(editorShortcut({ ...event('k'), ctrlKey: true }, true), null);
+  });
   await test('local resize resolves independent axes and scaled or rotated layouts', () => {
     assert.deepEqual(resizedElementSize({x:200,y:80},{x:1,y:1},[1,0,0,1],{x:30,y:-12}),{x:230,y:68});
     assert.deepEqual(resizedElementSize({x:200,y:80},{x:1,y:1},[0,2,2,0],{x:20,y:40}),{x:220,y:90});

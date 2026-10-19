@@ -91,10 +91,10 @@ async function allFiles(directory) {
 async function chromium(url, profile, evidencePath) {
   await mkdir(profile, { recursive: true, mode: 0o700 });
   const result = await new Promise((accept, reject) => {
-    const child = spawn('/usr/bin/chromium', ['--headless', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking', '--no-first-run', '--no-default-browser-check', '--allow-file-access-from-files', '--virtual-time-budget=2000', `--user-data-dir=${profile}`, '--dump-dom', url], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('/usr/bin/chromium', ['--headless', '--password-store=basic', '--use-mock-keychain', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--disable-background-networking', '--no-first-run', '--no-default-browser-check', '--allow-file-access-from-files', '--virtual-time-budget=2000', `--user-data-dir=${profile}`, '--dump-dom', url], { detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
     const stop = () => { try { process.kill(-child.pid, 'SIGTERM'); } catch (error) { if (error.code !== 'ESRCH') throw error; } };
     let output = '', error = '';
-    const timeout = setTimeout(() => { stop(); reject(new Error('The isolated exported-site browser timed out')); }, 25_000);
+    const timeout = setTimeout(() => { stop(); accept({ code: 'timeout', output, error }); }, 25_000);
     child.stdout.on('data', chunk => { output += chunk; if (output.length > 2 * 1024 * 1024) stop(); });
     child.stderr.on('data', chunk => { error += chunk; if (error.length > 256 * 1024) stop(); });
     child.once('error', problem => { clearTimeout(timeout); reject(problem); });
@@ -144,8 +144,8 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.deepEqual(value.pages[0].viewport, { width: 390, height: 844 }); assert.equal(value.pages[0].appearance, 'light'); assert.equal(value.showGrid, true);
     await driver.ready('[data-testid="canvas"]');
     assert.equal(await driver.execute(() => [...document.querySelectorAll('.generation-controls button')].find(button => button.textContent.trim() === 'Generate')?.disabled), true);
-    const fit = await driver.execute(() => { const guide = document.querySelector('[data-testid="screen-guide"]').getBoundingClientRect(), view = document.querySelector('.free-workspace').getBoundingClientRect(); return { top: guide.top, bottom: guide.bottom, viewportTop: view.top, viewportBottom: view.bottom }; });
-    assert.ok(fit.top >= fit.viewportTop - 1 && fit.bottom <= fit.viewportBottom + 1, JSON.stringify(fit));
+    const fit = await driver.execute(() => { const guide = document.querySelector('[data-testid="screen-guide"]').getBoundingClientRect(), view = document.querySelector('.free-workspace').getBoundingClientRect(); return { top: guide.top, bottom: guide.bottom, viewportTop: view.top, viewportBottom: view.bottom, dockTop: document.querySelector('[aria-label="Canvas tools"]').getBoundingClientRect().top }; });
+    assert.ok(fit.top >= fit.viewportTop - 1 && fit.bottom <= Math.min(fit.viewportBottom, fit.dockTop - 12) + 1, JSON.stringify(fit));
     await driver.ready('.canvas-empty-hint button'); await physical.captureWindow(join(output, '02-empty-mobile-window.png'));
   });
 
@@ -164,6 +164,14 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   });
 
   await step('The empty-state Add request action, readable long prompts and one global interpretation reach Generate', async () => {
+    const emptyPoint = await driver.execute(() => { const guide = document.querySelector('[data-testid="screen-guide"]').getBoundingClientRect(); return { x: guide.x + guide.width / 4, y: guide.y + 35 }; });
+    await physical.doubleClick(emptyPoint);
+    await waitFor(async () => (await workspace(driver)).project.pages[0].regions.length === 1, 'Double-click did not add exactly one request');
+    await driver.click('details.request-overview > summary'); await driver.click('button.request-list-item');
+    await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA'), 'An empty request could not be reopened from the overview');
+    assert.equal((await workspace(driver)).project.pages[0].regions.length, 1);
+    await physical.keys('Escape'); await driver.button('Undo');
+    await waitFor(async () => (await workspace(driver)).project.pages[0].regions.length === 0, 'Undo did not remove the empty request');
     await driver.click('.canvas-empty-hint button'); await driver.fill('Request 1', longPrompt);
     await driver.click('[role="toolbar"][aria-label="Canvas tools"] button[aria-label="Select"], [role="toolbar"][aria-label="Canvas tools"] button[title^="Select"]');
     await waitFor(async () => (await workspace(driver)).project.pages[0].regions[0]?.prompt === longPrompt, 'The long request did not persist');
@@ -187,7 +195,8 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     const overview = await driver.execute(() => document.querySelector('section.request-popover').textContent);
     assert.match(overview, /About/); assert.match(overview, /Home|Page 1/); assert.match(overview, /Pending/);
     await physical.captureWindow(join(output, '05-request-overview-window.png'));
-    await driver.click('details.request-overview > summary'); await driver.page(homeId);
+    await driver.click('button.request-list-item');
+    await waitFor(() => driver.execute(id => document.getElementById(`page-tab-${id}`)?.getAttribute('aria-selected') === 'true' && !!document.querySelector('.annotation.selected textarea'), homeId), 'The grouped request did not switch to its page and select the request');
   });
 
   await step('AI settings connect a session key in reading order and show truthful connection and budget states', async () => {
@@ -230,7 +239,10 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await waitFor(() => driver.execute(previous => { const element = document.querySelector('.workspace-scroll'); return element.scrollLeft !== previous[0] || element.scrollTop !== previous[1]; }, before), 'The canvas could not pan while generation was held');
     await physical.captureWindow(join(output, '08-nonmodal-generation-window.png'));
     await driver.button('Fit'); await driver.click('[role="toolbar"][aria-label="Canvas tools"] button[aria-label="Select"], [role="toolbar"][aria-label="Canvas tools"] button[title^="Select"]');
-    provider.release(held.jobId); applied = await jobAt(driver, projectId, ['applied']);
+    provider.release(held.jobId);
+    await waitFor(async () => (await driver.invoke('get_generation', { projectId }))?.receivedBytes > 0, 'The held reply did not start streaming');
+    provider.release(held.jobId);
+    applied = await jobAt(driver, projectId, ['applied']);
     const record = provider.generationRequests().find(item => item.metadata.jobId === applied.jobId);
     assert.equal(record.markdown, applied.requirements.markdown); assert.equal(hash(record.markdown), applied.requirements.sha256); assert.equal(record.metadata.generationMode, 'strict');
     assert.equal(applied.requirements.pageCount, 2); assert.equal((await workspace(driver)).project.pages.every(page => page.content?.html.includes('Generated native preview')), true);
@@ -249,6 +261,33 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await assertCanvasOnly(driver);
   });
 
+  await step('A draft typed during generation is committed before apply and stale output cannot overwrite it', async () => {
+    await clickHeading(driver, physical); await physical.click(await physical.center('.element-toolbar .ask-ai'));
+    await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA'), 'Ask AI did not focus its request');
+    await physical.raw({ action: 'text', text: 'Refine this heading while keeping its meaning.' });
+    await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === homeId).regions.some(region => region.prompt === 'Refine this heading while keeping its meaning.'), 'Typing in Ask AI lost focus or failed to persist');
+    provider.setMode('waiting'); await driver.button('Generate');
+    const held = await waitFor(async () => { const job = await driver.invoke('get_generation', { projectId }); return job?.status === 'generating' && provider.generationRequests().some(item => item.metadata.jobId === job.jobId) && job; }, 'Draft preservation generation did not start');
+    await driver.button('Fit');
+    await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
+    await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'My unfinished edit must survive' });
+    provider.release(held.jobId);
+    await waitFor(async () => (await driver.invoke('get_generation', { projectId }))?.receivedBytes > 0, 'The draft-test reply did not start streaming');
+    provider.release(held.jobId); await jobAt(driver, projectId, ['blocked']);
+    await previewReady(driver, 'My unfinished edit must survive');
+    await physical.captureWindow(join(output, '09b-draft-preserved-window.png'));
+    await driver.button('Undo'); await previewReady(driver, 'Generated native preview');
+    provider.setMode('complete'); await driver.button('Generate'); applied = await jobAt(driver, projectId, ['applied']);
+    await previewReady(driver, 'Generated native preview');
+    await driver.ready('section[aria-label="Generated changes"]');
+    await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
+    await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Result review preserves newer typing' });
+    await physical.click(await physical.center('section[aria-label="Generated changes"] button:nth-child(2)'));
+    await previewReady(driver, 'Result review preserves newer typing');
+    assert.equal((await workspace(driver)).project.latestGeneration.jobId, applied.jobId, 'Result Undo undid a newer local edit');
+    await driver.button('Undo'); await previewReady(driver, 'Generated native preview');
+  });
+
   await step('Double-click edits actual heading text inline, Enter commits and Escape cancels without an AI request', async () => {
     const requests = requestCount(provider); await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('[data-testid="inline-text-editor"], .inline-text-editor[role="textbox"]');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
@@ -259,15 +298,17 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await previewReady(driver, 'Edited directly on the page'); assert.equal(requestCount(provider), requests);
     await clickHeading(driver, physical); assert.match(await driver.execute(() => document.querySelector('.element-type-tag').textContent), /Heading|H1/i);
     assert.match(await driver.execute(() => document.querySelector('.workspace-measurement').textContent), /px/);
+    const overlap = await driver.execute(() => { const a = document.querySelector('.element-toolbar').getBoundingClientRect(), b = document.querySelector('.element-selection').getBoundingClientRect(); return Math.max(0, Math.min(a.right,b.right)-Math.max(a.left,b.left))*Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)); });
+    assert.equal(overlap, 0, 'The restored element toolbar hides the selected heading');
     await physical.captureWindow(join(output, '10-inline-edit-selection-window.png'));
   });
 
   await step('A labelled Ask AI action and Ctrl+K open the same on-page request without sending anything', async () => {
-    const requests = requestCount(provider); await driver.click('.element-toolbar .ask-ai');
+    const requests = requestCount(provider); await physical.click(await physical.center('.element-toolbar .ask-ai'));
     const request = await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === homeId).regions.find(region => !region.completed && region.element?.tag === 'h1'), 'Ask AI did not create a source-bound request');
     await driver.fill(`Request ${(await workspace(driver)).project.pages.find(page => page.id === homeId).regions.findIndex(region => region.id === request.id) + 1}`, 'Make the heading warmer while preserving its meaning.');
     await clickHeading(driver, physical); await physical.keys('K', 1, ['Control']);
-    await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA' && document.activeElement.closest('[data-testid="canvas"]')), 'Ctrl+K did not focus its on-canvas AI request');
+    await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA' && !!document.activeElement.closest('[data-testid="canvas"]')), 'Ctrl+K did not focus its on-canvas AI request');
     assert.equal(requestCount(provider), requests); await physical.captureWindow(join(output, '11-ask-ai-window.png'));
   });
 
@@ -290,6 +331,22 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await physical.captureWindow(join(output, '13-real-recent-projects-window.png')); await closeDialog(driver);
   });
 
+
+  await step('Native Close flushes an unfinished inline edit before asking about unsaved changes', async () => {
+    assert.equal((await workspace(driver)).dirty, false);
+    await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
+    await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Closing preserves this draft' });
+    assert.equal((await workspace(driver)).dirty, false, 'The regression requires an uncommitted inline draft');
+    await physical.raw({ action: 'close' });
+    const dialog = await waitFor(async () => (await physical.inspect()).windows.find(window => window.title === 'Unsaved project changes'), 'Close did not show the native unsaved-changes confirmation');
+    assert.equal((await workspace(driver)).dirty, true);
+    await physical.captureWindow(join(output, '13b-unsaved-inline-close-window.png'));
+    await physical.raw({ action: 'key', key: 'Escape', windowId: dialog.id });
+    await previewReady(driver, 'Closing preserves this draft');
+    await driver.button('Undo'); await previewReady(driver, 'Edited directly on the page');
+    await driver.button('Save'); savedProject = (await savedState(driver, projectPath)).project;
+  });
+
   await step('Opening an actual recent project restores its saved source and pending requests', async () => {
     await driver.menu(['Project', 'New project']); await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
     await driver.fill('Project name', 'Temporary audit page'); await driver.button('Create project'); await closed(driver);
@@ -303,7 +360,11 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   });
 
   await step('Local replacement builds two real portable pages with image sources, CSS assets, internal links and a click script', async () => {
-    const requests = requestCount(provider); await replaceMain(driver, physical, false); await driver.page(aboutId); await replaceMain(driver, physical, true); await driver.page(homeId);
+    const requests = requestCount(provider);
+    await driver.click('details.request-overview > summary'); await driver.click('button.request-list-item');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.annotation.selected textarea')), 'The temporary export request was not selected');
+    await driver.menu(['Edit', 'Remove request']); await driver.button('Remove'); await closed(driver);
+    await driver.button('Fit'); await replaceMain(driver, physical, false); await driver.page(aboutId); await replaceMain(driver, physical, true); await driver.page(homeId);
     const value = (await workspace(driver)).project; assert.equal(value.pages.length, 2);
     for (const page of value.pages) { assert.ok(page.content.html.includes('srcset=')); assert.ok(page.content.html.includes('background-image:')); assert.ok(page.content.html.includes('Local click script works')); }
     assert.equal(requestCount(provider), requests); await driver.button('Save'); await savedState(driver, projectPath);

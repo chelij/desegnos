@@ -4,6 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { native, edit } from './api';
 import { Canvas, type CanvasHandle, type RequestPatch } from './Canvas';
+import { CanvasTools, RequestOverview, type CanvasTool } from './CanvasTools';
 import { Modal } from './Modal';
 import brandLight from './assets/brand/desegnos-wordmark-light.svg';
 import brandDark from './assets/brand/desegnos-wordmark-dark.svg';
@@ -14,17 +15,18 @@ import './shell.css';
 import { editorShortcut, SHORTCUT_HELP } from './shortcuts';
 import { steppedZoom, zoomLabel, ZOOM_LEVELS } from './canvasGeometry';
 import { AiSettings, ChatgptWelcome } from './AiSettings';
-import { GenerationDialog } from './Generation';
+import { GenerationDialog, GenerationFeedback } from './Generation';
 import { PagePreview, SourceView } from './Preview';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AiSettingsView, Appearance, Brief, Command, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, NewProjectIdentity, Page, Project, Rect, RecoveryInfo, Region, RequirementsSnapshot, Viewport, WorkspaceView } from './types';
+import type { AiSettingsView, Appearance, Brief, Command, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, NewProjectIdentity, Page, Project, Rect, RecoveryInfo, Region, RequirementsSnapshot, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport } from './types';
 
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
 type Confirmation = { title: string; message: string; action: () => Promise<void> };
 
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : String(error); }
-function initialZoom(width: number) { return [1, 0.75, 0.5, 0.25].find(zoom => width * zoom <= window.innerWidth - 64) ?? 0.25; }
+function initialZoom(width: number, height = 900) { return [...ZOOM_LEVELS].reverse().find(zoom => zoom <= 1 && width * zoom <= window.innerWidth - 96 && (width > 600 || height * zoom <= window.innerHeight - 304)) ?? 0.1; }
+function readRulerUnit(): 'pixels' | 'percent' { try { return localStorage.getItem('desegnos.ruler-unit') === 'percent' ? 'percent' : 'pixels'; } catch { return 'pixels'; } }
 function readTheme(): Theme {
   try { const saved = localStorage.getItem('desegni.editor-theme'); return saved === 'light' || saved === 'dark' ? saved : 'system'; }
   catch { return 'system'; }
@@ -45,6 +47,13 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const [focusPrompt, setFocusPrompt] = useState(false);
   const [zoom, setZoom] = useState(0.75);
+  const [tool, setTool] = useState<CanvasTool>('select');
+  const [rulerUnit, setRulerUnit] = useState<'pixels' | 'percent'>(readRulerUnit);
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [exported, setExported] = useState<WebsiteExport | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [resultReview, setResultReview] = useState<{ jobId: string; revision: number } | null>(null);
+  const [highlightResult, setHighlightResult] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [showNotes, setShowNotes] = useState<DossierSection | null>(null);
   const [showGridSettings, setShowGridSettings] = useState(false);
@@ -103,6 +112,14 @@ export default function App() {
     return () => { active = false; clearTimeout(timer); };
   }, [aiSettings?.chatgpt.signIn.status, refreshAiSettings]);
 
+  const refreshRecent = useCallback(async () => {
+    const value = await native<RecentProjectsView>('get_recent_projects');
+    setRecentProjects(value.projects);
+    if (value.error) setError(`Recent projects: ${value.error}`);
+  }, []);
+  useEffect(() => { void refreshRecent().catch(error => setError(errorMessage(error))); }, [refreshRecent]);
+  useEffect(() => { try { localStorage.setItem('desegnos.ruler-unit', rulerUnit); } catch {} }, [rulerUnit]);
+
   const accept = useCallback((next: WorkspaceView) => { current.current = next; setView(next); }, []);
   const queue = useCallback(<T,>(operation: (workspace: WorkspaceView | null) => Promise<T>, reportErrors = true): Promise<T> => {
     setPending(count => count + 1);
@@ -120,7 +137,7 @@ export default function App() {
   }), [queue, accept]);
   const load = useCallback(async () => {
     setLoading(true); setError('');
-    try { const loaded = await native<WorkspaceView>('get_workspace'); accept(loaded); if (loaded.project) setZoom(initialZoom(loaded.project.viewport.width)); }
+    try { const loaded = await native<WorkspaceView>('get_workspace'); accept(loaded); if (loaded.project) setZoom(initialZoom(loaded.project.viewport.width, loaded.project.viewport.height)); }
     catch (error) { setError(errorMessage(error)); }
     finally { setLoading(false); }
   }, [accept]);
@@ -159,6 +176,7 @@ export default function App() {
       if (closing.current) return;
       closing.current = true;
       try {
+        await canvas.current?.synchronize();
         await settle();
         const identity = await native<import('./types').IdentityAnalysis | null>('get_identity_analysis').catch(() => null);
         const generating = generationRef.current?.status === 'generating' || identity?.status === 'analyzing';
@@ -178,7 +196,7 @@ export default function App() {
     await settle();
     return queue(async () => {
       const saved = await native<WorkspaceView | null>('save_project', { saveAs });
-      if (saved) { accept(saved); setNotice('Project saved.'); }
+      if (saved) { accept(saved); setNotice('Project saved.'); void refreshRecent().catch(() => {}); }
       return saved;
     });
   }
@@ -192,16 +210,37 @@ export default function App() {
     await replace('open another project', async discard => {
       await queue(async () => {
         const opened = await native<WorkspaceView | null>('open_project', { discard });
-        if (opened) { accept(opened); setSelected(null); setRequirements(null); setNotice('Project opened.'); setShowNew(false); if (opened.project) setZoom(initialZoom(opened.project.viewport.width)); }
+        if (opened) { accept(opened); setSelected(null); setRequirements(null); setNotice('Project opened.'); setShowNew(false); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
       });
     });
+  }
+  async function openRecent(path: string) {
+    await replace('open another project', async discard => {
+      await queue(async () => {
+        const opened = await native<WorkspaceView>('open_recent_project', { path, discard });
+        accept(opened); setSelected(null); setRequirements(null); setShowNew(false); setNotice('Project opened.');
+        if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height));
+        void refreshRecent().catch(() => {});
+      });
+    });
+  }
+  async function exportWebsite() {
+    await canvas.current?.synchronize(); await settle();
+    setExporting(true); setError('');
+    try {
+      const project = current.current?.project;
+      if (!project) return;
+      const result = await native<WebsiteExport | null>('export_website', { projectId: project.id, revision: project.revision });
+      if (result) setExported(result);
+    } catch (error) { setError(errorMessage(error)); }
+    finally { setExporting(false); }
   }
   async function create(name: string, viewport: Viewport, identity?: NewProjectIdentity) {
     await replace('create a new project', async discard => {
       await queue(async () => {
         accept(await native<WorkspaceView>('create_project', { name, viewport, appearance: 'light', discard, ...identity }));
-        setSelected(null); setRequirements(null); setShowNew(false); setNotice(identity ? 'Blank project created with your identity.' : 'Blank project created.');
-        setZoom(initialZoom(viewport.width));
+        setSelected(null); setRequirements(null); setShowNew(false); setNotice(identity ? 'Blank website created with your brand.' : 'Blank project created.');
+        setZoom(initialZoom(viewport.width, viewport.height));
       });
     });
   }
@@ -210,7 +249,7 @@ export default function App() {
       await queue(async () => {
         const recovered = await native<WorkspaceView>('recover_project', { projectId, discard });
         accept(recovered);
-        if (recovered.project) setZoom(initialZoom(recovered.project.viewport.width));
+        if (recovered.project) setZoom(initialZoom(recovered.project.viewport.width, recovered.project.viewport.height));
         setSelected(null); setRequirements(null); setShowRecovery(false);
         setNotice('Project recovered. Save it to keep a project file.');
       });
@@ -259,6 +298,8 @@ export default function App() {
         if (shortcut === 'undo' ? current.current?.canUndo : current.current?.canRedo) action = () => travel(shortcut === 'undo' ? 'undo_project' : 'redo_project');
       } else if (shortcut === 'zoomIn' || shortcut === 'zoomOut') { event.preventDefault(); setZoom(value => steppedZoom(value, shortcut === 'zoomIn' ? 1 : -1)); return; }
       else if (shortcut === 'actualSize' || shortcut === 'doubleSize') { event.preventDefault(); setZoom(shortcut === 'actualSize' ? 1 : 2); return; }
+      else if (shortcut === 'selectTool' || shortcut === 'requestTool' || shortcut === 'panTool') { event.preventDefault(); setTool(shortcut === 'selectTool' ? 'select' : shortcut === 'requestTool' ? 'request' : 'pan'); return; }
+      else if (shortcut === 'askAI') { event.preventDefault(); canvas.current?.askAI(); return; }
       else if (shortcut === 'fit') { event.preventDefault(); recenter('fit'); return; }
       else if (shortcut === 'remove' && selected) { event.preventDefault(); removeRegion(selected); return; }
       else if (shortcut === 'nextPage' || shortcut === 'previousPage') {
@@ -278,7 +319,7 @@ export default function App() {
   const region = page?.regions.find(region => region.id === selected) ?? null;
   const requestedAreas = project?.pages.reduce((count, page) => count + page.regions.filter(region => !region.completed && region.prompt.trim()).length, 0) ?? 0;
   const activeProjectId = project?.id ?? null;
-  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>) => Promise.resolve(command === 'prepare_generation' ? canvas.current?.synchronize(true) : undefined).then(() => queue(async workspace => {
+  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' ? canvas.current?.synchronize(command === 'prepare_generation') : undefined).then(() => queue(async workspace => {
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {
       await aiTail.current;
@@ -294,13 +335,33 @@ export default function App() {
     if (command === 'apply_generation') accept(result as WorkspaceView);
     return result;
   })), [queue, activeProjectId, accept, refreshAiSettings]);
-  const generationApplied = useCallback((_workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); }, []);
+  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
   }), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
+  useEffect(() => { setResultReview(null); setExported(null); setTool('select'); }, [activeProjectId]);
+  useEffect(() => { if (resultReview && project?.revision !== resultReview.revision) setResultReview(null); }, [project?.revision, resultReview]);
+  useEffect(() => { if (!highlightResult) return; const timer = setTimeout(() => setHighlightResult(false), 2000); return () => clearTimeout(timer); }, [highlightResult, resultReview?.jobId]);
+  async function rejectResult(tryAgain = false) {
+    const review = resultReview;
+    if (!review) return;
+    await canvas.current?.synchronize(); await settle();
+    const undone = await queue(async workspace => {
+      setResultReview(null);
+      if (workspace?.project?.revision !== review.revision || workspace.project.latestGeneration?.jobId !== review.jobId) return false;
+      accept(await native<WorkspaceView>('undo_project')); setNotice('Generated changes undone.'); return true;
+    });
+    if (undone && tryAgain) await generation.prepare();
+  }
+  async function visitRequest(targetPage: string, targetRegion: string | null) {
+    await selectPage(targetPage, targetRegion);
+    if (targetRegion) { setSelected(targetRegion); setFocusPrompt(true); requestAnimationFrame(() => canvas.current?.focusRequest(targetRegion)); }
+  }
+  const working = activeGeneration(generation.job) || !!generation.operation;
+  const showGenerationStatus = working || !!generation.error || !!generation.job && ['prepared', 'blocked', 'failed', 'unknown', 'cancelled'].includes(generation.job.status);
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
   const composeAccountId = composeJob ? composeJob.chatgptAccountId : aiSettings?.chatgpt.activeAccountId;
@@ -323,7 +384,7 @@ export default function App() {
     setSelected(id); setFocusPrompt(false);
     void dismissEmpty(id).catch(() => {});
   }
-  async function selectPage(id: string) { await canvas.current?.synchronize(); await settle(); await dismissEmpty(null); setPageId(id); setSelected(null); }
+  async function selectPage(id: string, keep: string | null = null) { await canvas.current?.synchronize(); await settle(); await dismissEmpty(keep); setPageId(id); setSelected(null); }
   async function addRegion(rect: Rect) {
     if (!page) return;
     const id = page.id;
@@ -375,13 +436,13 @@ export default function App() {
   function removeRegion(id = region?.id) {
     if (!page || !id) return;
     const page_id = page.id; const region_id = id;
-    setConfirmation({ title: 'Remove request?', message: 'Remove this request? You can undo this. Remove any linked choices or exceptions from the project dossier first.',
+    setConfirmation({ title: 'Remove request?', message: 'Remove this request? You can undo this. Remove any linked choices or exceptions from the project brief first.',
       action: async () => { await mutate({ type: 'remove_region', page_id, region_id }); setSelected(null); requestAnimationFrame(() => { if (!document.querySelector('dialog[open]')) document.getElementById('page-canvas')?.focus(); }); } });
   }
   function removePage() {
     if (!page) return;
     const page_id = page.id;
-    setConfirmation({ title: 'Remove page?', message: `Remove “${page.name}” and its ${page.regions.length} requests? You can undo this. Remove any linked choices or exceptions from the project dossier first.`,
+    setConfirmation({ title: 'Remove page?', message: `Remove “${page.name}” and its ${page.regions.length} requests? You can undo this. Remove any linked choices or exceptions from the project brief first.`,
       action: async () => { await mutate({ type: 'delete_page', page_id }); setPageId(project!.homePageId); setSelected(null); } });
   }
 
@@ -393,9 +454,10 @@ export default function App() {
       { id: 'open', label: 'Open project', shortcut: 'Ctrl/Cmd+O', action: () => run(open) },
       { id: 'save', label: 'Save', shortcut: 'Ctrl/Cmd+S', disabled: !project, action: () => run(() => save()) },
       { id: 'save-as', label: 'Save as', shortcut: 'Ctrl/Cmd+Shift+S', disabled: !project, action: () => run(() => save(true)) },
+      { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
       { id: 'project-divider', label: '', separator: true },
       { id: 'rename', label: 'Rename project', disabled: !project, action: () => setShowRename(true) },
-      { id: 'dossier', label: 'Project dossier', disabled: !project, action: () => setShowNotes('overview') },
+      { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
       { id: 'recover', label: 'Recover projects', disabled: !view?.recoveries.length, action: () => setShowRecovery(true) },
     ] },
     { id: 'edit', label: 'Edit', disabled: !project, children: [
@@ -406,7 +468,7 @@ export default function App() {
     { id: 'page', label: 'Page', disabled: !page, children: [
       { id: 'add-page', label: 'Add page', disabled: !project || project.pages.length >= 100, action: () => setPageDialog('new') },
       { id: 'page-settings', label: 'Page settings', action: () => setPageDialog(page) },
-      { id: 'include-page', label: 'Include in website', checked: page?.included, disabled: !page || page.id === project?.homePageId,
+      { id: 'include-page', label: 'Include in export', checked: page?.included, disabled: !page || page.id === project?.homePageId,
         action: () => { if (page) run(() => mutate(current => {
           const target = current.pages.find(item => item.id === page.id);
           return target ? { type: 'update_page', page_id: target.id, name: target.name, path: target.path, viewport: target.viewport, appearance: target.appearance, included: !target.included } : null;
@@ -430,8 +492,8 @@ export default function App() {
       { id: 'usage', label: 'Manage ChatGPT usage', disabled: !composeUsesChatgpt, action: () => { void manageChatgptUsage().catch(error => setError(errorMessage(error))); } },
     ] },
     { id: 'help', label: 'Keyboard shortcuts', shortcut: 'F1', action: () => setShowShortcuts(true) },
-    { id: 'technical', label: 'Technical', disabled: !project, children: [
-      { id: 'requirements', label: 'Review requirements', disabled: requestedAreas === 0, action: () => run(prepare) },
+    { id: 'technical', label: 'Advanced', disabled: !project, children: [
+      { id: 'requirements', label: 'View AI instructions', disabled: requestedAreas === 0, action: () => run(prepare) },
       { id: 'project-source', label: 'PROJECT.md', action: () => setShowNotes('markdown') },
       { id: 'site-source', label: 'Site source', disabled: !page?.content, action: () => setShowSource(true) },
       { id: 'project-details', label: 'Project details', action: () => setShowDetails(true) },
@@ -443,46 +505,54 @@ export default function App() {
       {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot">●</span>}</button>}
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       <div className="shell-primary-actions">
-        {project && <button aria-label="Undo last change" title="Undo last change · Ctrl/Cmd+Z" disabled={!view?.canUndo || activeGeneration(generation.job) || !!generation.operation} onClick={() => run(() => travel('undo_project'))}>Undo</button>}
+        {project && <><button aria-label="Undo last change" title="Undo last change · Ctrl/Cmd+Z" disabled={!view?.canUndo || pending > 0} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo last change · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo || pending > 0} onClick={() => run(() => travel('redo_project'))}>Redo</button></>}
         {page?.content && <button onClick={() => setShowPreview(true)}>Preview</button>}
-        <button className="ai-shortcut" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title={composeUsesChatgpt ? `${composeAccount?.label ?? 'ChatGPT'} · ${composeAccount?.connected && composeAccount.planEnabled ? 'Using ChatGPT plan' : 'Needs attention'}` : 'AI settings'}>{composeUsesChatgpt ? 'ChatGPT' : 'AI'}</button>
-        {project && requestedAreas > 0 && <div className="generation-controls">
-          <fieldset className="generation-mode"><legend className="sr-only">Generation mode</legend><div className="segmented">{(['fuzzy', 'strict'] as GenerationMode[]).map(mode => <button type="button" key={mode} aria-pressed={project.generationMode === mode} disabled={activeGeneration(generation.job)}
-            title={mode === 'fuzzy' ? 'Give the AI room to interpret your requests.' : 'Follow your descriptions and placement closely.'}
-            onClick={() => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode }))}>{mode === 'fuzzy' ? 'Fuzzy' : 'Strict'}</button>)}</div></fieldset>
-          <button className="primary" disabled={!activeGeneration(generation.job) && !!generation.operation} onClick={activeGeneration(generation.job) ? openGeneration : generate}>{activeGeneration(generation.job) || generation.operation ? 'Generating…' : 'Generate'}</button>
+        {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
+        <button className={`ai-shortcut ai-status ${!aiSettings || aiSettings.configurationError || (composeUsesChatgpt ? !composeAccount?.connected || !composeAccount.planEnabled || composeAccount.storageRepairRequired : !aiSettings.credential.configured) ? 'needs-connection' : ''}`} onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI or change settings">{aiSettings && !aiSettings.configurationError && (composeUsesChatgpt ? composeAccount?.connected && composeAccount.planEnabled && !composeAccount.storageRepairRequired : aiSettings.credential.configured) ? composeUsesChatgpt ? `AI: ChatGPT · ${composeAccount?.label ?? 'Connected'}` : 'AI: OpenAI key' : 'AI: Not connected'}</button>
+        {project && <div className="generation-controls">
+          <RequestOverview project={project} choose={(targetPage, targetRegion) => run(() => visitRequest(targetPage, targetRegion))} />
+          <button className="primary" title={requestedAreas === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={requestedAreas === 0 || working} onClick={generate}>{working ? 'Generating…' : 'Generate'}</button>
+          <MenuButton label="⌄" showChevron={false} ariaLabel="Generation interpretation" title={`Interpretation: ${project.generationMode === 'fuzzy' ? 'Flexible' : 'Precise'}`} items={(['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible — coordinate and interpret requests' : 'Precise — follow descriptions and placement closely', checked: project.generationMode === mode, disabled: working, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) }))} />
         </div>}
       </div>
     </header>
     {error && <div className="message error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
+    {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'} · {exported.fileCount} files · {exported.path}</span>{exported.warnings.length > 0 && <details><summary>Things to check ({exported.warnings.length})</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
     {view?.recoveryError && <div className="message error" role="alert">Recovery could not be loaded: {view.recoveryError}</div>}
     {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <div className="message warning migration-notice" role="status"><span>{view.migrationNotice}</span><button onClick={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} aria-label="Dismiss migration notice">Dismiss</button></div>}
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><p className="muted">Projects are managed by the native application.</p><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
       {view.recoveries.length > 0 && <section className="recovery-notice" aria-label="Project recovery"><h2>Recover unsaved projects</h2>
         <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} /></section>}
-      <NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} />
+      <NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} />
     </main> : <>
       <div className="page-strip"><div className="page-tabs" role="tablist" aria-label="Project pages">
         {project.pages.map((item, index) => <button key={item.id} id={`page-tab-${item.id}`} role="tab" aria-selected={page?.id === item.id} aria-controls="page-panel" tabIndex={page?.id === item.id ? 0 : -1}
-          title={`${item.path}${item.included ? '' : ' · Draft'}`} onClick={() => run(() => selectPage(item.id))}
+          title={`${item.path}${item.included ? '' : ' · Hidden page'}`} onClick={() => run(() => selectPage(item.id))}
           onKeyDown={event => {
             if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
             event.preventDefault();
             const next = event.key === 'Home' ? 0 : event.key === 'End' ? project.pages.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + project.pages.length) % project.pages.length;
             document.getElementById(`page-tab-${project.pages[next].id}`)?.focus(); run(() => selectPage(project.pages[next].id));
-          }}><span>{item.name}</span>{!item.included && <span className="page-draft">Draft</span>}</button>)}
+          }}><span>{item.name}</span>{!item.included && <span className="page-draft">Hidden</span>}</button>)}
       </div><button className="add-page-tab" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}>+</button></div>
+      {showGenerationStatus && <div className="generation-strip"><GenerationFeedback controller={generation} compact>
+        <button onClick={openGeneration}>Details</button>
+        {generation.job?.status === 'generating' && <button disabled={!!generation.operation} onClick={() => run(generation.cancel)}>Cancel generation</button>}
+        {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
+      </GenerationFeedback></div>}
+      {resultReview && <section className="result-review" aria-label="Generated changes"><strong>Website updated</strong><button className="primary" onClick={() => setResultReview(null)}>Keep</button><button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button><button disabled={pending > 0} title="Undo this result and generate a new version; this uses your AI account again" onClick={() => run(() => rejectResult(true))}>Try again</button><button onClick={openGeneration}>Details</button></section>}
       <main className="workspace" id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined}>
-      {page && <Canvas ref={canvas} page={page} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={activeGeneration(generation.job) || !!generation.operation ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas ref={canvas} page={page} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      <CanvasTools tool={tool} setTool={setTool} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
       </main>
-      <footer className="status-bar"><span title={view.path ?? undefined}>{region?.element ? 'Describe the change, then Generate' : region ? 'Request selected · move or resize with its handles' : page?.content ? 'Drag a selected element to move · double-click to prompt' : 'Double-click to add a request · drag to pan · Ctrl+wheel to zoom'}</span><div className="canvas-status-actions">{page && <label className="page-appearance">Page appearance<select value={page.appearance} disabled={pending > 0 || activeGeneration(generation.job) || !!generation.operation} onChange={event => { const appearance = event.target.value as Appearance; run(() => mutate(current => { const target = current.pages.find(item => item.id === page.id); return target ? { type: 'update_page', page_id: target.id, name: target.name, path: target.path, viewport: target.viewport, appearance, included: target.included } : null; })); }}><option value="light">Light</option><option value="dark">Dark</option></select></label>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><MenuButton label={zoomLabel(zoom)} ariaLabel="Canvas zoom" items={ZOOM_LEVELS.map(value => ({ id: `zoom-${value}`, label: zoomLabel(value), checked: zoom === value, action: () => setZoom(value) }))} /><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
+      <footer className="status-bar"><span title={view.path ?? undefined}>{region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{page && <button className="page-appearance-toggle" aria-label={`Page appearance: ${page.appearance === 'light' ? 'Light' : 'Dark'}`} title={`Switch page to ${page.appearance === 'light' ? 'dark' : 'light'}`} onClick={() => run(() => mutate(current => { const target = current.pages.find(item => item.id === page.id); return target ? { type: 'update_page', page_id: target.id, name: target.name, path: target.path, viewport: target.viewport, appearance: target.appearance === 'light' ? 'dark' : 'light', included: target.included } : null; }))}>{page.appearance === 'light' ? '☀ Light' : '☾ Dark'}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
     </>}
     {showShortcuts && <Modal title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><p className="field-help">Text selection, copy, paste and text undo keep their normal behavior inside prompts.</p><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></Modal>}
-    {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} /></Modal>}
+    {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} /></Modal>}
     {showRecovery && view && <Modal title="Recover unsaved projects" close={() => setShowRecovery(false)}><DialogError error={error} dismiss={() => setError('')} />
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} /></Modal>}
-    {showNotes && project && <Modal title="Project dossier" wide close={() => setShowNotes(null)}><DialogError error={error} dismiss={() => setError('')} /><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} markdown={getNotes} /></Modal>}
-    {showGridSettings && project && <Modal title="Grid and rulers" close={() => setShowGridSettings(false)}><DialogError error={error} dismiss={() => setError('')} /><GridForm settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
+    {showNotes && project && <Modal title="Project brief" wide close={() => setShowNotes(null)}><DialogError error={error} dismiss={() => setError('')} /><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} markdown={getNotes} /></Modal>}
+    {showGridSettings && project && <Modal title="Grid and rulers" close={() => setShowGridSettings(false)}><DialogError error={error} dismiss={() => setError('')} /><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
       if (visible !== project.showGrid) await mutate({ type: 'set_grid', enabled: visible });
       await mutate({ type: 'set_grid_settings', settings }); setShowGridSettings(false);
     }} /></Modal>}
@@ -504,8 +574,8 @@ export default function App() {
       }} />
     </Modal>}
     {showRename && project && <Modal title="Rename project" close={() => setShowRename(false)}><DialogError error={error} dismiss={() => setError('')} /><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); setShowRename(false); }} /></Modal>}
-    {requirements && <Modal title="Review requirements" wide close={() => setRequirements(null)}><DialogError error={error} dismiss={() => setError('')} /><div className="requirements-review"><p>{requirements.regionCount} {requirements.regionCount === 1 ? 'request' : 'requests'} · {requirements.pageCount} {requirements.pageCount === 1 ? 'page' : 'pages'} · revision {requirements.baseRevision}</p>
-      <p className="muted">Not sent to AI.</p>{project && project.revision !== requirements.baseRevision && <p className="message warning">This copy is older than your project. Reopen requirements to update it.</p>}
+    {requirements && <Modal title="View AI instructions" wide close={() => setRequirements(null)}><DialogError error={error} dismiss={() => setError('')} /><div className="requirements-review"><p>{requirements.regionCount} {requirements.regionCount === 1 ? 'request' : 'requests'} · {requirements.pageCount} {requirements.pageCount === 1 ? 'page' : 'pages'} · revision {requirements.baseRevision}</p>
+      <p className="muted">Not sent to AI.</p>{project && project.revision !== requirements.baseRevision && <p className="message warning">This copy is older than your project. Reopen AI instructions to update it.</p>}
       <pre className="markdown-source" tabIndex={0} aria-label="REQUIREMENTS.md source">{requirements.markdown}</pre>
       <details className="snapshot-details"><summary>Snapshot details</summary><dl><dt>Job</dt><dd>{requirements.jobId}</dd><dt>SHA-256</dt><dd>{requirements.sha256}</dd></dl></details>
       <div className="form-actions"><button className="primary" onClick={() => { void queue(async () => { const saved = await native<boolean>('save_requirements', { jobId: requirements.jobId }); if (saved) setNotice('Requirements saved.'); }).catch(() => {}); }}>Save requirements</button><button onClick={() => setRequirements(null)}>Close review</button></div>
@@ -567,14 +637,14 @@ function PageForm({ page, paths, home, busy, submit }: { page: Page | null; path
         <label>Screen width<input type="number" min={1} max={32768} required value={viewport.width} onChange={event => setViewport({ ...viewport, width: Number(event.target.value) })} /></label><label>Screen height<input type="number" min={1} max={100000} required value={viewport.height} onChange={event => setViewport({ ...viewport, height: Number(event.target.value) })} /></label>
       </div></details>
       <label>Website appearance<select value={appearance} onChange={event => setAppearance(event.target.value as Appearance)}><option value="light">Light page</option><option value="dark">Dark page</option></select></label>
-      <label className="check-label"><input type="checkbox" checked={included} disabled={home} onChange={event => setIncluded(event.target.checked)} />Include this page in the website</label>
+      <label className="check-label"><input type="checkbox" checked={included} disabled={home} onChange={event => setIncluded(event.target.checked)} />Include this page in export</label>
     </>}
     <details className="page-address"><summary>Page address · {path}</summary><label>Page path<input required maxLength={1024} disabled={home} value={path} onChange={event => { setPath(event.target.value); setCustomPath(true); }} aria-describedby="page-path-help" /></label><p id="page-path-help" className="field-help">{home ? 'The home page uses /.' : 'Start with /, such as /about.'}</p></details>
     <div className="form-actions"><button className="primary" disabled={busy || saving || !name.trim() || !path.trim()}>{page ? 'Save page settings' : 'Add page'}</button></div>
   </form>;
 }
 
-function GridForm({ settings, showGrid, busy, submit }: { settings: GridSettings; showGrid: boolean; busy: boolean; submit: (settings: GridSettings, visible: boolean) => Promise<void> }) {
+function GridForm({ settings, showGrid, busy, submit, rulerUnit, changeRulerUnit }: { rulerUnit: 'pixels' | 'percent'; changeRulerUnit: (value: 'pixels' | 'percent') => void; settings: GridSettings; showGrid: boolean; busy: boolean; submit: (settings: GridSettings, visible: boolean) => Promise<void> }) {
   const [draft, setDraft] = useState(settings);
   const [visible, setVisible] = useState(showGrid);
   const [saving, setSaving] = useState(false);
@@ -591,7 +661,8 @@ function GridForm({ settings, showGrid, busy, submit }: { settings: GridSettings
         setDraft({ ...draft, unit, spacing: unit === 'percent' ? Math.max(0.25, Math.min(100, draft.spacing)) : Math.max(1, Math.min(512, draft.spacing)) });
       }}><option value="pixels">Pixels</option><option value="percent">Percent</option></select></label></div>
     <label className="check-label"><input type="checkbox" checked={draft.snap} onChange={event => setDraft({ ...draft, snap: event.target.checked })} />Snap requests to the grid</label>
-    <label className="check-label"><input type="checkbox" checked={draft.rulers} onChange={event => setDraft({ ...draft, rulers: event.target.checked })} />Show percentage rulers</label>
+    <label className="check-label"><input type="checkbox" checked={draft.rulers} onChange={event => setDraft({ ...draft, rulers: event.target.checked })} />Show rulers</label>
+    <label>Ruler units<select value={rulerUnit} onChange={event => changeRulerUnit(event.target.value as 'pixels' | 'percent')}><option value="pixels">Pixels</option><option value="percent">Percent</option></select></label>
     <p className="field-help">Percentages follow the screen guide. Hold Alt to place freely.</p>
     <div className="form-actions"><button className="primary" disabled={busy || saving || !valid}>Save grid settings</button></div>
   </form>;

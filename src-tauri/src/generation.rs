@@ -35,6 +35,25 @@ const MAX_ATTEMPTS: usize = 20;
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
+
+#[cfg(all(debug_assertions, feature = "native-tests"))]
+fn capture_benchmark_output(
+    directory: &Path,
+    ordinal: usize,
+    text: &str,
+    enabled: bool,
+) -> NativeResult<()> {
+    if enabled {
+        private_directory(directory)?;
+        write_markdown(
+            &directory.join(format!("provider-output-{ordinal}.txt")),
+            text,
+        )
+        .map_err(message)?;
+    }
+    Ok(())
+}
+
 fn now() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
@@ -324,6 +343,10 @@ impl GenerationService {
                     Arc::new(CredentialManager::isolated_for_tests()),
                     OpenAiClient::for_loopback(&endpoint).map_err(message),
                 )
+            } else if cfg!(debug_assertions)
+                && std::env::var("DESEGNI_GENERATION_BENCHMARK").as_deref() == Ok("1")
+            {
+                (Arc::new(CredentialManager::isolated_for_tests()), client)
             } else {
                 (credentials, client)
             };
@@ -901,6 +924,15 @@ impl GenerationService {
                     attempt.response_id = Some(response.response_id);
                     attempt.usage = response.usage;
                 }
+                // Only the explicit owner-run debug benchmark captures model output.
+                // Successful transport has already bounded it and rejected credential echoes.
+                #[cfg(all(debug_assertions, feature = "native-tests"))]
+                capture_benchmark_output(
+                    &self.job_directory(original.id, job_id),
+                    ordinal,
+                    &response.text,
+                    std::env::var("DESEGNI_GENERATION_BENCHMARK").as_deref() == Ok("1"),
+                )?;
                 match GenerationCandidate::from_json(&response.text).and_then(|candidate| {
                     candidate.validate(&record.view.requirements, original)?;
                     Ok(candidate)

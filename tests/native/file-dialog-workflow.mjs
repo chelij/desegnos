@@ -79,7 +79,7 @@ export async function chooseFile(physical, trigger, path, evidence, label, cance
   if (folder) {
     // The observed GTK Select Folder dialog opens in Recent, where Open stays
     // disabled for a typed location. Its Home row enters filesystem browsing.
-    assert.equal(dialog.title, 'Select Folder');
+    assert.ok(['Select Folder', 'Choose where to export your website'].includes(dialog.title), 'The owned window must be the expected native folder picker');
     assert.ok(dialog.width >= 600 && dialog.height >= 300);
     await physical.raw({ action: 'click', point: { x: dialog.x + 60, y: dialog.y + 60 }, windowId: dialog.id });
   }

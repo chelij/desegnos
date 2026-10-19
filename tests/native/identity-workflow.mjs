@@ -77,8 +77,8 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     sourceProjectHash = hash(await readFile(sourceProjectPath));
     await driver.button('New project');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] input[name="projectName"]')), false);
-    await driver.ready('//dialog[@open]//button[normalize-space(.)="New blank page"]', 'xpath');
-    await driver.button('Import identity from project');
+    await driver.ready('//dialog[@open]//button[normalize-space(.)="Blank website"]', 'xpath');
+    await driver.button('Use my existing brand');
     await driver.fill('Project name', 'Imported Northstar website');
     await driver.button('Web');
     assert.deepEqual(await driver.execute(() => [...document.querySelector('dialog[open] select').options].map(option => option.value)), ['1440x900', '1920x1080', '1536x864', '1366x768', '1280x720', '2560x1440', 'custom']);
@@ -115,7 +115,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
 
   await step('Identity analysis shows progress, rejects duplicate sending and cancels without creating a website', async () => {
     provider.setMode('waiting');
-    await driver.button('Analyze identity');
+    await driver.button('Analyze brand');
     cancelled = await waitFor(async () => { const value = await analysis(driver); return value?.status === 'analyzing' && provider.identityRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The frozen identity request did not reach the controlled provider');
     await driver.ready('.identity-progress[role="status"]');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] button[disabled][type="submit"]')), true);
@@ -131,7 +131,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
   });
 
   await step('An invalid identity reply leaves a visible failure and never creates or changes a project', async () => {
-    provider.setMode('malformed'); await driver.button('Analyze identity');
+    provider.setMode('malformed'); await driver.button('Analyze brand');
     const value = await completedAnalysis(driver, ['failed', 'unknown']);
     assert.equal(value.candidate ?? null, null); assert.ok(value.error || value.message);
     await waitFor(() => driver.execute(() => !!document.querySelector('.identity-import [role="alert"]')?.textContent), 'The identity failure was hidden from the user');
@@ -140,9 +140,9 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
   });
 
   await step('Identity analysis freezes reviewed files and image provenance, then offers findings and portable logos to choose', async () => {
-    provider.setMode('complete', { chunkDelayMs: 2, chunkSize: 512 }); await driver.button('Analyze identity');
+    provider.setMode('complete', { chunkDelayMs: 2, chunkSize: 512 }); await driver.button('Analyze brand');
     completed = await completedAnalysis(driver, ['complete']);
-    await driver.ready('.identity-result[aria-label="Identity review"]');
+    await driver.ready('.identity-result[aria-label="Brand review"]');
     const record = provider.identityRequests().find(record => record.metadata.jobId === completed.jobId);
     assert.ok(record?.authenticated);
     assert.equal(record.metadata.purpose, 'identityAnalysis');

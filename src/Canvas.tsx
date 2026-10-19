@@ -37,6 +37,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const gesture = useRef<Gesture | null>(null);
   const pan = useRef<{ pointerId: number; last: Point; start: Point; click: boolean; active: boolean } | null>(null);
   const plainClicks = useRef(0);
+  const lastPlainClick = useRef<{ at: number; point: Point } | null>(null);
   const [element, setElement] = useState<ElementSelection | null>(null);
   const [elementDialog, setElementDialog] = useState<ElementDialogMode | null>(null);
   const [elementError, setElementError] = useState('');
@@ -86,7 +87,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   const acceptedVersion = useMemo(() => JSON.stringify([page.content, page.viewport, page.appearance]),
     [page.content?.html, page.content?.css, page.content?.javascript, page.viewport.width, page.viewport.height, page.appearance]);
   const acceptedVersionRef = useRef(acceptedVersion); acceptedVersionRef.current = acceptedVersion;
-  useLayoutEffect(() => { if (elementDrag.current) cancel(); inlineTicket.current++; inlineTextRef.current = null; setInlineText(null); }, [acceptedVersion]);
+  useLayoutEffect(() => { plainClicks.current = 0; lastPlainClick.current = null; if (elementDrag.current) cancel(); inlineTicket.current++; inlineTextRef.current = null; setInlineText(null); }, [acceptedVersion]);
 
   function measure() {
     const node = scroll.current;
@@ -111,8 +112,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     const node = scroll.current;
     if (!node) return;
     if (kind === 'fit') {
-      const target = Math.max(MIN_ZOOM, Math.min(4, Math.max(1, node.clientWidth - 96) / page.viewport.width, Math.max(1, node.clientHeight - 96) / page.viewport.height));
-      const origin = { x: page.viewport.width / 2 - node.clientWidth / target / 2, y: page.viewport.height / 2 - node.clientHeight / target / 2 };
+      const target = Math.max(MIN_ZOOM, Math.min(4, Math.max(1, node.clientWidth - 96) / page.viewport.width, Math.max(1, node.clientHeight - 160) / page.viewport.height));
+      const origin = { x: page.viewport.width / 2 - node.clientWidth / target / 2, y: page.viewport.height / 2 - (node.clientHeight - 64) / target / 2 };
       if (Math.abs(target - zoom) < 1e-8) seek(origin);
       else { zoomIntent.current = { pageId: page.id, zoom: target, origin }; changeZoom(target); }
       return;
@@ -125,7 +126,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     return clientToCanvas(client, stage.current!.getBoundingClientRect(), zoom, { x: boundsRef.current.left, y: boundsRef.current.top });
   }
   function cancel(resetClicks = true) {
-    if (resetClicks) plainClicks.current = 0;
+    if (resetClicks) { plainClicks.current = 0; lastPlainClick.current = null; }
     const pointerId = gesture.current?.pointerId ?? pan.current?.pointerId ?? elementDrag.current?.pointerId;
     if (elementDrag.current) { elementDrag.current.mover?.cancel(); elementDrag.current.resizer?.cancel(); if (elementDrag.current.pageId === pageRef.current.id && elementDrag.current.version === acceptedVersionRef.current) storeElement(elementDrag.current.original); else deselectElement(); elementDrag.current = null; }
     gesture.current = null; pan.current = null; lastPointer.current = null;
@@ -218,6 +219,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
   }, [viewAction]);
 
   function scrolled() {
+    plainClicks.current = 0; lastPlainClick.current = null;
     measure();
     if (pendingOrigin.current) return;
     const node = scroll.current!;
@@ -505,15 +507,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
       cancel(drag.active || !!drag.corner);
       if (css !== null) void applyElement({ kind: 'update', texts: [], attributes: {}, style: css }, drag.original).catch(() => {});
       else if (!drag.active && !drag.corner) {
-        plainClicks.current = Math.min(2, plainClicks.current + 1);
-        const at = point({ x: event.clientX, y: event.clientY }); chooseElement(site.current?.pick(at.x, at.y) ?? null);
+        finishPlainClick({ x: event.clientX, y: event.clientY }, !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey);
       }
       return;
     }
     if (pan.current?.pointerId === event.pointerId) {
       const current = pan.current; cancel(false);
-      plainClicks.current = !current.active && current.click ? Math.min(2, plainClicks.current + 1) : 0;
-      if (!current.active && current.click) { const at = point({ x: event.clientX, y: event.clientY }); chooseElement(page.content ? site.current?.pick(at.x, at.y) ?? null : null); }
+      if (!current.active && current.click) finishPlainClick({ x: event.clientX, y: event.clientY }, !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey);
+      else { plainClicks.current = 0; lastPlainClick.current = null; }
       return;
     }
     const current = gesture.current;
@@ -527,13 +528,34 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     }
     if (current.region && rect && !sameRect(rect, current.initial)) void change(current.region.id, { rect }).catch(() => {});
   }
-  function activate(event: ReactMouseEvent) {
-    if (tool !== 'select' || event.target !== event.currentTarget || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || plainClicks.current < 2) return;
-    event.preventDefault(); event.stopPropagation(); plainClicks.current = 0;
-    const at = point({ x: event.clientX, y: event.clientY });
+  function finishPlainClick(client: Point, plain: boolean) {
+    const at = point(client); chooseElement(page.content ? site.current?.pick(at.x, at.y) ?? null : null);
+    if (!plain) { plainClicks.current = 0; lastPlainClick.current = null; return; }
+    const previous = lastPlainClick.current; const now = performance.now();
+    plainClicks.current = Math.min(2, plainClicks.current + 1);
+    lastPlainClick.current = { at: now, point: client };
+    // WebKit can omit dblclick after the selected-element pointer-capture path.
+    // Two completed unmoved clicks still represent the same user gesture.
+    if (tool === 'select' && previous && now - previous.at <= 500 && Math.hypot(client.x - previous.point.x, client.y - previous.point.y) <= 4) {
+      plainClicks.current = 0; lastPlainClick.current = null; activateAt(client);
+    }
+  }
+  useEffect(() => {
+    const reset = () => { lastPlainClick.current = null; plainClicks.current = 0; };
+    const outside = (event: globalThis.PointerEvent) => { if (!(event.target instanceof Node) || !stage.current?.contains(event.target)) reset(); };
+    reset(); document.addEventListener('pointerdown', outside, true); window.addEventListener('keydown', reset, true);
+    return () => { document.removeEventListener('pointerdown', outside, true); window.removeEventListener('keydown', reset, true); };
+  }, [tool, page.id]);
+  function activateAt(client: Point) {
+    const at = point(client);
     if (page.content) { const hit = site.current?.pick(at.x, at.y); if (hit && hit.element.tag !== 'body') { chooseElement(hit); void editTextAt(at); return; } }
     const snapped = geometryForGesture({ kind: 'new', start: at, initial: { ...at, width: 0, height: 0 } }, at, page.viewport, gridSettings);
     add(requestAt({ x: snapped.x, y: snapped.y }, zoom));
+  }
+  function activate(event: ReactMouseEvent) {
+    if (tool !== 'select' || event.target !== event.currentTarget || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || plainClicks.current < 2) return;
+    event.preventDefault(); event.stopPropagation(); plainClicks.current = 0; lastPlainClick.current = null;
+    activateAt({ x: event.clientX, y: event.clientY });
   }
   function reveal(rect: Rect, resize: boolean) {
     const node = scroll.current;
@@ -583,9 +605,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
 
   useLayoutEffect(() => {
     const node = toolbar.current; if (!node) return;
-    const measure = () => { const rect = node.getBoundingClientRect(); setToolbarSize(current => current.width === rect.width && current.height === rect.height ? current : { width: rect.width, height: rect.height }); };
+    const measure = () => { const rect = node.getBoundingClientRect(); if (!rect.width || !rect.height) return; setToolbarSize(current => current.width === rect.width && current.height === rect.height ? current : { width: rect.width, height: rect.height }); };
     measure(); const observer = new ResizeObserver(measure); observer.observe(node); return () => observer.disconnect();
-  }, [!!element]);
+  }, [!!element, !!inlineText]);
   const visible = { x: bounds.left + measurements.left / zoom, y: bounds.top + measurements.top / zoom };
   const selectedRect = preview ?? element?.rect ?? page.regions.find(region => region.id === selected)?.rect;
   const aligningRegion = gesture.current?.region?.id ?? selected;
@@ -666,8 +688,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pa
     ]} />}
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
-    {coordinate && measurementRect && gridSettings.rulers && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)}${selectedRect ? ` · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}` : ''}`}
-      style={{ left: clamp(measurementRect.x, inset.x + 8, Math.max(inset.x + 8, inset.x + measurements.width - 260)), top: clamp(measurementRect.y + measurementRect.height + 8, inset.y + 8, Math.max(inset.y + 8, inset.y + measurements.height - 30)) }}>
+    {selectedRect && coordinate && measurementRect && gridSettings.rulers && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
+      style={(() => { const position = elementToolbarPosition(measurementRect, { x: 245, y: 28 }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupied.map(inViewport), ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]); return { left: position.x, top: position.y }; })()}>
       {px(coordinate.x)}, {px(coordinate.y)} px{selectedRect && <span>{px(selectedRect.width)} × {px(selectedRect.height)} px</span>}</div>}
     {atEdge && <div className="workspace-edge" role="status">Workspace edge reached</div>}
   </div>;
@@ -747,7 +769,7 @@ function InlineTextEditor({ text, origin, zoom, layer, disabled, finish }: { tex
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onContextMenu={event => event.stopPropagation()}
     onBlur={() => complete(editor.current?.innerText ?? text.text)}
     onKeyDown={event => {
-      event.stopPropagation();
+      if (!event.ctrlKey && !event.metaKey) event.stopPropagation();
       if (event.key === 'Escape') { event.preventDefault(); complete(null, true); }
       if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); complete(editor.current?.innerText ?? text.text, true); }
     }}

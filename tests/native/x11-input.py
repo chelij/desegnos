@@ -24,6 +24,20 @@ class WindowAttributes(c.Structure):
     ]
 
 
+class ClientData(c.Union):
+    _fields_ = [("bytes", c.c_char * 20), ("shorts", c.c_short * 10), ("longs", c.c_long * 5)]
+
+
+class ClientMessage(c.Structure):
+    _fields_ = [("type", c.c_int), ("serial", c.c_ulong), ("send_event", c.c_int),
+        ("display", c.c_void_p), ("window", c.c_ulong), ("message_type", c.c_ulong),
+        ("format", c.c_int), ("data", ClientData)]
+
+
+class XEvent(c.Union):
+    _fields_ = [("client", ClientMessage), ("padding", c.c_long * 24)]
+
+
 def bind(library, name, result, arguments):
     fn = getattr(library, name)
     fn.restype = result
@@ -165,6 +179,22 @@ def main():
         if action == "inspect":
             print(json.dumps(result))
             return
+        if action == "close":
+            # Deliver the same owned-window protocol as its title-bar Close button,
+            # without blurring an unfinished DOM edit or needing a window manager.
+            event = XEvent()
+            event.client.type = 33
+            event.client.display = display
+            event.client.window = target["id"]
+            event.client.message_type = intern_atom(display, b"WM_PROTOCOLS", 0)
+            event.client.format = 32
+            event.client.data.longs[0] = intern_atom(display, b"WM_DELETE_WINDOW", 0)
+            send_event = bind(x, "XSendEvent", integer, [pointer, window, integer, c.c_long, c.POINTER(XEvent)])
+            if not send_event(display, target["id"], 0, 0, c.byref(event)):
+                raise RuntimeError("The owned native window rejected its Close protocol")
+            sync(display, 0)
+            print(json.dumps(result))
+            return
         if action not in ("move", "click", "drag", "wheel", "key", "text"):
             raise RuntimeError("Unsupported isolated native input action")
 
@@ -239,7 +269,7 @@ def main():
                 time.sleep(0.02)
         if action == "key":
             name, count = request.get("key"), request.get("count", 1)
-            if name not in ("Left", "Right", "Up", "Down", "Home", "End", "Escape", "Return", "Tab", "L", "A", "R", "Z", "Y", "S", "N", "O", "equal", "minus", "0", "1", "2", "Page_Down", "Page_Up", "F1", "F2", "space", "Delete", "BackSpace") or type(count) is not int or not 1 <= count <= 20:
+            if name not in ("Left", "Right", "Up", "Down", "Home", "End", "Escape", "Return", "Tab", "L", "K", "A", "R", "Z", "Y", "S", "N", "O", "equal", "minus", "0", "1", "2", "Page_Down", "Page_Up", "F1", "F2", "space", "Delete", "BackSpace") or type(count) is not int or not 1 <= count <= 20:
                 raise RuntimeError("Only bounded navigation and file-picker key sequences are allowed")
             code = keysym_to_code(display, string_to_keysym(name.encode()))
             if not code:

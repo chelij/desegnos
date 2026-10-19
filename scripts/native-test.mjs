@@ -10,17 +10,12 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { toolchainEnvironment } from './toolchain.mjs';
 import { waitFor, WebDriver } from '../tests/native/webdriver.mjs';
-import { authorProject, recoverProject } from '../tests/native/workflow.mjs';
-import { interactionWorkflow } from '../tests/native/interaction-workflow.mjs';
-import { PhysicalInput, physicalAuthoring } from '../tests/native/physical-workflow.mjs';
-import { chooseFile, savedState, fileDialogWorkflow } from '../tests/native/file-dialog-workflow.mjs';
-import { editorActions } from '../tests/native/editor-actions.mjs';
-import { migrationWorkflow } from '../tests/native/migration-workflow.mjs';
-import { schema2MigrationWorkflow } from '../tests/native/schema2-migration-workflow.mjs';
+import { recoverProject } from '../tests/native/workflow.mjs';
+import { PhysicalInput } from '../tests/native/physical-workflow.mjs';
+import { chooseFile, savedState } from '../tests/native/file-dialog-workflow.mjs';
 import { startProviderServer, assertNoSyntheticKeys } from '../tests/native/provider-server.mjs';
-import { generationWorkflow } from '../tests/native/generation-workflow.mjs';
-import { chatgptWorkflow } from '../tests/native/chatgpt-workflow.mjs';
 import { identityWorkflow } from '../tests/native/identity-workflow.mjs';
+import { uxAuditWorkflow } from '../tests/native/ux-audit-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const guardedXvfb = '~/.local/bin/xvfb-run';
@@ -172,50 +167,31 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (['generation', 'identity'].includes(process.env.DESEGNI_NATIVE_TEST_SCOPE)) {
-      report.scope = 'Focused generation workflow; authoring has separate full-workflow evidence.';
-      await step('Create and save a real native project for focused generation verification', async () => {
-        await driver.button('New blank page');
-        await driver.fill('Project name', 'Native generation verification');
-        await driver.button('Mobile');
-        await driver.button('Create project');
-        await waitFor(() => driver.execute(() => !!document.querySelector('[data-testid="canvas"]')), 'The focused canvas did not mount');
-        assert.equal((await driver.invoke('get_workspace')).project.pages[0].appearance, 'light');
-        await driver.select('Page appearance', 'dark');
-        await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].appearance === 'dark', 'The focused page did not switch to Dark');
-        await driver.press('[data-testid="canvas"]', '\uE007');
-        await driver.fill('Request 1', 'Create a native interactive button and explain its behavior.');
-        await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions[0].prompt, 'The focused request did not persist');
-        await physical.initialize(evidence);
-        const destination = join(evidence, 'focused site.desegni');
-        await chooseFile(physical, () => driver.button('Save'), destination, evidence, 'focused-save');
-        await savedState(driver, destination);
-        await driver.fill('Request 1', 'Create a native interactive button and explain its behavior. Preserve the requested appearance.');
-        project = (await driver.invoke('get_workspace')).project;
-      });
-    } else {
-      project = await authorProject(driver, step, evidence);
-      try { project = await physicalAuthoring(driver, physical, step, evidence); }
-      finally { await physical.cleanup(); }
-      project = await interactionWorkflow(driver, physical, step, evidence);
-      project = await editorActions(driver, physical, step);
-      project = await migrationWorkflow(driver, physical, step, evidence);
-      project = await schema2MigrationWorkflow(driver, physical, step, evidence);
-      project = await fileDialogWorkflow(driver, physical, step, evidence);
-    }
     if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity') {
-      report.scope = 'Focused identity workflow using a real native source generation and private session key.';
-      await step('Prepare a real generated source project for focused identity import', async () => {
+      report.scope = 'Focused native brand import and recovery.';
+      await step('Create a real source website for brand import', async () => {
+        await driver.button('Blank website');
+        await driver.fill('Project name', 'Native brand source');
+        await driver.button('Mobile'); await driver.button('Create project');
+        await waitFor(() => driver.execute(() => !!document.querySelector('[data-testid="canvas"]')), 'The focused canvas did not mount');
+        await physical.initialize(evidence);
+        await driver.button('Add request');
+        await driver.fill('Request 1', 'Create a native interactive button and explain its behavior.');
+        await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions[0]?.prompt, 'The request did not persist');
         await driver.invoke('set_ai_key', { key: provider.key(), storage: 'session' });
         provider.setMode('complete'); await driver.button('Generate');
         await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].content, 'The source website did not generate', 25000);
-        await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'The source generation progress window did not close');
+        const destination = join(evidence, 'focused site.desegni');
+        await chooseFile(physical, () => driver.button('Save'), destination, evidence, 'focused-save');
+        await savedState(driver, destination);
       });
     } else {
-      project = await generationWorkflow(driver, physical, step, evidence, provider);
-      project = await chatgptWorkflow(driver, physical, step, evidence, provider);
+      report.scope = 'Current UX audit core loop with real export, local edits, generation and recovery.';
+      project = await uxAuditWorkflow(driver, physical, step, evidence, provider);
     }
-    project = await identityWorkflow(driver, physical, step, evidence, provider);
+    if (!process.env.DESEGNI_NATIVE_TEST_SCOPE || process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity') {
+      project = await identityWorkflow(driver, physical, step, evidence, provider);
+    }
     await step('The native editor workflow reports no browser errors or unhandled rejections', async () => {
       const errors = await driver.execute(() => window.__desegniTestErrors);
       await writeFile(join(evidence, 'browser-errors.json'), JSON.stringify(errors, null, 2));
@@ -227,20 +203,20 @@ async function runIsolated() {
     const submittedCount = provider.generationRequests().length;
     const identitySubmittedCount = provider.identityRequests().length;
     await recoverProject(await start(), project, step);
-    await step('Restart keeps imported identity without retaining the session key or repeating analysis or generation', async () => {
+    await step('Restart preserves project data and recent paths, drops the session key and never replays paid work', async () => {
       const ai = await driver.invoke('get_ai_settings');
       assert.equal(ai.credential.configured, false);
       assert.equal(ai.credential.storage, 'none');
-      assert.equal(ai.authentication, process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity' ? 'apiKey' : 'chatgpt');
-      assert.ok(ai.chatgpt.accounts.length >= (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'identity' ? 0 : 2));
-      assert.equal(ai.chatgpt.accounts.some(account => account.connected || account.planEnabled), false);
-      assert.equal(ai.chatgpt.accounts.some(account => account.storage !== 'none'), false);
-      if (process.env.DESEGNI_NATIVE_TEST_SCOPE !== 'identity') assert.deepEqual(ai.catalogue, []);
+      assert.equal(ai.chatgpt.accounts.some(account => account.connected || account.planEnabled || account.storage !== 'none'), false);
       const job = await driver.invoke('get_generation', { projectId: project.id });
-      assert.equal(job, null, 'The blank imported project must not inherit another project\'s generation');
-      const identity = await driver.invoke('get_identity_analysis');
-      assert.equal(identity.status, 'complete');
-      assert.equal(identity.source.sha256, project.importedIdentity.sourceSha256);
+      if (project.importedIdentity) {
+        assert.equal(job, null);
+        const identity = await driver.invoke('get_identity_analysis');
+        assert.equal(identity.status, 'complete');
+        assert.equal(identity.source.sha256, project.importedIdentity.sourceSha256);
+      } else if (project.latestGeneration) assert.equal(job?.jobId, project.latestGeneration.jobId);
+      const recent = await driver.invoke('get_recent_projects');
+      assert.ok(recent.projects.length > 0);
       assert.equal(provider.identityRequests().length, identitySubmittedCount);
       assert.equal(provider.generationRequests().length, submittedCount);
     });
@@ -252,6 +228,7 @@ async function runIsolated() {
   } catch (error) {
     report.error = error.stack;
     if (driver) {
+      try { await writeFile(join(evidence, 'failure-input-events.json'), JSON.stringify(await driver.execute(() => ({ events: window.__desegniNativeEvents, focus: document.activeElement?.outerHTML.slice(0, 1000) })), null, 2)); } catch {}
       try { await writeFile(join(evidence, 'failure-workspace.json'), JSON.stringify(await driver.invoke('get_workspace'), null, 2)); } catch {}
       try { await writeFile(join(evidence, 'failure.png'), Buffer.from(await driver.screenshot(), 'base64')); } catch {}
       try { await writeFile(join(evidence, 'failure.html'), await driver.command('GET', '/source')); } catch {}
@@ -272,17 +249,17 @@ async function runIsolated() {
 
 async function main() {
   if (args.includes('--help')) {
-    console.log('node scripts/native-test.mjs [--skip-build] [--generation-only|--identity-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. --generation-only covers generation, direct editing, accounts, identity import and recovery. --identity-only covers a generated source project, identity import and recovery.');
+    console.log('node scripts/native-test.mjs [--skip-build] [--ux-audit-only|--identity-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery.');
     return;
   }
   if (process.platform !== 'linux') throw new Error('This runner requires the guarded Linux Xvfb route. Native Windows/macOS isolation must be configured on those runners.');
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--skip-build', '--generation-only', '--identity-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
   if (args.includes('--identity-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'identity';
-  if (args.includes('--generation-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'generation';
+  if (args.includes('--generation-only') || args.includes('--ux-audit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'audit';
   process.chdir(root);
   const target = resolve('target/native-tests');
   const binary = resolve(binaryIndex === -1 ? join(target, 'debug/desegni') : args[binaryIndex + 1]);
@@ -315,9 +292,12 @@ async function main() {
     try { result = await childExit(isolated); }
     finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); }
   } finally {
-    await rm(scratch, { recursive: true, force: true });
+    let cleanupError;
+    try { await rm(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }); }
+    catch (error) { cleanupError = error; }
     desktop = await verifyDesktop(original);
-    await writeFile(join(evidence, 'desktop-cleanup.json'), JSON.stringify(desktop, null, 2));
+    await writeFile(join(evidence, 'desktop-cleanup.json'), JSON.stringify({ ...desktop, scratchCleanup: cleanupError ? { path: scratch, error: cleanupError.message } : 'passed' }, null, 2));
+    if (cleanupError) throw cleanupError;
   }
   console.log(`Native evidence: ${evidence}`);
   process.exitCode = result;

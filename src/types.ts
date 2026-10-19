@@ -29,6 +29,9 @@ export type Project = { schemaVersion: number; id: string; name: string; revisio
   appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; brief: Brief;
   decisions: Decision[]; exceptions: DesignException[]; appliedJobIds: string[]; extensions: Record<string, { schemaVersion: number; data: unknown }> };
 export type RecoveryInfo = { projectId: string; name: string; revision: number };
+export type RecentProject = { path: string; name: string };
+export type RecentProjectsView = { projects: RecentProject[]; error: string | null };
+export type WebsiteExport = { path: string; indexPath: string; pageCount: number; fileCount: number; warnings: string[] };
 export type WorkspaceView = { project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null; migrationNotice: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;

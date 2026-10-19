@@ -21,7 +21,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
   useEffect(() => {
     if (!recorded || !job) return;
     let active = true;
-    void recorded().catch(error => { if (active) setError(`The project dossier could not be refreshed: ${describe(error)}`); });
+    void recorded().catch(error => { if (active) setError(`The project brief could not be refreshed: ${describe(error)}`); });
     return () => { active = false; };
   }, [job?.jobId, job?.status, recorded]);
   const busy = !!operation || activeGeneration(job);
@@ -39,7 +39,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     let active = true;
     const version = ++epoch.current; action.current += 1; setJob(null); setVisible(false); setOperation(null); setError('');
     if (projectId) void native<GenerationJobView | null>('get_generation', { projectId }).then(value => {
-      if (active && context.current === projectId && version === epoch.current) { setJob(value); if (value && ['generating', 'ready', 'applying'].includes(value.status)) { automatic.current = value.jobId; setVisible(true); } }
+      if (active && context.current === projectId && version === epoch.current) { setJob(value); if (value && ['generating', 'ready', 'applying'].includes(value.status)) { automatic.current = value.jobId; } }
     }, error => { if (active && version === epoch.current) setError(describe(error)); });
     return () => { active = false; };
   }, [projectId]);
@@ -74,9 +74,9 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     finally { if (context.current === id && token === action.current) setOperation(null); }
   }
   async function prepare() {
-    setVisible(true);
+    setVisible(false);
     if (job && ['prepared', 'ready', 'blocked'].includes(job.status)) await perform('discard_generation', 'Preparing your changes…', { jobId: job.jobId });
-    const prepared = await perform('prepare_generation', 'Preparing requirements…');
+    const prepared = await perform('prepare_generation', 'Preparing AI instructions…');
     automatic.current = prepared.jobId;
     await perform('start_generation', 'Starting generation…', { jobId: prepared.jobId });
   }
@@ -87,20 +87,16 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const token = ++action.current; setOperationStartedAt(Date.now()); setOperation('Updating your canvas…'); setError('');
     try {
       const value = await call<WorkspaceView>('apply_generation', { ...args(), acceptedDecisionIndices: indices });
-      if (context.current === id) { applied(value); await refresh(); setVisible(false); requestAnimationFrame(() => document.getElementById('page-canvas')?.focus({ preventScroll: true })); }
+      if (context.current === id) { applied(value); await refresh(); setVisible(false); }
     } catch (error) { if (context.current === id) setError(describe(error)); throw error; }
     finally { if (context.current === id && token === action.current) setOperation(null); }
   }
-  useEffect(() => {
-    if (job && automatic.current === job.jobId && ['blocked', 'failed', 'unknown', 'cancelled'].includes(job.status)) setVisible(true);
-  }, [job?.jobId, job?.status]);
   const appliedAttempts = useRef(new Set<string>());
   useEffect(() => {
     if (!job || automatic.current !== job.jobId || job.status !== 'ready' || operation) return;
     const key = `${job.jobId}:${job.attempts.length}`;
     if (appliedAttempts.current.has(key)) return;
     appliedAttempts.current.add(key);
-    setVisible(true);
     void apply([]).catch(() => {});
   }, [job?.jobId, job?.status, job?.attempts.length, operation]);
   return { job, visible, operation, error, elapsedSeconds, open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,

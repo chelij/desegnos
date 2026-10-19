@@ -145,11 +145,18 @@ async function isolated() {
   for (const variable of ['XDG_RUNTIME_DIR', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME']) assert.ok(serverEnvironment.includes(`${variable}=${process.env[variable]}`), 'Xvfb does not belong to the private XDG session');
   assert.ok(serverArguments.includes(`:${display[1]}`) && /\/Xvfb(?:\.real)?$/.test(await readlink(`/proc/${serverPid}/exe`)), 'The isolated display is not owned Xvfb');
   await writeFile(join(scratch, 'display.json'), JSON.stringify({ ...ownership, serverPid, ownershipVerified: true }));
+  const connectionDeadline = Date.now() + 10_000;
+  let connected = false;
+  while (Date.now() < connectionDeadline) {
+    try { await command('/usr/bin/xprop', ['-root', '_NET_SUPPORTING_WM_CHECK']); connected = true; break; }
+    catch { await delay(100); }
+  }
+  assert.ok(connected, 'The owned Xvfb display did not accept an actual client connection');
   const config = JSON.parse(await readFile(join(root, 'src-tauri/tauri.conf.json'), 'utf8')).app.windows.find(window => window.label === 'editor');
   assert.ok(config, 'The normal editor configuration is missing');
   const report = { passed: false, binary, binarySha256: await hashFile(binary), display: process.env.DISPLAY, serverPid, displayResources,
     startup: 'Fresh normal binary with private XDG storage and no automation client or invoke calls.',
-    screenshot: 'startup.png', visualReview: 'Required: inspect the real screenshot for New blank page and Import identity from project, with project name/platform fields hidden until a choice. No DOM assertions are claimed.',
+    screenshot: 'startup.png', visualReview: 'Required: inspect the real screenshot for Blank website and Use my existing brand, with project name/platform fields hidden until a choice. No DOM assertions are claimed.',
     webdriver: { port: await unusedPort(), samples: [] }, startedAt: new Date().toISOString() };
   const log = createWriteStream(join(evidence, 'app.log'), { flags: 'wx' });
   let app;

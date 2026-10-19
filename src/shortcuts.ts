@@ -1,4 +1,4 @@
-export type EditorShortcut = 'new' | 'open' | 'save' | 'saveAs' | 'undo' | 'redo' | 'zoomIn' | 'zoomOut' | 'fit' | 'actualSize' | 'doubleSize' | 'nextPage' | 'previousPage' | 'remove' | 'help';
+export type EditorShortcut = 'new' | 'open' | 'save' | 'saveAs' | 'undo' | 'redo' | 'zoomIn' | 'zoomOut' | 'fit' | 'actualSize' | 'doubleSize' | 'nextPage' | 'previousPage' | 'remove' | 'help' | 'selectTool' | 'requestTool' | 'panTool' | 'askAI';
 export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented?: boolean; isComposing?: boolean };
 
 export const SHORTCUT_HELP = [
@@ -8,7 +8,9 @@ export const SHORTCUT_HELP = [
   ['Next / previous page', 'Ctrl+Tab / Ctrl+Shift+Tab · Ctrl+Page Down / Page Up'],
   ['Select an element', 'Single-click'], ['Edit selected element', 'F2'], ['Move selected element', 'Arrow keys · Shift for 10 px'], ['Delete selected element', 'Delete / Backspace'],
   ['Move / resize element', 'Drag selection / its corners'], ['Element actions', 'Right-click'],
-  ['Open a request', 'Double-click canvas or website element'],
+  ['Edit text in place', 'Double-click website text · Enter to save · Escape to cancel'],
+  ['Select / Add request / Pan', 'V / R / H'], ['Ask AI about selection', 'Ctrl/Cmd+K'],
+  ['Open a request', 'Double-click empty canvas · Add request tool'],
   ['Pan canvas', 'Drag empty space · Space+drag · Middle drag'], ['Draw an area', 'Shift+drag'],
   ['New request in view', 'Enter on blank canvas · Shift+Enter'], ['Next element / parent', 'Enter / Alt+Enter on generated canvas'],
   ['Move / resize request', 'Arrow keys on handles · Alt for 1 px'], ['Remove selected request', 'Delete / Backspace outside text'],
@@ -21,6 +23,7 @@ export function editorShortcut(event: ShortcutInput, editingText: boolean): Edit
   const key = (event.key === 'Unidentified' && event.code === 'Tab' ? 'Tab' : event.key).toLowerCase();
   const command = event.ctrlKey || event.metaKey;
   if (command) {
+    if (!editingText && !event.shiftKey && key === 'k') return 'askAI';
     if (key === 's') return event.shiftKey ? 'saveAs' : 'save';
     if (!event.shiftKey && key === 'n') return 'new';
     if (!event.shiftKey && key === 'o') return 'open';
@@ -36,6 +39,9 @@ export function editorShortcut(event: ShortcutInput, editingText: boolean): Edit
     if (!editingText && !event.shiftKey && key === 'y') return 'redo';
     return null;
   }
+  if (!editingText && !event.shiftKey && key === 'v') return 'selectTool';
+  if (!editingText && !event.shiftKey && key === 'r') return 'requestTool';
+  if (!editingText && !event.shiftKey && key === 'h') return 'panTool';
   if (!editingText && (key === 'f1' || key === '?')) return 'help';
   if (!editingText && !event.shiftKey && (key === 'delete' || key === 'backspace')) return 'remove';
   return null;
