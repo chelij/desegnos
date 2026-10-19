@@ -70,6 +70,7 @@ pub struct Workspace {
     prepared: Option<RequirementsSnapshot>,
     migration_notice: Option<String>,
     needs_migration_save: bool,
+    recent_error: Option<String>,
 }
 
 impl Workspace {
@@ -136,6 +137,7 @@ impl Workspace {
             prepared: None,
             migration_notice: None,
             needs_migration_save: false,
+            recent_error: None,
         };
         state.refresh_recoveries();
         Ok(state)
@@ -317,7 +319,16 @@ impl Workspace {
             self.migration_notice = Some(notice.into());
             self.needs_migration_save = true;
         }
+        self.remember_recent();
         Ok(())
+    }
+
+    fn remember_recent(&mut self) {
+        if let (Some(file), Some(session)) = (&self.file, &self.session) {
+            self.recent_error =
+                crate::recent::remember(&self.directory, file.path(), &session.project().name)
+                    .err();
+        }
     }
 
     fn start(
@@ -472,6 +483,7 @@ impl Workspace {
         self.saved_revision = Some(project.revision);
         self.migration_notice = None;
         self.needs_migration_save = false;
+        self.remember_recent();
         Ok(())
     }
 
@@ -1427,4 +1439,63 @@ mod tests {
         assert!(workspace.file.is_none());
         assert_eq!(fs::read(journal_path).unwrap(), journal_bytes);
     }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecentProjectsView {
+    projects: Vec<crate::recent::RecentProject>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+pub fn get_recent_projects(
+    window: tauri::WebviewWindow,
+    state: WorkspaceState<'_>,
+) -> NativeResult<RecentProjectsView> {
+    if window.label() != "editor" {
+        return Err("Only the editor can read recent projects.".into());
+    }
+    let state = state.lock().map_err(message)?;
+    match crate::recent::read(&state.directory) {
+        Ok(projects) => Ok(RecentProjectsView {
+            projects,
+            error: state.recent_error.clone(),
+        }),
+        Err(error) => Ok(RecentProjectsView {
+            projects: vec![],
+            error: Some(error),
+        }),
+    }
+}
+
+#[tauri::command]
+pub fn open_recent_project(
+    window: tauri::WebviewWindow,
+    state: WorkspaceState<'_>,
+    generation: State<'_, Mutex<crate::generation::GenerationService>>,
+    path: PathBuf,
+    discard: bool,
+) -> NativeResult<WorkspaceView> {
+    if window.label() != "editor" {
+        return Err("Only the editor can open recent projects.".into());
+    }
+    generation
+        .lock()
+        .map_err(message)?
+        .ensure_switch_allowed()?;
+    let mut state = state.lock().map_err(message)?;
+    state.check_replace(discard)?;
+    if !crate::recent::read(&state.directory)?
+        .iter()
+        .any(|entry| entry.path == path)
+    {
+        return Err(
+            "This project is not in your recent list. Use Open project to choose it.".into(),
+        );
+    }
+    let file = ProjectFile::acquire(&path).map_err(message)?;
+    let document = file.load_document().map_err(message)?;
+    state.open_document(file, document)?;
+    Ok(state.view())
 }

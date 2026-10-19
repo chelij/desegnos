@@ -6,6 +6,8 @@ fn main() {
             "get_identity_analysis",
             "cancel_identity_analysis",
             "get_workspace",
+            "get_recent_projects",
+            "open_recent_project",
             "create_project",
             "edit_project",
             "inspect_element",

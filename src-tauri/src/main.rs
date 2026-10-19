@@ -10,6 +10,7 @@ mod identity;
 mod linux_startup;
 mod preview;
 mod preview_health;
+mod recent;
 mod workspace;
 
 use generation::*;
@@ -84,6 +85,8 @@ fn main() {
             identity::get_identity_analysis,
             identity::cancel_identity_analysis,
             get_workspace,
+            get_recent_projects,
+            open_recent_project,
             create_project,
             edit_project,
             inspect_element,
