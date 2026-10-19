@@ -4,6 +4,7 @@
 compile_error!("Native test automation must not be compiled into release artifacts.");
 
 mod chatgpt;
+mod clipboard;
 mod export;
 mod generation;
 mod identity;
@@ -25,7 +26,9 @@ fn main() {
         eprintln!("Desegnos could not prepare its graphics startup: {error}");
         std::process::exit(1);
     }
-    let builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init());
     #[cfg(feature = "native-tests")]
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
