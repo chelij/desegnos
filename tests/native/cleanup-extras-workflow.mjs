@@ -14,6 +14,11 @@ const pngOther = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQCi
 const workspace = driver => driver.invoke('get_workspace');
 async function closed(driver) { await waitFor(()=>driver.execute(()=>!document.querySelector('dialog[open]')),'Dialog did not close'); }
 async function closeDialog(driver) { await driver.click('(//dialog[@open])[last()]//button[starts-with(@aria-label,"Close ")]','xpath'); await closed(driver); }
+// The page-check fix request stays waiting, so a picture Generate also asks for an AI key once the pictures apply.
+async function dismissKeyPrompt(driver) {
+  if(await driver.execute(()=>!!document.querySelector('dialog[open]')))await closeDialog(driver);
+  if(await driver.execute(()=>!!document.querySelector('.generation-log')))await driver.button('Hide AI conversation');
+}
 async function pointFor(driver, selector) {
   return driver.execute(query=>{
     const frame=document.querySelector('.static-preview iframe'),node=frame?.contentDocument?.querySelector(query);
@@ -99,6 +104,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     await waitFor(()=>driver.execute(()=>document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#picture')?.getAttribute('src')?.endsWith('DejjuQAAAABJRU5ErkJggg==')),'Chosen picture did not render');
     await driver.button('Generate');
     await waitFor(()=>driver.execute(()=>!document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#picture')?.hasAttribute('data-desegnos-placeholder')),'Generate did not apply the chosen picture');
+    await dismissKeyPrompt(driver);
     const dimensions=await driver.execute(()=>{const node=document.querySelector('.static-preview iframe').contentDocument.querySelector('#picture');return {width:node.width,height:node.height,alt:node.alt,placeholder:node.hasAttribute('data-desegnos-placeholder')};});
     assert.deepEqual(dimensions,{width:240,height:120,alt:'Studio photo',placeholder:false});
     await driver.button('Undo last change');await driver.ready('.image-drop-target');await driver.button('Redo last change');
@@ -106,7 +112,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     await physical.captureWindow(join(output,'picture-browse.png'));
   });
   await step('A real GTK file drag reaches the canvas as trusted drop input and changes only the picture',async()=>{
-    await driver.page(about);await canvasReady(driver,'About');
+    await driver.page(about);await canvasReady(driver,'About');await driver.button('Fit');await canvasReady(driver,'About');
     const before=(await workspace(driver)).project.pages.find(page=>page.id===about).content;
     await driver.executeAsync(async()=>{window.__nativeFileDrops=[];await window.__TAURI__.event.listen('desegnos://image-drag',event=>{const p=event.payload;window.__nativeFileDrops.push({type:`native-${p.phase}`,files:p.picture?1:0,position:p.position,message:p.message});});for(const name of ['dragenter','dragover','drop'])document.addEventListener(name,event=>window.__nativeFileDrops.push({type:event.type,trusted:event.isTrusted,files:event.dataTransfer.files.length,types:[...event.dataTransfer.types],x:event.clientX,y:event.clientY,target:event.target?.className}),true);});
     const source=spawn('/usr/bin/python3',[fileURLToPath(new URL('./file-drag-source.py',import.meta.url)),picture],{env:process.env,stdio:['ignore','pipe','pipe']});
@@ -118,6 +124,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
       await waitFor(()=>driver.execute(()=>document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#picture')?.getAttribute('src')?.endsWith('DejjuQAAAABJRU5ErkJggg==')),'Dropped original did not render');
       await driver.button('Generate');
       await waitFor(async()=>{const content=(await workspace(driver)).project.pages.find(page=>page.id===about).content;return content.html!==before.html;},'A native file drop did not change the picture');
+      await dismissKeyPrompt(driver);
       const events=await driver.execute(()=>window.__nativeFileDrops);assert.ok(events.some(event=>event.type==='native-drop'&&event.files===1),JSON.stringify(events));
       const after=(await workspace(driver)).project.pages.find(page=>page.id===about).content;assert.equal(after.css,before.css);assert.equal(after.javascript,before.javascript);
       await writeFile(join(output,'native-file-drop.json'),JSON.stringify({events,log},null,2));

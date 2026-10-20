@@ -28,7 +28,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     await driver.invoke('set_ai_key', { key:provider.key(), storage:'session' }); provider.setMode('complete', { editorAudit:true }); await driver.button('Generate');
     await waitFor(async () => (await driver.invoke('get_generation', { projectId:id }))?.status === 'applied', 'The controlled result did not apply',25000);
     await waitFor(() => driver.execute(() => document.querySelector('.static-preview')?.dataset.previewReady === 'true'), 'The accepted canvas did not render');
-    await driver.ready('section[aria-label="Generated changes"]'); await driver.click('//section[@aria-label="Generated changes"]//button[normalize-space(.)="Keep"]','xpath');
+    await driver.button('Keep changes');
     await driver.button('Fit'); await settled(driver);
   });
   await step('Trusted site clicks remain under the pointer after combined zoom and panning', async () => {
@@ -118,7 +118,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     await waitFor(async()=>(await workspace(driver)).project?.id===saved.project.id && (await workspace(driver)).path===destination,'The Desegnos project did not reopen');
     assert.deepEqual((await workspace(driver)).project,saved.project);
     // Leave an acknowledged unsaved edit for the runner's actual crash/recovery check.
-    await driver.button('Fit'); await driver.click('details.request-overview > summary'); await driver.click('button.request-list-item:last-child'); await settled(driver);
+    await driver.button('Fit'); await driver.button('Layers'); await driver.click('section[aria-label="Layers"] .layer-row[data-region-id="'+saved.project.pages[0].regions.at(-1).id+'"] button.layer-select'); await driver.button('Close Layers'); await settled(driver);
     const anchor=await physical.rect('[data-region-id="'+saved.project.pages[0].regions.at(-1).id+'"]'),view=await physical.rect('.workspace-scroll');
     assert.ok(anchor.left>=view.left && anchor.left<view.right && anchor.top>=view.top && anchor.top<view.bottom,JSON.stringify({anchor,view}));
     await driver.fill('Request 3','A large area preserved after reopening, with an unsaved revision.');

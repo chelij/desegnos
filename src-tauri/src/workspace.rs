@@ -582,6 +582,19 @@ impl Workspace {
         Ok(())
     }
 
+    /// Opens a project file in its own tab. Choosing the active project's own file again reloads
+    /// it from disk with fresh history, unless it has unsaved edits, which are kept as they are.
+    fn open_file_tab(&mut self, path: &std::path::Path) -> NativeResult<()> {
+        let active = self.file.as_ref().is_some_and(|file| {
+            file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
+        });
+        match (active, self.view().dirty) {
+            (true, false) => self.open_path(path),
+            (true, true) => Ok(()),
+            (false, _) => self.open_tab(|state| state.open_path(path)),
+        }
+    }
+
     fn open_path(&mut self, path: &std::path::Path) -> NativeResult<()> {
         let canonical = path.canonicalize().ok();
         if let Some(index) = self.parked.iter().position(|open| {
@@ -1523,7 +1536,7 @@ pub async fn open_project(
             "A project was opened while the dialog was active. Open the file again.".into(),
         );
     }
-    state.open_tab(|state| state.open_path(&path))?;
+    state.open_file_tab(&path)?;
     Ok(Some(state.view()))
 }
 
@@ -2662,7 +2675,7 @@ pub fn open_recent_project(
             "This project is not in your recent list. Use Open project to choose it.".into(),
         );
     }
-    state.open_tab(|state| state.open_path(&path))?;
+    state.open_file_tab(&path)?;
     Ok(state.view())
 }
 

@@ -72,9 +72,9 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
   await driver.page(home);await ready(driver);
   await select(driver,physical,'#picture');await select(driver,physical,'#action',true);
   const before=await workspace(driver);await driver.button('Delete selected items');
-  const dialog=await waitFor(async()=>(await physical.inspect()).windows.find(w=>w.title==='Delete items'),'The delete confirmation did not appear');
+  await waitFor(()=>driver.execute(()=>[...document.querySelectorAll('dialog[open] h2')].some(h=>h.textContent==='Delete items')),'The delete confirmation did not appear');
   await physical.captureWindow(join(output,'delete-confirmation.png'));
-  await physical.raw({action:'key',key:'Return',windowId:dialog.id});
+  await driver.button('Delete 2 items');
   await waitFor(()=>driver.execute(()=>!document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#action')),'Selected items were not deleted');
   assert.equal((await workspace(driver)).history.position,before.history.position+1);
   await driver.button('Undo last change');await ready(driver);

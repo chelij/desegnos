@@ -310,7 +310,7 @@ async function main() {
   const target = resolve('target/native-tests');
   const binary = resolve(binaryIndex === -1 ? join(target, 'debug/desegnos') : args[binaryIndex + 1]);
   if (!skipBuild) {
-    const build = spawn(process.execPath, ['scripts/tauri.mjs', 'build', '--debug', '--no-bundle', '--features', 'native-tests', '--config', 'src-tauri/tauri.test.conf.json'],
+    const build = spawn(process.execPath, ['scripts/tauri.mjs', 'build', '--debug', '--no-bundle', '--features', 'native-tests,gtk-dialogs', '--config', 'src-tauri/tauri.test.conf.json', '--', '--no-default-features'],
       { cwd: root, env: { ...toolchainEnvironment(), CARGO_TARGET_DIR: target }, stdio: 'inherit' });
     const status = await childExit(build);
     if (status !== 0) throw new Error(`The explicit native-tests build failed (${status})`);

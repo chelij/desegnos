@@ -14,6 +14,11 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [features]
+default = ["portal-dialogs"]
+# File dialogs use the desktop portal. rfd allows only one Linux backend, so native test builds
+# turn defaults off and use in-process GTK dialogs: the guarded Xvfb display has no portal.
+portal-dialogs = ["tauri-plugin-dialog/xdg-portal"]
+gtk-dialogs = ["tauri-plugin-dialog/gtk3"]
 native-tests = ["dep:tauri-plugin-wdio-webdriver", "desegni-ai/test-support"]
 
 [dependencies]
@@ -25,7 +30,7 @@ serde_json.workspace = true
 uuid.workspace = true
 base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
 tauri = { version = "2", features = [] }
-tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
+tauri-plugin-dialog = { version = "2", default-features = false }
 tauri-plugin-clipboard-manager = "=2.5.0"
 open = { version = "=5.4.4", features = ["shellexecute-on-windows"] }
 tauri-plugin-wdio-webdriver = { version = "=1.5.0", optional = true }
