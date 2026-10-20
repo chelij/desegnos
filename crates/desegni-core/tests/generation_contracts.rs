@@ -658,6 +658,7 @@ fn source_candidate_and_requirements_limits_fail_without_truncation() {
             elements: vec![],
             allow_target_removal: false,
             mobile_only: false,
+            attachments: vec![],
             completed: false,
             id: Uuid::new_v4(),
             rect: excessive.pages[0].regions[0].rect,

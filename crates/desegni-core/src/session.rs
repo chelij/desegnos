@@ -65,6 +65,21 @@ impl Session {
         Ok(())
     }
 
+    pub fn import_context(
+        &mut self,
+        revision: u64,
+        context: crate::ImportedContext,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<()> {
+        self.assert_revision(revision)?;
+        let candidate = self
+            .project
+            .import_context(self.project.revision, context)?;
+        durable(&candidate)?;
+        self.commit(candidate);
+        Ok(())
+    }
+
     pub fn edit_page_source(
         &mut self,
         revision: u64,

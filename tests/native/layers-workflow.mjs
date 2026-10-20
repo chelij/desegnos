@@ -474,7 +474,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await driver.menu(['New project']); await driver.button('Blank website'); await driver.fill('Project name', 'Temporary Layers reopen check'); await driver.button('Create project');
     await waitFor(async () => (await workspace(driver)).project?.id !== savedProject.id, 'The temporary blank project did not replace the saved layer project');
     const unsaved = (await workspace(driver)).dirty;
-    await chooseFile(physical, async () => { await driver.menu(['Open project']); if (unsaved) await driver.button('Discard and continue'); }, projectPath, output, 'layers-open');
+    await chooseFile(physical, async () => { await driver.menu(['Open project']); }, projectPath, output, 'layers-open');
     await waitFor(async () => (await workspace(driver)).project?.id === savedProject.id && (await workspace(driver)).path === projectPath, 'The saved layer project did not reopen');
     assert.deepEqual((await workspace(driver)).project, savedProject); await previewReady(driver); assert.deepEqual(await appearance(driver, copiedId), copiedAppearance);
     await physical.captureWindow(join(output, '07-reopened-layers.png'));

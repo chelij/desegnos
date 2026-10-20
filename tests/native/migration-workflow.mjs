@@ -36,8 +36,6 @@ export async function migrationWorkflow(driver, physical, step, evidence) {
   await step('Native Open migrates a real schema1 archive without changing its original bytes', async () => {
     await chooseFile(physical, async () => {
       await driver.button('Open project');
-      await waitFor(() => driver.execute(() => !!document.querySelector('dialog[aria-label="Save your changes?"][open]')), 'The dirty project replacement choice did not appear');
-      await driver.click('//dialog[@open]//button[normalize-space(.)="Discard and continue"]', 'xpath');
     }, destination, evidence, 'migration-01-open');
     const state = await waitFor(async () => {
       const view = await driver.invoke('get_workspace');

@@ -87,7 +87,6 @@ export async function reviewRequirements(driver, mode, evidence, name = 'REQUIRE
 export async function authorProject(driver, step, evidence) {
   await step('A fresh native app has no inherited project or recovery data', async () => {
     await driver.ready('//button[@aria-label="Blank website"]', 'xpath');
-    await driver.ready('//button[@aria-label="Use my existing brand"]', 'xpath');
     const state = await driver.invoke('get_workspace');
     assert.equal(state.project, null);
     assert.equal(state.recovery, null);

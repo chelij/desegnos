@@ -476,15 +476,27 @@ impl Project {
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
         for page in &candidate.pages {
-            next.pages
+            let target = next
+                .pages
                 .iter_mut()
                 .find(|existing| existing.id == page.page_id)
-                .ok_or_else(|| Error("A generated page no longer exists.".into()))?
-                .content = Some({
-                let mut content = page.content.clone();
-                content.html = crate::source::assign_editor_ids(&content.html)?;
-                content
-            });
+                .ok_or_else(|| Error("A generated page no longer exists.".into()))?;
+            let mut content = page.content.clone();
+            // Attached pictures are stored with their requests and inserted here, after the AI
+            // has placed them, so the picture bytes are never part of the AI request.
+            let attachments: Vec<_> = target
+                .regions
+                .iter()
+                .flat_map(|region| region.attachments.iter())
+                .collect();
+            if let Some(html) =
+                crate::attachments::insert_attached_images(&content.html, &attachments)?
+            {
+                content.html = html;
+                content.validate()?;
+            }
+            content.html = crate::source::assign_editor_ids(&content.html)?;
+            target.content = Some(content);
         }
         for page in &mut next.pages {
             for region in &mut page.regions {

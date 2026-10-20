@@ -133,7 +133,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   await step('Fresh onboarding explains the creation loop and offers described cards without sidebars', async () => {
     assert.equal((await workspace(driver)).project, null);
     await driver.ready('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
-    await driver.ready('//button[.//strong[normalize-space(.)="Use my existing brand"]]', 'xpath');
+    assert.equal(await driver.execute(() => !!document.querySelector('button[aria-label="Use my existing brand"]')), false);
     assert.match(await driver.execute(() => document.querySelector('.new-project-intro')?.textContent), /describe.*generate.*edit.*export/i);
     assert.equal(await driver.execute(() => !!document.querySelector('input[name="projectName"]')), false);
     await assertCanvasOnly(driver); await physical.initialize(output);

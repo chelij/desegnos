@@ -61,6 +61,8 @@ pub struct WorkspaceView {
     recoveries: Vec<RecoveryInfo>,
     recovery_error: Option<String>,
     migration_notice: Option<String>,
+    open_projects: Vec<OpenProjectSummary>,
+    any_dirty: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -138,6 +140,44 @@ pub struct Workspace {
     needs_migration_save: bool,
     recent_error: Option<String>,
     pending_save: Option<PendingSaveConflict>,
+    /// Other open projects, each with its own undo history, file and recovery journal.
+    parked: Vec<OpenProject>,
+    /// Open projects in tab order.
+    order: Vec<Uuid>,
+}
+
+/// A project kept open in the background while another one is active.
+struct OpenProject {
+    session: Session,
+    file: Option<ProjectFile>,
+    journal: Option<Journal>,
+    ownership: Option<File>,
+    saved_revision: Option<u64>,
+    migration_notice: Option<String>,
+    needs_migration_save: bool,
+}
+
+impl OpenProject {
+    fn dirty(&self) -> bool {
+        Some(self.session.project().revision) != self.saved_revision || self.needs_migration_save
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenProjectSummary {
+    id: Uuid,
+    name: String,
+    dirty: bool,
+    active: bool,
+    pages: Vec<OpenPageSummary>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPageSummary {
+    id: Uuid,
+    name: String,
 }
 
 impl Workspace {
@@ -206,6 +246,8 @@ impl Workspace {
             needs_migration_save: false,
             recent_error: None,
             pending_save: None,
+            parked: vec![],
+            order: vec![],
         };
         state.refresh_recoveries();
         Ok(state)
@@ -387,6 +429,11 @@ impl Workspace {
                 .collect(),
             recovery_error: self.recovery_error.clone(),
             migration_notice: self.migration_notice.clone(),
+            open_projects: self.open_projects(),
+            any_dirty: self.parked.iter().any(OpenProject::dirty)
+                || self.session.as_ref().is_some_and(|s| {
+                    Some(s.project().revision) != self.saved_revision || self.needs_migration_save
+                }),
         }
     }
 
@@ -397,6 +444,130 @@ impl Workspace {
             );
         }
         Ok(())
+    }
+
+    /// Back to the start screen. The project lock is released; its recovery journal stays,
+    /// exactly as when another project replaces it.
+    fn close(&mut self) {
+        if let Some(session) = &self.session {
+            let id = session.project().id;
+            self.order.retain(|other| *other != id);
+        }
+        self.session = None;
+        self.file = None;
+        self.journal = None;
+        self.ownership = None;
+        self.saved_revision = None;
+        self.prepared = None;
+        self.migration_notice = None;
+        self.needs_migration_save = false;
+        self.pending_save = None;
+        if let Some(project) = self.parked.pop() {
+            self.unpark(project);
+        }
+        self.refresh_recoveries();
+    }
+
+    fn open_projects(&self) -> Vec<OpenProjectSummary> {
+        let summary = |project: &Project, dirty: bool, active: bool| OpenProjectSummary {
+            id: project.id,
+            name: project.name.clone(),
+            dirty,
+            active,
+            pages: project
+                .pages
+                .iter()
+                .map(|page| OpenPageSummary {
+                    id: page.id,
+                    name: page.name.clone(),
+                })
+                .collect(),
+        };
+        self.order
+            .iter()
+            .filter_map(|id| {
+                if let Some(session) = self.session.as_ref().filter(|s| s.project().id == *id) {
+                    let dirty = Some(session.project().revision) != self.saved_revision
+                        || self.needs_migration_save;
+                    return Some(summary(session.project(), dirty, true));
+                }
+                self.parked
+                    .iter()
+                    .find(|open| open.session.project().id == *id)
+                    .map(|open| summary(open.session.project(), open.dirty(), false))
+            })
+            .collect()
+    }
+
+    /// Keep the active project open in the background so another one can become active.
+    fn park_active(&mut self) {
+        if let Some(session) = self.session.take() {
+            self.parked.push(OpenProject {
+                session,
+                file: self.file.take(),
+                journal: self.journal.take(),
+                ownership: self.ownership.take(),
+                saved_revision: self.saved_revision.take(),
+                migration_notice: self.migration_notice.take(),
+                needs_migration_save: std::mem::take(&mut self.needs_migration_save),
+            });
+        }
+        self.prepared = None;
+        self.pending_save = None;
+    }
+
+    fn unpark(&mut self, project: OpenProject) {
+        self.session = Some(project.session);
+        self.file = project.file;
+        self.journal = project.journal;
+        self.ownership = project.ownership;
+        self.saved_revision = project.saved_revision;
+        self.migration_notice = project.migration_notice;
+        self.needs_migration_save = project.needs_migration_save;
+        self.prepared = None;
+        self.pending_save = None;
+    }
+
+    fn switch_to(&mut self, project_id: Uuid) -> NativeResult<()> {
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|s| s.project().id == project_id)
+        {
+            return Ok(());
+        }
+        let index = self
+            .parked
+            .iter()
+            .position(|open| open.session.project().id == project_id)
+            .ok_or("That project is no longer open.")?;
+        let project = self.parked.remove(index);
+        self.park_active();
+        self.unpark(project);
+        Ok(())
+    }
+
+    /// Open or create another project in a new tab group. If that fails, the previous
+    /// project becomes active again.
+    fn open_tab<T>(&mut self, open: impl FnOnce(&mut Self) -> NativeResult<T>) -> NativeResult<T> {
+        let previous = self.session.as_ref().map(|s| s.project().id);
+        self.park_active();
+        match open(self) {
+            Ok(value) => Ok(value),
+            Err(error) => {
+                if self.session.is_none()
+                    && let Some(id) = previous
+                    && let Some(index) = self
+                        .parked
+                        .iter()
+                        .position(|open| open.session.project().id == id)
+                {
+                    let project = self.parked.remove(index);
+                    self.unpark(project);
+                }
+                Err(error)
+            }
+        }
     }
 
     fn open_document(&mut self, file: ProjectFile, document: DecodedProject) -> NativeResult<()> {
@@ -412,6 +583,17 @@ impl Workspace {
     }
 
     fn open_path(&mut self, path: &std::path::Path) -> NativeResult<()> {
+        let canonical = path.canonicalize().ok();
+        if let Some(index) = self.parked.iter().position(|open| {
+            open.file.as_ref().is_some_and(|file| {
+                file.path() == path || canonical.as_deref() == Some(file.path())
+            })
+        }) {
+            let project = self.parked.remove(index);
+            self.park_active();
+            self.unpark(project);
+            return Ok(());
+        }
         let (file, document) = if let Some(current) = self.file.as_ref().filter(|file| {
             file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
         }) {
@@ -438,6 +620,16 @@ impl Workspace {
         file: Option<ProjectFile>,
         saved_revision: Option<u64>,
     ) -> NativeResult<()> {
+        if let Some(index) = self
+            .parked
+            .iter()
+            .position(|open| open.session.project().id == project.id)
+        {
+            let open = self.parked.remove(index);
+            self.park_active();
+            self.unpark(open);
+            return Ok(());
+        }
         let same_project = self
             .session
             .as_ref()
@@ -485,6 +677,9 @@ impl Workspace {
             last_saved_path,
         )?;
         self.pending_save = None;
+        if !self.order.contains(&session.project().id) {
+            self.order.push(session.project().id);
+        }
         self.session = Some(session);
         self.file = file;
         self.journal = Some(journal);
@@ -744,7 +939,11 @@ impl Workspace {
     }
 
     fn recover(&mut self, project_id: Option<Uuid>, discard: bool) -> NativeResult<()> {
-        self.check_replace(discard)?;
+        let _ = discard; // Recovery opens in its own tab group; the active project stays open.
+        self.open_tab(|state| state.recover_inner(project_id))
+    }
+
+    fn recover_inner(&mut self, project_id: Option<Uuid>) -> NativeResult<()> {
         self.refresh_recoveries();
         let project_id = project_id
             .or_else(|| {
@@ -824,8 +1023,8 @@ pub fn create_project(
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
+    let _ = discard; // New projects open in their own tab group; nothing is replaced.
     let mut state = state.lock().map_err(message)?;
-    state.check_replace(discard)?;
     let project = if let Some(id) = identity_analysis_id {
         identity.lock().map_err(message)?.project_from_analysis(
             id,
@@ -849,7 +1048,68 @@ pub fn create_project(
         }
         Project::new(name, viewport, Appearance::Light).map_err(message)?
     };
-    state.start(project, None, None)?;
+    state.open_tab(|state| state.start(project, None, None))?;
+    Ok(state.view())
+}
+
+#[tauri::command]
+pub fn switch_project(
+    state: WorkspaceState<'_>,
+    generation: State<'_, Mutex<crate::generation::GenerationService>>,
+    project_id: Uuid,
+) -> NativeResult<WorkspaceView> {
+    generation
+        .lock()
+        .map_err(message)?
+        .ensure_switch_allowed()?;
+    let mut state = state.lock().map_err(message)?;
+    state.switch_to(project_id)?;
+    Ok(state.view())
+}
+
+#[tauri::command]
+pub fn close_project(
+    state: WorkspaceState<'_>,
+    generation: State<'_, Mutex<crate::generation::GenerationService>>,
+    discard: bool,
+) -> NativeResult<WorkspaceView> {
+    generation
+        .lock()
+        .map_err(message)?
+        .ensure_switch_allowed()?;
+    let mut state = state.lock().map_err(message)?;
+    state.check_replace(discard)?;
+    state.close();
+    Ok(state.view())
+}
+
+/// Import context: merge the reviewed findings and logos of a completed analysis into the
+/// open project as one undoable change. Only a native analysis record is accepted.
+#[tauri::command]
+pub fn import_context(
+    state: WorkspaceState<'_>,
+    identity: State<'_, Mutex<crate::identity::IdentityService>>,
+    revision: u64,
+    identity_analysis_id: Uuid,
+    identity_finding_indices: Vec<usize>,
+    identity_asset_ids: Vec<Uuid>,
+) -> NativeResult<WorkspaceView> {
+    let context = identity.lock().map_err(message)?.reviewed_context(
+        identity_analysis_id,
+        &identity_finding_indices,
+        &identity_asset_ids,
+    )?;
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let journal = journal.as_ref().ok_or("Create or open a project first.")?;
+    session
+        .as_mut()
+        .ok_or("Create or open a project first.")?
+        .import_context(revision, context, |project| journal.append(project))
+        .map_err(message)?;
+    state.prepared = None;
     Ok(state.view())
 }
 
@@ -1231,9 +1491,9 @@ pub async fn open_project(
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
+    let _ = discard; // Opening adds a tab group; the active project stays open.
     let before = {
         let state = state.lock().map_err(message)?;
-        state.check_replace(discard)?;
         state.session.as_ref().map(|s| s.project().clone())
     };
     let picked = tauri::async_runtime::spawn_blocking(move || {
@@ -1263,8 +1523,7 @@ pub async fn open_project(
             "A project was opened while the dialog was active. Open the file again.".into(),
         );
     }
-    state.check_replace(discard)?;
-    state.open_path(&path)?;
+    state.open_tab(|state| state.open_path(&path))?;
     Ok(Some(state.view()))
 }
 
@@ -1924,21 +2183,34 @@ mod tests {
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
         workspace.start(current.clone(), None, None).unwrap();
         change_grid(&mut workspace);
-        assert!(workspace.recover(Some(original.id), false).is_err());
-        assert_eq!(workspace.session.as_ref().unwrap().project().id, current.id);
-        workspace.recover(Some(original.id), true).unwrap();
+        // Recovery opens in its own tab group; the unsaved current project stays open behind it.
+        workspace.recover(Some(original.id), false).unwrap();
         assert_eq!(
             workspace.session.as_ref().unwrap().project().id,
             original.id
         );
-        assert!(
-            workspace
-                .recoveries
-                .iter()
-                .any(|candidate| candidate.info.project_id == current.id)
+        let parked = workspace
+            .parked
+            .iter()
+            .find(|open| open.session.project().id == current.id)
+            .unwrap();
+        assert!(parked.dirty() && parked.session.project().show_grid);
+        let tabs = workspace.view().open_projects;
+        assert_eq!(
+            tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            [current.id, original.id]
         );
+        assert!(workspace.view().any_dirty);
         let (retained, _) = workspace.read_recovery(current.id).unwrap().unwrap();
         assert!(retained.project.show_grid);
+        // Switching back keeps each project's own state.
+        workspace.switch_to(current.id).unwrap();
+        assert!(workspace.session.as_ref().unwrap().project().show_grid);
+        workspace.close();
+        assert_eq!(
+            workspace.session.as_ref().unwrap().project().id,
+            original.id
+        );
         drop(workspace);
         let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
         assert_eq!(restarted.recoveries.len(), 2);
@@ -2380,8 +2652,8 @@ pub fn open_recent_project(
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
+    let _ = discard; // Opening adds a tab group; the active project stays open.
     let mut state = state.lock().map_err(message)?;
-    state.check_replace(discard)?;
     if !crate::recent::read(&state.directory)?
         .iter()
         .any(|entry| entry.path == path)
@@ -2390,7 +2662,7 @@ pub fn open_recent_project(
             "This project is not in your recent list. Use Open project to choose it.".into(),
         );
     }
-    state.open_path(&path)?;
+    state.open_tab(|state| state.open_path(&path))?;
     Ok(state.view())
 }
 

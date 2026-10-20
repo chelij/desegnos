@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Modal } from './Modal';
+import { setAskBeforeDelete } from './deletePreference';
 import { escapeHtml, imageFile } from './elementEditing';
 import type { ElementDetails, ElementEdit, ElementTarget, ElementVisual, IdentityAsset } from './types';
 
@@ -22,6 +23,7 @@ export function ElementDialog({ mode, target, visual, inspect, apply, move, clos
   </div></Modal>;
 }
 function ElementForm({ mode, details, visual, apply, move, close, projectImages }: { projectImages: IdentityAsset[]; mode: ElementDialogMode; details: ElementDetails; visual: ElementVisual | null; apply: (change: ElementEdit) => Promise<void>; move: (x: number, y: number) => Promise<void>; close: () => void }) {
+  const [skipAsking, setSkipAsking] = useState(false);
   const [texts, setTexts] = useState(details.texts); const [attributes, setAttributes] = useState(details.attributes);
   const [styles, setStyles] = useState<Record<string, string>>({ ...visual });
   const [kind, setKind] = useState(['p', 'h1', 'h2', 'h3', 'button', 'a', 'img', 'section', 'div'].includes(details.target.tag) ? details.target.tag : 'p');
@@ -34,7 +36,7 @@ function ElementForm({ mode, details, visual, apply, move, close, projectImages 
   async function submit(event: FormEvent) {
     event.preventDefault(); setError(''); setBusy(true);
     try {
-      if (mode === 'remove') await apply({ kind: 'remove' });
+      if (mode === 'remove') { await apply({ kind: 'remove' }); if (skipAsking) setAskBeforeDelete(false); }
       else if (mode === 'position') { if (x || y) await move(x, y); }
       else if (mode === 'replace') {
         let source = html;
@@ -70,7 +72,7 @@ function ElementForm({ mode, details, visual, apply, move, close, projectImages 
   </>;
   return <form onSubmit={event => { void submit(event); }}>
     {error && <p className="message error" role="alert">{error}</p>}
-    {mode === 'remove' ? <p>Delete this item and everything inside it? You can undo this.</p> : mode === 'position' ? <><p>Drag the selected element on the canvas, or enter an offset.</p><div className="form-row"><label>Move horizontally (px)<input type="number" value={x} step="any" onChange={event => setX(event.target.valueAsNumber)} required /></label><label>Move vertically (px)<input type="number" value={y} step="any" onChange={event => setY(event.target.valueAsNumber)} required /></label></div></> : mode === 'replace' ? <>
+    {mode === 'remove' ? <><p>Delete this item and everything inside it? You can undo this.</p><label className="check-label"><input type="checkbox" checked={skipAsking} onChange={event => setSkipAsking(event.target.checked)} />Don’t ask again</label></> : mode === 'position' ? <><p>Drag the selected element on the canvas, or enter an offset.</p><div className="form-row"><label>Move horizontally (px)<input type="number" value={x} step="any" onChange={event => setX(event.target.valueAsNumber)} required /></label><label>Move vertically (px)<input type="number" value={y} step="any" onChange={event => setY(event.target.valueAsNumber)} required /></label></div></> : mode === 'replace' ? <>
       <label>Replace with<select value={kind} onChange={event => setKind(event.target.value)}>{[['p','Paragraph'],['h1','Main heading'],['h2','Heading'],['h3','Small heading'],['button','Button'],['a','Link'],['img','Image'],['section','Section'],['div','Container']].map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       {kind === 'html' ? <label>Replacement HTML<textarea className="code-input" value={html} onChange={event => setHtml(event.target.value)} rows={10} maxLength={1048576} required /></label> : kind === 'img' ? <>{imageControl}<label>Image description<input value={attributes.alt ?? ''} onChange={event => attr('alt', event.target.value)} /></label></> : <label>Text<textarea value={replacementText} onChange={event => setReplacementText(event.target.value)} rows={3} /></label>}
       {kind === 'a' && <label>Link address<input value={attributes.href ?? ''} onChange={event => attr('href',event.target.value)} /></label>}

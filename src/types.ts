@@ -22,7 +22,8 @@ export type ElementBounds = { regionId: string; bounds: { target: ElementTarget;
 export type ElementDetails = { target: ElementTarget; texts: { index: number; text: string }[]; textsTruncated: boolean; attributes: Record<string, string>; inlineStyle: string; html: string; canMove: boolean; canMoveBefore: boolean; canMoveAfter: boolean };
 export type ElementEditView = { workspace: WorkspaceView; element: ElementTarget | null };
 export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string; textAlign?: string };
-export type Region = { elements?: ElementTarget[]; element?: ElementTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
+export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; text?: string; url?: string };
+export type Region = { attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
 export type SiteContent = { html: string; css: string; javascript: string };
 export type Page = { id: string; name: string; path: string; included: boolean; viewport: Viewport; appearance: Appearance; regions: Region[]; content: SiteContent | null };
 export type Brief = { purpose: string; audience: string; brandName: string; tone: string };
@@ -38,7 +39,8 @@ export type RecentProject = { path: string; name: string };
 export type RecentProjectsView = { projects: RecentProject[]; error: string | null };
 export type WebsiteExport = { path: string; indexPath: string; pageCount: number; fileCount: number; warnings: string[] };
 export type HistoryView = { sessionId: string; start: number; position: number; end: number; version: number };
-export type WorkspaceView = { history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
+export type OpenProjectSummary = { id: string; name: string; dirty: boolean; active: boolean; pages: { id: string; name: string }[] };
+export type WorkspaceView = { openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null; migrationNotice: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;
   regionCount: number; pageCount: number; dependencies: Record<string, string> };
@@ -99,6 +101,8 @@ export type Command =
   | { type: 'retarget_region'; page_id: string; region_id: string; elements: ElementTarget[]; bounds: { target: ElementTarget; rect: Rect }[] }
   | { type: 'set_region_target_removal'; page_id: string; region_id: string; allow_target_removal: boolean }
   | { type: 'set_region_mobile_only'; page_id: string; region_id: string; mobile_only: boolean }
+  | { type: 'add_region_attachment'; page_id: string; region_id: string; attachment: RequestAttachment }
+  | { type: 'remove_region_attachment'; page_id: string; region_id: string; attachment_id: string }
   | { type: 'delete_elements'; page_id: string; elements: ElementTarget[] }
   | { type: 'update_region'; page_id: string; region_id: string; rect: Rect; prompt: string }
   | { type: 'dismiss_empty_regions'; keep_region_id: string | null }

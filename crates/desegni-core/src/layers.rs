@@ -768,6 +768,7 @@ impl Project {
                 elements: vec![],
                 allow_target_removal: false,
                 mobile_only: false,
+                attachments: vec![],
                 completed: false,
             });
             for (rank, index) in order.into_iter().enumerate() {

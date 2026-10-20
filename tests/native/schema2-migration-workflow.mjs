@@ -50,8 +50,6 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
   await step('Native Open upgrades a real schema2 archive while preserving its global mode and original bytes', async () => {
     await chooseFile(physical, async () => {
       await driver.button('Open project');
-      await waitFor(() => driver.execute(() => !!document.querySelector('dialog[aria-label="Save your changes?"][open]')), 'The dirty project replacement choice did not appear');
-      await driver.click('//dialog[@open]//button[normalize-space(.)="Discard and continue"]', 'xpath');
     }, destination, evidence, 'schema2-migration-01-open');
     const state = await waitFor(async () => {
       const view = await driver.invoke('get_workspace');

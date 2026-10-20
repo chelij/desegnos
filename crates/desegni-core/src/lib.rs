@@ -1,3 +1,4 @@
+mod attachments;
 mod dossier;
 mod editing;
 mod export;
@@ -16,6 +17,7 @@ mod source;
 mod stable_targets;
 mod website;
 
+pub use attachments::*;
 pub use dossier::*;
 pub use editing::*;
 pub use export::*;

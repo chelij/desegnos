@@ -114,7 +114,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     await driver.menu(['New project']); await driver.button('Blank website'); await driver.fill('Project name','Temporary reopen check'); await driver.button('Create project');
     await waitFor(async()=>(await workspace(driver)).project.id!==saved.project.id,'The temporary project did not replace the saved one');
     const unsaved=(await workspace(driver)).dirty;
-    await chooseFile(physical,async()=>{await driver.menu(['Open project']);if(unsaved)await driver.button('Discard and continue');},destination,evidence,'canvas-open');
+    await chooseFile(physical,async()=>{await driver.menu(['Open project']);},destination,evidence,'canvas-open');
     await waitFor(async()=>(await workspace(driver)).project?.id===saved.project.id && (await workspace(driver)).path===destination,'The Desegnos project did not reopen');
     assert.deepEqual((await workspace(driver)).project,saved.project);
     // Leave an acknowledged unsaved edit for the runner's actual crash/recovery check.

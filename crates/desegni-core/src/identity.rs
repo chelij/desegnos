@@ -123,6 +123,16 @@ impl IdentityAsset {
     }
 }
 
+/// Reviewed brand findings and logos to merge into an open project ("Import context").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedContext {
+    pub source_name: String,
+    pub source_sha256: String,
+    pub summary: String,
+    pub findings: Vec<(String, String)>,
+    pub assets: Vec<IdentityAsset>,
+}
+
 impl ImportedIdentity {
     pub fn validate(&self) -> Result<()> {
         validate_text(&self.source_name, "Identity source name", 240, true)?;
@@ -153,6 +163,89 @@ impl ImportedIdentity {
 }
 
 impl Project {
+    /// Merge reviewed context into an existing project as one change. Findings become project
+    /// rules (protected rules are never overwritten), brand name and tone fill the brief, and
+    /// logos join the project's images up to the usual limit of four.
+    pub fn import_context(&self, revision: u64, context: ImportedContext) -> Result<Self> {
+        ensure(
+            revision == self.revision,
+            "The project changed. Import the context again.",
+        )?;
+        ensure(
+            !context.findings.is_empty() || !context.assets.is_empty(),
+            "Choose at least one finding or logo to import.",
+        )?;
+        let mut next = self.clone();
+        next.revision = revision
+            .checked_add(1)
+            .ok_or_else(|| crate::Error("Project revision limit reached.".into()))?;
+        for (topic, value) in &context.findings {
+            let (topic, value) = (topic.trim(), value.trim());
+            let normalized = topic.to_lowercase();
+            if normalized == "brand name" {
+                next.brief.brand_name = value.into();
+            }
+            if normalized == "tone" {
+                next.brief.tone = value.into();
+            }
+            match next.decisions.iter_mut().find(|decision| {
+                decision.scope == crate::Scope::Project
+                    && decision.topic.eq_ignore_ascii_case(topic)
+            }) {
+                Some(existing) if existing.protected => {}
+                Some(existing) => {
+                    existing.value = value.into();
+                    existing.accepted_at_revision = next.revision;
+                }
+                None => next.decisions.push(crate::Decision {
+                    id: uuid::Uuid::new_v4(),
+                    topic: topic.into(),
+                    value: value.into(),
+                    scope: crate::Scope::Project,
+                    protected: false,
+                    accepted_at_revision: next.revision,
+                }),
+            }
+        }
+        let identity = match next.imported_identity.take() {
+            Some(mut existing) => {
+                for asset in context.assets {
+                    if !existing
+                        .assets
+                        .iter()
+                        .any(|item| item.sha256 == asset.sha256 || item.id == asset.id)
+                    {
+                        if existing.assets.len() == MAX_IDENTITY_ASSETS {
+                            existing.assets.remove(0);
+                        }
+                        existing.assets.push(asset);
+                    }
+                }
+                existing.source_name = context.source_name;
+                existing.source_sha256 = context.source_sha256;
+                let summary = format!("{}\n{}", existing.summary, context.summary);
+                existing.summary = summary
+                    .chars()
+                    .rev()
+                    .take(crate::MAX_PROMPT_CHARS)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect();
+                existing
+            }
+            None => ImportedIdentity {
+                source_name: context.source_name,
+                source_sha256: context.source_sha256,
+                summary: context.summary,
+                assets: context.assets,
+            },
+        };
+        next.imported_identity = Some(identity);
+        next.validate()?;
+        Ok(next)
+    }
+
     pub fn set_initial_identity(&self, identity: ImportedIdentity) -> Result<Self> {
         self.validate()?;
         identity.validate()?;

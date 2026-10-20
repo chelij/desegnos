@@ -201,6 +201,9 @@ pub struct Region {
     /// A phone-layout fix: only CSS inside small-screen media queries may change.
     #[serde(default, skip_serializing_if = "is_false")]
     pub mobile_only: bool,
+    /// Files and links dropped on the request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<crate::RequestAttachment>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub completed: bool,
 }
@@ -371,6 +374,16 @@ pub enum Command {
         region_id: Uuid,
         mobile_only: bool,
     },
+    AddRegionAttachment {
+        page_id: Uuid,
+        region_id: Uuid,
+        attachment: crate::RequestAttachment,
+    },
+    RemoveRegionAttachment {
+        page_id: Uuid,
+        region_id: Uuid,
+        attachment_id: String,
+    },
     DeleteElements {
         page_id: Uuid,
         elements: Vec<ElementTarget>,
@@ -535,6 +548,13 @@ impl Project {
                     )?;
                 }
                 validate_text(&region.prompt, "Area description", MAX_PROMPT_CHARS, false)?;
+                ensure(
+                    region.attachments.len() <= crate::MAX_ATTACHMENTS,
+                    "A request can hold at most six attachments.",
+                )?;
+                for attachment in &region.attachments {
+                    attachment.validate()?;
+                }
             }
         }
         let home = self.page(self.home_page_id)?;
@@ -776,6 +796,7 @@ impl Project {
                     elements: vec![],
                     allow_target_removal: false,
                     mobile_only: false,
+                    attachments: vec![],
                     completed: false,
                 });
             }
@@ -803,6 +824,7 @@ impl Project {
                     elements: canonical,
                     allow_target_removal: false,
                     mobile_only: false,
+                    attachments: vec![],
                     completed: false,
                 });
             }
@@ -832,6 +854,7 @@ impl Project {
                     elements: targets,
                     allow_target_removal,
                     mobile_only: false,
+                    attachments: vec![],
                     completed: false,
                 });
             }
@@ -880,6 +903,52 @@ impl Project {
                     .find(|r| r.id == region_id && !r.completed)
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
                 region.mobile_only = mobile_only;
+            }
+            Command::AddRegionAttachment {
+                page_id,
+                region_id,
+                mut attachment,
+            } => {
+                let page = next.page_mut(page_id)?;
+                let used: BTreeSet<String> = page
+                    .regions
+                    .iter()
+                    .flat_map(|r| r.attachments.iter().map(|a| a.id.clone()))
+                    .collect();
+                let region = page
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.id == region_id && !r.completed)
+                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                ensure(
+                    region.attachments.len() < crate::MAX_ATTACHMENTS,
+                    "A request can hold at most six attachments.",
+                )?;
+                // Identifiers are assigned here so they stay unique on the page.
+                attachment.id = (1..)
+                    .map(|n| format!("a{}{n}", &region_id.simple().to_string()[..4]))
+                    .find(|id| !used.contains(id))
+                    .expect("an unused identifier");
+                attachment.validate()?;
+                region.attachments.push(attachment);
+            }
+            Command::RemoveRegionAttachment {
+                page_id,
+                region_id,
+                attachment_id,
+            } => {
+                let region = next
+                    .page_mut(page_id)?
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.id == region_id && !r.completed)
+                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                let before = region.attachments.len();
+                region.attachments.retain(|a| a.id != attachment_id);
+                ensure(
+                    region.attachments.len() < before,
+                    "That attachment was already removed.",
+                )?;
             }
             Command::DeleteElements { page_id, elements } => {
                 return self.delete_elements(expected_revision, page_id, &elements);

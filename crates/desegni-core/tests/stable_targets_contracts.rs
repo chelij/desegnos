@@ -323,6 +323,7 @@ fn migration_assigns_and_remaps_without_modifying_original_bytes_or_revision() {
         elements: vec![],
         allow_target_removal: false,
         mobile_only: false,
+        attachments: vec![],
         completed: false,
     });
     p.schema_version = 6;
@@ -693,5 +694,113 @@ fn phone_fix_changes_only_small_screen_css_and_runs_on_its_own() {
             .unwrap_err()
             .to_string()
             .contains("Phone fixes run on their own")
+    );
+}
+#[test]
+fn attached_pictures_stay_out_of_ai_instructions_and_are_inserted_on_apply() {
+    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQCi3/DwADeQHuOPZfDAAAAABJRU5ErkJggg==";
+    let p = project();
+    let a = target(&p, "article:nth-of-type(1)");
+    let p = describe(p, &[a]);
+    let home = p.home_page_id;
+    let region = p.pages[0].regions.last().unwrap().id;
+    let attach = |p: Project, attachment: RequestAttachment| {
+        p.apply(
+            p.revision,
+            Command::AddRegionAttachment {
+                page_id: home,
+                region_id: region,
+                attachment,
+            },
+        )
+        .unwrap()
+    };
+    let p = attach(
+        p,
+        RequestAttachment {
+            id: "x".into(),
+            name: "bread.png".into(),
+            kind: AttachmentKind::Image,
+            data_uri: Some(png.into()),
+            text: None,
+            url: None,
+        },
+    );
+    let p = attach(
+        p,
+        RequestAttachment {
+            id: "x".into(),
+            name: "menu.txt".into(),
+            kind: AttachmentKind::Text,
+            data_uri: None,
+            text: Some("Sourdough £4.50".into()),
+            url: None,
+        },
+    );
+    let p = attach(
+        p,
+        RequestAttachment {
+            id: "x".into(),
+            name: "shop".into(),
+            kind: AttachmentKind::Link,
+            data_uri: None,
+            text: None,
+            url: Some("https://crumb.example/order".into()),
+        },
+    );
+    let attachments = p.pages[0].regions.last().unwrap().attachments.clone();
+    assert_eq!(attachments.len(), 3);
+    assert!(attachments.iter().all(|item| item.id.starts_with('a')));
+    let image_id = attachments[0].id.clone();
+    // Invalid files are refused.
+    let bad = p.apply(
+        p.revision,
+        Command::AddRegionAttachment {
+            page_id: home,
+            region_id: region,
+            attachment: RequestAttachment {
+                id: "x".into(),
+                name: "x.png".into(),
+                kind: AttachmentKind::Image,
+                data_uri: Some("data:image/png;base64,AAAA".into()),
+                text: None,
+                url: None,
+            },
+        },
+    );
+    assert!(bad.is_err());
+    let snapshot = p.prepare_requirements().unwrap();
+    assert!(
+        snapshot.markdown.contains("bread.png")
+            && snapshot.markdown.contains("Sourdough £4.50")
+            && snapshot.markdown.contains("https://crumb.example/order")
+    );
+    assert!(
+        !snapshot.markdown.contains("iVBORw0KGgo"),
+        "picture bytes never go to the AI"
+    );
+    let original = p.pages[0].content.as_ref().unwrap().html.clone();
+    let c = candidate(&p, &snapshot, original.replace("First</h2>", &format!("First</h2><img data-desegnos-attachment=\"{image_id}\" src=\"#\" alt=\"Fresh bread\">")));
+    c.validate(&snapshot, &p).unwrap();
+    let applied = p.apply_generation(&snapshot, &c, &[]).unwrap();
+    let html = &applied.pages[0].content.as_ref().unwrap().html;
+    assert!(
+        html.contains(png) && !html.contains(ATTACHMENT_ATTRIBUTE),
+        "{html}"
+    );
+    // Removing an attachment works and is validated.
+    let removed = p
+        .apply(
+            p.revision,
+            Command::RemoveRegionAttachment {
+                page_id: home,
+                region_id: region,
+                attachment_id: image_id,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        removed.pages[0].regions.last().unwrap().attachments.len(),
+        2
     );
 }

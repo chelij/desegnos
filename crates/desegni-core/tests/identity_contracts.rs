@@ -503,3 +503,120 @@ fn flexible_and_strict_reject_unsolicited_content_outside_new_request_roots() {
         }
     }
 }
+
+#[test]
+fn import_context_merges_rules_into_an_open_project_without_overwriting_protected_ones() {
+    use desegni_core::*;
+    let project = Project::new(
+        "Bakery".into(),
+        Viewport {
+            width: 1440,
+            height: 900,
+        },
+        Appearance::Light,
+    )
+    .unwrap();
+    let project = project
+        .apply(
+            project.revision,
+            Command::SetDecision {
+                topic: "Primary colour".into(),
+                value: "#000000".into(),
+                scope: Scope::Project,
+                protected: true,
+            },
+        )
+        .unwrap();
+    let project = project
+        .apply(
+            project.revision,
+            Command::SetDecision {
+                topic: "Heading font".into(),
+                value: "Arial".into(),
+                scope: Scope::Project,
+                protected: false,
+            },
+        )
+        .unwrap();
+    let context = ImportedContext {
+        source_name: "crumb.example".into(),
+        source_sha256: "a".repeat(64),
+        summary: "Brand name: Crumb & Co".into(),
+        findings: vec![
+            ("Brand name".into(), "Crumb & Co".into()),
+            ("Tone".into(), "Warm and rustic".into()),
+            ("Primary colour".into(), "#c0392b".into()),
+            ("heading font".into(), "Georgia, serif".into()),
+            ("Accent colour".into(), "#fdf6e3".into()),
+        ],
+        assets: vec![],
+    };
+    let next = project
+        .import_context(project.revision, context.clone())
+        .unwrap();
+    assert_eq!(next.revision, project.revision + 1);
+    assert_eq!(next.brief.brand_name, "Crumb & Co");
+    assert_eq!(next.brief.tone, "Warm and rustic");
+    let rule = |topic: &str| {
+        next.decisions
+            .iter()
+            .find(|d| d.topic.eq_ignore_ascii_case(topic))
+            .unwrap()
+            .value
+            .clone()
+    };
+    assert_eq!(
+        rule("Primary colour"),
+        "#000000",
+        "protected rules are kept"
+    );
+    assert_eq!(rule("Heading font"), "Georgia, serif");
+    assert_eq!(rule("Accent colour"), "#fdf6e3");
+    assert_eq!(
+        next.decisions
+            .iter()
+            .filter(|d| d.topic.eq_ignore_ascii_case("heading font"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        next.imported_identity.as_ref().unwrap().source_name,
+        "crumb.example"
+    );
+    // A second import keeps the first summary and replaces the source.
+    let again = next
+        .import_context(
+            next.revision,
+            ImportedContext {
+                source_name: "second".into(),
+                ..context.clone()
+            },
+        )
+        .unwrap();
+    assert!(
+        again
+            .imported_identity
+            .as_ref()
+            .unwrap()
+            .summary
+            .contains("Crumb & Co\nBrand name")
+    );
+    assert!(
+        project
+            .import_context(project.revision + 1, context.clone())
+            .is_err(),
+        "stale revisions are refused"
+    );
+    assert!(
+        project
+            .import_context(
+                project.revision,
+                ImportedContext {
+                    findings: vec![],
+                    ..context
+                }
+            )
+            .is_err(),
+        "empty imports are refused"
+    );
+}

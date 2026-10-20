@@ -71,20 +71,27 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
   const identityCount = provider.identityRequests().length;
   await physical.initialize(output);
 
-  await step('New project offers blank or imported identity before name, platform and resolution', async () => {
+  let blankProject;
+  await step('New projects always start blank; Import context opens from the main window', async () => {
     await chooseFile(physical, () => driver.button('Save as'), sourceProjectPath, output, 'source-project-save');
     await savedState(driver, sourceProjectPath);
     sourceProjectHash = hash(await readFile(sourceProjectPath));
     await driver.button('New project');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] input[name="projectName"]')), false);
-    await driver.ready('//dialog[@open]//button[@aria-label="Blank website"]', 'xpath');
-    await driver.button('Use my existing brand');
+    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] button[aria-label="Use my existing brand"]')), false);
+    await driver.click('//dialog[@open]//button[@aria-label="Blank website"]', 'xpath');
     await driver.fill('Project name', 'Imported Northstar website');
     await driver.button('Web');
     assert.deepEqual(await driver.execute(() => [...document.querySelector('dialog[open] select').options].map(option => option.value)), ['1440x900', '1920x1080', '1536x864', '1366x768', '1280x720', '2560x1440', 'custom']);
     await driver.select('Resolution', '1536x864');
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] button')].find(button => button.textContent.trim() === 'Create project')?.disabled), true);
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] .appearance-choice')), false);
+    await driver.button('Create project');
+    blankProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id !== originalProject.id && value; }, 'The blank project did not open');
+    // The source project stays open in its own tab group.
+    const openIds = (await workspace(driver)).openProjects.map(open => open.id); assert.ok(openIds.includes(originalProject.id) && openIds.at(-1) === blankProject.id, JSON.stringify(openIds));
+    await driver.button('Import context');
+    await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .import-context')), 'Import context did not open');
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] button')].find(button => button.textContent.trim() === 'Add to project')?.disabled), true);
     await physical.captureWindow(join(output, 'new-project-choice-window.png'));
   });
 
@@ -103,7 +110,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     const projectNames = await importedSource(driver, 'Existing website.desegni');
     assert.ok(projectNames.some(value => value.includes('PROJECT.md')));
     assert.ok(projectNames.some(value => value.includes('styles.css')));
-    assert.deepEqual((await workspace(driver)).project, originalProject);
+    assert.deepEqual((await workspace(driver)).project, blankProject);
     assert.equal(provider.generationRequests().length, generationCount);
     assert.equal(provider.identityRequests().length, identityCount);
     assert.deepEqual(await snapshot(fixtures.directory), originals.folder);
@@ -126,7 +133,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.button('Cancel analysis');
     const value = await completedAnalysis(driver, ['cancelled']);
     assert.equal(value.candidate ?? null, null);
-    assert.deepEqual((await workspace(driver)).project, originalProject);
+    assert.deepEqual((await workspace(driver)).project, blankProject);
     provider.release(cancelled.jobId);
   });
 
@@ -136,7 +143,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     assert.equal(value.candidate ?? null, null); assert.ok(value.error || value.message);
     await waitFor(() => driver.execute(() => !!document.querySelector('.identity-import [role="alert"]')?.textContent), 'The identity failure was hidden from the user');
     assert.equal(await driver.execute(() => document.querySelector('dialog[open] button[type="submit"]')?.disabled), true);
-    assert.deepEqual((await workspace(driver)).project, originalProject);
+    assert.deepEqual((await workspace(driver)).project, blankProject);
   });
 
   await step('Identity analysis freezes reviewed files and image provenance, then offers findings and portable logos to choose', async () => {
@@ -168,10 +175,9 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await writeFile(join(output, 'identity-analysis.json'), JSON.stringify(completed, null, 2), { mode: 0o600 });
   });
 
-  await step('Selected identity starts an empty Light website and preserves only chosen decisions and the actual logo', async () => {
-    await driver.button('Create project');
-    if (await driver.execute(() => !!document.querySelector('dialog[aria-label="Save your changes?"][open]'))) await driver.button('Discard and continue');
-    finalProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id !== originalProject.id && value; }, 'The imported-identity project did not open');
+  await step('Selected identity is added to the open blank website and preserves only chosen decisions and the actual logo', async () => {
+    await driver.button('Add to project');
+    finalProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id === blankProject.id && value.importedIdentity && value; }, 'The imported context was not added to the open project');
     assert.equal(finalProject.name, 'Imported Northstar website'); assert.equal(finalProject.schemaVersion, 7);
     assert.equal(finalProject.appearance, 'light'); assert.equal(finalProject.pages[0].appearance, 'light');
     assert.deepEqual(finalProject.viewport, { width: 1536, height: 864 });

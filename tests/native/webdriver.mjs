@@ -109,7 +109,7 @@ export class WebDriver {
   }
 
   page(pageId) {
-    return this.click(`//div[@role="tablist" and @aria-label="Project pages"]/button[@role="tab" and @id=${xpathString(`page-tab-${pageId}`)}]`, 'xpath');
+    return this.click(`//div[@role="tablist" and @aria-label="Project pages"]//button[@role="tab" and @id=${xpathString(`page-tab-${pageId}`)}]`, 'xpath');
   }
 
   async button(text) {

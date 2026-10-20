@@ -165,3 +165,21 @@
 .free-workspace .style-value { min-width: 22px; text-align: center; font-size: 11px; color: var(--muted); }
 .free-workspace .style-divider { width: 1px; height: 18px; margin-inline: 3px; background: var(--border-soft); }
 .free-workspace .request-phone-tag { position: absolute; left: -1px; top: -20px; padding: 1px 6px; border-radius: 3px 3px 0 0; background: #2e7d32; color: #fff; font-size: 11px; line-height: 16px; pointer-events: none; }
+
+/* Unselected request boxes are see-through so the grid and page show behind them;
+   selecting or typing in one makes it solid again for easy reading. */
+.free-workspace .annotation { background: color-mix(in srgb, var(--annotation-surface) 28%, transparent); transition: background-color .12s; }
+.free-workspace .annotation textarea { text-shadow: 0 0 4px var(--annotation-surface), 0 0 2px var(--annotation-surface), 0 0 1px var(--annotation-surface); }
+.free-workspace .annotation:hover { background: color-mix(in srgb, var(--annotation-surface) 55%, transparent); }
+.free-workspace .annotation.selected, .free-workspace .annotation:focus-within, .free-workspace .annotation.expanded { background: var(--annotation-surface); }
+.free-workspace .annotation.selected textarea, .free-workspace .annotation:focus-within textarea { text-shadow: none; }
+
+/* Request attachments: chips along the bottom of the box, a paperclip on the selected box,
+   and a hint while dragging files over it. */
+.free-workspace .request-attachments { position: absolute; left: 6px; right: 34px; bottom: 6px; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; pointer-events: auto; }
+.free-workspace .request-attachments li { display: flex; align-items: center; gap: 4px; max-width: 160px; padding: 2px 4px 2px 3px; border: 1px solid var(--annotation-border); border-radius: 4px; background: var(--annotation-surface); color: var(--annotation-text); font-size: 11px; }
+.free-workspace .request-attachments img { width: 18px; height: 18px; object-fit: cover; border-radius: 2px; }
+.free-workspace .request-attachments .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.free-workspace .request-attachments button { min-height: 0; padding: 0 3px; border: 0; background: transparent; font-size: 13px; line-height: 1; }
+.free-workspace .request-attach { position: absolute; right: 6px; bottom: 6px; z-index: 3; width: 26px; min-height: 26px; padding: 0; border: 1px solid var(--annotation-border); border-radius: 4px; background: var(--annotation-surface); font-size: 13px; line-height: 1; }
+.free-workspace .request-drop-hint { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; border: 2px dashed var(--annotation-focus); background: color-mix(in srgb, var(--annotation-focus) 18%, var(--annotation-surface)); color: var(--annotation-text); font-size: 12px; font-weight: 600; pointer-events: none; }

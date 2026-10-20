@@ -873,14 +873,13 @@ impl IdentityService {
         }
         Ok(())
     }
-    pub(super) fn project_from_analysis(
+    /// The user's reviewed choices from a completed analysis, checked against its record.
+    pub(super) fn reviewed_context(
         &self,
         job_id: Uuid,
         findings: &[usize],
         assets: &[Uuid],
-        name: String,
-        viewport: Viewport,
-    ) -> NativeResult<Project> {
+    ) -> NativeResult<desegni_core::ImportedContext> {
         let record = self
             .latest
             .as_ref()
@@ -891,7 +890,7 @@ impl IdentityService {
         self.validate_record(&record)?;
         require(
             record.status == AnalysisStatus::Complete,
-            "Complete identity analysis before creating this project.",
+            "Complete the analysis before importing its findings.",
         )?;
         let candidate = record
             .candidate
@@ -922,29 +921,15 @@ impl IdentityService {
             asset.validate().map_err(error)?;
             accepted_assets.push(asset);
         }
-        let mut project = Project::new(name, viewport, Appearance::Light).map_err(error)?;
-        let mut brief = Brief::default();
+        let mut chosen_findings = Vec::new();
         let mut summary = Vec::new();
         for index in chosen {
             let finding = &candidate.findings[index];
-            let topic = finding.topic.trim();
-            let value = finding.value.trim();
-            let normalized = topic.to_lowercase();
-            if normalized == "brand name" {
+            let (topic, value) = (finding.topic.trim(), finding.value.trim());
+            if topic.eq_ignore_ascii_case("brand name") {
                 text(value, 120, true)?;
-                brief.brand_name = value.into();
             }
-            if normalized == "tone" {
-                brief.tone = value.into();
-            }
-            project.decisions.push(Decision {
-                id: Uuid::new_v4(),
-                topic: topic.into(),
-                value: value.into(),
-                scope: Scope::Project,
-                protected: false,
-                accepted_at_revision: 0,
-            });
+            chosen_findings.push((topic.to_owned(), value.to_owned()));
             summary.push(format!("{topic}: {value}"));
         }
         if !accepted_assets.is_empty() {
@@ -957,13 +942,50 @@ impl IdentityService {
                     .join(", ")
             ));
         }
+        Ok(desegni_core::ImportedContext {
+            source_name: record.source.name,
+            source_sha256: record.source.sha256,
+            summary: summary.join("\n"),
+            findings: chosen_findings,
+            assets: accepted_assets,
+        })
+    }
+
+    pub(super) fn project_from_analysis(
+        &self,
+        job_id: Uuid,
+        findings: &[usize],
+        assets: &[Uuid],
+        name: String,
+        viewport: Viewport,
+    ) -> NativeResult<Project> {
+        let context = self.reviewed_context(job_id, findings, assets)?;
+        let mut project = Project::new(name, viewport, Appearance::Light).map_err(error)?;
+        let mut brief = Brief::default();
+        for (topic, value) in &context.findings {
+            let normalized = topic.to_lowercase();
+            if normalized == "brand name" {
+                brief.brand_name = value.clone();
+            }
+            if normalized == "tone" {
+                brief.tone = value.clone();
+            }
+            project.decisions.push(Decision {
+                id: Uuid::new_v4(),
+                topic: topic.clone(),
+                value: value.clone(),
+                scope: Scope::Project,
+                protected: false,
+                accepted_at_revision: 0,
+            });
+        }
         project.brief = brief;
         project
             .set_initial_identity(ImportedIdentity {
-                source_name: record.source.name,
-                source_sha256: record.source.sha256,
-                summary: summary.join("\n"),
-                assets: accepted_assets,
+                source_name: context.source_name,
+                source_sha256: context.source_sha256,
+                summary: context.summary,
+                assets: context.assets,
             })
             .map_err(error)
     }
