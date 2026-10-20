@@ -294,6 +294,9 @@ try {
     const selection = { x: 200, y: 180, width: 300, height: 100 }, size = { x: 240, y: 42 }, viewport = { x: 28, y: 28, width: 800, height: 600 };
     assert.deepEqual(elementToolbarPosition(selection, size, viewport), { x: 200, y: 130 });
     assert.deepEqual(elementToolbarPosition(selection, size, viewport, [{ x: 180, y: 125, width: 340, height: 45 }]), { x: 200, y: 288 });
+    // Busy surroundings never send the menu to a far corner while a spot beside the selection is free of it.
+    const crowded = elementToolbarPosition({ x: 300, y: 500, width: 130, height: 37 }, size, viewport, [{ x: 0, y: 0, width: 2000, height: 2000 }]);
+    assert.ok(Math.abs(crowded.y - 500) < 120 && Math.abs(crowded.x - 300) < 400, JSON.stringify(crowded));
     const nearTop = elementToolbarPosition({ ...selection, y: 35 }, size, viewport);
     assert.deepEqual(nearTop, { x: 200, y: 143 });
     for (const rect of [{ x: -50, y: -30, width: 10, height: 10 }, { x: 820, y: 620, width: 40, height: 40 }]) {

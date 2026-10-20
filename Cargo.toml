@@ -10,7 +10,7 @@ rust-version = "1.99"
 license = "GPL-3.0-only"
 
 [workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }

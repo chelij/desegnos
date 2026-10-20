@@ -57,6 +57,8 @@ fn candidate(record: &AnalysisRecord) -> IdentityCandidate {
         job_id: record.requirements.job_id,
         requirements_sha256: record.requirements.sha256.clone(),
         summary: "Reusable studio identity from the supplied source.".into(),
+        photos: vec![],
+        content: vec![],
         brand_name: "Saka".into(),
         tone: "Direct and welcoming".into(),
         findings: vec![

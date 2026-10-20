@@ -7,6 +7,91 @@ use uuid::Uuid;
 
 pub const MAX_IDENTITY_ASSETS: usize = 4;
 pub const MAX_IDENTITY_ASSET_BYTES: usize = 512 * 1024;
+/// The user's own pictures from an imported folder (portfolio photos, products, team).
+pub const MAX_PROJECT_PHOTOS: usize = 16;
+pub const MAX_PROJECT_PHOTO_BYTES: usize = 200 * 1024;
+pub const MAX_PHOTO_DESCRIPTION_CHARS: usize = 200;
+
+/// Existing work and pages found in imported sources (projects, tutorials, articles), so
+/// generation knows what exists and where to link.
+pub const MAX_IMPORTED_ITEMS: usize = 64;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedItem {
+    pub kind: String,
+    pub title: String,
+    /// A public https address or a site path such as /projects/robot; empty when unknown.
+    pub url: String,
+    pub summary: String,
+}
+
+impl ImportedItem {
+    pub fn validate(&self) -> Result<()> {
+        ensure(
+            matches!(
+                self.kind.as_str(),
+                "project" | "tutorial" | "article" | "page" | "product" | "other"
+            ),
+            "An imported item has an unknown kind.",
+        )?;
+        validate_text(&self.title, "Imported item title", 160, true)?;
+        validate_text(&self.summary, "Imported item summary", 300, false)?;
+        validate_text(&self.url, "Imported item link", 2048, false)?;
+        ensure(
+            self.url.is_empty()
+                || self.url.starts_with("https://")
+                || self.url.starts_with("http://")
+                || (self.url.starts_with('/') && !self.url.starts_with("//")),
+            "An imported item link must be a web address or a site path.",
+        )
+    }
+}
+
+/// A photo kept with the project. Bytes are shared, so undo history does not copy them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectPhoto {
+    pub id: Uuid,
+    pub name: String,
+    pub data_uri: std::sync::Arc<str>,
+    pub sha256: String,
+    pub width: u32,
+    pub height: u32,
+    pub description: String,
+}
+
+impl ProjectPhoto {
+    pub fn validate(&self) -> Result<()> {
+        ensure(
+            !self.id.is_nil(),
+            "A project photo needs a valid identifier.",
+        )?;
+        validate_text(&self.name, "Photo name", 240, true)?;
+        validate_text(
+            &self.description,
+            "Photo description",
+            MAX_PHOTO_DESCRIPTION_CHARS,
+            false,
+        )?;
+        ensure(
+            valid_digest(&self.sha256),
+            "A project photo has an invalid fingerprint.",
+        )?;
+        ensure(
+            (1..=4096).contains(&self.width) && (1..=4096).contains(&self.height),
+            "A project photo has an invalid size.",
+        )?;
+        let encoded = self
+            .data_uri
+            .strip_prefix("data:image/jpeg;base64,")
+            .ok_or_else(|| Error("A project photo must be an embedded JPEG.".into()))?;
+        ensure(
+            !encoded.is_empty() && encoded.len() <= MAX_PROJECT_PHOTO_BYTES.div_ceil(3) * 4,
+            "A project photo exceeds its size limit.",
+        )
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -25,6 +110,10 @@ pub struct ImportedIdentity {
     pub source_sha256: String,
     pub summary: String,
     pub assets: Vec<IdentityAsset>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub photos: Vec<ProjectPhoto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content: Vec<ImportedItem>,
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -131,6 +220,8 @@ pub struct ImportedContext {
     pub summary: String,
     pub findings: Vec<(String, String)>,
     pub assets: Vec<IdentityAsset>,
+    pub photos: Vec<ProjectPhoto>,
+    pub content: Vec<ImportedItem>,
 }
 
 impl ImportedIdentity {
@@ -158,6 +249,24 @@ impl ImportedIdentity {
                 "Identity asset identifiers must be unique.",
             )?;
         }
+        ensure(
+            self.photos.len() <= MAX_PROJECT_PHOTOS,
+            "A project keeps at most 16 imported photos.",
+        )?;
+        for photo in &self.photos {
+            photo.validate()?;
+            ensure(
+                ids.insert(photo.id),
+                "Project photo identifiers must be unique.",
+            )?;
+        }
+        ensure(
+            self.content.len() <= MAX_IMPORTED_ITEMS,
+            "A project keeps at most 64 imported content items.",
+        )?;
+        for item in &self.content {
+            item.validate()?;
+        }
         Ok(())
     }
 }
@@ -172,8 +281,11 @@ impl Project {
             "The project changed. Import the context again.",
         )?;
         ensure(
-            !context.findings.is_empty() || !context.assets.is_empty(),
-            "Choose at least one finding or logo to import.",
+            !context.findings.is_empty()
+                || !context.assets.is_empty()
+                || !context.photos.is_empty()
+                || !context.content.is_empty(),
+            "Choose at least one finding, logo, photo or content item to import.",
         )?;
         let mut next = self.clone();
         next.revision = revision
@@ -221,6 +333,29 @@ impl Project {
                         existing.assets.push(asset);
                     }
                 }
+                // Newer photos replace the oldest once the project holds the maximum.
+                for photo in context.photos {
+                    if !existing
+                        .photos
+                        .iter()
+                        .any(|item| item.sha256 == photo.sha256 || item.id == photo.id)
+                    {
+                        if existing.photos.len() == MAX_PROJECT_PHOTOS {
+                            existing.photos.remove(0);
+                        }
+                        existing.photos.push(photo);
+                    }
+                }
+                // The same title and link from a newer import replaces the older entry.
+                for item in context.content {
+                    existing.content.retain(|old| {
+                        !(old.title.eq_ignore_ascii_case(&item.title) && old.url == item.url)
+                    });
+                    if existing.content.len() == MAX_IMPORTED_ITEMS {
+                        existing.content.remove(0);
+                    }
+                    existing.content.push(item);
+                }
                 existing.source_name = context.source_name;
                 existing.source_sha256 = context.source_sha256;
                 let summary = format!("{}\n{}", existing.summary, context.summary);
@@ -239,6 +374,8 @@ impl Project {
                 source_sha256: context.source_sha256,
                 summary: context.summary,
                 assets: context.assets,
+                photos: context.photos,
+                content: context.content,
             },
         };
         next.imported_identity = Some(identity);

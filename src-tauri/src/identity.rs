@@ -77,6 +77,16 @@ pub struct IdentitySourceManifest {
     sha256: String,
     files: Vec<IdentityFileManifest>,
     skipped: Vec<String>,
+    photos: Vec<IdentityPhotoManifest>,
+}
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentityPhotoManifest {
+    id: Uuid,
+    name: String,
+    width: u32,
+    height: u32,
+    thumbnail: String,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,6 +114,17 @@ impl From<&IdentitySource> for IdentitySourceManifest {
                 })
                 .collect(),
             skipped: source.skipped.clone(),
+            photos: source
+                .photos
+                .iter()
+                .map(|item| IdentityPhotoManifest {
+                    id: item.photo.id,
+                    name: item.photo.name.clone(),
+                    width: item.photo.width,
+                    height: item.photo.height,
+                    thumbnail: item.thumbnail.clone(),
+                })
+                .collect(),
         }
     }
 }
@@ -143,6 +164,18 @@ pub struct IdentityCandidate {
     pub findings: Vec<IdentityFinding>,
     pub logo_asset_ids: Vec<Uuid>,
     pub warnings: Vec<String>,
+    /// One short description per imported photo, so generation can choose fitting pictures.
+    #[serde(default)]
+    pub photos: Vec<PhotoDescription>,
+    /// The user's existing work and pages found in the sources, so generation knows what to link.
+    #[serde(default)]
+    pub content: Vec<desegni_core::ImportedItem>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PhotoDescription {
+    pub id: Uuid,
+    pub description: String,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -405,7 +438,7 @@ fn freeze(
     let requested: BTreeSet<_> = requested_ids.iter().copied().collect();
     require(
         !job_id.is_nil()
-            && !requested.is_empty()
+            && (!requested.is_empty() || !source.photos.is_empty())
             && requested.len() == requested_ids.len()
             && requested
                 .iter()
@@ -431,7 +464,7 @@ fn freeze(
     {
         let asset = file.asset.as_ref().map(|asset| {
             let can_attach = matches!(asset.mime.as_str(), "image/png" | "image/jpeg" | "image/webp") && images.len() < desegni_ai::MAX_IDENTITY_IMAGES && asset.data_uri.len() <= desegni_ai::MAX_IDENTITY_IMAGE_URI_BYTES && image_bytes + asset.data_uri.len() <= desegni_ai::MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES;
-            let number = can_attach.then(|| { image_bytes += asset.data_uri.len(); images.push(IdentityImage { data_uri: asset.data_uri.clone() }); images.len() });
+            let number = can_attach.then(|| { image_bytes += asset.data_uri.len(); images.push(IdentityImage { data_uri: asset.data_uri.clone(), photo: false }); images.len() });
             json!({"id":asset.id,"name":asset.name,"mime":asset.mime,"sha256":asset.sha256,"analysisImage":number})
         });
         markdown.push_str(&format!("### File {}\n\n", file.id));
@@ -442,6 +475,23 @@ fn freeze(
             .map_err(error)?,
         );
         markdown.push('\n');
+    }
+    markdown.push_str("\n## Existing work and pages\n\nAlso list the user's existing work and pages that these sources show, such as projects, tutorials, articles and products, in content: kind (project, tutorial, article, page, product or other), its title, a one-line summary of at most 300 characters, and url. Use a public address (https://...) or a site path (/projects/name) only when the source shows one; otherwise leave url empty. Include at most 64 items and never invent work.\n\n");
+    if !source.photos.is_empty() {
+        markdown.push_str("\n## Photos\n\nThese are the user's own pictures for the website (for example portfolio work, products, people or places). They are numbered photo attachments in low detail. For each, write one plain description of what it shows in at most 160 characters, using the photo id. Do not treat photos as brand evidence unless they clearly show branding.\n\n");
+        let list: Vec<_> = source
+            .photos
+            .iter()
+            .enumerate()
+            .map(|(index, item)| json!({"photoId":item.photo.id,"name":item.photo.name,"width":item.photo.width,"height":item.photo.height,"photo":index + 1}))
+            .collect();
+        markdown.push_str(&fenced_json(&list).map_err(error)?);
+        for item in &source.photos {
+            images.push(IdentityImage {
+                data_uri: item.thumbnail.clone(),
+                photo: true,
+            });
+        }
     }
     require(
         markdown.len() <= MAX_IDENTITY_MARKDOWN_BYTES,
@@ -465,10 +515,13 @@ fn freeze(
 fn candidate_schema() -> Value {
     let string = json!({"type":"string"});
     json!({"type":"object","additionalProperties":false,
-        "required":["jobId","requirementsSha256","summary","brandName","tone","findings","logoAssetIds","warnings"],
+        "required":["jobId","requirementsSha256","summary","brandName","tone","findings","logoAssetIds","warnings","photos","content"],
         "properties":{"jobId":string,"requirementsSha256":string,"summary":string,"brandName":string,"tone":string,
             "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["topic","value","evidence","confidence"],"properties":{"topic":string,"value":string,"evidence":{"type":"array","items":string},"confidence":{"type":"string","enum":["high","medium","low"]}}}},
-            "logoAssetIds":{"type":"array","items":string},"warnings":{"type":"array","items":string}}})
+            "logoAssetIds":{"type":"array","items":string},"warnings":{"type":"array","items":string},
+            "photos":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","description"],"properties":{"id":string,"description":string}}},
+            "content":{"type":"array","maxItems":desegni_core::MAX_IMPORTED_ITEMS,"items":{"type":"object","additionalProperties":false,"required":["kind","title","url","summary"],"properties":{
+                "kind":{"type":"string","enum":["project","tutorial","article","page","product","other"]},"title":string,"url":string,"summary":string}}}}})
 }
 /// The result format for one analysis: evidence and logos may only name the files actually sent.
 /// Without this, a model can cite a file name instead of its identifier and the reply is rejected.
@@ -487,6 +540,17 @@ fn candidate_schema_for(source: &IdentitySource, file_ids: &[Uuid]) -> Value {
     }
     if !logos.is_empty() {
         schema["properties"]["logoAssetIds"]["items"] = json!({"type":"string","enum":logos});
+    }
+    let photos: Vec<String> = source
+        .photos
+        .iter()
+        .map(|item| item.photo.id.to_string())
+        .collect();
+    if photos.is_empty() {
+        schema["properties"]["photos"]["maxItems"] = json!(0);
+    } else {
+        schema["properties"]["photos"]["items"]["properties"]["id"] =
+            json!({"type":"string","enum":photos});
     }
     schema
 }
@@ -542,6 +606,30 @@ fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) ->
     )?;
     for warning in &candidate.warnings {
         text(warning, 2000, true)?;
+    }
+    let mut described = BTreeSet::new();
+    for photo in &candidate.photos {
+        text(
+            &photo.description,
+            desegni_core::MAX_PHOTO_DESCRIPTION_CHARS,
+            false,
+        )?;
+        require(
+            described.insert(photo.id)
+                && record
+                    .source
+                    .photos
+                    .iter()
+                    .any(|item| item.photo.id == photo.id),
+            "The identity reply describes a missing or repeated photo.",
+        )?;
+    }
+    require(
+        candidate.content.len() <= desegni_core::MAX_IMPORTED_ITEMS,
+        "The identity reply lists too much existing work.",
+    )?;
+    for item in &candidate.content {
+        item.validate().map_err(error)?;
     }
     Ok(())
 }
@@ -926,7 +1014,10 @@ impl IdentityService {
                 && chosen.iter().all(|index| *index < candidate.findings.len())
                 && logos.len() == assets.len()
                 && logos.len() <= 4
-                && (!chosen.is_empty() || !logos.is_empty()),
+                && (!chosen.is_empty()
+                    || !logos.is_empty()
+                    || !record.source.photos.is_empty()
+                    || !candidate.content.is_empty()),
             "Choose distinct identity findings or logo images from this completed analysis.",
         )?;
         let selected: BTreeSet<_> = record.file_ids.iter().copied().collect();
@@ -974,12 +1065,43 @@ impl IdentityService {
                     .join(", ")
             ));
         }
+        // Every imported photo comes along, described when the analysis could see it.
+        let photos: Vec<_> = record
+            .source
+            .photos
+            .iter()
+            .map(|item| {
+                let mut photo = item.photo.clone();
+                if let Some(found) = candidate
+                    .photos
+                    .iter()
+                    .find(|described| described.id == photo.id)
+                {
+                    photo.description = found.description.trim().to_owned();
+                }
+                photo
+            })
+            .collect();
+        if !photos.is_empty() {
+            summary.push(format!(
+                "Imported {} photo(s) for use on the website.",
+                photos.len()
+            ));
+        }
+        if !candidate.content.is_empty() {
+            summary.push(format!(
+                "Found {} existing project(s), tutorial(s) or page(s).",
+                candidate.content.len()
+            ));
+        }
         Ok(desegni_core::ImportedContext {
             source_name: record.source.name,
             source_sha256: record.source.sha256,
             summary: summary.join("\n"),
             findings: chosen_findings,
             assets: accepted_assets,
+            photos,
+            content: candidate.content.clone(),
         })
     }
 
@@ -1018,6 +1140,8 @@ impl IdentityService {
                 source_sha256: context.source_sha256,
                 summary: context.summary,
                 assets: context.assets,
+                photos: context.photos,
+                content: context.content,
             })
             .map_err(error)
     }

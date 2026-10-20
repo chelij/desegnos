@@ -25,7 +25,7 @@ fn image(mime: &str, bytes: &[u8]) -> IdentityAsset {
     }
 }
 fn identity() -> ImportedIdentity {
-    ImportedIdentity { source_name: "Studio website".into(), source_sha256: digest(b"the exact imported source"), summary: "Studio uses deep blue #16324F and Indonesian, with a rounded wordmark.".into(), assets: vec![image("image/svg+xml", br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><defs><linearGradient id="brand"><stop stop-color="#16324F"/></linearGradient></defs><rect width="20" height="20" fill="url(#brand)"/><title>Studio &amp; Company</title></svg>"##)] }
+    ImportedIdentity { source_name: "Studio website".into(), source_sha256: digest(b"the exact imported source"), summary: "Studio uses deep blue #16324F and Indonesian, with a rounded wordmark.".into(), assets: vec![image("image/svg+xml", br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><defs><linearGradient id="brand"><stop stop-color="#16324F"/></linearGradient></defs><rect width="20" height="20" fill="url(#brand)"/><title>Studio &amp; Company</title></svg>"##)], photos: vec![], content: vec![] }
 }
 fn described(mut project: Project) -> Project {
     let page_id = project.home_page_id;
@@ -550,6 +550,8 @@ fn import_context_merges_rules_into_an_open_project_without_overwriting_protecte
             ("Accent colour".into(), "#fdf6e3".into()),
         ],
         assets: vec![],
+        photos: vec![],
+        content: vec![],
     };
     let next = project
         .import_context(project.revision, context.clone())
@@ -660,4 +662,72 @@ fn pictures_inside_page_sources_travel_as_references_and_resolve_to_the_same_byt
     assert_eq!(candidate.resolve_project_assets(&project).unwrap(), 2);
     assert!(candidate.pages[0].content.html.contains(&picture));
     assert!(candidate.pages[0].content.css.contains(&picture));
+}
+
+#[test]
+fn imported_photos_and_existing_work_reach_generation_without_their_bytes() {
+    let photo_bytes = vec![0xffu8, 0xd8, 0xff, 0xe0, 1, 2, 3, 4];
+    let photo = ProjectPhoto {
+        id: Uuid::new_v4(),
+        name: "work/robot-arm.jpg".into(),
+        data_uri: format!("data:image/jpeg;base64,{}", STANDARD.encode(&photo_bytes)).into(),
+        sha256: digest(&photo_bytes),
+        width: 1280,
+        height: 853,
+        description: "A 3D-printed robot arm on a workbench".into(),
+    };
+    let item = ImportedItem {
+        kind: "tutorial".into(),
+        title: "Wiring a servo".into(),
+        url: "/tutorials/servo".into(),
+        summary: "Step-by-step servo wiring for beginners.".into(),
+    };
+    let mut imported = identity();
+    imported.photos = vec![photo.clone()];
+    imported.content = vec![item.clone()];
+    let project = described(blank().set_initial_identity(imported).unwrap());
+    let snapshot = project.prepare_requirements().unwrap();
+    assert!(
+        snapshot
+            .markdown
+            .contains("A 3D-printed robot arm on a workbench")
+    );
+    assert!(
+        snapshot.markdown.contains("/tutorials/servo")
+            && snapshot.markdown.contains("Wiring a servo")
+    );
+    assert!(
+        !snapshot.markdown.contains(&*photo.data_uri),
+        "photo bytes are not sent"
+    );
+    let reference = project_asset_reference(photo.id);
+    let (_, mut candidate) = asset_candidate(
+        &project,
+        format!(
+            "<main data-desegnos-region='{}'><img src='{reference}' alt='Robot arm'></main>",
+            project.pages[0].regions[0].id
+        ),
+        String::new(),
+    );
+    assert_eq!(candidate.resolve_project_assets(&project).unwrap(), 1);
+    assert!(candidate.pages[0].content.html.contains(&*photo.data_uri));
+    for url in ["javascript:alert(1)", "//evil.example", "ftp://x"] {
+        assert!(
+            ImportedItem {
+                url: url.into(),
+                ..item.clone()
+            }
+            .validate()
+            .is_err(),
+            "{url}"
+        );
+    }
+    assert!(
+        ImportedItem {
+            kind: "secret".into(),
+            ..item
+        }
+        .validate()
+        .is_err()
+    );
 }

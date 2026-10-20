@@ -41,7 +41,11 @@ impl Project {
             "sourceName":identity.source_name,"sourceSha256":identity.source_sha256,"summary":identity.summary,
             "assets":identity.assets.iter().map(|asset| serde_json::json!({
                 "id":asset.id,"name":asset.name,"mime":asset.mime,"sha256":asset.sha256,"url":project_asset_reference(asset.id)
-            })).collect::<Vec<_>>()
+            })).collect::<Vec<_>>(),
+            "photos":identity.photos.iter().map(|photo| serde_json::json!({
+                "name":photo.name,"width":photo.width,"height":photo.height,"description":photo.description,"url":project_asset_reference(photo.id)
+            })).collect::<Vec<_>>(),
+            "content":identity.content
         }))
     }
 
@@ -53,6 +57,11 @@ impl Project {
             for asset in &identity.assets {
                 for source in [&mut content.html, &mut content.css, &mut content.javascript] {
                     *source = source.replace(&asset.data_uri, &project_asset_reference(asset.id));
+                }
+            }
+            for photo in &identity.photos {
+                for source in [&mut content.html, &mut content.css, &mut content.javascript] {
+                    *source = source.replace(&*photo.data_uri, &project_asset_reference(photo.id));
                 }
             }
         }
@@ -122,6 +131,12 @@ impl GenerationCandidate {
             .map(|asset| (asset.id, asset))
             .collect();
         let inline = project.inline_page_images();
+        let photos: BTreeMap<_, _> = project
+            .imported_identity
+            .iter()
+            .flat_map(|identity| &identity.photos)
+            .map(|photo| (photo.id, &*photo.data_uri))
+            .collect();
         let mut pages = self.pages.clone();
         let mut count = 0;
         for page in &mut pages {
@@ -144,7 +159,7 @@ impl GenerationCandidate {
                         asset.validate()?;
                         output.push_str(&asset.data_uri);
                     } else {
-                        let uri = inline.get(&id).ok_or_else(|| Error("The AI referred to an image that is not in this project. Your page is unchanged.".into()))?;
+                        let uri = photos.get(&id).or_else(|| inline.get(&id)).ok_or_else(|| Error("The AI referred to an image that is not in this project. Your page is unchanged.".into()))?;
                         output.push_str(uri);
                     }
                     rest = &rest[36..];

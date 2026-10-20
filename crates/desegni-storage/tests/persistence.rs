@@ -1398,6 +1398,8 @@ fn identity_project() -> Project {
                     .into(),
             sha256: digest(bytes),
         }],
+        photos: vec![],
+        content: vec![],
     };
     Project::new(
         "Imported studio identity".into(),

@@ -223,6 +223,44 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         project: &Project,
     ) -> Result<Self> {
+        let mut candidate = Self::read_reply(text, snapshot, project)?;
+        if snapshot.format_version()? >= 9 {
+            candidate.note_unavailable_components();
+        }
+        Ok(candidate)
+    }
+
+    /// A finished area may still lack a service it needs. Say so in the suggestions the user sees.
+    fn note_unavailable_components(&mut self) {
+        let mut notes = Vec::new();
+        for request in &self.component_requests {
+            if request.resolution != crate::ComponentResolution::Unavailable {
+                continue;
+            }
+            let message: String = format!(
+                "{} isn't connected yet: {}",
+                request.capability.trim(),
+                request.reason.trim()
+            )
+            .chars()
+            .take(crate::generation::MAX_EXPLANATION_CHARS)
+            .collect();
+            if !self.criticism.iter().any(|item| item.message == message) {
+                notes.push(DesignCriticism {
+                    region_id: Some(request.region_id),
+                    message,
+                    suggestion: "A clearly marked placeholder was left in its place. Connect the service later, or ask for something that works without it.".into(),
+                });
+            }
+        }
+        for note in notes {
+            if self.criticism.len() < crate::MAX_DESIGN_CRITICISMS {
+                self.criticism.push(note);
+            }
+        }
+    }
+
+    fn read_reply(text: &str, snapshot: &RequirementsSnapshot, project: &Project) -> Result<Self> {
         if snapshot.format_version()? != ELEMENT_FIX_FORMAT {
             return Self::from_json(text);
         }

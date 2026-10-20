@@ -335,7 +335,19 @@ fn conflicts_and_unavailable_components_never_become_applicable() {
     candidate.component_requests[0].reason =
         "This requested hosted payment capability is unavailable without a configured service."
             .into();
-    assert!(candidate.validate(&snapshot, &project).is_err());
+    // A finished draft keeps a marked placeholder for the missing service and tells the user.
+    candidate.validate(&snapshot, &project).unwrap();
+    let read = GenerationCandidate::from_reply(
+        &serde_json::to_string(&candidate).unwrap(),
+        &snapshot,
+        &project,
+    )
+    .unwrap();
+    assert!(
+        read.criticism
+            .iter()
+            .any(|item| item.message.contains("isn't connected yet"))
+    );
     candidate.regions[0].status = RegionStatus::Conflict;
     candidate.regions[0].explanation = candidate.component_requests[0].reason.clone();
     assert!(

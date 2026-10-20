@@ -36,7 +36,7 @@ fn identity_stream(candidate: &Value) -> Vec<u8> {
 }
 
 fn logo() -> IdentityImage {
-    IdentityImage { data_uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=".into() }
+    IdentityImage { photo: false, data_uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=".into() }
 }
 
 async fn analyze(
@@ -275,6 +275,7 @@ async fn identity_invalid_packet_schema_and_images_fail_before_connecting() {
             &frozen,
             AuthenticationMethod::ApiKey,
             &[IdentityImage {
+                photo: false,
                 data_uri: uri.into(),
             }],
         )
@@ -283,6 +284,7 @@ async fn identity_invalid_packet_schema_and_images_fail_before_connecting() {
         assert_eq!(error.kind, ErrorKind::InvalidRequirements, "URI {uri}");
     }
     let too_large = IdentityImage {
+        photo: false,
         data_uri: format!(
             "data:image/png;base64,{}",
             "a".repeat(MAX_IDENTITY_IMAGE_URI_BYTES)
@@ -300,6 +302,7 @@ async fn identity_invalid_packet_schema_and_images_fail_before_connecting() {
     let mut large_png = b"\x89PNG\r\n\x1a\n".to_vec();
     large_png.resize(140_000, 0);
     let large = IdentityImage {
+        photo: false,
         data_uri: format!("data:image/png;base64,{}", STANDARD.encode(large_png)),
     };
     assert_eq!(
@@ -385,6 +388,7 @@ async fn identity_preserves_correlation_and_credential_echo_rejections() {
         !format!(
             "{:?}",
             IdentityImage {
+                photo: false,
                 data_uri: KEY.into()
             }
         )

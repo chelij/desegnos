@@ -1,8 +1,10 @@
 export type Appearance = 'light' | 'dark';
 export type IdentityAsset = { id: string; name: string; mime: string; dataUri: string; sha256: string };
-export type ImportedIdentity = { sourceName: string; sourceSha256: string; summary: string; assets: IdentityAsset[] };
-export type IdentitySource = { id: string; name: string; sha256: string; files: { id: string; name: string; textBytes: number; asset: IdentityAsset | null }[]; skipped: string[] };
-export type IdentityCandidate = { jobId: string; requirementsSha256: string; summary: string; brandName: string; tone: string; findings: { topic: string; value: string; evidence: string[]; confidence: 'high' | 'medium' | 'low' }[]; logoAssetIds: string[]; warnings: string[] };
+export type ProjectPhoto = { id: string; name: string; dataUri: string; sha256: string; width: number; height: number; description: string };
+export type ImportedItem = { kind: 'project' | 'tutorial' | 'article' | 'page' | 'product' | 'other'; title: string; url: string; summary: string };
+export type ImportedIdentity = { sourceName: string; sourceSha256: string; summary: string; assets: IdentityAsset[]; photos?: ProjectPhoto[]; content?: ImportedItem[] };
+export type IdentitySource = { id: string; name: string; sha256: string; files: { id: string; name: string; textBytes: number; asset: IdentityAsset | null }[]; skipped: string[]; photos?: { id: string; name: string; width: number; height: number; thumbnail: string }[] };
+export type IdentityCandidate = { jobId: string; requirementsSha256: string; summary: string; brandName: string; tone: string; findings: { topic: string; value: string; evidence: string[]; confidence: 'high' | 'medium' | 'low' }[]; logoAssetIds: string[]; warnings: string[]; photos?: { id: string; description: string }[]; content?: ImportedItem[] };
 export type IdentityAnalysis = { jobId: string; sourceId: string; source: IdentitySource; fileIds: string[]; authentication?: AuthenticationMethod | null; chatgptAccountId?: string | null; status: 'analyzing' | 'complete' | 'failed' | 'unknown' | 'cancelled'; message: string; receivedBytes: number; candidate: IdentityCandidate | null; error: string | null };
 export type NewProjectIdentity = { identityAnalysisId: string; identityFindingIndices: number[]; identityAssetIds: string[] };
 export type GenerationMode = 'fuzzy' | 'strict';

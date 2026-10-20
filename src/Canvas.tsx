@@ -933,6 +933,15 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
   const toolbarPoint = toolbarRect ? elementToolbarPosition(inViewport(toolbarRect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupied.map(inViewport)) : null;
   const toolbarPosition = toolbarPoint ? { left: toolbarPoint.x, top: toolbarPoint.y } : {};
   const measurementRect = coordinate ? inViewport(selectedRect ?? { ...coordinate, width: 0, height: 0 }) : null;
+  // The size label sits beside the selection. Near the view's edges it would cover the box (and
+  // the request text being typed), so it is left out until there is room again.
+  const measurementPosition = (() => {
+    if (!measurementRect) return null;
+    const size = { x: 245, y: 28 };
+    const position = elementToolbarPosition(measurementRect, size, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupied.map(inViewport), ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]);
+    const covers = position.x < measurementRect.x + measurementRect.width && position.x + size.x > measurementRect.x && position.y < measurementRect.y + measurementRect.height && position.y + size.y > measurementRect.y;
+    return covers ? null : position;
+  })();
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
 
   const editBusy = layerBusy || editingElement || nudging;
@@ -1091,8 +1100,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
       <div className="form-actions"><button type="button" onClick={() => setConfirmMany(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void deleteSelected(true).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete {confirmMany.count} items</button></div></div></Modal>}
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
-    {selectedRect && coordinate && measurementRect && gridSettings.rulers && !liveView && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
-      style={(() => { const position = elementToolbarPosition(measurementRect, { x: 245, y: 28 }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupied.map(inViewport), ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]); return { left: position.x, top: position.y }; })()}>
+    {selectedRect && coordinate && measurementPosition && gridSettings.rulers && !liveView && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
+      style={{ left: measurementPosition.x, top: measurementPosition.y }}>
       {px(coordinate.x)}, {px(coordinate.y)} px{selectedRect && <span>{px(selectedRect.width)} × {px(selectedRect.height)} px</span>}</div>}
   </div>;
 });

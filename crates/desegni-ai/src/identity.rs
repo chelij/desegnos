@@ -10,6 +10,10 @@ use serde_json::{Value, json};
 pub const MAX_IDENTITY_IMAGES: usize = 4;
 pub const MAX_IDENTITY_IMAGE_URI_BYTES: usize = 256 * 1024;
 pub const MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES: usize = 512 * 1024;
+/// Photo thumbnails are looked at in low detail only, to describe what each photo shows.
+pub const MAX_IDENTITY_PHOTOS: usize = 16;
+pub const MAX_IDENTITY_PHOTO_URI_BYTES: usize = 96 * 1024;
+pub const IDENTITY_PHOTO_TOKEN_RESERVE: u64 = 1_024;
 // Compressed logo bytes do not bound visual token use. Reserve 64K tokens per high-detail image
 // in addition to counting every request byte; this exceeds the documented 30K patch rejection
 // threshold with substantial token-multiplier headroom. Revisit with changes to MODEL_ID.
@@ -20,6 +24,8 @@ pub const IDENTITY_IMAGE_TOKEN_RESERVE: u64 = 65_536;
 #[derive(Clone, PartialEq, Eq)]
 pub struct IdentityImage {
     pub data_uri: String,
+    /// A photo thumbnail (low detail, described) rather than a logo (high detail).
+    pub photo: bool,
 }
 
 impl std::fmt::Debug for IdentityImage {
@@ -58,7 +64,16 @@ pub(crate) fn prepare_identity_body(
 
 fn vision_reserve(images: &[IdentityImage]) -> u64 {
     // Called only after identity_body validates the image count.
-    images.len() as u64 * IDENTITY_IMAGE_TOKEN_RESERVE
+    images
+        .iter()
+        .map(|image| {
+            if image.photo {
+                IDENTITY_PHOTO_TOKEN_RESERVE
+            } else {
+                IDENTITY_IMAGE_TOKEN_RESERVE
+            }
+        })
+        .sum()
 }
 
 pub(crate) fn identity_body(
@@ -121,9 +136,13 @@ pub(crate) fn identity_body(
             "data:text/markdown;base64,{}", STANDARD.encode(snapshot.markdown.as_bytes()))}),
         json!({"type":"input_text","text":metadata}),
     ];
-    for (index, image) in images.iter().enumerate() {
+    for (index, image) in images.iter().filter(|image| !image.photo).enumerate() {
         content.push(json!({"type":"input_text","text":format!("Identity image {}. Match this image to its numbered source reference in IDENTITY-SOURCES.md.", index + 1)}));
         content.push(json!({"type":"input_image","image_url":image.data_uri,"detail":"high"}));
+    }
+    for (index, image) in images.iter().filter(|image| image.photo).enumerate() {
+        content.push(json!({"type":"input_text","text":format!("Photo {}. Describe it for the matching numbered photo in IDENTITY-SOURCES.md.", index + 1)}));
+        content.push(json!({"type":"input_image","image_url":image.data_uri,"detail":"low"}));
     }
     let mut body = json!({
         "model": settings.model, "stream": true, "store": false,
@@ -146,18 +165,27 @@ pub(crate) fn identity_body(
 }
 
 fn validate_images(images: &[IdentityImage]) -> Result<()> {
-    if images.len() > MAX_IDENTITY_IMAGES {
+    let photos = images.iter().filter(|image| image.photo).count();
+    if images.len() - photos > MAX_IDENTITY_IMAGES || photos > MAX_IDENTITY_PHOTOS {
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
     let mut total = 0_usize;
     for image in images {
-        total = total
-            .checked_add(image.data_uri.len())
-            .ok_or_else(|| ProviderError::before(ErrorKind::InputLimit))?;
-        if image.data_uri.len() > MAX_IDENTITY_IMAGE_URI_BYTES
-            || total > MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES
-        {
-            return Err(ProviderError::before(ErrorKind::InputLimit));
+        if image.photo {
+            if image.data_uri.len() > MAX_IDENTITY_PHOTO_URI_BYTES
+                || !image.data_uri.starts_with("data:image/jpeg;base64,")
+            {
+                return Err(ProviderError::before(ErrorKind::InputLimit));
+            }
+        } else {
+            total = total
+                .checked_add(image.data_uri.len())
+                .ok_or_else(|| ProviderError::before(ErrorKind::InputLimit))?;
+            if image.data_uri.len() > MAX_IDENTITY_IMAGE_URI_BYTES
+                || total > MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES
+            {
+                return Err(ProviderError::before(ErrorKind::InputLimit));
+            }
         }
         let (prefix, encoded) = image
             .data_uri

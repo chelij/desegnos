@@ -16,7 +16,7 @@ pub const MAX_COMPONENT_REQUESTS: usize = 512;
 pub const MAX_DECISION_PROPOSALS: usize = 128;
 pub const MAX_DESIGN_CRITICISMS: usize = 512;
 pub const MAX_APPLIED_JOBS: usize = 10_000;
-const MAX_EXPLANATION_CHARS: usize = 4096;
+pub(crate) const MAX_EXPLANATION_CHARS: usize = 4096;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -285,7 +285,11 @@ impl GenerationCandidate {
                 capabilities.insert((request.region_id, request.capability.trim().to_lowercase())),
                 "The generation result repeats a component capability for one area.",
             )?;
-            if request.resolution == ComponentResolution::Unavailable {
+            // Since format 9 a draft finishes with a clearly marked placeholder for a missing
+            // service (for example a CAPTCHA that needs its own keys); older formats require a conflict.
+            if request.resolution == ComponentResolution::Unavailable
+                && snapshot.format_version()? < 9
+            {
                 ensure(
                     self.regions.iter().any(|region| {
                         region.region_id == request.region_id

@@ -133,13 +133,18 @@ export function elementToolbarPosition(rect: Rect, size: Point, viewport: Rect, 
   const gap = 8;
   const at = (x: number, y: number) => ({ x: clamp(x, viewport.x + gap, Math.max(viewport.x + gap, viewport.x + viewport.width - size.x - gap)),
     y: clamp(y, viewport.y + gap, Math.max(viewport.y + gap, viewport.y + viewport.height - size.y - gap)) });
-  const candidates = [at(rect.x, rect.y - size.y - gap), at(rect.x, rect.y + rect.height + gap),
-    at(rect.x - size.x - gap, rect.y), at(rect.x + rect.width + gap, rect.y),
-    at(viewport.x + gap, viewport.y + gap), at(viewport.x + viewport.width - size.x - gap, viewport.y + viewport.height - size.y - gap)];
+  // Spots touching the selection come first; covering other boxes there is better than
+  // floating far away. The view's corners are used only when every nearby spot covers the selection.
+  const near = [at(rect.x, rect.y - size.y - gap), at(rect.x, rect.y + rect.height + gap),
+    at(rect.x + rect.width - size.x, rect.y - size.y - gap), at(rect.x + rect.width - size.x, rect.y + rect.height + gap),
+    at(rect.x - size.x - gap, rect.y), at(rect.x + rect.width + gap, rect.y)];
+  const corners = [at(viewport.x + gap, viewport.y + gap), at(viewport.x + viewport.width - size.x - gap, viewport.y + viewport.height - size.y - gap)];
   const intersection = (point: Point, other: Rect) => Math.max(0, Math.min(point.x + size.x, other.x + other.width) - Math.max(point.x, other.x))
     * Math.max(0, Math.min(point.y + size.y, other.y + other.height) - Math.max(point.y, other.y));
   const score = (point: Point) => intersection(point, rect) * 2 + occupied.reduce((sum, other) => sum + intersection(point, other), 0);
-  return candidates.reduce((best, point) => score(point) < score(best) ? point : best);
+  const best = (points: Point[]) => points.reduce((winner, point) => score(point) < score(winner) ? point : winner);
+  const clear = near.filter(point => intersection(point, rect) === 0);
+  return clear.length ? best(clear) : best([...near, ...corners]);
 }
 
 export function alignmentLines(rect: Rect | undefined, guide: Viewport, others: Rect[], zoom: number): { x: number[]; y: number[] } {

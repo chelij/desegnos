@@ -121,6 +121,8 @@ function identityCandidateFor(record) {
       { topic: 'Possible audience', value: 'The source may appeal to independent creative studios; verify this before treating it as a requirement.', evidence: [notes.fileId], confidence: 'low' },
     ],
     logoAssetIds: images.map(file => file.asset.id), warnings: ['Confirm the intended audience before adding it to the brief.'],
+    photos: (jsonBlocks(record.markdown).find(value => Array.isArray(value) && value[0]?.photoId) ?? []).map(photo => ({ id: photo.photoId, description: `Fixture photo ${photo.photo}` })),
+    content: [{ kind: 'project', title: 'Northstar case study', url: '/work/northstar', summary: 'A fixture project found in the imported source.' }],
   };
 }
 

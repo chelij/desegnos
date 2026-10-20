@@ -108,10 +108,14 @@ export function ImportContext({ busy, settings, openSettings, importInto, close 
   }
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (locked || !analysis || !candidate || (!findings.length && !assets.length)) return;
+    if (locked || !analysis || !candidate || !keepable) return;
     void run(async () => { await importInto(analysis.jobId, findings, assets); close(); });
   }
   const selectedBytes = source?.files.filter(file => files.includes(file.id)).reduce((total, file) => total + file.textBytes, 0) ?? 0;
+  const photos = source?.photos ?? [];
+  const work = candidate?.content ?? [];
+  // Photos and existing work always come along; findings and logos are chosen.
+  const keepable = findings.length > 0 || assets.length > 0 || photos.length > 0 || work.length > 0;
   const logos = source?.files.flatMap(file => file.asset && candidate?.logoAssetIds.includes(file.asset.id) ? [file.asset] : []) ?? [];
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
     <p className="field-help">Add your brand to this project: the AI reads a website, folder, project or ZIP, and you choose which colours, fonts, tone and logos to keep. They become rules the AI follows when it builds your pages.</p>
@@ -125,23 +129,26 @@ export function ImportContext({ busy, settings, openSettings, importInto, close 
         {source && <>
           <strong className="identity-source-name">{source.name}</strong>
           <details className="identity-file-review"><summary>Files to read · {files.length} selected</summary><div className="identity-files">{source.files.map(file => <label className="identity-choice" key={file.id}><input type="checkbox" disabled={locked || !!candidate} checked={files.includes(file.id)} onChange={event => { setFiles(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id)); setAnalysis(null); }} /><span>{file.name}<small>{file.textBytes ? `${Math.ceil(file.textBytes / 1024)} KB` : 'Image'}{file.asset ? ' · possible logo' : ''}</small></span></label>)}</div><p className="field-help">Selected files and logo images go to {settings?.authentication === 'chatgpt' ? 'ChatGPT' : 'OpenAI'} for analysis.</p></details>
+          {photos.length > 0 && !candidate && <p className="field-help">{photos.length} photo{photos.length === 1 ? '' : 's'} found. Small previews go to the AI so it can describe them; the photos are kept with your project for the AI to place on pages.</p>}
           {source.skipped.length > 0 && <details><summary>Skipped files · {source.skipped.length}</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{reason}</li>)}</ul></details>}
           {selectedBytes >= 512 * 1024 && <p role="alert">Choose fewer files to keep this analysis under 512 KB.</p>}
           {!candidate && <p className="field-help">Analysis sends the selected files and logos to {analysisMethod === 'chatgpt' ? `ChatGPT using ${analysisAccount?.label ? `${analysisAccount.label}’s` : 'your'} plan` : 'OpenAI using your API key'}.</p>}
           {analyzing ? <div className="identity-progress" role="status"><span>{analysis.message || 'Reading your brand…'}</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Cancel analysis</button></div> : !candidate ? <>
             {analysis && <p role={analysis.status === 'failed' || analysis.status === 'unknown' ? 'alert' : 'status'}>{analysis.error || analysis.message}</p>}
-            <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || !files.length || selectedBytes >= 512 * 1024 || !connected} onClick={() => { void analyze(); }}>Analyze brand</button><button type="button" disabled={locked} onClick={openSettings}>{connected ? 'AI settings' : 'Connect AI'}</button></div>
+            <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || (!files.length && !photos.length) || selectedBytes >= 512 * 1024 || !connected} onClick={() => { void analyze(); }}>Analyze brand</button><button type="button" disabled={locked} onClick={openSettings}>{connected ? 'AI settings' : 'Connect AI'}</button></div>
           </> : <div className="identity-result" aria-label="Brand review">
             <h2>{candidate.brandName || 'Brand found'}</h2><p>{candidate.summary}</p>{candidate.tone && <p className="field-help">Tone · {candidate.tone}</p>}
             <div className="identity-findings">{candidate.findings.map((finding, index) => <div key={index}><label className="identity-choice"><input type="checkbox" checked={findings.includes(index)} disabled={locked} onChange={event => setFindings(current => event.target.checked ? [...current, index] : current.filter(value => value !== index))} /><span><strong>{finding.topic}</strong><span>{finding.value}</span></span></label><details><summary>{finding.confidence === 'low' ? 'Uncertain · ' : ''}Sources</summary><ul>{finding.evidence.map(id => <li key={id}>{source.files.find(file => file.id === id)?.name ?? id}</li>)}</ul></details></div>)}</div>
             {logos.length > 0 && <fieldset className="identity-logos"><legend>Logos to keep</legend>{logos.map(asset => <label className="identity-logo" key={asset.id}><img src={asset.dataUri} alt={asset.name} /><span><input type="checkbox" checked={assets.includes(asset.id)} disabled={locked} onChange={event => setAssets(current => event.target.checked ? [...current, asset.id] : current.filter(id => id !== asset.id))} />{asset.name}</span></label>)}</fieldset>}
+            {work.length > 0 && <details className="identity-work" open><summary>Existing work · {work.length}</summary><p className="field-help">The AI will know about these and link to them when a page mentions them.</p><ul>{work.map((item, index) => <li key={index}><strong>{item.title}</strong> <small>{item.kind}{item.url ? ` · ${item.url}` : ''}</small>{item.summary && <span>{item.summary}</span>}</li>)}</ul></details>}
+            {photos.length > 0 && <details className="identity-photos" open><summary>Photos · {photos.length}</summary><p className="field-help">Kept with your project so the AI can use them on pages.</p><div className="identity-photo-grid">{photos.map(photo => <figure key={photo.id}><img src={photo.thumbnail} alt="" /><figcaption>{candidate.photos?.find(item => item.id === photo.id)?.description || photo.name}</figcaption></figure>)}</div></details>}
             {candidate.warnings.length > 0 && <ul className="identity-warnings">{candidate.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
             <button type="button" disabled={locked} onClick={() => { setAnalysis(null); setFindings([]); setAssets([]); }}>Change files</button>
           </div>}
         </>}
       </section>
-    {candidate && !findings.length && !assets.length && <p className="field-help">Choose at least one finding or logo to keep.</p>}
-    <div className="form-actions"><button type="button" disabled={locked} onClick={close}>Cancel</button><button className="primary" type="submit" disabled={locked || !candidate || (!findings.length && !assets.length)}>{busy || working ? 'Importing…' : 'Add to project'}</button></div>
+    {candidate && !keepable && <p className="field-help">Choose at least one finding or logo to keep.</p>}
+    <div className="form-actions"><button type="button" disabled={locked} onClick={close}>Cancel</button><button className="primary" type="submit" disabled={locked || !candidate || !keepable}>{busy || working ? 'Importing…' : 'Add to project'}</button></div>
     {error && <p className="message error" role="alert">{error}</p>}
   </form>;
 }

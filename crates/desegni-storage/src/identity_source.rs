@@ -3,7 +3,9 @@
 
 use crate::{io, load_project};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use desegni_core::{Error, Result, digest};
+use desegni_core::{
+    Error, MAX_PROJECT_PHOTO_BYTES, MAX_PROJECT_PHOTOS, ProjectPhoto, Result, digest,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -25,6 +27,11 @@ const MAX_COLLECTED_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_EXPANDED_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SKIPPED: usize = 256;
+const MAX_PHOTO_FILE_BYTES: usize = 30 * 1024 * 1024;
+const MAX_PHOTO_PIXELS: u64 = 80_000_000;
+const MIN_PHOTO_EDGE: u32 = 200;
+const PHOTO_EDGE: u32 = 1280;
+const THUMBNAIL_EDGE: u32 = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -34,6 +41,18 @@ pub struct IdentitySource {
     pub sha256: String,
     pub files: Vec<IdentitySourceFile>,
     pub skipped: Vec<String>,
+    /// Pictures that are not logos (portfolio, products, people), resized for the project.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub photos: Vec<IdentitySourcePhoto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct IdentitySourcePhoto {
+    /// Description is empty until analysis describes the photo.
+    pub photo: ProjectPhoto,
+    /// A small JPEG the analysis looks at to describe the photo.
+    pub thumbnail: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +82,7 @@ struct Candidate {
 #[derive(Default)]
 struct Collector {
     candidates: Vec<Candidate>,
+    photos: Vec<IdentitySourcePhoto>,
     collected_bytes: usize,
     skipped: Vec<String>,
     omitted_reports: usize,
@@ -92,6 +112,25 @@ impl Collector {
                 &removed.name,
                 "the 4 MiB collection snapshot budget is full",
             );
+        }
+    }
+
+    fn add_photo(&mut self, name: String, bytes: &[u8]) {
+        if self.photos.len() == MAX_PROJECT_PHOTOS {
+            self.skip(&name, "only the first 16 photos are included");
+            return;
+        }
+        match prepare_photo(&name, bytes) {
+            Ok(photo)
+                if self
+                    .photos
+                    .iter()
+                    .any(|item| item.photo.sha256 == photo.photo.sha256) =>
+            {
+                self.skip(&name, "same photo as another file");
+            }
+            Ok(photo) => self.photos.push(photo),
+            Err(reason) => self.skip(&name, reason),
         }
     }
 
@@ -169,7 +208,7 @@ impl Collector {
                 asset,
             });
         }
-        if files.is_empty() {
+        if files.is_empty() && self.photos.is_empty() {
             return Err(Error("No usable identity sources were found. Choose a Desegnos project, or a website folder or ZIP containing HTML, styles, identity notes, or logo files.".into()));
         }
         files.sort_by(|a, b| a.name.cmp(&b.name));
@@ -184,13 +223,19 @@ impl Collector {
         // Hash only the immutable, ordered snapshot, including image bytes via
         // their data URIs. It does not depend on timestamps, selection order,
         // the absolute local path, or fresh random IDs.
-        let sha256 = digest(&serde_json::to_vec(&files).map_err(io)?);
+        self.photos.sort_by(|a, b| a.photo.name.cmp(&b.photo.name));
+        let sha256 = if self.photos.is_empty() {
+            digest(&serde_json::to_vec(&files).map_err(io)?)
+        } else {
+            digest(&serde_json::to_vec(&(&files, &self.photos)).map_err(io)?)
+        };
         Ok(IdentitySource {
             id: stable_id(&format!("source:{sha256}")),
             name,
             sha256,
             files,
             skipped: self.skipped,
+            photos: self.photos,
         })
     }
 }
@@ -282,6 +327,20 @@ fn collect_folder(
             );
         } else if metadata.is_dir() {
             collect_folder(root, &path, entries, collector)?;
+        } else if metadata.is_file() && is_photo(&name) {
+            if metadata.len() > MAX_PHOTO_FILE_BYTES as u64 {
+                collector.skip(&name, "photo exceeds the 30 MiB file limit");
+            } else if collector.photos.len() == MAX_PROJECT_PHOTOS {
+                collector.skip(&name, "only the first 16 photos are included");
+            } else {
+                let canonical = path.canonicalize().map_err(io)?;
+                if !canonical.starts_with(root) {
+                    return Err(Error("A source path changed during collection. Choose the original folder again.".into()));
+                }
+                let mut file = open_unchanged(&path, &metadata)?;
+                let bytes = read_bounded(&mut file, MAX_PHOTO_FILE_BYTES)?;
+                collector.add_photo(name, &bytes);
+            }
         } else if metadata.is_file() && relevant(&name) {
             if metadata.len() > MAX_TEXT_BYTES as u64 {
                 collector.skip(&name, "exceeds the 256 KiB source file limit");
@@ -348,7 +407,22 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
         if entry.is_dir() {
             continue;
         }
-        if excluded(&name) || !relevant(&name) {
+        if !excluded(&name) && is_photo(&name) {
+            if entry.size() > MAX_PHOTO_FILE_BYTES as u64 {
+                collector.skip(&name, "photo exceeds the 30 MiB file limit");
+            } else if collector.photos.len() == MAX_PROJECT_PHOTOS {
+                collector.skip(&name, "only the first 16 photos are included");
+            } else {
+                let expected = entry.size();
+                let bytes = read_bounded(&mut entry, MAX_PHOTO_FILE_BYTES)?;
+                if bytes.len() as u64 != expected {
+                    return Err(Error(
+                        "A ZIP source has an inconsistent expanded size.".into(),
+                    ));
+                }
+                collector.add_photo(name, &bytes);
+            }
+        } else if excluded(&name) || !relevant(&name) {
             collector.skip(
                 &name,
                 "private, generated, dependency, or unsupported source",
@@ -535,6 +609,92 @@ fn is_image(name: &str) -> bool {
         extension(name).as_str(),
         "png" | "jpg" | "jpeg" | "webp" | "svg"
     )
+}
+
+/// PNG and JPEG pictures that are not logos or icons.
+fn is_photo(name: &str) -> bool {
+    matches!(extension(name).as_str(), "png" | "jpg" | "jpeg") && !logo_name(name)
+}
+
+fn jpeg(image: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, quality)
+        .encode_image(&image::DynamicImage::ImageRgb8(image.to_rgb8()))
+        .ok()?;
+    Some(bytes)
+}
+
+/// Decodes a photo within pixel limits, applies its camera orientation, and keeps a JPEG of at
+/// most 1280 px and 200 KiB plus a small thumbnail. Transparent areas become white.
+fn prepare_photo(
+    name: &str,
+    bytes: &[u8],
+) -> std::result::Result<IdentitySourcePhoto, &'static str> {
+    use image::{ImageDecoder, ImageReader, imageops::FilterType};
+    let reader = ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| "the photo could not be read")?;
+    let mut decoder = reader
+        .into_decoder()
+        .map_err(|_| "the photo format is not supported")?;
+    let (width, height) = decoder.dimensions();
+    if u64::from(width) * u64::from(height) > MAX_PHOTO_PIXELS {
+        return Err("the photo exceeds 80 million pixels");
+    }
+    if width.min(height) < MIN_PHOTO_EDGE {
+        return Err("too small to be a photo");
+    }
+    let orientation = decoder
+        .orientation()
+        .unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut picture =
+        image::DynamicImage::from_decoder(decoder).map_err(|_| "the photo could not be decoded")?;
+    picture.apply_orientation(orientation);
+    if picture.color().has_alpha() {
+        let mut flat = image::RgbaImage::from_pixel(
+            picture.width(),
+            picture.height(),
+            image::Rgba([255, 255, 255, 255]),
+        );
+        image::imageops::overlay(&mut flat, &picture.to_rgba8(), 0, 0);
+        picture = image::DynamicImage::ImageRgba8(flat);
+    }
+    let mut edge = PHOTO_EDGE;
+    let mut encoded = None;
+    'sizes: while edge >= 480 {
+        let resized = if picture.width().max(picture.height()) > edge {
+            picture.resize(edge, edge, FilterType::Triangle)
+        } else {
+            picture.clone()
+        };
+        for quality in [82, 74, 66] {
+            let bytes = jpeg(&resized, quality).ok_or("the photo could not be compressed")?;
+            if bytes.len() <= MAX_PROJECT_PHOTO_BYTES {
+                encoded = Some((bytes, resized.width(), resized.height()));
+                break 'sizes;
+            }
+        }
+        edge = edge * 3 / 4;
+    }
+    let (bytes, width, height) = encoded.ok_or("the photo could not be made small enough")?;
+    let thumbnail = jpeg(
+        &picture.resize(THUMBNAIL_EDGE, THUMBNAIL_EDGE, FilterType::Triangle),
+        70,
+    )
+    .ok_or("the photo could not be compressed")?;
+    let sha256 = digest(&bytes);
+    Ok(IdentitySourcePhoto {
+        photo: ProjectPhoto {
+            id: stable_id(&format!("photo:{sha256}")),
+            name: display_name(name),
+            data_uri: format!("data:image/jpeg;base64,{}", STANDARD.encode(&bytes)).into(),
+            sha256,
+            width,
+            height,
+            description: String::new(),
+        },
+        thumbnail: format!("data:image/jpeg;base64,{}", STANDARD.encode(&thumbnail)),
+    })
 }
 
 fn relevant(name: &str) -> bool {
