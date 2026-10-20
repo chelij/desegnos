@@ -23,6 +23,7 @@ import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from
 import { FirstRunTips } from './Onboarding';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
+import { GenerationLog } from './GenerationLog';
 import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './deletePreference';
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
 import { useHistory } from './useHistory';
@@ -78,6 +79,7 @@ export default function App() {
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [offerRestyle, setOfferRestyle] = useState(false);
+  const [showLog, setShowLog] = useState(false);
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
   const askDelete = useAskBeforeDelete();
   const [skipNextAsk, setSkipNextAsk] = useState(false);
@@ -480,7 +482,7 @@ export default function App() {
   }), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
-  useEffect(() => { setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
+  useEffect(() => { setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
   async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
   function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
     const host = event.currentTarget.parentElement; if (!host) return;
@@ -519,6 +521,7 @@ export default function App() {
   function closeGeneration() { generation.close(); }
   function generate() {
     phoneFix.current = false;
+    setShowLog(true);
     void generation.prepare().catch(() => {});
   }
 
@@ -757,6 +760,7 @@ export default function App() {
         {page?.content && <button onClick={() => setShowPreview(true)}>Preview</button>}
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
         {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
+        {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} title={showLog ? 'Hide the AI conversation' : 'Show what was sent to the AI and its reply'} onClick={() => setShowLog(value => !value)}>AI log</button>}
         {project && <button className="primary" title={requestedAreas === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={requestedAreas === 0 || working} onClick={generate}>{working ? 'Generating…' : 'Generate'}</button>}
       </div>
     </header>
@@ -808,6 +812,7 @@ export default function App() {
         {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}
         <CodePane ref={code} saveProject={() => run(() => save())} key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id); }} />
       </>}
+      {showLog && project && <GenerationLog job={generation.job} operation={generation.operation} error={generation.error} project={project} close={() => setShowLog(false)} />}
       </main>
       <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
     </>}

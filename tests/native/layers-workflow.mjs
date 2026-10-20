@@ -384,6 +384,8 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
   });
 
   await step('Trusted text Ctrl+C and Ctrl+V stay native and plain-text clipboard data cannot paste a site layer', async () => {
+    // The AI conversation opens on Generate; hide it so the canvas has its usual width.
+    if (await driver.execute(() => !!document.querySelector('.generation-log'))) { await driver.click('[aria-label="Hide AI conversation"]'); await settled(driver); }
     await driver.click('[aria-label="Canvas tools"] button[title^="Add request"]');
     const view = await physical.rect('.workspace-scroll'); await physical.click({ x: view.left + 720, y: view.top + 95 });
     await driver.fill('Request 4', 'Ordinary text stays ordinary text.'); await settled(driver);

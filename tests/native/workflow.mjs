@@ -14,7 +14,7 @@ export function dataBlocks(markdown) {
 }
 
 export async function assertCanvasOnly(driver) {
-  assert.equal(await driver.execute(() => document.querySelectorAll('aside:not(.first-run-tips), .project-sidebar, .inspector').length), 0,
+  assert.equal(await driver.execute(() => document.querySelectorAll('aside:not(.first-run-tips):not(.generation-log), .project-sidebar, .inspector').length), 0,
     'The corrected editor must not contain a sidebar or inspector');
   assert.equal(await driver.execute(() => document.querySelectorAll('input[data-coordinate], [data-testid="canvas"] input[type="number"]').length), 0,
     'Request placement must not expose a numeric geometry inspector');
