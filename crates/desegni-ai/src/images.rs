@@ -231,7 +231,8 @@ impl OpenAiClient {
         if format < 7 {
             return response;
         }
-        let Ok(mut candidate) = GenerationCandidate::from_json(&response.text) else {
+        let Ok(mut candidate) = GenerationCandidate::from_reply(&response.text, snapshot, project)
+        else {
             return response;
         };
         if format >= 8 && candidate.resolve_project_assets(project).is_err() {

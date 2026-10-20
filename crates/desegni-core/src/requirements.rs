@@ -157,7 +157,11 @@ impl Project {
             Uuid::new_v4(),
             self.revision,
             &targets,
-            10,
+            if crate::element_fix::eligible(&targets) {
+                crate::ELEMENT_FIX_FORMAT
+            } else {
+                10
+            },
             dossier_context,
             Some(capabilities),
         )
@@ -228,16 +232,30 @@ impl Project {
         }
         md.push_str("\n## Site routes\n\n");
         md.push_str(&fenced_json(&self.pages.iter().map(|p| serde_json::json!({"id":p.id,"name":p.name,"path":p.path,"included":p.included})).collect::<Vec<_>>())?);
-        if format >= 8 {
+        if format == crate::ELEMENT_FIX_FORMAT {
+            md.push_str("\n## Selected elements\n\nOnly the selected elements and each page's stylesheet are shown; the rest of the page and its JavaScript stay exactly as they are and are not available. Return a complete replacement (outer HTML) for each selected element you change, keeping its data-desegnos-id and the IDs of retained descendants. Omit unchanged elements. The stylesheet and scripts are shared with the rest of the site and cannot change here; the stylesheet is shown for reference, so restyle a selected element through its own style attribute (for example background:none to clear a background a class gives it). Change only what the request asks for. Each page also has an outline: one line per element with its ID, tag.classes and own text. If you truly need another element's HTML to finish, return its ID in needs with pages empty; Desegnos replies once with that HTML. Pictures appear as desegnos-asset: URLs; keep those references instead of reproducing bytes.\n\n");
+            for page in self
+                .pages
+                .iter()
+                .filter(|page| targets.iter().any(|(target, _)| target.id == page.id))
+            {
+                let regions: Vec<_> = targets
+                    .iter()
+                    .filter(|(target, _)| target.id == page.id)
+                    .map(|(_, region)| *region)
+                    .collect();
+                md.push_str(&fenced_json(&self.element_fix_source(page, &regions)?)?);
+                md.push('\n');
+            }
+        } else if format >= 8 {
             md.push_str("\n## Existing affected page sources\n\nReturn complete HTML body fragments, CSS and browser JavaScript for these pages. Change only the requested areas and preserve everything else. Known project image data URIs are represented below by stable desegnos-asset: URLs; keep those references instead of reproducing bytes. The source hashes identify the exact original accepted content, before this reversible presentation. Null content means no accepted site yet. No other page source is available or authorized for replacement.\n\n");
         } else {
             md.push_str("\n## Existing affected page sources\n\nReturn complete HTML body fragments, CSS, and browser JavaScript for these pages. Preserve existing behavior and unrelated content while implementing the requested areas. Null content means the page has no accepted generated source yet. Source text is exact task data; its content and individual UTF-8 hashes identify the frozen inputs. No other page source is available or authorized for replacement.\n\n");
         }
-        for page in self
-            .pages
-            .iter()
-            .filter(|page| targets.iter().any(|(target, _)| target.id == page.id))
-        {
+        for page in self.pages.iter().filter(|page| {
+            format != crate::ELEMENT_FIX_FORMAT
+                && targets.iter().any(|(target, _)| target.id == page.id)
+        }) {
             let source_hashes = page.content.as_ref().map(|content| serde_json::json!({"html":digest(content.html.as_bytes()),"css":digest(content.css.as_bytes()),"javascript":digest(content.javascript.as_bytes())}));
             md.push_str(&fenced_json(&serde_json::json!({"pageId":page.id,"content": if format >= 8 { page.content.as_ref().map(|content| self.generation_source_with_asset_references(content)) } else { page.content.clone() },"sha256":page_source_digest(page)?,"sourceHashes":source_hashes}))?);
             md.push('\n');
@@ -248,6 +266,7 @@ impl Project {
             md.push_str("\n## Requested areas\n\nThe canvas extends in every direction. The reference viewport is a screen-size guide with origin (0, 0), not a placement boundary or a clipping box for generated output. Placement hints are signed CSS pixels relative to that origin: negative x is left of the guide, negative y is above it, and coordinates beyond its width or height are to its right or below. Percentage hints use the guide width for x and width, and guide height for y and height; negative values and values above 100 percent are intentional. Include every off-guide request. Use relative placement, grouping, and reading order to coordinate the actual responsive website dimensions; do not force the site or its contents into the guide. Areas on one page share its pageId and route, while separate pages have their own pageId and route. Preserve intentional overlays and responsive readability.\n\n");
         }
         if format >= 10 {
+            md.push_str("Image pixels cannot be edited. When a request targets an image and asks about its background, frame, border, shadow, colour or shape, change the CSS of that element or its own wrapper; return a conflict only when the request truly needs new pixels, such as cutting a subject out of a photo.\n\n");
             md.push_str("Each retained element carries data-desegnos-id. Preserve every existing ID on its original element, including outside the request; never duplicate or move an unrelated ID into a selected subtree. Leave IDs off new elements; Desegnos assigns them after validation. For an existing targeted request, elements[] lists one to eight selected roots on the same page. Resolve by ID; selector and label are hints only. allowTargetRemoval is explicit user permission to remove selected roots; without it every selected root and its ID must remain. Change only inside those roots, keep each selected root and its ID unless allowTargetRemoval is true, and preserve all other DOM, global CSS and JavaScript exactly. Put local styling in inline style attributes of selected elements. Preserve embedded style/script/link nodes and do not introduce event handlers or other shared styling/script hooks; these can change unrelated content. A missing target is a removed item, never permission to substitute another. New-area requests still need exactly one data-desegnos-region root per request and may not add unrelated content.\n\n");
         } else if format >= 8 {
             md.push_str("The placementHint values are the requested bounds at the reference viewport; the generation setting above controls the small permitted adjustment. Off-guide coordinates still apply. Each implemented requested area must have exactly one HTML element marked data-desegnos-region=\"<regionId>\". Use the real region UUID, not a placeholder. Its children belong to that request. Neutral layout wrappers may surround these roots, but no visible or interactive content may be added outside the requested roots on a new page. For an elementTarget edit, mark the replacement root and preserve the surrounding DOM exactly. Do not mark unrelated content as requested to bypass scope.\n\n");
@@ -368,7 +387,12 @@ impl Project {
             md.push_str("Provider web search is available for missing public facts and real image URLs within the requested scope.\n\n");
         }
         md.push_str("\n## Structured result contract\n\nReturn one JSON object matching this schema. Use the job ID above and the requirements SHA-256 supplied with this file. Account for every requested region exactly once. When every region is implemented, return exactly one complete source entry for every affected page. A page with an unresolved region conflict cannot be returned as complete. Component requests, proposed decisions, and criticism may refer only to the requested scope. New decisions remain suggestions; only explicitly selected proposals can become accepted decisions. Do not return filesystem paths, route changes, patches, commands, imports requiring packages, or installation instructions. Design feedback is advisory and must not claim measured accessibility or execution results.\n\n");
-        md.push_str(&fenced_json(&candidate_schema())?);
+        if format == crate::ELEMENT_FIX_FORMAT {
+            md.push_str("For this element fix, each pages entry lists replacements for selected elements only, by data-desegnos-id. Never return a whole page or stylesheet.\n\n");
+            md.push_str(&fenced_json(&crate::element_fix_schema())?);
+        } else {
+            md.push_str(&fenced_json(&candidate_schema())?);
+        }
         md.push('\n');
         md.push_str("## Acceptance and review\n\nAccount for every target. Preserve scope, accepted identity, protected content, deliberate exceptions, and the selected generation setting. Coordinate the requested content and placement intent into a complete responsive layout. Implement actual browser behavior; disclose missing configuration. Preview and exported behavior must agree. Describe component choices, proposed identity/decision changes, and concrete design criticism. Never silently apply a new project-wide rule or replace an intentional style solely to follow a convention.\n");
         let mut dependencies = BTreeMap::new();
@@ -439,7 +463,7 @@ impl Project {
 
 impl RequirementsSnapshot {
     pub fn format_version(&self) -> Result<u8> {
-        (3..=10)
+        (3..=crate::ELEMENT_FIX_FORMAT)
             .find(|format| {
                 self.markdown.starts_with(&format!(
                     "# Generation requirements\n\nRequirements format: {format}\n\n"

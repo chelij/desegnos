@@ -179,7 +179,7 @@ fn multi_target_scope_accepts_only_selected_subtrees_and_preserves_shared_source
     let b = target(&p, "article:nth-of-type(2)");
     let p = describe(p, &[a.clone(), b]);
     let snapshot = p.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 10);
+    assert_eq!(snapshot.format_version().unwrap(), ELEMENT_FIX_FORMAT);
     assert!(snapshot.markdown.contains("\"elements\""));
     let original = &p.pages[0].content.as_ref().unwrap().html;
     let c = candidate(

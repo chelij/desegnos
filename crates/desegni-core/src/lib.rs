@@ -1,6 +1,7 @@
 mod attachments;
 mod dossier;
 mod editing;
+mod element_fix;
 mod export;
 mod generation;
 mod generation_scope;
@@ -20,6 +21,7 @@ mod website;
 pub use attachments::*;
 pub use dossier::*;
 pub use editing::*;
+pub use element_fix::{ELEMENT_FIX_FORMAT, element_fix_schema, result_schema};
 pub use export::*;
 pub use generation::*;
 pub use identity::*;

@@ -9,9 +9,7 @@ use desegni_ai::{
     ProviderDescriptor, ProviderError, ProviderId, ProviderResponse, ProviderSettings,
     SubmissionOutcome, TokenUsage, model_catalogue, provider_catalogue,
 };
-use desegni_core::{
-    GenerationCandidate, GenerationMode, Project, RequirementsSnapshot, candidate_schema, digest,
-};
+use desegni_core::{GenerationCandidate, GenerationMode, Project, RequirementsSnapshot, digest};
 use desegni_storage::{ProjectFile, write_markdown};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -800,7 +798,7 @@ impl GenerationService {
                 self.authentication,
                 &requirements,
                 project.generation_mode,
-                &candidate_schema(),
+                &desegni_core::result_schema(&requirements),
                 &self.settings,
             )
             .map_err(message)?;
@@ -890,7 +888,7 @@ impl GenerationService {
                 record.view.authentication,
                 &record.view.requirements,
                 record.view.generation_mode,
-                &candidate_schema(),
+                &desegni_core::result_schema(&record.view.requirements),
                 &record.view.settings,
             )
             .map_err(message)?;
@@ -1045,7 +1043,7 @@ impl GenerationService {
                     &response.text,
                     std::env::var("DESEGNI_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                match GenerationCandidate::from_json(&response.text).and_then(|mut candidate| {
+                match GenerationCandidate::from_reply(&response.text, &record.view.requirements, original).and_then(|mut candidate| {
                     let format = record.view.requirements.format_version()?;
                     if format >= 8 { candidate.resolve_project_assets(original)?; }
                     candidate.validate(&record.view.requirements, original)?;
@@ -1600,25 +1598,61 @@ async fn submit(
         };
     let request = view.clone();
     tauri::async_runtime::spawn(async move {
-        let progress_app = app.clone();
         let ordinal = request.attempts.len();
-        let result = client
-            .generate_for_auth(
-                request.authentication,
-                &request.requirements,
-                request.generation_mode,
-                &candidate_schema(),
-                &request.settings,
-                &key,
-                &cancellation,
-                move |progress| {
-                    if let Ok(mut service) = progress_app.state::<Mutex<GenerationService>>().lock()
-                    {
-                        service.progress(job_id, ordinal, progress);
-                    }
-                },
-            )
-            .await;
+        let (shared_app, request_ref, key_ref, cancel_ref, client_ref) =
+            (&app, &request, &key, &cancellation, &client);
+        let ask = |requirements: &RequirementsSnapshot| {
+            let progress_app = shared_app.clone();
+            let requirements = requirements.clone();
+            async move {
+                let schema = desegni_core::result_schema(&requirements);
+                client_ref
+                    .generate_for_auth(
+                        request_ref.authentication,
+                        &requirements,
+                        request_ref.generation_mode,
+                        &schema,
+                        &request_ref.settings,
+                        key_ref,
+                        cancel_ref,
+                        move |progress| {
+                            if let Ok(mut service) =
+                                progress_app.state::<Mutex<GenerationService>>().lock()
+                            {
+                                service.progress(job_id, ordinal, progress);
+                            }
+                        },
+                    )
+                    .await
+            }
+        };
+        let mut result = ask(&request.requirements).await;
+        // An element fix may ask once for other elements' HTML; reply automatically and keep
+        // the final answer tied to the frozen requirements.
+        if let Ok(first) = &result
+            && let Ok(Some(follow_up)) = request
+                .requirements
+                .context_follow_up(&first.text, &original)
+        {
+            let usage = first.usage;
+            result = ask(&follow_up).await.map(|mut response| {
+                if let Ok(text) = request
+                    .requirements
+                    .adopt_follow_up_reply(&follow_up, &response.text)
+                {
+                    response.text = text;
+                }
+                response.usage = match (usage, response.usage) {
+                    (Some(a), Some(b)) => Some(desegni_ai::TokenUsage {
+                        input_tokens: a.input_tokens + b.input_tokens,
+                        output_tokens: a.output_tokens + b.output_tokens,
+                        total_tokens: a.total_tokens + b.total_tokens,
+                    }),
+                    (a, b) => b.or(a),
+                };
+                response
+            });
+        }
         let result = match result {
             Ok(response) => Ok(client
                 .download_images(response, &request.requirements, &original, &cancellation)

@@ -72,6 +72,8 @@ function candidateFor(record, endpoint, options) {
     summary: 'Native fixture candidate with complete source and explicit review choices',
     regions: requests.map(value => ({ regionId: value.regionId, status: conflict ? 'conflict' : 'implemented', explanation: conflict ? 'The requested remote service is unavailable in this dependency gate.' : 'Implemented with native HTML, CSS and browser DOM behavior.' })),
     pages: conflict ? [] : pageIds.map(pageId => {
+      // Element fixes return replacements for selected elements only; this fixture keeps them as they are.
+      if (/^Requirements format: 11$/m.test(record.markdown)) return { pageId, elements: [] };
       let content = sourceFor(record, endpoint, options);
       const areas = requests.filter(value => value.pageId === pageId);
       const existing=jsonBlocks(record.markdown).find(value=>value?.pageId===pageId && value.content)?.content;
@@ -85,12 +87,13 @@ function candidateFor(record, endpoint, options) {
         }
         return {pageId,content};
       }
-      if (/^Requirements format: (?:8|9|10)$/m.test(record.markdown)) {
+      if (/^Requirements format: (?:8|9|10|11)$/m.test(record.markdown)) {
         content.html = content.html.replace('<main', `<main data-desegnos-region="${areas[0].regionId}"`);
         content.html += areas.slice(1).map(area => `<section data-desegnos-region="${area.regionId}"><p>Requested supporting content</p></section>`).join('');
       }
       return {pageId, content};
     }),
+    ...(/^Requirements format: 11$/m.test(record.markdown) ? { needs: [] } : {}),
     componentRequests: [{ regionId: requests[0].regionId, capability: 'Interactive button', resolution: conflict ? 'unavailable' : 'native', reason: conflict ? 'No external service is available.' : 'A native button and DOM listener provide the interaction without a package.' }],
     decisionProposals: conflict ? [] : [
       { topic: `Native fixture navigation ${record.metadata.jobId}`, value: 'Use a clear native action button.', scope: { kind: 'project' }, rationale: 'The primary action should remain recognizable across the site.' },
@@ -147,7 +150,7 @@ function readRequest(bytes, ordinal, mode, authentication) {
   const decoded = Buffer.from(encoded[1], 'base64');
   assert.equal(decoded.toString('base64'), encoded[1], 'Non-canonical Base64 file');
   const markdown = decoded.toString('utf8');
-  const webSearch = purpose === 'generation' && /^Requirements format: (?:8|9|10)$/m.test(markdown);
+  const webSearch = purpose === 'generation' && /^Requirements format: (?:8|9|10|11)$/m.test(markdown);
   assert.deepEqual(body.tools, webSearch ? [{type:'web_search'}] : []); assert.equal(body.tool_choice, webSearch ? 'auto' : 'none');
   assert.deepEqual(Buffer.from(markdown, 'utf8'), decoded, 'Requirements are not exact valid UTF-8');
   assert.deepEqual(body.text.format.schema.properties.jobId.enum, [metadata.jobId]);

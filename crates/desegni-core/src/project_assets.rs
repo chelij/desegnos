@@ -9,6 +9,32 @@ pub fn project_asset_reference(id: Uuid) -> String {
     format!("{PROJECT_ASSET_SCHEME}{id}")
 }
 
+/// Pictures placed straight into a page (dropped or browsed files) are stored as Base64 inside
+/// the source. Sending them would cost ~1 token per 4 bytes, so large ones travel as references too.
+const MIN_INLINE_IMAGE_BYTES: usize = 1024;
+
+fn inline_images(source: &str) -> impl Iterator<Item = &str> {
+    source
+        .match_indices("data:image/")
+        .filter_map(move |(start, _)| {
+            let rest = &source[start..];
+            let end = rest
+                .find(|c: char| matches!(c, '"' | '\'' | ')' | '<' | '>') || c.is_whitespace())
+                .unwrap_or(rest.len());
+            let uri = &rest[..end];
+            let (header, _) = uri.split_once(',')?;
+            (header.ends_with(";base64") && uri.len() >= MIN_INLINE_IMAGE_BYTES).then_some(uri)
+        })
+}
+
+fn inline_image_id(uri: &str) -> Uuid {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(uri.as_bytes());
+    let mut bytes = [0; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_custom_bytes(bytes).into_uuid()
+}
+
 impl Project {
     pub fn generation_asset_catalogue(&self) -> Option<serde_json::Value> {
         self.imported_identity.as_ref().map(|identity| serde_json::json!({
@@ -30,7 +56,24 @@ impl Project {
                 }
             }
         }
+        for source in [&mut content.html, &mut content.css, &mut content.javascript] {
+            let uris: Vec<String> = inline_images(source).map(str::to_owned).collect();
+            for uri in uris {
+                *source = source.replace(&uri, &project_asset_reference(inline_image_id(&uri)));
+            }
+        }
         content
+    }
+
+    /// Pictures already inside this project's pages, by the reference they are sent as.
+    fn inline_page_images(&self) -> BTreeMap<Uuid, &str> {
+        self.pages
+            .iter()
+            .filter_map(|page| page.content.as_ref())
+            .flat_map(|content| [&content.html, &content.css, &content.javascript])
+            .flat_map(|source| inline_images(source))
+            .map(|uri| (inline_image_id(uri), uri))
+            .collect()
     }
 }
 
@@ -78,6 +121,7 @@ impl GenerationCandidate {
             .flat_map(|identity| &identity.assets)
             .map(|asset| (asset.id, asset))
             .collect();
+        let inline = project.inline_page_images();
         let mut pages = self.pages.clone();
         let mut count = 0;
         for page in &mut pages {
@@ -96,9 +140,13 @@ impl GenerationCandidate {
                     rest = &rest[index + PROJECT_ASSET_SCHEME.len()..];
                     let id = rest.get(..36).and_then(|value| Uuid::parse_str(value).ok())
                         .ok_or_else(|| Error("The AI returned an invalid project image reference. Your page is unchanged.".into()))?;
-                    let asset = assets.get(&id).ok_or_else(|| Error("The AI referred to an image that is not in this project. Your page is unchanged.".into()))?;
-                    asset.validate()?;
-                    output.push_str(&asset.data_uri);
+                    if let Some(asset) = assets.get(&id) {
+                        asset.validate()?;
+                        output.push_str(&asset.data_uri);
+                    } else {
+                        let uri = inline.get(&id).ok_or_else(|| Error("The AI referred to an image that is not in this project. Your page is unchanged.".into()))?;
+                        output.push_str(uri);
+                    }
                     rest = &rest[36..];
                     count += 1;
                     ensure(

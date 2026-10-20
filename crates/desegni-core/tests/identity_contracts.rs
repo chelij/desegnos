@@ -620,3 +620,44 @@ fn import_context_merges_rules_into_an_open_project_without_overwriting_protecte
         "empty imports are refused"
     );
 }
+
+#[test]
+fn pictures_inside_page_sources_travel_as_references_and_resolve_to_the_same_bytes() {
+    let mut project = described(blank());
+    let picture = format!(
+        "data:image/webp;base64,{}",
+        STANDARD.encode(vec![7u8; 4096])
+    );
+    let small = "data:image/png;base64,iVBORw0KGgo=";
+    project.pages[0].content = Some(SiteContent {
+        html: format!("<main><img src=\"{picture}\" alt=\"Me\"><img src='{small}' alt=''></main>"),
+        css: format!("main{{background:url({picture})}}"),
+        javascript: String::new(),
+    });
+    let sent =
+        project.generation_source_with_asset_references(project.pages[0].content.as_ref().unwrap());
+    assert!(!sent.html.contains(&picture) && !sent.css.contains(&picture));
+    assert!(sent.html.contains(small), "small pictures stay inline");
+    let reference = sent
+        .html
+        .split("src=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap()
+        .to_owned();
+    assert!(reference.starts_with("desegnos-asset:"));
+    assert!(sent.css.contains(&reference));
+    let (_, mut candidate) = asset_candidate(
+        &project,
+        format!(
+            "<main data-desegnos-region='{}'><img src='{reference}' alt='Me'></main>",
+            project.pages[0].regions[0].id
+        ),
+        format!("main{{background:url({reference})}}"),
+    );
+    assert_eq!(candidate.resolve_project_assets(&project).unwrap(), 2);
+    assert!(candidate.pages[0].content.html.contains(&picture));
+    assert!(candidate.pages[0].content.css.contains(&picture));
+}

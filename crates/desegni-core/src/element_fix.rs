@@ -1,0 +1,343 @@
+//! Element fixes: when every request targets existing elements, only those elements and the
+//! page stylesheet (reference only) are sent, and the AI returns replacements for just those elements. Desegnos
+//! rebuilds complete pages from the reply, so every normal check and Undo applies unchanged.
+use crate::{
+    ComponentRequest, DecisionProposal, DesignCriticism, Error, GeneratedPage, GenerationCandidate,
+    Page, Project, Region, RegionOutcome, RequirementsSnapshot, Result, SiteContent, editing,
+    ensure,
+};
+use serde::Deserialize;
+use std::collections::BTreeSet;
+use uuid::Uuid;
+
+pub const ELEMENT_FIX_FORMAT: u8 = 11;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ElementFixReply {
+    job_id: Uuid,
+    requirements_sha256: String,
+    summary: String,
+    regions: Vec<RegionOutcome>,
+    pages: Vec<ElementPageFix>,
+    needs: Vec<String>,
+    component_requests: Vec<ComponentRequest>,
+    decision_proposals: Vec<DecisionProposal>,
+    criticism: Vec<DesignCriticism>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ElementPageFix {
+    page_id: Uuid,
+    elements: Vec<ElementReplacement>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ElementReplacement {
+    id: String,
+    html: String,
+}
+
+fn targets(region: &Region) -> impl Iterator<Item = &crate::ElementTarget> {
+    region.element.iter().chain(region.elements.iter())
+}
+
+/// Element fixes apply when every request is an ordinary fix of existing elements with stable IDs
+/// on a page that already has a site. New areas, phone fixes and attachments need the full page.
+pub(crate) fn eligible(requests: &[(&Page, &Region)]) -> bool {
+    !requests.is_empty()
+        && requests.iter().all(|(page, region)| {
+            page.content.is_some()
+                && !region.mobile_only
+                && region.attachments.is_empty()
+                && targets(region).next().is_some()
+                && targets(region).all(|target| !target.id.is_empty())
+        })
+}
+
+/// One short line per element on the page (ID, tag.classes, own text), so the AI can ask for
+/// the ones it needs.
+const MAX_OUTLINE_ENTRIES: usize = 400;
+const MAX_CONTEXT_ELEMENTS: usize = 32;
+const CONTEXT_HEADING: &str = "\n## Requested context\n\n";
+
+fn outline(doc: &dom_query::Document) -> Vec<String> {
+    doc.select(&format!("body [{}]", crate::ELEMENT_ID_ATTRIBUTE))
+        .nodes()
+        .iter()
+        .take(MAX_OUTLINE_ENTRIES)
+        .map(|node| {
+            let own: String = node
+                .children()
+                .into_iter()
+                .filter(|child| child.is_text())
+                .map(|child| child.text().to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let text: String = own
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(40)
+                .collect();
+            let mut line = format!(
+                "{} {}",
+                node.attr(crate::ELEMENT_ID_ATTRIBUTE).unwrap_or_default(),
+                node.node_name().unwrap_or_default()
+            );
+            if let Some(class) = node.attr("class") {
+                for name in class.split_whitespace() {
+                    line.push('.');
+                    line.push_str(name);
+                }
+            }
+            if !text.is_empty() {
+                line.push_str(&format!(" {text:?}"));
+            }
+            line
+        })
+        .collect()
+}
+
+impl Project {
+    fn referenced(&self, html: String) -> String {
+        self.generation_source_with_asset_references(&SiteContent {
+            html,
+            css: String::new(),
+            javascript: String::new(),
+        })
+        .html
+    }
+
+    /// The selected elements (outer HTML with editor IDs), the page stylesheet and a page outline.
+    /// Scripts are not sent; they stay exactly as they are.
+    pub(crate) fn element_fix_source(
+        &self,
+        page: &Page,
+        regions: &[&Region],
+    ) -> Result<serde_json::Value> {
+        let content = page
+            .content
+            .as_ref()
+            .ok_or_else(|| Error("This page has no site to fix.".into()))?;
+        let doc = editing::parse(&content.html)?;
+        let mut seen = BTreeSet::new();
+        let mut elements = vec![];
+        for target in regions.iter().flat_map(|region| targets(region)) {
+            if !seen.insert(target.id.clone()) {
+                continue;
+            }
+            let node = editing::locate(&doc, target)?;
+            elements.push(serde_json::json!({"id":target.id,"tag":target.tag,"html":self.referenced(node.html().to_string())}));
+        }
+        let css = self
+            .generation_source_with_asset_references(&SiteContent {
+                html: String::new(),
+                css: content.css.clone(),
+                javascript: String::new(),
+            })
+            .css;
+        Ok(
+            serde_json::json!({"pageId": page.id, "elements": elements, "css": css, "outline": outline(&doc)}),
+        )
+    }
+}
+
+impl RequirementsSnapshot {
+    /// True for the one follow-up that carries elements the AI asked for.
+    pub fn has_requested_context(&self) -> bool {
+        self.markdown.contains(CONTEXT_HEADING)
+    }
+
+    /// When an element-fix reply asks for other elements, the follow-up requirements: the same
+    /// frozen file plus those elements' HTML. None when the reply is a final result.
+    pub fn context_follow_up(
+        &self,
+        text: &str,
+        project: &Project,
+    ) -> Result<Option<RequirementsSnapshot>> {
+        if self.format_version()? != ELEMENT_FIX_FORMAT || self.has_requested_context() {
+            return Ok(None);
+        }
+        let Ok(reply) = serde_json::from_str::<ElementFixReply>(text) else {
+            return Ok(None);
+        };
+        if reply.needs.is_empty() {
+            return Ok(None);
+        }
+        ensure(
+            reply.needs.len() <= MAX_CONTEXT_ELEMENTS,
+            "The AI asked for too many other elements.",
+        )?;
+        let pages: BTreeSet<Uuid> = self
+            .target_ids()?
+            .into_iter()
+            .map(|(page, _)| page)
+            .collect();
+        let mut found = vec![];
+        for id in &reply.needs {
+            let element = pages.iter().find_map(|page_id| {
+                let content = project.page(*page_id).ok()?.content.as_ref()?;
+                let doc = editing::parse(&content.html).ok()?;
+                let nodes = doc.select(&format!("[{}=\"{}\"]", crate::ELEMENT_ID_ATTRIBUTE, id.replace('"', "")));
+                (nodes.nodes().len() == 1).then(|| serde_json::json!({"pageId":page_id,"id":id,"html":project.referenced(nodes.nodes()[0].html().to_string())}))
+            });
+            found.push(element.unwrap_or_else(|| serde_json::json!({"id":id,"missing":true})));
+        }
+        let mut markdown = self.markdown.clone();
+        markdown.push_str(CONTEXT_HEADING);
+        markdown.push_str("You asked for these elements. They are reference only: change only the selected elements. Return the final result now, with needs empty.\n\n");
+        markdown.push_str(&crate::requirements::fenced_json(&found)?);
+        let mut follow_up = self.clone();
+        follow_up.sha256 = crate::digest(markdown.as_bytes());
+        follow_up.markdown = markdown;
+        Ok(Some(follow_up))
+    }
+
+    /// Ties a follow-up reply back to the frozen requirements it extends.
+    pub fn adopt_follow_up_reply(
+        &self,
+        follow_up: &RequirementsSnapshot,
+        text: &str,
+    ) -> Result<String> {
+        let mut value: serde_json::Value = serde_json::from_str(text)
+            .map_err(|_| Error("The AI reply did not match the element fix format.".into()))?;
+        ensure(
+            value["requirementsSha256"] == follow_up.sha256.as_str()
+                && follow_up.markdown.starts_with(&self.markdown),
+            "The AI reply did not match these requirements.",
+        )?;
+        value["requirementsSha256"] = self.sha256.clone().into();
+        serde_json::to_string(&value).map_err(|e| Error(e.to_string()))
+    }
+}
+
+impl GenerationCandidate {
+    /// Reads a provider reply for these requirements. Element-fix replies are expanded into
+    /// complete pages from the project they were prepared against.
+    pub fn from_reply(
+        text: &str,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+    ) -> Result<Self> {
+        if snapshot.format_version()? != ELEMENT_FIX_FORMAT {
+            return Self::from_json(text);
+        }
+        ensure(
+            text.len() <= crate::MAX_GENERATION_BYTES,
+            "The AI reply is too large.",
+        )?;
+        let reply: ElementFixReply = match serde_json::from_str(text) {
+            Ok(reply) => reply,
+            // Image preparation hands on an already expanded result; it is validated the same way.
+            Err(error) => {
+                return Self::from_json(text).map_err(|_| {
+                    let detail: String = error.to_string().chars().take(160).collect();
+                    Error(format!(
+                        "The AI reply did not match the element fix format ({detail})."
+                    ))
+                });
+            }
+        };
+        ensure(
+            reply.needs.is_empty(),
+            "The AI still needed more of the page. Your page is unchanged. Select the related elements too and try again.",
+        )?;
+        let allowed: BTreeSet<(Uuid, String)> = snapshot
+            .target_ids()?
+            .into_iter()
+            .filter_map(|(page_id, region_id)| {
+                project
+                    .pages
+                    .iter()
+                    .find(|page| page.id == page_id)
+                    .and_then(|page| page.regions.iter().find(|region| region.id == region_id))
+                    .map(|region| (page_id, region))
+            })
+            .flat_map(|(page_id, region)| {
+                targets(region).map(move |target| (page_id, target.id.clone()))
+            })
+            .collect();
+        let mut pages = Vec::with_capacity(reply.pages.len());
+        for fix in reply.pages {
+            let page = project.page(fix.page_id)?;
+            let content = page
+                .content
+                .as_ref()
+                .ok_or_else(|| Error("The AI changed a page that has no site.".into()))?;
+            let doc = editing::parse(&content.html)?;
+            let mut done = BTreeSet::new();
+            for element in &fix.elements {
+                ensure(
+                    allowed.contains(&(fix.page_id, element.id.clone()))
+                        && done.insert(element.id.clone()),
+                    "The AI changed an element that was not selected. Your page is unchanged.",
+                )?;
+                editing::check_value(&element.html, crate::MAX_SITE_SOURCE_BYTES)?;
+                let nodes = doc.select(&format!(
+                    "[{}=\"{}\"]",
+                    crate::ELEMENT_ID_ATTRIBUTE,
+                    element.id
+                ));
+                ensure(nodes.nodes().len() == 1, "This element was removed.")?;
+                nodes.nodes()[0].replace_with_html(element.html.as_str());
+            }
+            editing::bounded(&doc)?;
+            pages.push(GeneratedPage {
+                page_id: fix.page_id,
+                content: SiteContent {
+                    html: editing::serialized(&doc)?,
+                    css: content.css.clone(),
+                    javascript: content.javascript.clone(),
+                },
+            });
+        }
+        Ok(GenerationCandidate {
+            job_id: reply.job_id,
+            requirements_sha256: reply.requirements_sha256,
+            summary: reply.summary,
+            regions: reply.regions,
+            pages,
+            component_requests: reply.component_requests,
+            decision_proposals: reply.decision_proposals,
+            criticism: reply.criticism,
+        })
+    }
+}
+
+/// The result schema matching these requirements.
+pub fn result_schema(snapshot: &RequirementsSnapshot) -> serde_json::Value {
+    if snapshot.format_version().ok() == Some(ELEMENT_FIX_FORMAT) {
+        let mut schema = element_fix_schema();
+        if snapshot.has_requested_context() {
+            schema["properties"]["needs"]["maxItems"] = 0.into();
+        }
+        schema
+    } else {
+        crate::candidate_schema()
+    }
+}
+
+pub fn element_fix_schema() -> serde_json::Value {
+    use serde_json::json;
+    let mut schema = crate::candidate_schema();
+    let source = json!({"type":"string","description":format!("At most {} UTF-8 bytes, enforced by Desegni before acceptance.", crate::MAX_SITE_SOURCE_BYTES)});
+    let element = json!({"type":"object","additionalProperties":false,"required":["id","html"],"properties":{
+        "id":{"type":"string","description":"The data-desegnos-id of a selected element."},
+        "html":source
+    }});
+    schema["properties"]["pages"]["items"] = json!({"type":"object","additionalProperties":false,"required":["pageId","elements"],"properties":{
+        "pageId":schema["properties"]["pages"]["items"]["properties"]["pageId"].clone(),
+        "elements":{"type":"array","maxItems":crate::MAX_GENERATION_REGIONS * 8,"items":element}
+    }});
+    schema["properties"]["needs"] = json!({"type":"array","maxItems":MAX_CONTEXT_ELEMENTS,"items":{"type":"string"},
+        "description":"IDs from the page outline whose HTML you need before you can finish. Leave pages empty when asking. Empty for a final result."});
+    schema["required"]
+        .as_array_mut()
+        .expect("required is a list")
+        .push("needs".into());
+    schema
+}
