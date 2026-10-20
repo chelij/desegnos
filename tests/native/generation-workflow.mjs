@@ -478,7 +478,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     assert.deepEqual((await workspace()).project, before); assert.deepEqual(provider.networkProbes(), []);
   });
   await step('Explicit interactive preview stays opaque and denies parent DOM, native IPC and network', async () => {
-    await driver.button('Preview'); await installPreviewObserver(driver); await setScripts(driver, physical, true);
+    await driver.menu(['Preview in a window']); await installPreviewObserver(driver); await setScripts(driver, physical, true);
     const ready = await waitFor(async () => (await messages(driver)).find(value => value.event === 'ready'), 'The explicit interactive preview did not execute');
     assert.equal(ready.origin, 'null'); assert.equal(ready.detail.parentDenied, true);
     assert.equal(ready.detail.tauriAbsent, true); assert.equal(ready.detail.internalsAbsent, true); assert.equal(ready.detail.ipcAbsent, true);

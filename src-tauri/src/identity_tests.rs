@@ -356,6 +356,51 @@ fn restart_retains_complete_review_and_marks_interrupted_intents_uncertain_witho
 }
 
 #[test]
+fn descriptive_brand_finding_imports_the_dedicated_name_only_when_selected() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let source = temp.source();
+    let view = reserve(&mut service, &source);
+    service
+        .begin(view.job_id, &access(AuthenticationMethod::ApiKey, None))
+        .unwrap();
+    let mut value = candidate(service.latest.as_ref().unwrap());
+    value.brand_name = "Cheli's Library".into();
+    value.findings[0].value = format!(
+        "Cheli's Library. {}",
+        "The design document and SVG title support this display name. ".repeat(4)
+    );
+    assert!(value.findings[0].value.chars().count() > 120);
+    service.finish(view.job_id, Ok(response(&value))).unwrap();
+    assert_eq!(
+        service.latest.as_ref().unwrap().status,
+        AnalysisStatus::Complete
+    );
+    // Exercise a saved receipt too: existing analyses must work without another AI request.
+    drop(service);
+    let service = temp.service();
+    let viewport = Viewport {
+        width: 1440,
+        height: 900,
+    };
+    let project = service
+        .project_from_analysis(view.job_id, &[0], &[], "Library".into(), viewport)
+        .unwrap();
+    assert_eq!(project.brief.brand_name, "Cheli's Library");
+    assert_eq!(project.decisions[0].value, "Cheli's Library");
+    let existing = Project::new("Existing".into(), viewport, Appearance::Light).unwrap();
+    let imported = existing
+        .import_context(0, service.reviewed_context(view.job_id, &[0], &[]).unwrap())
+        .unwrap();
+    assert_eq!(imported.brief.brand_name, "Cheli's Library");
+    let without_brand = service
+        .project_from_analysis(view.job_id, &[1], &[], "Colours only".into(), viewport)
+        .unwrap();
+    assert!(without_brand.brief.brand_name.is_empty());
+    assert_eq!(without_brand.decisions[0].value, value.findings[1].value);
+}
+
+#[test]
 fn selected_creation_is_blank_light_and_carries_only_approved_findings_and_images() {
     let temp = Temp::new();
     let mut service = temp.service();
@@ -614,4 +659,59 @@ fn cancellation_receipt_failure_still_revokes_active_analysis_and_rejects_late_o
         .finish(view.job_id, Ok(response(&candidate)))
         .unwrap();
     assert!(service.latest.as_ref().unwrap().candidate.is_none());
+}
+
+#[test]
+fn per_analysis_schema_only_allows_the_sent_file_and_logo_identifiers() {
+    let png = {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&[
+            0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0, 0x90, 0x77,
+            0x53, 0xde,
+        ]);
+        bytes
+    };
+    let source = desegni_storage::identity_source_from_files(
+        "example.com",
+        vec![
+            ("index.html".into(), b"<h1>Crumb</h1>".to_vec()),
+            ("styles/site.css".into(), b"body{color:#c0392b}".to_vec()),
+            ("images/logo.png".into(), png),
+        ],
+        vec![],
+    )
+    .unwrap();
+    let ids: Vec<Uuid> = source.files.iter().map(|file| file.id).collect();
+    let schema = candidate_schema_for(&source, &ids);
+    let evidence =
+        schema["properties"]["findings"]["items"]["properties"]["evidence"]["items"]["enum"]
+            .as_array()
+            .unwrap();
+    assert_eq!(evidence.len(), ids.len());
+    assert!(
+        evidence
+            .iter()
+            .all(|value| Uuid::parse_str(value.as_str().unwrap()).is_ok())
+    );
+    let logos = &schema["properties"]["logoAssetIds"]["items"];
+    if source.files.iter().any(|file| file.asset.is_some()) {
+        assert!(
+            logos["enum"]
+                .as_array()
+                .is_some_and(|values| !values.is_empty())
+        );
+    }
+    // A reply citing a file name instead of its identifier is rejected with the failing field named.
+    let reply = r#"{"evidence":["styles/site.css"]}"#;
+    #[derive(Debug, serde::Deserialize)]
+    struct Probe {
+        #[allow(dead_code)]
+        evidence: Vec<Uuid>,
+    }
+    assert!(
+        serde_json::from_str::<Probe>(reply)
+            .unwrap_err()
+            .to_string()
+            .contains("UUID")
+    );
 }

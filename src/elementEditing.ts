@@ -13,11 +13,31 @@ export function translatedStyle(inlineStyle: string, translate: string, x: numbe
   return style.cssText;
 }
 export const escapeHtml = (value: string) => value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
-export function imageFile(file: File): Promise<string> {
-  if (file.size > 512 * 1024 || !['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml'].includes(file.type)) return Promise.reject(new Error('Choose a PNG, JPEG, WebP, GIF or SVG image up to 512 KB.'));
-  return new Promise((resolve, reject) => { const reader = new FileReader(); reader.onerror = () => reject(new Error('The image could not be read.')); reader.onload = () => {
-    const value = String(reader.result); const image = new Image(); image.onerror = () => reject(new Error('This file could not be opened as an image.'));
-    image.onload = () => image.naturalWidth > 0 && image.naturalWidth <= 16384 && image.naturalHeight <= 16384 ? resolve(value) : reject(new Error('Choose an image no larger than 16,384 pixels on either side.'));
-    image.src = value;
-  }; reader.readAsDataURL(file); });
+// Original files can be previewed before Generate; embedded copies stay within the page budget.
+export async function imageFile(file: File, optimize = true): Promise<string> {
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/svg+xml'].includes(file.type)) throw new Error('Choose a PNG, JPEG, WebP, GIF or SVG image.');
+  const value = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader(); reader.onerror = () => reject(new Error('The image could not be read.'));
+    reader.onload = () => resolve(String(reader.result)); reader.readAsDataURL(file);
+  });
+  const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image(); image.onerror = () => reject(new Error('This file could not be opened as an image.'));
+    image.onload = () => resolve(image); image.src = value;
+  });
+  if (!image.naturalWidth || !image.naturalHeight || image.naturalWidth > 16384 || image.naturalHeight > 16384 || image.naturalWidth * image.naturalHeight > 64 * 1024 * 1024) throw new Error('Choose an image up to 64 million pixels and 16,384 pixels on either side.');
+  if (!optimize || file.size <= 256 * 1024) return value;
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) throw new Error('The image could not be resized.');
+  let scale = Math.min(1, 2048 / Math.max(image.naturalWidth, image.naturalHeight));
+  for (let attempt = 0; attempt < 16; attempt++) {
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    // WebP preserves transparency. Browsers without an encoder fall back to PNG.
+    const result = canvas.toDataURL('image/webp', 0.85);
+    if (atob(result.slice(result.indexOf(',') + 1)).length <= 256 * 1024) return result;
+    scale *= 0.75;
+  }
+  throw new Error('The image could not be resized. Try another picture.');
 }

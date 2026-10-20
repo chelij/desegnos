@@ -183,3 +183,11 @@
 .free-workspace .request-attachments button { min-height: 0; padding: 0 3px; border: 0; background: transparent; font-size: 13px; line-height: 1; }
 .free-workspace .request-attach { position: absolute; right: 6px; bottom: 6px; z-index: 3; width: 26px; min-height: 26px; padding: 0; border: 1px solid var(--annotation-border); border-radius: 4px; background: var(--annotation-surface); font-size: 13px; line-height: 1; }
 .free-workspace .request-drop-hint { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; border: 2px dashed var(--annotation-focus); background: color-mix(in srgb, var(--annotation-focus) 18%, var(--annotation-surface)); color: var(--annotation-text); font-size: 12px; font-weight: 600; pointer-events: none; }
+
+/* Live view: the real, interactive page sits over the static copy at the same place and zoom. */
+.free-workspace .live-canvas-page { position: absolute; z-index: 1; background: #fff; box-shadow: 0 0 0 1px var(--annotation-focus); }
+.free-workspace .canvas.dark .live-canvas-page { background: #17191c; }
+.free-workspace .live-canvas-content { position: absolute; top: 0; left: 0; transform-origin: top left; }
+.free-workspace .live-canvas-content .preview-frame, .free-workspace .live-canvas-content .preview-frame iframe { width: 100%; height: 100%; min-height: 0; border: 0; }
+.free-workspace .live-canvas-page.passive { pointer-events: none; }
+.free-workspace.live .screen-guide-label { display: none; }

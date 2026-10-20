@@ -97,6 +97,8 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     await driver.ready('.image-drop-target');
     await chooseFile(physical,()=>driver.click('.image-drop-target'),picture,output,'browse-picture');
     await waitFor(()=>driver.execute(()=>document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#picture')?.getAttribute('src')?.endsWith('DejjuQAAAABJRU5ErkJggg==')),'Chosen picture did not render');
+    await driver.button('Generate');
+    await waitFor(()=>driver.execute(()=>!document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#picture')?.hasAttribute('data-desegnos-placeholder')),'Generate did not apply the chosen picture');
     const dimensions=await driver.execute(()=>{const node=document.querySelector('.static-preview iframe').contentDocument.querySelector('#picture');return {width:node.width,height:node.height,alt:node.alt,placeholder:node.hasAttribute('data-desegnos-placeholder')};});
     assert.deepEqual(dimensions,{width:240,height:120,alt:'Studio photo',placeholder:false});
     await driver.button('Undo last change');await driver.ready('.image-drop-target');await driver.button('Redo last change');
@@ -113,6 +115,8 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
       await waitFor(()=>{if(source.exitCode!==null)throw new Error(errors);return log.includes('"ready": true');},'GTK file drag source did not open');
       const snapshot=await new PhysicalInput(driver,source.pid).inspect();const window=snapshot.window;
       await physical.raw({action:'drag',sourcePid:source.pid,from:{x:window.x+window.width/2,y:window.y+window.height/2},to:physical.rootPoint(await pointFor(driver,'#picture'))});
+      await waitFor(()=>driver.execute(()=>document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#picture')?.getAttribute('src')?.endsWith('DejjuQAAAABJRU5ErkJggg==')),'Dropped original did not render');
+      await driver.button('Generate');
       await waitFor(async()=>{const content=(await workspace(driver)).project.pages.find(page=>page.id===about).content;return content.html!==before.html;},'A native file drop did not change the picture');
       const events=await driver.execute(()=>window.__nativeFileDrops);assert.ok(events.some(event=>event.type==='native-drop'&&event.files===1),JSON.stringify(events));
       const after=(await workspace(driver)).project.pages.find(page=>page.id===about).content;assert.equal(after.css,before.css);assert.equal(after.javascript,before.javascript);
@@ -122,7 +126,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
   });
   await step('Device preview uses real layout widths, runs enabled interactions and leaves authored source unchanged',async()=>{
     const before=(await workspace(driver)).project;
-    await driver.button('Preview');await driver.ready('.device-stage iframe');
+    await driver.menu(['Preview in a window']);await driver.ready('.device-stage iframe');
     await driver.execute(()=>{window.__deviceMessages=[];window.addEventListener('message',event=>{if(event.source===document.querySelector('.device-stage iframe')?.contentWindow&&event.data?.type?.startsWith('native-device-'))window.__deviceMessages.push(event.data);});});
     await driver.click('//label[contains(.,"Try buttons and links")]/input','xpath');
     for(const [name,width] of [['Desktop',1440],['Tablet',768],['Phone',390]]){

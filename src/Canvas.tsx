@@ -40,8 +40,8 @@ function paintStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSPrope
 }
 
 type CanvasProps = {
-  canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
-  projectImages?: import('./types').IdentityAsset[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; detach?: (regionId: string, attachmentId: string) => void;
+  pendingImagesChanged: (count: number) => void; canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
+  projectImages?: import('./types').IdentityAsset[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void;
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: Rect[]; highlighted?: Rect[];
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
@@ -50,7 +50,7 @@ type CanvasProps = {
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect) => void; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
   const [context, setContext] = useState<CanvasContext | null>(null);
@@ -90,6 +90,20 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     return () => { window.removeEventListener('dragover', guard); window.removeEventListener('drop', guard); };
   }, []);
   const [placeholders, setPlaceholders] = useState<ElementSelection[]>([]);
+  // When a side panel opens or closes, the canvas changes width. Shift by half the difference so
+  // whatever was in the middle of the view stays there instead of sliding under the panel.
+  useEffect(() => {
+    const node = scroll.current; if (!node) return;
+    let width = node.clientWidth;
+    const observer = new ResizeObserver(() => {
+      const next = node.clientWidth;
+      if (next !== width && width > 0) node.scrollLeft += (width - next) / 2;
+      width = next;
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => { if (liveView) { deselectElement(); setExtras([]); } }, [!!liveView]);
   const [extras, setExtrasState] = useState<ElementSelection[]>([]);
   const extrasRef = useRef<ElementSelection[]>([]);
   // Element requests whose element can no longer be found on the rendered page.
@@ -112,6 +126,40 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     return () => { disposed = true; stop?.(); };
   }, []);
   const browseFor = useRef<ElementSelection | null>(null);
+  const pendingImages = useRef<{ selection: ElementSelection; file: File; src: string }[]>([]);
+  const imageReads = useRef(new Set<Promise<void>>());
+  const imageFlush = useRef<Promise<void> | null>(null);
+  async function stageImage(selection: ElementSelection, file: File) {
+    const pageId = page.id;
+    const work = (async () => {
+      try {
+        const src = await imageFile(file, false);
+        if (pageRef.current.id !== pageId || !site.current?.previewImage(selection.element, src)) throw new Error('The picture target changed. Drop it again.');
+        pendingImages.current = [...pendingImages.current.filter(item => !sameTarget(item.selection.element, selection.element)), { selection, file, src }];
+        pendingImagesChanged(pendingImages.current.length);
+        setPlaceholders(current => current.filter(item => !sameTarget(item.element, selection.element)));
+        setElementError('');
+      } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+    })();
+    imageReads.current.add(work);
+    try { await work; } finally { imageReads.current.delete(work); }
+  }
+  async function flushImages() {
+    if (imageFlush.current) return imageFlush.current;
+    imageFlush.current = (async () => {
+      await Promise.all(imageReads.current);
+      if (pendingImages.current.length) await waitForSite(pageRef.current.id);
+      while (pendingImages.current.length) {
+        const item = pendingImages.current[0];
+        // A picture deleted while its replacement was pending needs no update.
+        if (site.current?.contains(item.selection.element)) await replaceImage(item.selection, item.file);
+        pendingImages.current = pendingImages.current.filter(entry => entry !== item);
+        pendingImagesChanged(pendingImages.current.length);
+        await waitForSite(pageRef.current.id);
+      }
+    })().finally(() => { imageFlush.current = null; });
+    return imageFlush.current;
+  }
   // Fill a picture from a file: dropped from the file manager, or chosen with Browse.
   async function replaceImage(selection: ElementSelection, file: File) {
     if (!file.type.startsWith('image/')) { setElementError('Choose a picture file (PNG, JPEG, WebP or GIF).'); return; }
@@ -128,7 +176,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
         const attributes = Array.from(original.content.firstElementChild?.attributes ?? []).filter(attribute => !['src', 'srcset', 'sizes', 'alt', 'style'].includes(attribute.name) && !attribute.name.startsWith('data-desegnos-'));
         await applyElement({ kind: 'replace', html: `<img ${attributes.map(attribute => `${attribute.name}="${escapeHtml(attribute.value)}"`).join(' ')} src="${escapeHtml(src)}" alt="${escapeHtml(description)}" style="${escapeHtml(css.cssText)}">`, keepStyle: true }, selection);
       } else await applyElement({ kind: 'update', texts: [], attributes: description === alt ? { src } : { src, alt: description }, style: null }, selection);
-    } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+    } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); throw error; }
   }
   function browseImage(selection: ElementSelection | null) { browseFor.current = selection; imagePicker.current?.click(); }
   function storeElement(value: ElementSelection | null) { elementRef.current = value; setElement(value); selectionChanged(value?.element ?? null); }
@@ -523,6 +571,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   function refreshLayers() { const ready = !!site.current?.source(); setLayersReady(ready); setSiteLayers(ready ? site.current!.layers() : []); }
   useEffect(() => { if (layersOpen) refreshLayers(); }, [layersOpen, page.id, acceptedVersion]);
   async function finishLayerDraft() {
+    await flushImages();
     if (inlineSaving.current) await inlineSaving.current;
     const text = inlineTextRef.current;
     if (text) await finishText(stage.current?.querySelector<HTMLElement>('.inline-text-editor')?.innerText ?? text.text);
@@ -629,6 +678,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     return found;
   }
   useImperativeHandle(ref, () => ({ focusElement, addRequest: addRequestInView, focusRequest: focusRegion, askAI, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
+    await flushImages();
     if (inlineSaving.current) await inlineSaving.current;
     const text = inlineTextRef.current;
     if (text) { const node = stage.current?.querySelector<HTMLElement>('.inline-text-editor'); await finishText(node?.innerText ?? text.text); }
@@ -640,6 +690,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     if (event.button === 2) { contextMenu(event); return; }
     if (event.target !== event.currentTarget || event.button !== 0) return;
     if (panKey.current || tool === 'pan') { startPan(event, false); return; }
+    // Live mode: the page itself takes clicks; the canvas only pans or places new requests.
+    if (liveView) { if (tool === 'request' && liveRequests) begin(event, 'new'); else startPan(event, false); return; }
     const at = point({ x: event.clientX, y: event.clientY });
     const hit = page.content ? site.current?.pick(at.x, at.y) : null;
     if (tool === 'request' || event.shiftKey && (!hit || hit.element.tag === 'body')) { begin(event, 'new'); return; }
@@ -706,7 +758,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   function refreshElement() {
     refreshLayers();
     setExtras(extrasRef.current.flatMap(item => { const found = site.current?.find(item.element); return found ? [found] : []; }));
-    setPlaceholders(page.content ? site.current?.placeholders() ?? [] : []);
+    for (const item of pendingImages.current) site.current?.previewImage(item.selection.element, item.src);
+    setPlaceholders(page.content ? (site.current?.placeholders() ?? []).filter(item => !pendingImages.current.some(pending => sameTarget(pending.selection.element, item.element))) : []);
     refreshStaleTargets();
     const current = elementRef.current;
     if (current) {
@@ -801,6 +854,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     add(requestAt({ x: snapped.x, y: snapped.y }, zoom));
   }
   function activate(event: ReactMouseEvent) {
+    if (liveView) return;
     if (tool !== 'select' || event.target !== event.currentTarget || event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || plainClicks.current < 2) return;
     event.preventDefault(); event.stopPropagation(); plainClicks.current = 0; lastPlainClick.current = null;
     activateAt({ x: event.clientX, y: event.clientY });
@@ -882,6 +936,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
 
   const editBusy = layerBusy || editingElement || nudging;
+  // Requests line up with the design only at the page's own width, so they show (and can be added) there.
+  const liveRequests = !liveView || liveView.width === page.viewport.width;
+  const liveHeight = liveView ? Math.max(liveView.height, liveView.width === page.viewport.width ? previewHeight : liveView.height) : 0;
   nativeDrag.current = value => {
     if (value.phase === 'leave') { setDropTarget(null); return; }
     if (value.phase === 'drop') {
@@ -892,7 +949,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
       if (!pending.selection) { setElementError('Drop the picture onto an image on the page.'); return; }
       if (value.picture) {
         const picture = value.picture; const bytes = Uint8Array.from(atob(picture.data), character => character.charCodeAt(0));
-        chooseElement(pending.selection); void replaceImage(pending.selection, new File([bytes], picture.name, { type: picture.mime }));
+        chooseElement(pending.selection); void stageImage(pending.selection, new File([bytes], picture.name, { type: picture.mime }));
       }
       return;
     }
@@ -930,10 +987,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     ]),
     { id: 'layers', label: 'Layers', action: () => setLayersOpen(true) },
   ] : [];
-  return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''} ${repicking ? 'repicking' : ''}`}
+  return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers && !liveView ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''} ${repicking ? 'repicking' : ''} ${liveView ? 'live' : ''}`}
     onKeyDownCapture={event => { if (event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
     <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 8 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
-    {gridSettings.rulers && <><div className="ruler-corner" aria-hidden="true">{rulerUnit === 'percent' ? '%' : 'px'}</div>
+    {gridSettings.rulers && !liveView && <><div className="ruler-corner" aria-hidden="true">{rulerUnit === 'percent' ? '%' : 'px'}</div>
       <Ruler axis="x" unit={rulerUnit} start={visible.x} length={measurements.width} reference={page.viewport.width} zoom={zoom} cursor={cursor?.x} selection={selectedRect ? [selectedRect.x, selectedRect.x + selectedRect.width] : undefined} />
       <Ruler axis="y" unit={rulerUnit} start={visible.y} length={measurements.height} reference={page.viewport.height} zoom={zoom} cursor={cursor?.y} selection={selectedRect ? [selectedRect.y, selectedRect.y + selectedRect.height] : undefined} /></>}
     <div ref={scroll} className="workspace-scroll" data-testid="workspace-scroll" onScroll={scrolled} onPointerDownCapture={beginPan}>
@@ -958,7 +1015,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
             const hit = page.content ? site.current?.imageAt(at.x, at.y) ?? null : null;
             if (!file) setElementError('Drop a picture file (PNG, JPEG, WebP or GIF).');
             else if (!hit) setElementError('Drop the picture onto an image on the page.');
-            else { chooseElement(hit); void replaceImage(hit, file); }
+            else { chooseElement(hit); void stageImage(hit, file); }
           }}
           onPointerLeave={() => { if (!gesture.current) setCursor(null); }} onPointerCancel={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
           onLostPointerCapture={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
@@ -968,27 +1025,32 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
               <PreviewFrame ref={site} content={page.content} referenceHeight={page.viewport.height} onHeight={setSiteHeight} onReady={refreshElement} pageId={page.id} revision={acceptedVersion} title={`${page.name} accepted static preview`} staticView />
             </div>
           </div>}
+          {liveView && page.content && <div className={`live-canvas-page${tool === 'request' || panReady || panning ? ' passive' : ''}`} data-testid="live-canvas-page" style={positioned({ x: 0, y: 0, width: liveView.width, height: liveHeight })}>
+            <div className="live-canvas-content" style={{ width: liveView.width, height: liveHeight, transform: `scale(${zoom})` }}>
+              <PreviewFrame pageId={page.id} revision={`live:${acceptedVersion}`} runScripts title={`${page.name} live`} />
+            </div>
+          </div>}
           <div className={`screen-guide ${page.content ? 'has-preview' : ''}`} data-testid="screen-guide" style={positioned({ x: 0, y: 0, ...page.viewport })} aria-hidden="true">
             <span className="screen-guide-label">Screen · {page.viewport.width} × {page.viewport.height}</span>
           </div>
-          {grid && <div className="canvas-grid" aria-hidden="true" style={{ ...positioned({ x: 0, y: 0, width: page.viewport.width, height: Math.max(page.viewport.height, page.content ? previewHeight : 0) }), backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: '0 0' }} />}
+          {grid && !liveView && <div className="canvas-grid" aria-hidden="true" style={{ ...positioned({ x: 0, y: 0, width: page.viewport.width, height: Math.max(page.viewport.height, page.content ? previewHeight : 0) }), backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: '0 0' }} />}
           {!page.content && !page.regions.some(region => !region.completed) && <div className="canvas-empty-hint" style={positioned({ x: 0, y: 0, ...page.viewport })}>
             <strong>This page is empty</strong><p>Place a box where something should go, then describe it.</p><button type="button" className="primary" onClick={addRequestInView}>Add request</button><p className="empty-hint-small">or double-click anywhere on the page</p>
           </div>}
-          {page.regions.map((region, index) => {
+          {liveRequests && page.regions.map((region, index) => {
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
             return <RequestBox key={region.id} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
               layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => change(region.id, patch)} />;
           })}
-          {element && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
+          {element && !liveView && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
             <span className="element-type-tag">{elementName(element.element.tag)}{foundUrl && <span className="found-tag" title={foundUrl}> · Found online · {foundHost}</span>}</span>
             {!extras.length && element.element.selector !== 'body' && (['nw','ne','sw','se'] as const).map(corner => <button key={corner} type="button" className={`element-resize-corner corner-${corner}`} data-corner={corner} aria-label={`Resize ${corner.includes('n') ? 'top' : 'bottom'}-${corner.includes('w') ? 'left' : 'right'}`} title="Drag to resize; press Enter for size settings" disabled={editingElement || nudging} onPointerDown={event => beginElementGesture(event, corner)} onClick={event => { if (event.detail === 0) setElementDialog('edit'); }} />)}
           </div>}
           {extras.map(item => <div key={item.element.id ?? item.element.selector} data-testid="multi-element-selection" data-element-id={item.element.id} className="element-selection multi-selection" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }} aria-hidden="true" />)}
           {inlineText && <InlineTextEditor key={`${inlineText.selection.element.sourceSha256}:${inlineText.index}`} text={inlineText} origin={origin} zoom={zoom} layer={overlayLayer + 4} disabled={editingElement} finish={finishText} />}
           {changing.map((rect, index) => <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
-          {!editBusy && placeholders.map(item => <button key={item.element.selector} type="button" className="image-drop-target" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }}
+          {!editBusy && !liveView && placeholders.map(item => <button key={item.element.selector} type="button" className="image-drop-target" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }}
             onPointerDown={event => event.stopPropagation()} onClick={event => { if (event.shiftKey || event.ctrlKey || event.metaKey) toggleElement(item); else if (repicking && repick) { const id = repicking; setRepicking(null); void repick(id, item).catch(error => setElementError(String(error))); } else { chooseElement(item); browseImage(item); } }} title="Drop a picture here, or click to choose one">
             <strong>Drop a picture here</strong><span>or click to browse</span></button>)}
           {dropTarget && <div className="image-drop-highlight" style={{ ...paintStyle(dropTarget, bounds, zoom), zIndex: overlayLayer + 3 }} aria-hidden="true"><span>Drop to use this picture</span></div>}
@@ -999,7 +1061,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
         </div>
       </div>
     </div>
-    {toolbarRect && !inlineText && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
+    {toolbarRect && !inlineText && !(liveView && element) && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
       {extras.length > 0 ? <>
         <span className="multi-count">{extras.length + 1} selected</span>
         <button className="ask-ai" disabled={editBusy} onClick={askAI}>Ask AI</button>
@@ -1022,14 +1084,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element?.element.selector ?? null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady} anchor={toolbarPoint ? { x: toolbarPoint.x, y: toolbarPoint.y, height: toolbarSize.height } : null} contextElement={openElementContext} contextRequest={openRequestContext}
       chooseElement={item => { chooseElement(item); reveal(item.rect, false); }} chooseRequest={item => { deselectElement(); select(item.id); reveal(item.rect, false); }}
       arrange={direction => { void arrangeLayer(direction); }} copy={() => { void copyLayer(); }} paste={() => { void pasteLayer(); }} close={() => setLayersOpen(false)} />
-    <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void replaceImage(target, file); }} />
+    <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void stageImage(target, file); }} />
     {repicking && <div className="repick-hint" role="status">Click the element this request is for. <button type="button" onClick={() => setRepicking(null)}>Cancel</button></div>}
     {confirmMany && <Modal title="Delete items" close={() => setConfirmMany(null)}><div className="dialog-body"><p>Delete these {confirmMany.count} items and everything inside them? You can undo this.</p>
       <label className="check-label"><input type="checkbox" checked={confirmMany.skip} onChange={event => setConfirmMany({ ...confirmMany, skip: event.target.checked })} />Don’t ask again</label>
       <div className="form-actions"><button type="button" onClick={() => setConfirmMany(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void deleteSelected(true).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete {confirmMany.count} items</button></div></div></Modal>}
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
-    {selectedRect && coordinate && measurementRect && gridSettings.rulers && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
+    {selectedRect && coordinate && measurementRect && gridSettings.rulers && !liveView && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
       style={(() => { const position = elementToolbarPosition(measurementRect, { x: 245, y: 28 }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupied.map(inViewport), ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]); return { left: position.x, top: position.y }; })()}>
       {px(coordinate.x)}, {px(coordinate.y)} px{selectedRect && <span>{px(selectedRect.width)} × {px(selectedRect.height)} px</span>}</div>}
   </div>;

@@ -264,3 +264,10 @@
 @keyframes log-dot { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .log-dots i { animation: none; } }
 @media (max-width: 820px) { .generation-log { position: absolute; z-index: 15; right: 0; top: 0; bottom: 0; flex-basis: auto; width: min(360px, 90%); box-shadow: -6px 0 18px #0003; } }
+.live-bar { position: absolute; z-index: 9; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 5px 6px 5px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); box-shadow: 0 3px 12px #00000028; font-size: 12px; }
+.live-bar > strong { color: #2b8a3e; }
+.live-bar .segmented button, .live-bar > button { min-height: 28px; padding: 2px 10px; font-size: 12px; }
+.live-bar .segmented button[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); }
+.live-bar .live-note { color: var(--muted); white-space: nowrap; }
+.live-toggle[aria-pressed="true"] { border-color: #2b8a3e; color: #2b8a3e; }
+.live-bar .segmented button { white-space: nowrap; }

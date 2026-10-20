@@ -18,7 +18,7 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
 export type ElementMover = { preview: (x: number, y: number) => ElementSelection | null; style: (x: number, y: number) => string; cancel: () => void };
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
-export type CanvasPreviewHandle = { layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type CanvasPreviewHandle = { previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
@@ -154,6 +154,12 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     return { node, original: original ?? '', origin, restore, set, offset };
   }
   useImperativeHandle(ref, () => ({
+    previewImage(target, src) {
+      const node = findNode(target);
+      if (!node || node.localName !== 'img') return false;
+      node.removeAttribute('srcset'); node.removeAttribute('sizes'); node.setAttribute('src', src);
+      return true;
+    },
     source() { return registeredVersion.current?.pageId === pageId && registeredVersion.current.revision === revision && mounted.current?.session === descriptor?.sessionId && mounted.current?.document === frame.current?.contentDocument && !invalidated.current ? descriptor?.sourceSha256 ?? null : null; },
     find(target) { return selected(findNode(target), false, true); },
     contains(target) { return !!findNode(target); },

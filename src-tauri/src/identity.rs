@@ -470,6 +470,26 @@ fn candidate_schema() -> Value {
             "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["topic","value","evidence","confidence"],"properties":{"topic":string,"value":string,"evidence":{"type":"array","items":string},"confidence":{"type":"string","enum":["high","medium","low"]}}}},
             "logoAssetIds":{"type":"array","items":string},"warnings":{"type":"array","items":string}}})
 }
+/// The result format for one analysis: evidence and logos may only name the files actually sent.
+/// Without this, a model can cite a file name instead of its identifier and the reply is rejected.
+fn candidate_schema_for(source: &IdentitySource, file_ids: &[Uuid]) -> Value {
+    let mut schema = candidate_schema();
+    let files: Vec<String> = file_ids.iter().map(Uuid::to_string).collect();
+    let logos: Vec<String> = source
+        .files
+        .iter()
+        .filter(|file| file_ids.contains(&file.id))
+        .filter_map(|file| file.asset.as_ref().map(|asset| asset.id.to_string()))
+        .collect();
+    if !files.is_empty() {
+        schema["properties"]["findings"]["items"]["properties"]["evidence"]["items"] =
+            json!({"type":"string","enum":files});
+    }
+    if !logos.is_empty() {
+        schema["properties"]["logoAssetIds"]["items"] = json!({"type":"string","enum":logos});
+    }
+    schema
+}
 fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) -> NativeResult<()> {
     require(
         candidate.job_id == record.requirements.job_id
@@ -698,7 +718,7 @@ impl IdentityService {
         &mut self,
         job_id: Uuid,
         access: &IdentityAccess,
-    ) -> NativeResult<(RequirementsSnapshot, Vec<IdentityImage>)> {
+    ) -> NativeResult<(RequirementsSnapshot, Vec<IdentityImage>, Value)> {
         require(
             self.active
                 .as_ref()
@@ -714,12 +734,13 @@ impl IdentityService {
             .ok_or("This identity analysis is no longer active.")?
             .clone();
         let (requirements, images) = freeze(&record.source, &record.file_ids, job_id)?;
+        let schema = candidate_schema_for(&record.source, &record.file_ids);
         access
             .client
             .estimate_identity(
                 access.authentication,
                 &requirements,
-                &candidate_schema(),
+                &schema,
                 &access.settings,
                 &images,
             )
@@ -730,7 +751,7 @@ impl IdentityService {
         record.message = "Reading the selected sources and identifying reusable colours, logos, language, and style…".into();
         self.persist(&record)?;
         self.latest = Some(record);
-        Ok((requirements, images))
+        Ok((requirements, images, schema))
     }
     fn progress(&mut self, job_id: Uuid, progress: ProviderProgress) {
         if self
@@ -766,8 +787,10 @@ impl IdentityService {
                 record.response_id = Some(response.response_id);
                 record.usage = response.usage;
                 let candidate = if response.text.len() <= MAX_CANDIDATE_BYTES {
-                    serde_json::from_str::<IdentityCandidate>(&response.text).map_err(|_| {
-                        "The identity reply did not match the required result format.".to_owned()
+                    serde_json::from_str::<IdentityCandidate>(&response.text).map_err(|reason| {
+                        // Name the failing field so a rejected reply can be diagnosed.
+                        let detail: String = reason.to_string().chars().take(160).collect();
+                        format!("The identity reply did not match the required result format ({detail}).")
                     })
                 } else {
                     Err("The identity reply exceeded its result limit.".into())
@@ -926,6 +949,15 @@ impl IdentityService {
         for index in chosen {
             let finding = &candidate.findings[index];
             let (topic, value) = (finding.topic.trim(), finding.value.trim());
+            // Findings may explain the name at length; the dedicated field holds
+            // the concise name. Use it only when this finding was selected.
+            let value = if topic.eq_ignore_ascii_case("brand name")
+                && !candidate.brand_name.trim().is_empty()
+            {
+                candidate.brand_name.trim()
+            } else {
+                value
+            };
             if topic.eq_ignore_ascii_case("brand name") {
                 text(value, 120, true)?;
             }
@@ -1111,7 +1143,7 @@ pub fn analyze_identity(
             } else {
                 begin()
             };
-        let (snapshot, images) = match prepared {
+        let (snapshot, images, schema) = match prepared {
             Ok(value) => value,
             Err(reason) => {
                 if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
@@ -1126,7 +1158,7 @@ pub fn analyze_identity(
             .analyze_identity_for_auth(
                 access.authentication,
                 &snapshot,
-                &candidate_schema(),
+                &schema,
                 &access.settings,
                 &access.key,
                 &cancellation,

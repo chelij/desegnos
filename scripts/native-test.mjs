@@ -19,6 +19,7 @@ import { uxAuditWorkflow } from '../tests/native/ux-audit-workflow.mjs';
 import { canvasInputWorkflow } from '../tests/native/canvas-input-workflow.mjs';
 import { logoScopeWorkflow } from '../tests/native/logo-scope-workflow.mjs';
 import { layersWorkflow } from '../tests/native/layers-workflow.mjs';
+import { imageResizeWorkflow } from '../tests/native/image-resize-workflow.mjs';
 import { cleanupExtrasWorkflow } from '../tests/native/cleanup-extras-workflow.mjs';
 import { sourceEditWorkflow } from '../tests/native/source-edit-workflow.mjs';
 
@@ -172,7 +173,10 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'cleanup-extras') {
+    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'image-resize') {
+      report.scope = 'Large original picture preview followed by Generate-time resizing.';
+      project = await imageResizeWorkflow(driver, physical, step, evidence, provider);
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'cleanup-extras') {
       report.scope = 'Cleanup extra workflows: exact History, tips, page checks, real file drop, device previews and code editing.';
       project = await cleanupExtrasWorkflow(driver, physical, step, evidence, provider);
     } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'source-edit') {
@@ -246,7 +250,7 @@ async function runIsolated() {
         assert.equal(identity.source.sha256, project.importedIdentity.sourceSha256);
       } else if (project.latestGeneration) assert.equal(job?.jobId, project.latestGeneration.jobId);
       const recent = await driver.invoke('get_recent_projects');
-      assert.ok(recent.projects.length > 0);
+      if (process.env.DESEGNI_NATIVE_TEST_SCOPE !== 'image-resize') assert.ok(recent.projects.length > 0);
       assert.equal(provider.identityRequests().length, identitySubmittedCount);
       assert.equal(provider.generationRequests().length, submittedCount);
     });
@@ -285,15 +289,16 @@ async function runIsolated() {
 
 async function main() {
   if (args.includes('--help')) {
-    console.log('node scripts/native-test.mjs [--skip-build] [--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
+    console.log('node scripts/native-test.mjs [--skip-build] [--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
     return;
   }
   if (process.platform !== 'linux') throw new Error('This runner requires the guarded Linux Xvfb route. Native Windows/macOS isolation must be configured on those runners.');
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--image-resize-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
+  if (args.includes('--image-resize-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'image-resize';
   if (args.includes('--canvas-input-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'canvas-input';
   if (args.includes('--identity-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'identity';
   if (args.includes('--generation-only') || args.includes('--ux-audit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'audit';

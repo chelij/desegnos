@@ -78,8 +78,12 @@ export default function App() {
   const [showCheck, setShowCheck] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [offerRestyle, setOfferRestyle] = useState(false);
+  const [offerRestyle, setOfferRestyle] = useState<string | false>(false);
   const [showLog, setShowLog] = useState(false);
+  const [pendingImages, setPendingImages] = useState(0);
+  // Live mode: the canvas page runs its scripts and takes clicks; requests can still be added.
+  const [live, setLive] = useState(false);
+  const [liveDevice, setLiveDevice] = useState<'desktop' | 'tablet' | 'phone'>('desktop');
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
   const askDelete = useAskBeforeDelete();
   const [skipNextAsk, setSkipNextAsk] = useState(false);
@@ -265,7 +269,7 @@ export default function App() {
       accept(next);
       setNotice('Context added to the project brief.');
       // Pages generated before this import don't follow it yet: offer to rebuild them.
-      if (next.project?.pages.some(item => item.content)) setOfferRestyle(true);
+      if (next.project?.pages.some(item => item.content)) setOfferRestyle('Context added. Your existing pages don’t use it yet.');
     });
   }
   // Opening, creating or recovering adds a project tab group; the current project stays open.
@@ -308,6 +312,15 @@ export default function App() {
     }
     if (problems.length) setError(problems.join(' ')); else setNotice('Attached to the request.');
   }
+  // One switch for light/dark: the editor and every page of the open project.
+  async function switchAppearance(next: 'light' | 'dark') {
+    setTheme(next);
+    const target = current.current?.project; if (!target) return;
+    for (const item of target.pages.filter(entry => entry.appearance !== next)) {
+      await mutate(project => { const page = project.pages.find(entry => entry.id === item.id); return page && page.appearance !== next ? { type: 'update_page', page_id: page.id, name: page.name, path: page.path, viewport: page.viewport, appearance: next, included: page.included } : null; });
+    }
+    if (target.pages.some(entry => entry.content && entry.appearance !== next)) setOfferRestyle(`Pages switched to ${next}. Pages already built keep their colours until they're regenerated.`);
+  }
   async function regenerateWithContext() {
     setOfferRestyle(false);
     const target = current.current?.project; if (!target) return;
@@ -315,7 +328,7 @@ export default function App() {
       const before = new Set((current.current?.project?.pages.find(entry => entry.id === item.id)?.regions ?? []).map(region => region.id));
       const next = await mutate({ type: 'add_region', page_id: item.id, rect: { x: 0, y: 0, width: item.viewport.width, height: Math.min(item.viewport.height, 160) } });
       const added = next.project!.pages.find(entry => entry.id === item.id)!.regions.find(region => !before.has(region.id));
-      if (added) await changeRegion(item.id, added.id, { prompt: 'Update this page to follow the project brand rules (colours, fonts, tone and logo). Keep its content, structure and layout the same.' });
+      if (added) await changeRegion(item.id, added.id, { prompt: `Update this page to follow the project brand rules (colours, fonts, tone and logo) and its ${item.appearance} appearance. Keep its content, structure and layout the same.` });
     }
     generate();
   }
@@ -475,14 +488,14 @@ export default function App() {
     if (command === 'apply_generation') accept(result as WorkspaceView);
     return result;
   })), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
-  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (phoneFix.current) { phoneFix.current = false; setPreviewDevice('phone'); setShowPreview(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
+  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
   }), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
-  useEffect(() => { setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
+  useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
   async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
   function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
     const host = event.currentTarget.parentElement; if (!host) return;
@@ -521,6 +534,10 @@ export default function App() {
   function closeGeneration() { generation.close(); }
   function generate() {
     phoneFix.current = false;
+    if (!requestedAreas && pendingImages) {
+      void synchronize().then(() => setNotice('Pictures resized and updated.')).catch(() => {});
+      return;
+    }
     setShowLog(true);
     void generation.prepare().catch(() => {});
   }
@@ -663,6 +680,7 @@ export default function App() {
 
   const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
   const recenter = (kind: 'guide' | 'selection' | 'fit') => setCanvasView(value => ({ serial: value.serial + 1, kind }));
+
   // Page check: select the item on the canvas, switching pages first and waiting for the page to render.
   async function showCheckItem(item: CheckItem) {
     if (page?.id !== item.pageId) await selectPage(item.pageId);
@@ -730,7 +748,8 @@ export default function App() {
     { id: 'page-settings', label: 'Page settings', disabled: !page, action: () => setPageDialog(page) },
     { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: () => run(removePage) },
     { id: 'page-divider', label: '', separator: true },
-    { id: 'preview', label: 'Preview website', disabled: !page?.content, action: () => setShowPreview(true) },
+    { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => setLive(value => !value) },
+    { id: 'preview', label: 'Preview in a window', disabled: !page?.content, action: () => setShowPreview(true) },
     { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
@@ -753,20 +772,20 @@ export default function App() {
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
-        <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'} onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
+        <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
         {project && <button type="button" title="Add your brand from a website, folder, project or ZIP" onClick={() => setShowImport(true)}>Import context</button>}
         {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo || pending > 0} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo || pending > 0} onClick={() => run(() => travel('redo_project'))}>Redo</button>
           <MenuButton label="History" className="history-menu" ariaLabel="Change history" title="Go back to an earlier point" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
-        {page?.content && <button onClick={() => setShowPreview(true)}>Preview</button>}
+        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Use the page like a visitor: scripts run and links work. You can still add requests.'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
         {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} title={showLog ? 'Hide the AI conversation' : 'Show what was sent to the AI and its reply'} onClick={() => setShowLog(value => !value)}>AI log</button>}
-        {project && <button className="primary" title={requestedAreas === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={requestedAreas === 0 || working} onClick={generate}>{working ? 'Generating…' : 'Generate'}</button>}
+        {project && <button className="primary" title={requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={(requestedAreas === 0 && pendingImages === 0) || working} onClick={generate}>{working ? 'Generating…' : 'Generate'}</button>}
       </div>
     </header>
     {error && <div className="message error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
     {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span title={exported.path}>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'}{exported.warnings.length > 0 && ` · ${exported.warnings.length} to check`}</span>{exported.warnings.length > 0 && <details><summary>Things to check</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
-    {offerRestyle && project && <div className="message info restyle-offer" role="status"><span>Context added. Your existing pages don’t use it yet.</span><button className="primary" disabled={pending > 0 || working} onClick={() => run(regenerateWithContext)}>Regenerate pages</button><button onClick={() => setOfferRestyle(false)}>Not now</button></div>}
+    {offerRestyle && project && <div className="message info restyle-offer" role="status"><span>{offerRestyle}</span><button className="primary" disabled={pending > 0 || working} onClick={() => run(regenerateWithContext)}>Regenerate pages</button><button onClick={() => setOfferRestyle(false)}>Not now</button></div>}
     {view?.recoveryError && <div className="message error" role="alert">Recovery could not be loaded: {view.recoveryError}</div>}
     {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <div className="message warning migration-notice" role="status"><span>{view.migrationNotice}</span><button onClick={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} aria-label="Dismiss migration notice">Dismiss</button></div>}
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><p className="muted">Projects are managed by the native application.</p><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
@@ -791,7 +810,7 @@ export default function App() {
       </div></div>
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
-      {page && <Canvas projectImages={project.importedIdentity?.assets ?? []} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={project.importedIdentity?.assets ?? []} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {(showGenerationStatus || resultReview) && <div className="canvas-pill" role="region" aria-label="Generation status">
         {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
@@ -799,12 +818,19 @@ export default function App() {
           <button className="pill-close" aria-label="Keep changes" title="Keep" onClick={() => setResultReview(null)}>×</button>
         </> : <GenerationFeedback controller={generation} compact>
           {generation.job?.status === 'generating' && <button disabled={!!generation.operation} onClick={() => run(generation.cancel)}>Cancel</button>}
-          {!working && generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status) && <button className="primary" disabled={requestedAreas === 0} onClick={generate}>{generation.job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
+          {!working && generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status) && <button className="primary" disabled={requestedAreas === 0 && pendingImages === 0} onClick={generate}>{generation.job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
           {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
           {!working && <button onClick={openGeneration}>Details</button>}
         </GenerationFeedback>}
       </div>}
       <FirstRunTips />
+      {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
+        <strong>Live</strong>
+        <div className="segmented" role="group" aria-label="Live device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
+        {liveDevice !== 'desktop' && (liveDevice === 'tablet' ? 768 : 390) !== page.viewport.width && <span className="live-note">Add requests at page width</span>}
+        {liveDevice === 'phone' && <button type="button" title="AI adjusts this page for phones and keeps the desktop design as it is" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
+        <button type="button" onClick={() => setLive(false)}>Exit live</button>
+      </div>}
       {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}
       <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
       </div>

@@ -1674,7 +1674,8 @@ fn fractional_request_sizes_round_trip_exactly_through_the_journal_fingerprint()
     // Regression: zoomed placement can store sizes like 191.98843383789062. Without exact
     // float parsing, reading them back changed the last digit and recovery reported a
     // failed integrity check on an intact journal.
-    let raw = r#"{"x":12.5,"y":304.0078125,"width":191.98843383789062,"height":191.98843383789062}"#;
+    let raw =
+        r#"{"x":12.5,"y":304.0078125,"width":191.98843383789062,"height":191.98843383789062}"#;
     let rect: desegni_core::Rect = serde_json::from_str(raw).unwrap();
     assert_eq!(serde_json::to_string(&rect).unwrap(), raw);
 }
