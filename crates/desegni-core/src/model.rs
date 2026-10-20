@@ -198,6 +198,9 @@ pub struct Region {
     pub elements: Vec<ElementTarget>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_target_removal: bool,
+    /// A phone-layout fix: only CSS inside small-screen media queries may change.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub mobile_only: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub completed: bool,
 }
@@ -362,6 +365,11 @@ pub enum Command {
         page_id: Uuid,
         region_id: Uuid,
         allow_target_removal: bool,
+    },
+    SetRegionMobileOnly {
+        page_id: Uuid,
+        region_id: Uuid,
+        mobile_only: bool,
     },
     DeleteElements {
         page_id: Uuid,
@@ -767,6 +775,7 @@ impl Project {
                     element: None,
                     elements: vec![],
                     allow_target_removal: false,
+                    mobile_only: false,
                     completed: false,
                 });
             }
@@ -793,6 +802,7 @@ impl Project {
                     element: None,
                     elements: canonical,
                     allow_target_removal: false,
+                    mobile_only: false,
                     completed: false,
                 });
             }
@@ -821,6 +831,7 @@ impl Project {
                     element: None,
                     elements: targets,
                     allow_target_removal,
+                    mobile_only: false,
                     completed: false,
                 });
             }
@@ -856,6 +867,19 @@ impl Project {
                     .find(|r| r.id == region_id && !r.completed && r.has_targets())
                     .ok_or_else(|| Error("Select a request for existing elements first.".into()))?;
                 region.allow_target_removal = allow_target_removal;
+            }
+            Command::SetRegionMobileOnly {
+                page_id,
+                region_id,
+                mobile_only,
+            } => {
+                let region = next
+                    .page_mut(page_id)?
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.id == region_id && !r.completed)
+                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                region.mobile_only = mobile_only;
             }
             Command::DeleteElements { page_id, elements } => {
                 return self.delete_elements(expected_revision, page_id, &elements);

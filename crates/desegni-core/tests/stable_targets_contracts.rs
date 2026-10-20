@@ -322,6 +322,7 @@ fn migration_assigns_and_remaps_without_modifying_original_bytes_or_revision() {
         element: Some(legacy),
         elements: vec![],
         allow_target_removal: false,
+        mobile_only: false,
         completed: false,
     });
     p.schema_version = 6;
@@ -619,5 +620,78 @@ fn migration_preserves_frozen_receipts_but_never_rebinds_them_to_changed_source(
     assert_eq!(
         preserved.pages[0].regions[0].prompt,
         original.pages[0].regions[0].prompt
+    );
+}
+#[test]
+fn phone_fix_changes_only_small_screen_css_and_runs_on_its_own() {
+    let p = project();
+    let home = p.home_page_id;
+    let p = p
+        .edit_page_source(
+            p.revision,
+            home,
+            &PageSourceEdit {
+                css: Some("main{display:flex;gap:24px}h2{font-size:40px}".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let a = target(&p, "article:nth-of-type(1)");
+    let p = describe(p, &[a]);
+    let region = p.pages[0].regions.last().unwrap().id;
+    let p = p
+        .apply(
+            p.revision,
+            Command::SetRegionMobileOnly {
+                page_id: home,
+                region_id: region,
+                mobile_only: true,
+            },
+        )
+        .unwrap();
+    let snapshot = p.prepare_requirements().unwrap();
+    assert!(
+        snapshot.markdown.contains("\"mobileOnly\": true")
+            || snapshot.markdown.contains("\"mobileOnly\":true")
+    );
+    assert!(snapshot.markdown.contains("phone-layout fixes"));
+    let original = p.pages[0].content.as_ref().unwrap().html.clone();
+    let mut c = candidate(&p, &snapshot, original.clone());
+    c.pages[0].content.css = "main { display: flex; gap: 24px }\nh2 { font-size: 40px }\n@media (max-width: 767px) { main { flex-direction: column } h2 { font-size: 28px } }".into();
+    c.validate(&snapshot, &p).unwrap();
+    let mut invalid = c.clone();
+    invalid.pages[0].content.css =
+        "main{display:block}@media (max-width: 767px){main{flex-direction:column}}".into();
+    assert!(
+        invalid
+            .validate(&snapshot, &p)
+            .unwrap_err()
+            .to_string()
+            .contains("desktop design")
+    );
+    let mut invalid = c.clone();
+    invalid.pages[0].content.css = "main{display:flex;gap:24px}h2{font-size:40px}@media (max-width: 1400px){main{flex-direction:column}}".into();
+    assert!(invalid.validate(&snapshot, &p).is_err());
+    let mut invalid = c.clone();
+    invalid.pages[0].content.html = original.replace("Unrelated", "Changed");
+    assert!(
+        invalid
+            .validate(&snapshot, &p)
+            .unwrap_err()
+            .to_string()
+            .contains("page content")
+    );
+    let mut invalid = c;
+    invalid.pages[0].content.javascript = "console.log(1)".into();
+    assert!(invalid.validate(&snapshot, &p).is_err());
+    // Mixing a phone fix with another request on the same page is refused before anything is sent.
+    let b = target(&p, "article:nth-of-type(2)");
+    let mixed = describe(p, &[b]);
+    assert!(
+        mixed
+            .prepare_requirements()
+            .unwrap_err()
+            .to_string()
+            .contains("Phone fixes run on their own")
     );
 }

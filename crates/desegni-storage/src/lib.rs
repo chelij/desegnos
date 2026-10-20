@@ -16,6 +16,7 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 pub mod identity_source;
 pub use identity_source::{
     IdentitySource, IdentitySourceAsset, IdentitySourceFile, collect_identity_source,
+    identity_source_from_files,
 };
 
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;

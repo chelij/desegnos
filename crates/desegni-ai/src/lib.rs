@@ -10,6 +10,7 @@ mod providers;
 mod settings;
 mod sse;
 mod transport;
+mod website;
 
 pub use chatgpt::*;
 pub use credentials::*;
@@ -18,6 +19,7 @@ pub use identity::*;
 pub use providers::*;
 pub use settings::*;
 pub use transport::*;
+pub use website::*;
 
 pub type Result<T> = std::result::Result<T, ProviderError>;
 

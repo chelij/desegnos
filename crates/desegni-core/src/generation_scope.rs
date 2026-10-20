@@ -91,6 +91,10 @@ impl GenerationCandidate {
                 .iter()
                 .filter(|region| targets.contains(&(page.page_id, region.id)))
                 .collect();
+            if !regions.is_empty() && regions.iter().all(|region| region.mobile_only) {
+                validate_phone_scope(original, &page.content)?;
+                continue;
+            }
             // Rectangular requests on an existing page have no trustworthy mapping
             // to old DOM nodes. Do not invent one from labels or model claims.
             let targeted = regions.iter().all(|region| region.has_targets());
@@ -337,4 +341,135 @@ fn validate_stable_scope(
         canonical(before.root()) == canonical(after.root()),
         "The AI changed content outside the selected elements. Your page is unchanged.",
     )
+}
+
+/// Small-screen media queries only: every width limit is at most 820 px and none sets a minimum
+/// above it, so desktop layouts can never match.
+fn phone_query(query: &str) -> bool {
+    let query = query.to_ascii_lowercase();
+    let limit = |value: &str, unit: &str| -> Option<f64> {
+        let number: f64 = value.parse().ok()?;
+        Some(match unit {
+            "px" => number,
+            "em" | "rem" => number * 16.0,
+            _ => return None,
+        })
+    };
+    let mut maxima = Vec::new();
+    let mut rest = query.as_str();
+    while let Some(index) = rest.find("max-width") {
+        rest = &rest[index + "max-width".len()..];
+        let value: String = rest
+            .trim_start_matches([':', ' '])
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let unit: String = rest
+            .trim_start_matches([':', ' '])
+            .chars()
+            .skip(value.len())
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect();
+        maxima.push(limit(&value, &unit));
+    }
+    let mut range = query.as_str();
+    while let Some(index) = range.find("width <") {
+        range = &range[index + "width <".len()..];
+        let tail = range.trim_start_matches(['=', ' ']);
+        let value: String = tail
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        let unit: String = tail
+            .chars()
+            .skip(value.len())
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect();
+        maxima.push(limit(&value, &unit));
+    }
+    !maxima.is_empty()
+        && maxima
+            .iter()
+            .all(|value| value.is_some_and(|value| value <= 820.0))
+        && !query.contains("orientation")
+        && !query.contains("print")
+}
+
+/// Page CSS with its small-screen rules removed, printed minified so formatting differences don't matter.
+fn desktop_css(css: &str) -> Result<String> {
+    use lightningcss::rules::CssRule;
+    use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
+    use lightningcss::traits::ToCss;
+    let mut sheet = StyleSheet::parse(css, ParserOptions::default()).map_err(|_| {
+        crate::Error("The AI returned CSS that could not be read. Your page is unchanged.".into())
+    })?;
+    sheet.rules.0.retain(|rule| match rule {
+        CssRule::Media(media) => !media
+            .query
+            .to_css_string(PrinterOptions::default())
+            .is_ok_and(|query| phone_query(&query)),
+        _ => true,
+    });
+    sheet
+        .to_css(PrinterOptions {
+            minify: true,
+            ..PrinterOptions::default()
+        })
+        .map(|output| output.code)
+        .map_err(|_| {
+            crate::Error("The page CSS could not be compared. Your page is unchanged.".into())
+        })
+}
+
+/// A phone fix keeps the page's HTML, JavaScript and desktop CSS identical.
+fn validate_phone_scope(original: &crate::Page, candidate: &crate::SiteContent) -> Result<()> {
+    let source = original
+        .content
+        .as_ref()
+        .ok_or_else(|| crate::Error("Generate this page before fixing it for phones.".into()))?;
+    ensure(
+        canonical(crate::editing::parse(&source.html)?.root())
+            == canonical(crate::editing::parse(&candidate.html)?.root()),
+        "The AI changed the page content during a phone fix. Your page is unchanged.",
+    )?;
+    ensure(
+        source.javascript == candidate.javascript,
+        "The AI changed page behavior during a phone fix. Your page is unchanged.",
+    )?;
+    ensure(
+        desktop_css(&source.css)? == desktop_css(&candidate.css)?,
+        "The AI changed the desktop design during a phone fix. Your page is unchanged.",
+    )
+}
+
+#[cfg(test)]
+mod phone_tests {
+    use super::*;
+
+    #[test]
+    fn only_small_screen_queries_count_as_phone_rules() {
+        assert!(phone_query("(max-width: 767px)"));
+        assert!(phone_query("screen and (max-width:600px)"));
+        assert!(phone_query("(min-width: 400px) and (max-width: 47.5em)"));
+        assert!(phone_query("(width < 768px)"));
+        assert!(!phone_query("(max-width: 1200px)"));
+        assert!(!phone_query("(min-width: 768px)"));
+        assert!(!phone_query("print and (max-width: 600px)"));
+        assert!(!phone_query(
+            "(max-width: 600px) and (orientation: landscape)"
+        ));
+    }
+
+    #[test]
+    fn desktop_css_ignores_phone_rules_and_formatting() {
+        let before = "body { color: red }\nh1 { font-size: 40px }";
+        let after =
+            "body{color:red}h1{font-size:40px}@media (max-width: 767px){h1{font-size:28px}}";
+        assert_eq!(desktop_css(before).unwrap(), desktop_css(after).unwrap());
+        let changed = "body{color:blue}@media (max-width: 767px){h1{font-size:28px}}";
+        assert_ne!(desktop_css(before).unwrap(), desktop_css(changed).unwrap());
+        let wide =
+            "body{color:red}h1{font-size:40px}@media (max-width: 1400px){h1{font-size:28px}}";
+        assert_ne!(desktop_css(before).unwrap(), desktop_css(wide).unwrap());
+    }
 }

@@ -303,7 +303,11 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview'); await driver.button('Redo'); await previewReady(driver, 'Edited directly on the page');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]'); await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Cancelled text change' }); await physical.keys('Escape');
     await previewReady(driver, 'Edited directly on the page'); assert.equal(requestCount(provider), requests);
-    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar button')].map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['Edit', 'Ask AI', 'Delete layer']);
+    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar > button')].map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['Edit', 'Ask AI', 'Style', 'Delete layer']);
+    assert.equal(await driver.execute(() => !!document.querySelector('.element-toolbar .style-bar')), false);
+    await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
+    await driver.ready('.element-toolbar .style-bar [aria-label="Larger text"]');
+    await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
     assert.match(await driver.execute(() => document.querySelector('.workspace-measurement').textContent), /px/);
     const overlap = await driver.execute(() => { const a = document.querySelector('.element-toolbar').getBoundingClientRect(), b = document.querySelector('.element-selection').getBoundingClientRect(); return Math.max(0, Math.min(a.right,b.right)-Math.max(a.left,b.left))*Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)); });
     assert.equal(overlap, 0, 'The restored element toolbar hides the selected heading');

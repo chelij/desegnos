@@ -219,8 +219,8 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
 
   await step('Selection offers Edit, Ask AI and Delete, and Layers opens at its selection anchor', async () => {
     await selectSite(driver, physical, 'blue-card'); await closeLayers(driver);
-    assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar button')].map(button => ({ label: button.getAttribute('aria-label'), text: button.textContent.trim() }))),
-      [{label:null,text:'Edit'},{label:null,text:'Ask AI'},{label:'Delete layer',text:''}]);
+    assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar > button')].map(button => ({ label: button.getAttribute('aria-label'), text: button.textContent.trim() }))),
+      [{label:null,text:'Edit'},{label:null,text:'Ask AI'},{label:null,text:'Style'},{label:'Delete layer',text:''}]);
     await driver.button('Layers'); await driver.ready(panel); await settled(driver);
     const anchor = await physical.rect('.element-toolbar'), popup = await physical.rect(panel);
     assert.ok(Math.abs(anchor.left - popup.left) < 1, JSON.stringify({ anchor, popup }));

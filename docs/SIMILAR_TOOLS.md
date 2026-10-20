@@ -1,0 +1,60 @@
+# Similar tools and what Desegnos can adapt
+
+Date: 2026-10-20. Scope: tools close to Desegnos's loop (place boxes, describe them, AI builds real HTML), for non-technical users. Platform features (CMS, translations, site search, publishing) are already covered in [FEATURE_RESEARCH.md](../FEATURE_RESEARCH.md) and aren't repeated here. Sources are product pages and reviews found by web search; several are third-party and are marked as such.
+
+## The closest matches
+
+| Tool | Why it's close | Idea worth taking |
+| --- | --- | --- |
+| **tldraw Make Real** ([tldraw blog](https://tldraw.dev/blog/make-real-the-story-so-far), [draw-a-ui](https://github.com/zuramai/draw-a-ui)) | Draw a rough UI on a canvas, select it, and AI turns the selection into a working HTML page on the same canvas. You then draw notes on top of the result and run it again. | **Sketch inside a box** and **draw notes over the result** to revise. Only the selected shapes are sent. |
+| **Google Stitch** ([Neowin](https://www.neowin.net/news/google-debuts-ai-tool-for-generating-ui-designs-from-prompts/), [Design Compass](https://designcompass.org/en/2025/05-1tp-3tea/21/google-ui-design-tool-stitch/)) | Upload a sketch or a screenshot and get an editable design plus HTML/CSS. Offers several variations. | **Reference image per box** ("make it look like this") and **2–3 variations** to pick from. |
+| **Relume** ([relume.io](https://relume.io/), [Scroll review](https://agence-scroll.com/en/blog/relume-the-ultimate-ai-tool-for-web-design), third-party) | Describe the business, get a sitemap, then wireframes, then a style guide, then the final design. The user approves each step. | **AI drafts the plan as boxes:** proposed pages and section boxes that you move, edit or delete before anything is generated. |
+| **Webflow AI site builder** ([help: site builder](https://help.webflow.com/hc/en-us/articles/38840145286035), [help: AI Assistant](https://help.webflow.com/hc/articles/34205154436243)) | Generates a **style guide page** (colors, type, cards, spacing) with every site. New sections reuse the site's existing styles. | A **visual style guide** built from the project brief, and new sections that reuse it. |
+| **Wix Studio Responsive AI** ([Wix help](https://support.wix.com/en/article/studio-editor-using-ai-to-make-sections-responsive)) | One click proposes a mobile layout for **one section**, previewed across sizes, then apply or discard, with Undo. | **"Fix on phones"** for a selected section, with a preview before applying. |
+| **Lovable visual edits** ([Lovable blog](https://lovable.dev/blog/introducing-visual-edits)) | Select an element and change its text, size or colour directly, with no prompt. Prompting is kept for bigger changes. | A **quick style bar** on the selection (colour, size, spacing, alignment), in place of a dialog. |
+| **Pinegrow** ([AI assistant docs](https://pinegrow.com/docs/ai-assistant/), [release notes](https://pinegrow.com/release_notes/)) | A Dreamweaver-like desktop editor with BYOK AI. "Smart Insert" adapts duplicated elements to their surroundings, "Continue my edits" repeats a pattern, and learned tasks can be reused across projects. | **Duplicate with AI** (copy a card; AI fills in new content), **repeat my edit**, and **saved requests**. |
+| **Bootstrap Studio 8** ([release forum](https://forum.bootstrapstudio.io/t/version-8-0-is-out/12646), [AI assistant](https://bootstrapstudio.io/academy/advanced/ai-assistant/)) | A desktop builder with a BYOK agent across OpenAI, Anthropic, Google, OpenRouter and local models. Can **redesign a site from its URL**. A user was surprised by a bill after the default model was an expensive one. | **Brand import from a URL**, and **show the estimated cost before Generate**. |
+| **Onlook** ([site](https://www.onlook.com/for/react), [LogRocket](https://blog.logrocket.com/onlook-react-visual-editor)) | An open-source visual editor where visual edits write real code, and the AI is limited to the project's own components. | Teach the AI to **reuse existing page parts** (buttons, cards) instead of inventing new styles. |
+| **GrapesJS / Webstudio** ([GrapesJS blocks](https://grapesjs.com/docs/modules/Blocks), [Webstudio export](https://docs.webstudio.is/university/self-hosting/download)) | Open-source builders: drag-in blocks, a style manager, layers, a code viewer. Webstudio exports a static site with no editor runtime. | Mostly confirms what Desegnos already has. **Blocks** could become drag-in box presets later. |
+
+## What fits Desegnos best
+
+Ranked by how well each idea fits "place it yourself, AI fills it in, for non-technical people", against how much work it is.
+
+| # | Idea | Fit | Effort | Who |
+| --- | --- | --- | --- | --- |
+| 1 | **AI drafts the plan as boxes.** Describe the business once; AI proposes pages and pre-placed section boxes with descriptions. You move, edit or delete them, then press Generate. | Very high. It keeps the user in control of placement, and fixes the blank-canvas problem. | M | Codex: a "plan" request returning pages, boxes and prompts. Claude: review screen, then place boxes. |
+| 2 | **Reference image in a box.** Drop a screenshot or photo onto a request box as "make it look like this". | Very high. It reuses the drag-and-drop just built, and the AI layer already sends images. | M | Codex: attach images to requirements (vision capability per provider). Claude: drop target and thumbnail on the box. |
+| 3 | **Quick style bar.** Colour, text size, spacing and alignment right on the selection toolbar, with no dialog or AI. | High. These controls already exist behind Edit → Appearance. | S | Claude only. |
+| 4 | **Style guide page.** A visual page of the brand's colours, fonts, buttons and cards, from the project brief. Editing it updates the rules the AI follows. | High. It makes the brief visual for non-technical users. | M | Claude: view. Codex: write rules back to the brief. |
+| 5 | **Fix on phones.** In Preview → Phone, or on a selected section, AI proposes a mobile layout for that section only. Preview, then apply or discard. | High. The device preview already exists. | M | Codex: scoped mobile request. Claude: preview and apply flow. |
+| 6 | **Sketch or annotate in a box** (tldraw style). Draw rough shapes or arrows inside a box, or over the generated page, and send them as an image with the request. | High, but a bigger UI job. Do it after #2 (same image path). | L | Claude: drawing layer. Codex: same image path as #2. |
+| 7 | **Variations.** "Show me 3 versions" for one box; pick one. | Medium. It costs 3× per request, so make it opt-in with the cost shown. | M | Codex: parallel candidates. Claude: picker. |
+| 8 | **Cost before Generate.** Show "about $0.12" or "uses your ChatGPT plan" on the Generate button tooltip or pill before sending. | Medium. A small change that prevents bill surprises. | S | Claude (the native estimate already exists). |
+| 9 | **Brand import from a URL.** Paste your current website's address in place of picking a folder. | Medium. It needs a safe fetcher (same rules as image downloads). | M | Codex: fetcher. Claude: field on the brand screen. |
+| 10 | **Duplicate with AI and saved requests** (Pinegrow style). Copy a card and AI writes new content into it. Save a request ("make this match our cards") to reuse. | Medium. | S–M | Mostly Claude. Duplicate with AI reuses element requests. |
+
+## Chosen by the owner (2026-10-20): #3, #4, #5, #9
+
+| # | Feature | Claude (`src/**`) | Codex (`crates/**`, `src-tauri/**`, `tests/**`) | Order |
+| --- | --- | --- | --- | --- |
+| 3 | **Quick style bar** | Colour, text size, spacing and alignment on the selection toolbar, using the existing `edit_element` style update. One Undo step per change. | Nothing new. Native tests for the bar. | First. No backend needed. |
+| 4 | **Style guide page** | A "Style guide" view (Menu and project brief) showing the brand's colours, fonts, buttons and cards from the brief and the current pages. Edits go through the existing brief commands. | Only if a brief rule needs new fields (e.g. structured colour/font tokens rather than free text). Record shapes in `CLEANUP_BACKEND_CONTRACT.md`. | Second. Frontend first; Codex only if tokens are needed. |
+| 5 | **Fix on phones** | In Preview → Phone, or for a selected section: **Fix on phones** → preview the proposed layout → Apply or Discard (Undo after). | A scoped "mobile layout" request: change only the section's responsive CSS (media queries) and keep desktop identical, with the scope check enforcing that. | Third. Needs Codex's scoped request. |
+| 9 | **Brand import from a URL** | A "Website address" field on the brand-import screen, beside folder/ZIP, with the same review step. | A safe page fetcher: HTTPS only, size and time limits, no private addresses, HTML/CSS/logo images only, the same rules as image downloads. Feeds the existing identity analysis. | Fourth. Needs Codex's fetcher. |
+
+Not chosen for now: #1, #2, #6, #7, #8, #10.
+
+### Built (2026-10-20, Claude did both halves since Codex was unavailable)
+
+- **#3 Quick style bar:** **Style** on the selection toolbar opens a row with text colour, fill, A−/A+ text size, less/more inner spacing, and left/centre/right alignment (`src/StyleBar.tsx`). Each change is one `edit_element` inline-style update (one Undo step). The row starts closed and remembers when opened, and it hides while Layers is open, so it never covers the page by default.
+- **#4 Style guide:** Menu → **Style guide** (`src/StyleGuide.tsx`) shows colour roles (primary, accent, text, background) and fonts (heading, body) as project-brief rules saved with `set_decision`. It also lists colours and fonts found on your pages (pick one and choose its role), and shows a sandboxed sample of headings, text, links and buttons using the site's own CSS. No backend change was needed.
+- **#5 Fix on phones:** **Preview → Phone → Fix on phones** (whole page), or right-click an element → **Fix on phones**. It creates one request with the new `mobileOnly` flag (`set_region_mobile_only` command; a "Phone fix" tag on the box) and generates right away. Requirements mark the area `"mobileOnly": true` and tell the AI to change only small-screen `@media` CSS. The native scope check (`generation_scope.rs`, `validate_phone_scope`) rejects any change to HTML, JavaScript, or CSS outside media queries capped at 820 px, comparing CSS minified by Lightning CSS. Phone fixes can't be mixed with other requests on a page (refused before sending). Afterwards the preview reopens at Phone, with Undo in the result pill.
+- **#9 Brand import from a URL:** a **Website address** field on "Use my existing brand" (`fetch_identity_source` command). `desegni-ai/src/website.rs` fetches the home page, up to 4 stylesheets and up to 6 logo or icon images (PNG/JPEG). It uses the same public-HTTPS checks as image downloads (pinned public DNS answers, no credentials or proxies, re-checked redirects, 8 s timeout, 256 KiB per file). `desegni-core/src/website.rs` finds the links. `identity_source_from_files` runs the folder/ZIP importer's text, secret and logo rules, so review and analysis are unchanged.
+- **Checks:** new unit/contract tests (phone queries, desktop-CSS comparison, phone-fix accept/reject/mixing, website links, website fetch against a local server, address rules). All 19 Rust suites and strict clippy pass. Native `--ux-audit-only` 25, `--layers-only` 24, `--source-edit-only` 8 and `--identity-only` 12 pass, and an in-app run exercised all four features. **Not verified:** a real phone fix with a live AI key, and URL import of a real public website (tests used a local fixture site).
+
+## Not worth copying
+
+- **Chat-first building** (Framer's agents, Lovable/v0 chat): it's the opposite of Desegnos's placement-first idea. Keep chat out of the main flow.
+- **Hosted-only output** (Framer, Wix): Desegnos's portable export is an advantage; keep it.
+- **Big component libraries** (Relume's 1,000+ blocks): heavy to build and maintain. Box presets or the AI plan (#1) give most of the benefit.

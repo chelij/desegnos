@@ -767,6 +767,7 @@ impl Project {
                 element: None,
                 elements: vec![],
                 allow_target_removal: false,
+                mobile_only: false,
                 completed: false,
             });
             for (rank, index) in order.into_iter().enumerate() {

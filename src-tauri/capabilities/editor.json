@@ -4,7 +4,7 @@
   "windows": ["editor"],
   "permissions": [
     "allow-export-website", "allow-open-export-folder",
-    "allow-pick-identity-source", "allow-analyze-identity", "allow-get-identity-analysis", "allow-cancel-identity-analysis",
+    "allow-pick-identity-source", "allow-fetch-identity-source", "allow-analyze-identity", "allow-get-identity-analysis", "allow-cancel-identity-analysis",
     "core:default", "core:window:allow-destroy", "allow-get-workspace", "allow-get-recent-projects", "allow-open-recent-project", "allow-create-project", "allow-edit-project",
     "allow-inspect-element", "allow-edit-element", "allow-edit-page-source", "allow-get-page-source-map", "allow-open-found-source", "allow-copy-layer", "allow-cut-layer", "allow-paste-layer", "allow-refresh-element-bounds", "allow-refresh-element-target-bounds",
     "allow-undo-project", "allow-redo-project", "allow-open-project", "allow-save-project", "allow-save-project-checked", "allow-resolve-save-conflict",

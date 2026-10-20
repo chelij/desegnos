@@ -13,7 +13,7 @@ use std::{
     time::Duration,
 };
 
-fn public_address(ip: IpAddr) -> bool {
+pub(crate) fn public_address(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();
@@ -38,12 +38,17 @@ fn public_address(ip: IpAddr) -> bool {
     }
 }
 
+#[cfg(test)]
 fn permitted_url(url: &Url, fixture: Option<&Url>) -> bool {
+    permitted_url_under(url, fixture, "/images/")
+}
+
+pub(crate) fn permitted_url_under(url: &Url, fixture: Option<&Url>, fixture_path: &str) -> bool {
     let ordinary = url.scheme() == "https" && url.port_or_known_default() == Some(443);
     let fixture = fixture.is_some_and(|origin| {
         url.scheme() == "http"
             && url.origin() == origin.origin()
-            && url.path().starts_with("/images/")
+            && url.path().starts_with(fixture_path)
     });
     (ordinary || fixture)
         && url.host_str().is_some()
@@ -86,16 +91,45 @@ fn embedded_raster(bytes: &[u8], mime: &str) -> Option<String> {
 }
 
 async fn download(source: &str, fixture: Option<&Url>) -> Option<String> {
-    let mut url = Url::parse(source).ok()?;
+    let (bytes, mime) = fetch_public(
+        source,
+        fixture,
+        "/images/",
+        "image/png,image/jpeg",
+        &["image/png", "image/jpeg"],
+        MAX_DOWNLOADED_IMAGE_BYTES,
+    )
+    .await
+    .ok()?;
+    tokio::task::spawn_blocking(move || embedded_raster(&bytes, &mime))
+        .await
+        .ok()?
+}
+
+/// Fetch one public HTTPS resource without credentials, cookies, proxies or compression.
+/// Every DNS answer must be a public address and is pinned for the request; each of at most
+/// two redirects repeats all checks. Returns the bytes and the lower-case MIME type.
+pub(crate) async fn fetch_public(
+    source: &str,
+    fixture: Option<&Url>,
+    fixture_path: &str,
+    accept: &str,
+    mimes: &[&str],
+    limit: usize,
+) -> Result<(Vec<u8>, String), &'static str> {
+    let mut url = Url::parse(source).map_err(|_| "is not a valid web address")?;
     for _ in 0..=2 {
-        if !permitted_url(&url, fixture) {
-            return None;
+        if !permitted_url_under(&url, fixture, fixture_path) {
+            return Err("must be a public https:// address");
         }
-        let host = url.host_str()?.trim_matches(['[', ']']);
-        let port = url.port_or_known_default()?;
+        let host = url
+            .host_str()
+            .ok_or("has no host")?
+            .trim_matches(['[', ']']);
+        let port = url.port_or_known_default().ok_or("has no port")?;
         let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
             .await
-            .ok()?
+            .map_err(|_| "could not be found")?
             .take(17)
             .collect();
         let fixture_host = fixture.is_some_and(|origin| url.origin() == origin.origin());
@@ -105,7 +139,7 @@ async fn download(source: &str, fixture: Option<&Url>) -> Option<String> {
                 !public_address(address.ip()) && !(fixture_host && address.ip().is_loopback())
             })
         {
-            return None;
+            return Err("points to a private or special network address");
         }
         // Resolve once, validate every answer, then pin these exact addresses.
         // Redirects repeat all checks with a fresh unauthenticated client.
@@ -126,54 +160,61 @@ async fn download(source: &str, fixture: Option<&Url>) -> Option<String> {
             .connect_timeout(Duration::from_secs(4))
             .user_agent(concat!("Desegnos/", env!("CARGO_PKG_VERSION")))
             .build()
-            .ok()?;
+            .map_err(|_| "could not be requested")?;
         let mut response = client
             .get(url.clone())
-            .header("Accept", "image/png,image/jpeg")
+            .header("Accept", accept)
             .send()
             .await
-            .ok()?;
+            .map_err(|_| "did not respond")?;
         if response.status().is_redirection() {
             url = url
-                .join(response.headers().get("location")?.to_str().ok()?)
-                .ok()?;
+                .join(
+                    response
+                        .headers()
+                        .get("location")
+                        .and_then(|value| value.to_str().ok())
+                        .ok_or("redirected without a destination")?,
+                )
+                .map_err(|_| "redirected to an invalid address")?;
             continue;
         }
-        if !response.status().is_success()
-            || response
-                .content_length()
-                .is_some_and(|size| size > MAX_DOWNLOADED_IMAGE_BYTES as u64)
-            || response
-                .headers()
-                .get("content-encoding")
-                .is_some_and(|value| value != "identity")
+        if !response.status().is_success() {
+            return Err("returned an error page");
+        }
+        if response
+            .content_length()
+            .is_some_and(|size| size > limit as u64)
         {
-            return None;
+            return Err("is too large");
+        }
+        if response
+            .headers()
+            .get("content-encoding")
+            .is_some_and(|value| value != "identity")
+        {
+            return Err("used an unsupported compressed response");
         }
         let mime = response
             .headers()
-            .get("content-type")?
-            .to_str()
-            .ok()?
-            .split(';')
-            .next()?
-            .trim()
-            .to_ascii_lowercase();
-        if !matches!(mime.as_str(), "image/png" | "image/jpeg") {
-            return None;
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(|value| value.trim().to_ascii_lowercase())
+            .ok_or("has no content type")?;
+        if !mimes.contains(&mime.as_str()) {
+            return Err("is not a supported file type");
         }
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await.ok()? {
-            if bytes.len() + chunk.len() > MAX_DOWNLOADED_IMAGE_BYTES {
-                return None;
+        while let Some(chunk) = response.chunk().await.map_err(|_| "stopped responding")? {
+            if bytes.len() + chunk.len() > limit {
+                return Err("is too large");
             }
             bytes.extend_from_slice(&chunk);
         }
-        return tokio::task::spawn_blocking(move || embedded_raster(&bytes, &mime))
-            .await
-            .ok()?;
+        return Ok((bytes, mime));
     }
-    None
+    Err("redirected too many times")
 }
 
 impl OpenAiClient {

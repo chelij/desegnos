@@ -90,6 +90,7 @@ fn main() {
             export::export_website,
             export::open_export_folder,
             identity::pick_identity_source,
+            identity::fetch_identity_source,
             identity::analyze_identity,
             identity::get_identity_analysis,
             identity::cancel_identity_analysis,

@@ -21,6 +21,7 @@ import { GenerationDialog, GenerationFeedback } from './Generation';
 import { PagePreview } from './Preview';
 import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from './CodePane';
 import { FirstRunTips } from './Onboarding';
+import { StyleGuide } from './StyleGuide';
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
 import { useHistory } from './useHistory';
 import { activeGeneration, useGeneration } from './useGeneration';
@@ -71,6 +72,7 @@ export default function App() {
   const [showGridSettings, setShowGridSettings] = useState(false);
   const [codeView, setCodeView] = useState<CodeView>('design');
   const [showCheck, setShowCheck] = useState(false);
+  const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [multiCount, setMultiCount] = useState(0);
   const history = useHistory();
   const [sourceMap, setSourceMap] = useState<SourceMapView | null>(null);
@@ -393,7 +395,7 @@ export default function App() {
     if (command === 'apply_generation') accept(result as WorkspaceView);
     return result;
   })), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
-  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
+  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (phoneFix.current) { phoneFix.current = false; setPreviewDevice('phone'); setShowPreview(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
@@ -438,6 +440,7 @@ export default function App() {
   }
   function closeGeneration() { generation.close(); }
   function generate() {
+    phoneFix.current = false;
     void generation.prepare().catch(() => {});
   }
 
@@ -468,6 +471,27 @@ export default function App() {
     });
     const request = next.project!.pages.find(item => item.id === pageId)?.regions.find(region => !region.completed && sameTargets(regionTargets(region), elements));
     if (request) { await dismissEmpty(request.id); setSelected(request.id); setFocusPrompt(true); }
+  }
+  // Fix on phones: one phone-only request (a section, or the whole page), generated right away.
+  // The native scope check only lets small-screen CSS change, so the desktop design stays identical.
+  const phoneFix = useRef(false);
+  const [previewDevice, setPreviewDevice] = useState<'phone' | undefined>(undefined);
+  async function fixOnPhones(selection?: ElementSelection) {
+    if (!page?.content) return;
+    const pageId = page.id;
+    const others = page.regions.filter(region => !region.completed && region.prompt.trim() && !region.mobileOnly);
+    if (others.length) { setError('Phone fixes run on their own. Generate or remove the other requests on this page first.'); return; }
+    setShowPreview(false);
+    const before = new Set(page.regions.map(region => region.id));
+    const next = await mutate(selection
+      ? { type: 'add_element_regions', page_id: pageId, elements: [selection.element], bounds: [{ target: selection.element, rect: selection.rect }] }
+      : { type: 'add_region', page_id: pageId, rect: { x: 0, y: 0, width: page.viewport.width, height: Math.min(page.viewport.height, 160) } });
+    const added = next.project!.pages.find(item => item.id === pageId)!.regions.find(region => !before.has(region.id));
+    if (!added) return;
+    await changeRegion(pageId, added.id, { prompt: selection ? 'Make this section look good and easy to use on phones.' : 'Make this whole page look good and easy to use on phones.' });
+    await mutate({ type: 'set_region_mobile_only', page_id: pageId, region_id: added.id, mobile_only: true });
+    setSelected(null);
+    generate(); phoneFix.current = true;
   }
   async function deleteElements(elements: ElementTarget[]) {
     if (!page) return;
@@ -630,6 +654,7 @@ export default function App() {
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
     { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible — small adjustments only' : 'Precise — follow placement closely', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
     { id: 'page-check', label: fixCount ? `Check page (${fixCount})` : 'Check page', disabled: !project?.pages.some(item => item.content), action: () => setShowCheck(true) },
+    { id: 'style-guide', label: 'Style guide', disabled: !project, action: () => setShowStyleGuide(true) },
     { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
     { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
@@ -671,7 +696,7 @@ export default function App() {
       </div><button className="add-page-tab" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}>+</button></div>
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
-      {page && <Canvas projectImages={project.importedIdentity?.assets ?? []} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} repick={repickRequest} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas projectImages={project.importedIdentity?.assets ?? []} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} repick={repickRequest} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {(showGenerationStatus || resultReview) && <div className="canvas-pill" role="region" aria-label="Generation status">
         {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
@@ -699,6 +724,7 @@ export default function App() {
     {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} /></Modal>}
     {showRecovery && view && <Modal title="Recover unsaved projects" close={() => setShowRecovery(false)}><DialogError error={error} dismiss={() => setError('')} />
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} /></Modal>}
+    {showStyleGuide && project && <Modal title="Style guide" wide close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></Modal>}
     {showNotes && project && <Modal title="Project brief" wide close={() => setShowNotes(null)}><DialogError error={error} dismiss={() => setError('')} /><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} markdown={getNotes} /></Modal>}
     {showGridSettings && project && <Modal title="Grid and rulers" close={() => setShowGridSettings(false)}><DialogError error={error} dismiss={() => setError('')} /><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
       if (visible !== project.showGrid) await mutate({ type: 'set_grid', enabled: visible });
@@ -722,7 +748,7 @@ export default function App() {
       <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(() => {}); }}>Discard and continue</button><button onClick={() => setReplacement(null)}>Keep editing</button>
     </div></div></Modal>}
     {confirmation && <Modal title={confirmation.title} close={() => setConfirmation(null)}><DialogError error={error} dismiss={() => setError('')} /><div className="dialog-body"><p>{confirmation.message}</p><div className="form-actions"><button className="danger" disabled={pending > 0} onClick={() => { void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>Remove</button><button onClick={() => setConfirmation(null)}>Cancel</button></div></div></Modal>}
-    {showPreview && page?.content && <Modal title="Site preview" wide close={() => setShowPreview(false)}><div className="accepted-preview"><PagePreview key={`${project?.id}:${page.id}`} page={page} revision={project!.revision} /></div></Modal>}
+    {showPreview && page?.content && <Modal title="Site preview" wide close={() => { setShowPreview(false); setPreviewDevice(undefined); }}><div className="accepted-preview"><PagePreview key={`${project?.id}:${page.id}`} page={page} revision={project!.revision} initialDevice={previewDevice} fixOnPhones={() => { setPreviewDevice(undefined); run(() => fixOnPhones()); }} /></div></Modal>}
     {generation.visible && project && <GenerationDialog controller={generation} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} manageUsage={manageChatgptUsage} editRequest={id => {
       const owner = project.pages.find(item => item.regions.some(region => region.id === id));
       if (!owner) return;

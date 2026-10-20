@@ -21,8 +21,8 @@ export type ElementEdit = { kind: 'update'; texts: { index: number; text: string
 export type ElementBounds = { regionId: string; bounds: { target: ElementTarget; rect: Rect }[] };
 export type ElementDetails = { target: ElementTarget; texts: { index: number; text: string }[]; textsTruncated: boolean; attributes: Record<string, string>; inlineStyle: string; html: string; canMove: boolean; canMoveBefore: boolean; canMoveAfter: boolean };
 export type ElementEditView = { workspace: WorkspaceView; element: ElementTarget | null };
-export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string };
-export type Region = { elements?: ElementTarget[]; element?: ElementTarget; allowTargetRemoval?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
+export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string; textAlign?: string };
+export type Region = { elements?: ElementTarget[]; element?: ElementTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
 export type SiteContent = { html: string; css: string; javascript: string };
 export type Page = { id: string; name: string; path: string; included: boolean; viewport: Viewport; appearance: Appearance; regions: Region[]; content: SiteContent | null };
 export type Brief = { purpose: string; audience: string; brandName: string; tone: string };
@@ -98,6 +98,7 @@ export type Command =
   | { type: 'add_element_regions'; page_id: string; elements: ElementTarget[]; bounds: { target: ElementTarget; rect: Rect }[] }
   | { type: 'retarget_region'; page_id: string; region_id: string; elements: ElementTarget[]; bounds: { target: ElementTarget; rect: Rect }[] }
   | { type: 'set_region_target_removal'; page_id: string; region_id: string; allow_target_removal: boolean }
+  | { type: 'set_region_mobile_only'; page_id: string; region_id: string; mobile_only: boolean }
   | { type: 'delete_elements'; page_id: string; elements: ElementTarget[] }
   | { type: 'update_region'; page_id: string; region_id: string; rect: Rect; prompt: string }
   | { type: 'dismiss_empty_regions'; keep_region_id: string | null }

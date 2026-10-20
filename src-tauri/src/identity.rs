@@ -1008,6 +1008,31 @@ pub async fn pick_identity_source(
         .map(|source| state.lock().map_err(error)?.retain_source(source))
         .transpose()
 }
+/// Brand import from a website address. Fetching follows the same public-network rules as
+/// generation image downloads; the snapshot then goes through the folder/ZIP importer's limits.
+#[tauri::command]
+pub async fn fetch_identity_source(
+    window: WebviewWindow,
+    state: IdentityState<'_>,
+    url: String,
+) -> NativeResult<IdentitySourceManifest> {
+    trusted(&window)?;
+    #[cfg(all(debug_assertions, feature = "native-tests"))]
+    let fixture = std::env::var("DESEGNI_NATIVE_TEST_WEBSITE_ORIGIN")
+        .ok()
+        .and_then(|value| desegni_ai::WebUrl::parse(&value).ok());
+    #[cfg(not(all(debug_assertions, feature = "native-tests")))]
+    let fixture: Option<desegni_ai::WebUrl> = None;
+    let site = desegni_ai::fetch_website(&url, fixture.as_ref()).await?;
+    let source = tauri::async_runtime::spawn_blocking(move || {
+        desegni_storage::identity_source_from_files(&site.name, site.files, site.skipped)
+            .map_err(error)
+            .and_then(normalize_source)
+    })
+    .await
+    .map_err(error)??;
+    state.lock().map_err(error)?.retain_source(source)
+}
 #[tauri::command]
 pub fn get_identity_analysis(
     window: WebviewWindow,

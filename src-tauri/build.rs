@@ -4,6 +4,7 @@ fn main() {
             "export_website",
             "open_export_folder",
             "pick_identity_source",
+            "fetch_identity_source",
             "analyze_identity",
             "get_identity_analysis",
             "cancel_identity_analysis",

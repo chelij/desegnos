@@ -116,6 +116,7 @@ fn request(
         element,
         elements: vec![],
         allow_target_removal: false,
+        mobile_only: false,
         completed,
     });
     id

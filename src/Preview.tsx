@@ -77,7 +77,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   function visual(target: ElementTarget): ElementVisual | null {
     const node = findNode(target); if (!node) return null;
     const style = getComputedStyle(node);
-    return { translate: style.translate, color: style.color, backgroundColor: style.backgroundColor, fontSize: style.fontSize, width: style.width, height: style.height, borderRadius: style.borderRadius, padding: style.padding };
+    return { translate: style.translate, color: style.color, backgroundColor: style.backgroundColor, fontSize: style.fontSize, width: style.width, height: style.height, borderRadius: style.borderRadius, padding: style.padding, textAlign: style.textAlign };
   }
   function textNodes(node: Node): Text[] {
     const result: Text[] = []; const pending = [node];
@@ -322,9 +322,9 @@ export function SourceView({ content, label = 'Site' }: { content: SiteContent; 
 
 const DEVICES = [{ id: 'desktop', label: 'Desktop', width: 1440, height: 900 }, { id: 'tablet', label: 'Tablet', width: 768, height: 1024 }, { id: 'phone', label: 'Phone', width: 390, height: 844 }] as const;
 
-export function PagePreview({ page, revision, jobId = null }: { page: Page; revision: number; jobId?: string | null }) {
+export function PagePreview({ page, revision, jobId = null, initialDevice, fixOnPhones }: { page: Page; revision: number; jobId?: string | null; initialDevice?: 'desktop' | 'tablet' | 'phone'; fixOnPhones?: () => void }) {
   const [runScripts, setRunScripts] = useState(false);
-  const [deviceId, setDeviceId] = useState<typeof DEVICES[number]['id']>(page.viewport.width < 600 ? 'phone' : 'desktop');
+  const [deviceId, setDeviceId] = useState<typeof DEVICES[number]['id']>(initialDevice ?? (page.viewport.width < 600 ? 'phone' : 'desktop'));
   const stage = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState(0);
   useLayoutEffect(() => {
@@ -340,6 +340,7 @@ export function PagePreview({ page, revision, jobId = null }: { page: Page; revi
     <div className="preview-toolbar">
       <div className="segmented device-switch" role="group" aria-label="Preview device">{DEVICES.map(item => <button key={item.id} type="button" aria-pressed={deviceId === item.id} onClick={() => setDeviceId(item.id)}>{item.label}</button>)}</div>
       <span className="field-help">{device.width} px wide{scale < 1 ? ` · shown at ${Math.round(scale * 100)}%` : ''}</span>
+      {deviceId === 'phone' && fixOnPhones && <button type="button" className="primary" title="AI adjusts this page for phones and keeps the desktop design as it is" onClick={fixOnPhones}>Fix on phones</button>}
       <label className="check-label"><input type="checkbox" checked={runScripts} onChange={event => setRunScripts(event.target.checked)} />Try buttons and links</label>
     </div>
     <div ref={stage} className="device-stage" style={{ height: height * scale }}>

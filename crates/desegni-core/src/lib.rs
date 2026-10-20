@@ -14,6 +14,7 @@ mod requirements;
 mod session;
 mod source;
 mod stable_targets;
+mod website;
 
 pub use dossier::*;
 pub use editing::*;
@@ -30,6 +31,7 @@ pub use requirements::*;
 pub use session::*;
 pub use source::*;
 pub use stable_targets::*;
+pub use website::*;
 
 pub type Result<T> = std::result::Result<T, Error>;
 

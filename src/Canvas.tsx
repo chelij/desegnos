@@ -6,6 +6,7 @@ import { confirm } from '@tauri-apps/plugin-dialog';
 import { canonicalSelections, regionTargets, sameTarget, unionRect } from './elementTargets';
 import { useDraftText } from './DraftText';
 import { escapeHtml, imageFile } from './elementEditing';
+import { StyleBar, type StyleChange } from './StyleBar';
 import { LayersPopover, LayerIcon } from './Layers';
 import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
@@ -39,7 +40,7 @@ function paintStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSPrope
 
 type CanvasProps = {
   canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
-  projectImages?: import('./types').IdentityAsset[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>;
+  projectImages?: import('./types').IdentityAsset[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void;
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: Rect[]; highlighted?: Rect[];
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
@@ -48,7 +49,7 @@ type CanvasProps = {
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect) => void; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
   const [context, setContext] = useState<CanvasContext | null>(null);
@@ -375,6 +376,21 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     finally { setEditingElement(false); }
   }
   function chooseElement(selection: ElementSelection | null) { deselectElement(); storeElement(selection); setElementError(''); select(null); }
+  const [styleOpen, setStyleOpen] = useState(() => { try { return localStorage.getItem('desegnos.style-bar') === 'open'; } catch { return false; } });
+  function toggleStyle() { setStyleOpen(value => { try { localStorage.setItem('desegnos.style-bar', value ? 'closed' : 'open'); } catch {} return !value; }); }
+  // Quick style edits update the element's own inline style, the same way the Edit dialog does.
+  async function applyStyles(change: StyleChange) {
+    const current = elementRef.current; if (!current) return;
+    try {
+      const details = await inspectElement(current.element);
+      const css = document.createElement('div').style; css.cssText = details.inlineStyle;
+      for (const [name, value] of Object.entries(change)) {
+        if (!CSS.supports(name, value)) throw new Error('That style value is not supported.');
+        css.setProperty(name, value, 'important');
+      }
+      await applyElement({ kind: 'update', texts: [], attributes: {}, style: css.cssText }, current);
+    } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+  }
   async function applyElement(change: ElementEdit, selected = elementRef.current) {
     if (!selected) throw new Error('Select an element first.');
     const ticket = selectionSerial.current; const pageId = page.id;
@@ -887,6 +903,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
     ...(context.kind === 'element' ? [
       { id: 'edit', label: 'Edit', disabled: editBusy, action: () => setElementDialog('edit') },
       { id: 'generate', label: 'Ask AI', disabled: editBusy, action: askAI },
+      ...(fixOnPhones && elementRef.current && elementRef.current.element.selector !== 'body' ? [{ id: 'phones', label: 'Fix on phones', disabled: editBusy, action: () => { const current = elementRef.current; if (current) fixOnPhones(current); } }] : []),
       { id: 'replace', label: 'Replace', disabled: editBusy, action: () => setElementDialog('replace') },
     ] : context.kind === 'request' ? [{ id: 'edit', label: 'Edit request', disabled: editBusy, action: () => focusRegion(context.regionId) }] : [{ id: 'add', label: 'Add request here', action: () => { deselectElement(); add(requestAt(context.at, zoom)); } }]),
     ...(context.kind === 'request' && regionTargets(page.regions.find(item => item.id === context.regionId)).length ? [{ id: 'allow-target-removal', label: 'Allow AI to remove selected items', checked: !!page.regions.find(item => item.id === context.regionId)?.allowTargetRemoval, action: () => setTargetRemoval(context.regionId, !page.regions.find(item => item.id === context.regionId)?.allowTargetRemoval) }] : []),
@@ -986,9 +1003,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pr
       </> : element && <>
         <button className="ask-ai" title="Change text, links and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>
         <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
+        {element.element.selector !== 'body' && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}
       </>}
       {element && foundUrl && openSource && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
       <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) setElementDialog('remove'); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
+      {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={site.current?.visual(element.element) ?? null} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </>}
     </div>}
     {context && <ContextMenu key={`${context.kind}:${context.point.x}:${context.point.y}`} label={context.kind === 'element' ? 'Element actions' : context.kind === 'request' ? 'Request actions' : 'Canvas actions'} point={context.point} close={closeContext} items={contextItems} />}
@@ -1066,6 +1085,7 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
     <div className="request-frame" aria-hidden="true" />
     {stale && <div className="request-stale" role="alert" onPointerDown={event => event.stopPropagation()}><span>This element was removed.</span><button type="button" onClick={repickNow}>Pick again</button><button type="button" onClick={removeNow}>Remove request</button></div>}
     {!target && <span className="request-number" aria-hidden="true">{number}</span>}
+    {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture you want; the AI will find one online…' : target ? 'Describe the change…' : 'Describe what goes here…'}
       style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, background: 'transparent', outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />

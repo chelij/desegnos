@@ -95,6 +95,14 @@ impl Collector {
         }
     }
 
+    fn skip_reason(&mut self, reason: String) {
+        if self.skipped.len() < MAX_SKIPPED {
+            self.skipped.push(reason);
+        } else {
+            self.omitted_reports += 1;
+        }
+    }
+
     fn skip(&mut self, name: &str, reason: &str) {
         if self.skipped.len() < MAX_SKIPPED {
             self.skipped
@@ -185,6 +193,23 @@ impl Collector {
             skipped: self.skipped,
         })
     }
+}
+
+/// Snapshot of files fetched from a website address. The same text, secret, size and
+/// logo-selection rules apply as for a folder or ZIP.
+pub fn identity_source_from_files(
+    name: &str,
+    files: Vec<(String, Vec<u8>)>,
+    skipped: Vec<String>,
+) -> Result<IdentitySource> {
+    let mut collector = Collector::default();
+    for reason in skipped {
+        collector.skip_reason(reason);
+    }
+    for (path, bytes) in files {
+        collector.add(path, bytes);
+    }
+    collector.finish(name.to_owned())
 }
 
 /// Creates a deterministic snapshot without changing the source or acquiring a

@@ -91,6 +91,16 @@ export function NewProject({ busy, create, open, recentProjects = [], openRecent
       setSource(value); setFiles(initialFiles(value)); setAnalysis(null); setFindings([]); setAssets([]);
     });
   }
+  const [address, setAddress] = useState('');
+  async function fetchSite(event?: FormEvent) {
+    event?.preventDefault();
+    const serial = ++picker.current;
+    await run(async () => {
+      const value = await native<IdentitySource>('fetch_identity_source', { url: address.trim() });
+      if (!mounted.current || serial !== picker.current) return;
+      setSource(value); setFiles(initialFiles(value)); setAnalysis(null); setFindings([]); setAssets([]);
+    });
+  }
   async function analyze() {
     if (!source) return;
     await run(async () => {
@@ -135,7 +145,10 @@ export function NewProject({ busy, create, open, recentProjects = [], openRecent
       }}>{sizes[platform].map(([width, height]) => <option key={`${width}x${height}`} value={`${width}x${height}`}>{width} × {height}</option>)}<option value="custom">Custom size</option></select></label>
       {custom && <div className="field-pair custom-screen"><label>Width <span className="unit">px</span><input name="width" type="number" required min={1} max={32768} value={viewport.width} disabled={locked} onChange={event => setViewport({ ...viewport, width: Number(event.target.value) })} /></label><label>Height <span className="unit">px</span><input name="height" type="number" required min={1} max={100000} value={viewport.height} disabled={locked} onChange={event => setViewport({ ...viewport, height: Number(event.target.value) })} /></label></div>}
       {mode === 'identity' && <section className="identity-import" aria-label="Use my existing brand">
-        <div className="identity-source-actions"><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose project or ZIP</button><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose website folder</button></div>
+        <div className="identity-address"><label>Website address<input type="url" inputMode="url" placeholder="example.com" value={address} disabled={locked} onChange={event => setAddress(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (address.trim()) void fetchSite(); } }} /></label>
+          <button type="button" disabled={locked || !address.trim()} onClick={() => { void fetchSite(); }}>{working && address.trim() ? 'Reading…' : 'Read website'}</button></div>
+        <p className="field-help">Reads the home page, its styles and logo images over the public web. Nothing on the website is changed.</p>
+        <div className="identity-source-actions"><span className="identity-or">or</span><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose project or ZIP</button><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose website folder</button></div>
         {!source && recoveryError && <div className="message error" role="alert"><span>{recoveryError}</span><button type="button" disabled={locked || readingPrevious} onClick={() => { void readPrevious(); }}>Retry loading brand review</button></div>}
         {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setFiles(previous.fileIds); acceptAnalysis(previous); setPrevious(null); }}>Continue previous brand review</button>}
         {source && <>
