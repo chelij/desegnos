@@ -264,6 +264,9 @@ impl OpenAiClient {
         project: &Project,
         cancellation: &CancellationToken,
     ) -> ProviderResponse {
+        if cancellation.is_cancelled() {
+            return response;
+        }
         let format = snapshot.format_version().unwrap_or(0);
         if format < 7 {
             return response;
@@ -302,12 +305,16 @@ impl OpenAiClient {
             .map_or(4, |capabilities| usize::from(capabilities.image_downloads));
         for url in urls.into_iter().take(limit) {
             let result = tokio::select! {
+                biased;
                 _ = cancellation.cancelled() => return response,
                 result = tokio::time::timeout(Duration::from_secs(8), download(&url, fixture.as_ref())) => result.ok().flatten(),
             };
             if let Some(image) = result {
                 images.insert(url, image);
             }
+        }
+        if cancellation.is_cancelled() {
+            return response;
         }
         if let Ok(missing) = candidate.embed_downloaded_images(&images) {
             if missing > 0 && candidate.criticism.len() < desegni_core::MAX_DESIGN_CRITICISMS {
@@ -392,6 +399,88 @@ mod tests {
         assert!(embedded_raster(output.get_ref(), "image/png").is_some());
         assert!(embedded_raster(output.get_ref(), "image/jpeg").is_none());
         assert!(embedded_raster(&output.get_ref()[..30], "image/png").is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_before_or_during_download_preserves_original_reply_and_project() {
+        use desegni_core::{GeneratedPage, RegionOutcome, RegionStatus, SiteContent};
+        for before_send in [true, false] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let cancel = CancellationToken::new();
+            let signal = cancel.clone();
+            let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let seen = requests.clone();
+            let task = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = [0; 4096];
+                assert!(socket.read(&mut bytes).await.unwrap() > 0);
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                signal.cancel();
+                std::future::pending::<()>().await;
+                drop(socket);
+            });
+            let fixture: serde_json::Value = serde_json::from_str(include_str!(
+                "../../desegni-core/tests/fixtures/requirements8.json"
+            ))
+            .unwrap();
+            let mut project: Project = serde_json::from_value(fixture["project"].clone()).unwrap();
+            project.schema_version = desegni_core::SCHEMA_VERSION;
+            project.pages[0].content = None;
+            let snapshot = project.prepare_requirements().unwrap();
+            let id = project.pages[0].regions[0].id;
+            let candidate = GenerationCandidate {
+                job_id: snapshot.job_id,
+                requirements_sha256: snapshot.sha256.clone(),
+                summary: "Two online pictures".into(),
+                regions: vec![RegionOutcome {
+                    region_id: id,
+                    status: RegionStatus::Implemented,
+                    explanation: "Requested pictures".into(),
+                }],
+                pages: vec![GeneratedPage {
+                    page_id: project.home_page_id,
+                    content: SiteContent {
+                        html: format!(
+                            "<main data-desegnos-region='{id}'><img data-desegnos-download src='{origin}/images/one.png' alt='One'><img data-desegnos-download src='{origin}/images/two.png' alt='Two'></main>"
+                        ),
+                        css: String::new(),
+                        javascript: String::new(),
+                    },
+                }],
+                component_requests: vec![],
+                decision_proposals: vec![],
+                criticism: vec![],
+            };
+            candidate.validate(&snapshot, &project).unwrap();
+            let response = ProviderResponse {
+                text: serde_json::to_string(&candidate).unwrap(),
+                response_id: "resp_download_stop".into(),
+                usage: None,
+            };
+            let original = project.clone();
+            if before_send {
+                cancel.cancel();
+            }
+            let client = OpenAiClient::for_loopback(&format!("{origin}/v1")).unwrap();
+            let result = tokio::time::timeout(
+                Duration::from_secs(2),
+                client.download_images(response.clone(), &snapshot, &project, &cancel),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                result, response,
+                "Stop must not embed any pictures or placeholders"
+            );
+            assert_eq!(project, original);
+            assert_eq!(
+                requests.load(std::sync::atomic::Ordering::SeqCst),
+                usize::from(!before_send)
+            );
+            assert!(cancel.is_cancelled());
+            task.abort();
+        }
     }
 
     #[tokio::test]

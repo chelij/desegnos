@@ -43,6 +43,18 @@ impl CancellationToken {
     pub fn is_cancelled(&self) -> bool {
         *self.0.borrow()
     }
+    /// Drop in-flight preparation or I/O as soon as cancellation is requested.
+    pub async fn run_until_cancelled<T>(
+        &self,
+        future: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        tokio::select! {
+            biased;
+            _ = self.cancelled() => None,
+            value = future => Some(value),
+        }
+    }
+
     pub(crate) async fn cancelled(&self) {
         let mut receiver = self.0.subscribe();
         loop {
@@ -280,6 +292,9 @@ impl OpenAiClient {
             web_search_calls: 0,
             citations: 0,
         });
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::before(ErrorKind::Cancelled));
+        }
         let mut response = tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::Unknown)),

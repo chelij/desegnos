@@ -1877,6 +1877,41 @@ async fn cancellation_before_and_during_streaming_prevents_a_candidate() {
     assert_eq!(error.kind, ErrorKind::Cancelled);
     assert_eq!(error.outcome, SubmissionOutcome::NotSubmitted);
     assert_eq!(server.count.load(Ordering::SeqCst), 0);
+    // A Stop arriving after preparation but immediately before send is still free.
+    let cancelled_at_send = CancellationToken::new();
+    let signal = cancelled_at_send.clone();
+    let error = server
+        .client()
+        .generate(
+            &frozen,
+            GenerationMode::Strict,
+            &schema(),
+            &ProviderSettings::default(),
+            &key,
+            &cancelled_at_send,
+            move |_| signal.cancel(),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Cancelled);
+    assert_eq!(error.outcome, SubmissionOutcome::NotSubmitted);
+    assert_eq!(server.count.load(Ordering::SeqCst), 0);
+
+    let skipped = CancellationToken::new();
+    skipped.cancel();
+    let mut preparation_polled = false;
+    assert!(
+        skipped
+            .run_until_cancelled(async {
+                preparation_polled = true;
+            })
+            .await
+            .is_none()
+    );
+    assert!(
+        !preparation_polled,
+        "cancelled credential preparation must not start"
+    );
     let cancelled = CancellationToken::new();
     let signal = cancelled.clone();
     let error = server

@@ -514,7 +514,8 @@ export default function App() {
     return () => { active = false; clearTimeout(timer); };
   }, [mapHtml, project?.id, page?.id]);
   const activeProjectId = project?.id ?? null;
-  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' ? synchronize(command === 'prepare_generation') : undefined).then(() => queue(async workspace => {
+  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' ? synchronize(command === 'prepare_generation') : undefined).then(() => queue(async workspace => {
+    signal?.throwIfAborted();
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {
       await aiTail.current;
@@ -526,8 +527,9 @@ export default function App() {
       } else if (!settings.credential.configured) { setShowAiSettings(true); throw new Error(`Add your ${settings.providers?.find(item => item.id === settings.provider)?.name ?? 'AI'} key in AI settings, then try again.`); }
       if (settings.configurationError) { setShowAiSettings(true); throw new Error('Review and save your AI settings, then prepare the request again.'); }
     }
+    signal?.throwIfAborted();
     const result = await native<T>(command, args);
-    if (command === 'apply_generation') accept(result as WorkspaceView);
+    if (command === 'apply_generation' && !signal?.aborted) accept(result as WorkspaceView);
     return result;
   })), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
   const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
@@ -561,8 +563,19 @@ export default function App() {
     });
     if (undone && tryAgain) await generation.prepare();
   }
-  const working = activeGeneration(generation.job) || !!generation.operation;
-  const showGenerationStatus = working || !!generation.error || !!generation.job && ['prepared', 'blocked', 'failed', 'unknown', 'cancelled'].includes(generation.job.status);
+  const working = generation.canStop || activeGeneration(generation.job) || !!generation.operation;
+  useEffect(() => {
+    if (!generation.canStop) return;
+    const stop = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], .cm-editor, [role="textbox"]'))) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void generation.cancel();
+    };
+    window.addEventListener('keydown', stop, true);
+    return () => window.removeEventListener('keydown', stop, true);
+  }, [generation.canStop, generation.cancel]);
+  const showGenerationStatus = generation.stopped || working || !!generation.error || !!generation.job && ['prepared', 'blocked', 'failed', 'unknown', 'cancelled'].includes(generation.job.status);
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
   const composeAccountId = composeJob ? composeJob.chatgptAccountId : aiSettings?.chatgpt.activeAccountId;
@@ -838,7 +851,7 @@ export default function App() {
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
         {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} onClick={() => setShowLog(value => !value)}>AI log</button>}
-        {project && <button className="primary" title={requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={(requestedAreas === 0 && pendingImages === 0) || working} onClick={generate}>{working ? 'Generating…' : 'Generate'}</button>}
+        {project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : generate}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
       </div>
     </header>
     {error && <div className="message error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
@@ -875,8 +888,8 @@ export default function App() {
           <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => run(() => rejectResult(true))}>Try again</button>
           <button className="pill-close" aria-label="Keep changes" title="Keep" onClick={() => setResultReview(null)}>×</button>
         </> : <GenerationFeedback controller={generation} compact>
-          {generation.job?.status === 'generating' && <button disabled={!!generation.operation} onClick={() => run(generation.cancel)}>Cancel</button>}
-          {!working && generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status) && <button className="primary" disabled={requestedAreas === 0 && pendingImages === 0} onClick={generate}>{generation.job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
+          {generation.canStop && <button onClick={() => { void generation.cancel(); }}>Stop</button>}
+          {!working && (generation.stopped || generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status)) && <button className="primary" disabled={requestedAreas === 0 && pendingImages === 0} onClick={generate}>{generation.job?.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
           {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
           {!working && <button onClick={openGeneration}>Details</button>}
         </GenerationFeedback>}

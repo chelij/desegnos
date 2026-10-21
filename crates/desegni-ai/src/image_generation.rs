@@ -127,7 +127,8 @@ impl OpenAiClient {
         key: &ApiKey,
         cancellation: &CancellationToken,
     ) -> ProviderResponse {
-        if auth != AuthenticationMethod::ApiKey
+        if cancellation.is_cancelled()
+            || auth != AuthenticationMethod::ApiKey
             || !settings.image_generation
             || snapshot.format_version().unwrap_or(0) < 17
         {
@@ -191,6 +192,9 @@ impl OpenAiClient {
             if let Some(image) = result {
                 images.insert(request, image);
             }
+        }
+        if cancellation.is_cancelled() {
+            return response;
         }
         // If insertion would exceed a source budget, fall back to placeholders for this request.
         let original = candidate.clone();
@@ -434,10 +438,13 @@ mod adapter_tests {
         let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
         let cancel = CancellationToken::new();
         let server_cancel = cancel.clone();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
         let task = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut part = [0; 4096];
             assert!(socket.read(&mut part).await.unwrap() > 0);
+            observed.fetch_add(1, Ordering::SeqCst);
             server_cancel.cancel();
             // Keep the response pending to prove cancellation, rather than a transport error, wins.
             std::future::pending::<()>().await;
@@ -450,6 +457,7 @@ mod adapter_tests {
             ..Default::default()
         };
         let (project, snapshot, response) = fixture();
+        let original = project.clone();
         let result = tokio::time::timeout(
             Duration::from_secs(5),
             client.generate_images(
@@ -465,6 +473,12 @@ mod adapter_tests {
         .await
         .unwrap();
         assert!(cancel.is_cancelled());
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "Stop prevents subsequent image calls"
+        );
+        assert_eq!(project, original);
         assert_eq!(
             result, response,
             "late image output cannot become an applicable result"

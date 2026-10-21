@@ -52,12 +52,12 @@ export function GenerationFeedback({ controller, compact = false, children }: {
 }) {
   const { job: currentJob, operation, elapsedSeconds, error } = controller;
   const job = operation === 'Preparing AI instructions…' ? null : currentJob;
-  if (!job && !operation && !error) return null;
+  if (!job && !operation && !error && !controller.stopped) return null;
   const minutes = elapsedSeconds ?? 0;
   const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your page…' : 'Building your page…',
     ready: 'Updating your page…', blocked: 'Needs a little more detail', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your page…', applied: 'Page updated' };
-  const heading = operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
+  const heading = operation === 'Stopping…' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
   return <section className={`generation-status${compact ? ' compact' : ''}`} data-job-status={job?.status} aria-label="Generation status">
     <div className="generation-status-copy"><p className="generation-heading" role="status" aria-atomic="true"><strong>{heading}</strong></p>
       {elapsedSeconds !== null && (!compact || job?.status === 'generating' || !!operation) && <p className="generation-activity" aria-live="off">
@@ -135,7 +135,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   return <>
     <Modal title={title} wide close={close} headerContent={<GenerationFeedback controller={controller}>
         {job?.status === 'prepared' && <button className="primary" disabled={!!operation} onClick={() => { void controller.start().catch(() => {}); }}>Send and generate</button>}
-        {job?.status === 'generating' && <button disabled={!!operation} onClick={() => { void controller.cancel().catch(() => {}); }}>Cancel generation</button>}
+        {controller.canStop && <button onClick={() => { void controller.cancel().catch(() => {}); }}>Cancel generation</button>}
       </GenerationFeedback>}><div className="generation-dialog">
       {error && <p className="message error" role="alert">{error}</p>}
       {usageError && <p className="message error" role="alert">{usageError}</p>}

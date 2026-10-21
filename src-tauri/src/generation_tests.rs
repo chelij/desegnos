@@ -1798,3 +1798,90 @@ fn independent_regions_make_partial_jobs_ready_and_persist_conflicts_after_apply
         "Which private account should this use?"
     );
 }
+
+#[test]
+fn stopped_prepared_job_cannot_start_and_remains_stopped_on_disk() {
+    let temp = Temp::new();
+    let project = project();
+    let mut service = temp.service();
+    let prepared = service.prepare(&project).unwrap();
+    let stopped = service.cancel(&project, prepared.job_id).unwrap();
+    status(&stopped, JobStatus::Cancelled);
+    assert!(stopped.message.starts_with("Stopped"));
+    assert!(service.begin(&project, prepared.job_id, false).is_err());
+    assert!(service.active.is_empty());
+    assert!(
+        disk_record(&service, &project, prepared.job_id)
+            .view
+            .attempts
+            .is_empty()
+    );
+    status(
+        &temp.service().latest(&project).unwrap().unwrap(),
+        JobStatus::Cancelled,
+    );
+}
+
+#[test]
+fn stop_after_response_preparation_clears_candidate_and_blocks_late_image_results() {
+    let temp = Temp::new();
+    let project = project();
+    let before = project.clone();
+    let mut service = temp.service();
+    let prepared = service.prepare(&project).unwrap();
+    let (_, token) = service.begin(&project, prepared.job_id, false).unwrap();
+    let late = response(&candidate(&project, &prepared, "Late image output"), 1);
+    service.cancel(&project, prepared.job_id).unwrap();
+    service
+        .finish(
+            &project,
+            Some(&project),
+            prepared.job_id,
+            1,
+            Ok(late.clone()),
+        )
+        .unwrap();
+    let stopped = service.latest(&project).unwrap().unwrap();
+    status(&stopped, JobStatus::Cancelled);
+    assert!(token.is_cancelled());
+    assert!(stopped.candidate.is_none());
+    assert_eq!(project, before);
+    assert!(stopped.status.retryable());
+
+    // Also cover Stop between Ready and a queued automatic apply.
+    service.begin(&project, prepared.job_id, true).unwrap();
+    service
+        .finish(&project, Some(&project), prepared.job_id, 2, Ok(late))
+        .unwrap();
+    status(
+        &service.latest(&project).unwrap().unwrap(),
+        JobStatus::Ready,
+    );
+    let stopped = service.cancel(&project, prepared.job_id).unwrap();
+    status(&stopped, JobStatus::Cancelled);
+    assert!(stopped.candidate.is_none());
+    assert!(
+        disk_record(&service, &project, prepared.job_id)
+            .view
+            .candidate
+            .is_none()
+    );
+    assert!(
+        service.cancel(&project, prepared.job_id).is_ok(),
+        "Stop is idempotent"
+    );
+}
+
+#[test]
+fn a_finish_record_error_does_not_replace_stopped_with_unknown() {
+    let temp = Temp::new();
+    let project = project();
+    let mut service = temp.service();
+    let prepared = service.prepare(&project).unwrap();
+    service.begin(&project, prepared.job_id, false).unwrap();
+    service.cancel(&project, prepared.job_id).unwrap();
+    service.handle_finish_error(prepared.job_id, 1, "Storage became unwritable");
+    status(&service.jobs[&prepared.job_id].view, JobStatus::Cancelled);
+    assert!(service.jobs[&prepared.job_id].view.candidate.is_none());
+    assert!(service.active.is_empty());
+}
