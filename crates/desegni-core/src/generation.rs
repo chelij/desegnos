@@ -257,19 +257,48 @@ impl GenerationCandidate {
                 "The generation result contains a duplicate or unrequested page.",
             )?;
             ensure(
-                targets
-                    .iter()
-                    .filter(|(id, _)| *id == page.page_id)
-                    .all(|(_, region_id)| {
-                        self.regions.iter().any(|region| {
-                            region.region_id == *region_id
-                                && region.status == RegionStatus::Implemented
-                        })
-                    }),
+                snapshot.format_version()? >= 17
+                    || targets.iter().filter(|(id, _)| *id == page.page_id).all(
+                        |(_, region_id)| {
+                            self.regions.iter().any(|region| {
+                                region.region_id == *region_id
+                                    && region.status == RegionStatus::Implemented
+                            })
+                        },
+                    ),
                 "A conflicted page cannot be represented as complete generated source.",
             )?;
         }
-        if self.is_ready() {
+        if snapshot.format_version()? >= 17 {
+            let ready_pages: BTreeSet<_> = targets
+                .iter()
+                .filter(|(_, id)| {
+                    self.regions.iter().any(|region| {
+                        region.region_id == *id && region.status == RegionStatus::Implemented
+                    })
+                })
+                .map(|(page, _)| *page)
+                .collect();
+            ensure(
+                pages == ready_pages,
+                "Return source for exactly the pages with implemented regions.",
+            )?;
+            self.validate_conflicting_regions(snapshot, project)?;
+            let requests = self.image_generation_requests()?;
+            if !requests.is_empty() {
+                ensure(
+                    snapshot
+                        .capabilities
+                        .as_ref()
+                        .is_some_and(|c| c.image_generation.is_some()),
+                    "Image generation is unavailable for these requirements.",
+                )?;
+                for request in requests {
+                    request.reference_image(snapshot, project)?;
+                }
+            }
+        }
+        if snapshot.format_version()? < 17 && self.is_ready() {
             ensure(
                 pages == target_pages,
                 "The generation result omitted source for an affected page.",
@@ -366,6 +395,18 @@ impl GenerationCandidate {
                 .all(|request| request.resolution == ComponentResolution::Native)
     }
 
+    /// Legacy requests retain their all-or-nothing application contract.
+    pub fn can_apply(&self, snapshot: &RequirementsSnapshot) -> bool {
+        if snapshot.format_version().is_ok_and(|format| format >= 17) {
+            self.regions
+                .iter()
+                .any(|region| region.status == RegionStatus::Implemented)
+                && !self.pages.is_empty()
+        } else {
+            self.is_ready()
+        }
+    }
+
     pub fn ensure_ready(&self) -> Result<()> {
         self.validate_bounds()?;
         if let Some(region) = self
@@ -439,7 +480,14 @@ impl Project {
             return Ok(self.clone());
         }
         candidate.validate(snapshot, self)?;
-        candidate.ensure_ready()?;
+        if snapshot.format_version()? >= 17 {
+            ensure(
+                candidate.can_apply(snapshot),
+                "There are no implemented regions to apply.",
+            )?;
+        } else {
+            candidate.ensure_ready()?;
+        }
         if let Some(recorded) = &self.latest_generation
             && recorded.job_id == candidate.job_id
         {
@@ -473,6 +521,12 @@ impl Project {
                     ),
                 )?;
             }
+        }
+        if snapshot.format_version()? >= 17 {
+            ensure(
+                candidate.image_generation_requests()?.is_empty(),
+                "Images must be prepared before applying.",
+            )?;
         }
         let mut next = self.clone();
         next.revision = self
@@ -513,16 +567,16 @@ impl Project {
         }
         for page in &mut next.pages {
             for region in &mut page.regions {
-                if candidate
-                    .regions
+                if candidate.regions.iter().any(|target| {
+                    target.region_id == region.id
+                        && (snapshot.format_version().unwrap_or(0) < 17
+                            || target.status == RegionStatus::Implemented)
+                }) || (candidate
+                    .pages
                     .iter()
-                    .any(|target| target.region_id == region.id)
-                    || (candidate
-                        .pages
-                        .iter()
-                        .any(|target| target.page_id == page.id)
-                        && region.has_targets()
-                        && region.prompt.trim().is_empty())
+                    .any(|target| target.page_id == page.id)
+                    && region.has_targets()
+                    && region.prompt.trim().is_empty())
                 {
                     region.completed = true;
                     // Only the placed, display-sized copies are kept.

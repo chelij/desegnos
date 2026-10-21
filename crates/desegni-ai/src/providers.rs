@@ -40,7 +40,19 @@ impl ProviderId {
         GenerationCapabilities {
             web_search: self.available(),
             image_downloads: if self.available() { 8 } else { 0 },
+            image_generation: (self == Self::Openai).then(Default::default),
         }
+    }
+    pub fn capabilities_for(
+        self,
+        auth: AuthenticationMethod,
+        settings: &ProviderSettings,
+    ) -> GenerationCapabilities {
+        let mut capabilities = self.capabilities();
+        if auth != AuthenticationMethod::ApiKey || !settings.image_generation {
+            capabilities.image_generation = None;
+        }
+        capabilities
     }
     pub fn defaults(self) -> ProviderSettings {
         ProviderSettings {
@@ -297,6 +309,24 @@ impl ProviderClient {
                 )
                 .await
         }
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn generate_images(
+        &self,
+        response: ProviderResponse,
+        auth: AuthenticationMethod,
+        settings: &ProviderSettings,
+        snapshot: &RequirementsSnapshot,
+        project: &desegni_core::Project,
+        key: &ApiKey,
+        cancel: &CancellationToken,
+    ) -> ProviderResponse {
+        if self.id != ProviderId::Openai {
+            return response;
+        }
+        self.openai
+            .generate_images(response, auth, settings, snapshot, project, key, cancel)
+            .await
     }
     pub async fn download_images(
         &self,

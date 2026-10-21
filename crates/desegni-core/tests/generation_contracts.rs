@@ -329,7 +329,7 @@ fn every_frozen_target_and_affected_page_must_be_accounted_for_exactly_once() {
 }
 
 #[test]
-fn conflicts_and_unavailable_components_never_become_applicable() {
+fn current_conflicts_keep_other_pages_applicable() {
     let (project, snapshot, mut candidate) = fixture();
     candidate.component_requests[0].resolution = ComponentResolution::Unavailable;
     candidate.component_requests[0].reason =
@@ -355,6 +355,7 @@ fn conflicts_and_unavailable_components_never_become_applicable() {
         "a conflicted page cannot be supplied as complete"
     );
     candidate.pages.remove(0);
+    candidate.regions[1].status = RegionStatus::Conflict;
     candidate.validate(&snapshot, &project).unwrap();
     assert!(!candidate.is_ready());
     assert!(
@@ -364,11 +365,11 @@ fn conflicts_and_unavailable_components_never_become_applicable() {
             .0
             .contains("hosted payment")
     );
-    assert!(
-        project
-            .apply_generation(&snapshot, &candidate, &[])
-            .is_err()
-    );
+    let applied = project
+        .apply_generation(&snapshot, &candidate, &[])
+        .unwrap();
+    assert_eq!(applied.pending_count(), 2);
+    assert!(candidate.can_apply(&snapshot));
     candidate.regions[0].explanation.clear();
     assert!(
         candidate.validate(&snapshot, &project).is_err(),
@@ -379,7 +380,7 @@ fn conflicts_and_unavailable_components_never_become_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 14"));
+    assert!(snapshot.markdown.contains("Requirements format: 17"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -948,6 +949,7 @@ fn explicit_retry_revises_a_draft_but_older_attempts_and_applied_rewrites_are_re
     let (project, snapshot, mut complete) = fixture();
     let mut blocked = complete.clone();
     blocked.regions[0].status = RegionStatus::Conflict;
+    blocked.regions[1].status = RegionStatus::Conflict;
     blocked.regions[0].explanation = "The original description needs clarification.".into();
     blocked.pages.remove(0);
     blocked.summary = "The first attempt identified a conflict.".into();

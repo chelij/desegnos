@@ -1,5 +1,23 @@
 # Desegnos technical guide
 
+New generation requests deliver ready areas even when another area needs details.
+Applying marks only ready requests complete; unresolved requests stay open with their
+explanations in the generation log and project notes. Older saved jobs retain their
+original behavior.
+
+In AI settings, **Image generation** defaults on for OpenAI API-key connections.
+The AI can request new images or edits from attached/project pictures, including
+transparent PNG cut-outs. Up to two images are attempted per job; a USD 1 allowance
+is included in the generation estimate and spending-limit check. Final charges may vary.
+References are sent as small previews and stored results may be reduced to fit the
+256 KiB image limit. Failed images leave labelled slots; the rest of the draft applies.
+The generation log shows the resulting images and prompts.
+
+ChatGPT sign-in still supports page generation, but image-tool entitlement for this
+OAuth connection is unconfirmed, so image generation is unavailable there. This never
+silently falls back to an API key. Other providers do not offer this image capability.
+
+
 Desegnos is a Rust desktop HTML editor built around pointing at a page and describing what belongs there. The full product contract is in [RELEASE_PLAN.md](../RELEASE_PLAN.md), with core and plugin responsibilities in [PLUGIN_REVIEW.md](../PLUGIN_REVIEW.md).
 
 This development build implements project authoring, decision memory, persistence and generation of HTML, CSS and browser JavaScript with an API key or an authorized ChatGPT plan. It is not the 1.0 release. Live OpenAI acceptance requires private sign-in or key entry in the application; controlled HTTP verification does not establish that result. [docs/IMPLEMENTATION.md](IMPLEMENTATION.md) records the checks and remaining release work.

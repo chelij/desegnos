@@ -42,6 +42,120 @@ fn empty_layout(node: NodeRef<'_>) -> bool {
 }
 
 impl GenerationCandidate {
+    pub(crate) fn validate_conflicting_regions(
+        &self,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+    ) -> Result<()> {
+        fn placeholder(node: NodeRef<'_>) -> bool {
+            node.attr("data-desegnos-placeholder").as_deref() == Some("conflict")
+                && node.text().chars().count() <= 160
+                && node.children().iter().all(|child| child.is_text())
+        }
+        for generated in &self.pages {
+            let page = project.page(generated.page_id)?;
+            let conflicts: Vec<_> = page
+                .regions
+                .iter()
+                .filter(|region| {
+                    self.regions.iter().any(|outcome| {
+                        outcome.region_id == region.id
+                            && outcome.status == crate::RegionStatus::Conflict
+                    })
+                })
+                .collect();
+            if conflicts.is_empty() {
+                continue;
+            }
+            let after_content = crate::compact_site_content(&generated.content);
+            let after = crate::editing::parse(&after_content.html)?;
+            if let Some(source) = &page.content {
+                let source = crate::compact_site_content(source);
+                ensure(
+                    source.css == after_content.css
+                        && source.javascript == after_content.javascript,
+                    "A partial page must preserve shared CSS and JavaScript; use inline styles in ready regions.",
+                )?;
+                let before = crate::editing::parse(&source.html)?;
+                let mut unbound_conflict = false;
+                for region in conflicts {
+                    if region.has_targets() {
+                        for target in region.targets() {
+                            ensure(
+                                canonical(crate::editing::locate(&before, target)?)
+                                    == canonical(crate::editing::locate(&after, target)?),
+                                "A conflicted element must stay unchanged.",
+                            )?;
+                        }
+                    } else {
+                        let selector = format!("[{MARKER}=\"{}\"]", region.id);
+                        let old = before.select(&selector);
+                        let new = after.select(&selector);
+                        if old.nodes().is_empty() {
+                            ensure(
+                                new.nodes().len() == 1 && placeholder(new.nodes()[0]),
+                                "An unmapped conflicting area needs a short local placeholder.",
+                            )?;
+                            unbound_conflict = true;
+                        } else {
+                            ensure(
+                                old.nodes().len() == 1
+                                    && new.nodes().len() == 1
+                                    && canonical(old.nodes()[0]) == canonical(new.nodes()[0]),
+                                "A conflicted area must retain its unchanged region root.",
+                            )?;
+                        }
+                    }
+                }
+                if unbound_conflict {
+                    // No old DOM target maps to this rectangle. Preserve all existing content
+                    // outside ready roots; only additive new areas or mapped replacements are safe.
+                    for (_, id) in snapshot
+                        .target_ids()?
+                        .into_iter()
+                        .filter(|(id, _)| *id == page.id)
+                    {
+                        let region = page
+                            .regions
+                            .iter()
+                            .find(|region| region.id == id)
+                            .expect("validated target");
+                        let selector = format!("[{MARKER}=\"{id}\"]");
+                        for doc in [&before, &after] {
+                            for node in doc.select(&selector).nodes() {
+                                node.remove_from_parent();
+                            }
+                            if self.regions.iter().any(|outcome| {
+                                outcome.region_id == id
+                                    && outcome.status == crate::RegionStatus::Implemented
+                            }) {
+                                for target in region.targets() {
+                                    if let Ok(node) = crate::editing::locate(doc, target) {
+                                        node.remove_from_parent();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    ensure(
+                        canonical(crate::editing::body(&before)?)
+                            == canonical(crate::editing::body(&after)?),
+                        "An unmapped conflicting area requires preserving existing content outside ready roots.",
+                    )?;
+                }
+            } else {
+                for region in conflicts {
+                    let nodes = after.select(&format!("[{MARKER}=\"{}\"]", region.id));
+                    ensure(
+                        nodes.nodes().len() == 1 && placeholder(nodes.nodes()[0]),
+                        "A new conflicted area needs one short, clearly marked placeholder.",
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn validate_scope(
         &self,
         snapshot: &RequirementsSnapshot,

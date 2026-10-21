@@ -881,7 +881,7 @@ impl GenerationService {
                 .view
                 .candidate
                 .as_ref()
-                .is_some_and(|candidate| candidate.is_ready())
+                .is_some_and(|candidate| candidate.can_apply(&record.view.requirements))
             && record.view.requirements.validate_current(project).is_ok()
             && record.view.candidate.as_ref().is_some_and(|candidate| {
                 candidate
@@ -950,7 +950,10 @@ impl GenerationService {
             return Err("Apply or discard the existing generation review, or cancel its running request, before starting another.".into());
         }
         let requirements = project
-            .prepare_requirements_with_capabilities(self.provider.capabilities())
+            .prepare_requirements_with_capabilities(
+                self.provider
+                    .capabilities_for(self.authentication, &self.settings),
+            )
             .map_err(message)?;
         let estimate = self
             .adapter(self.provider)?
@@ -1242,6 +1245,9 @@ impl GenerationService {
                         && !candidate.image_download_urls()?.is_empty() {
                         return Err(desegni_core::Error("Images could not be prepared. Nothing was applied. Try generating again or remove the image request.".into()));
                     }
+                    if format >= 17 && !candidate.image_generation_requests()?.is_empty() {
+                        return Err(desegni_core::Error("Generated images could not be prepared.".into()));
+                    }
                     Ok(candidate)
                 }) {
                     Ok(candidate) => {
@@ -1250,7 +1256,7 @@ impl GenerationService {
                             .and_then(|project| {
                                 record.view.requirements.validate_current(project).err()
                             });
-                        record.view.status = if candidate.is_ready() && stale.is_none() {
+                        record.view.status = if candidate.can_apply(&record.view.requirements) && stale.is_none() {
                             JobStatus::Ready
                         } else {
                             JobStatus::Blocked
@@ -1259,7 +1265,7 @@ impl GenerationService {
                             format!(
                                 "The generated result is stale: {error} Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements."
                             )
-                        } else if candidate.is_ready() {
+                        } else if candidate.can_apply(&record.view.requirements) {
                             "Result ready to apply.".into()
                         } else {
                             "Some requests need a choice.".into()
@@ -1319,7 +1325,9 @@ impl GenerationService {
         {
             return;
         }
-        if let Some(record) = self.jobs.get_mut(&job_id) {
+        if let Some(record) = self.jobs.get_mut(&job_id)
+            && record.view.status != JobStatus::Cancelled
+        {
             record.view.status = JobStatus::Unknown;
             record.view.message = format!(
                 "Generation stopped while recording its result: {error} No request will be automatically repeated."
@@ -1343,15 +1351,23 @@ impl GenerationService {
         };
         if !matches!(
             record.view.status,
-            JobStatus::Prepared | JobStatus::Generating
+            JobStatus::Prepared
+                | JobStatus::Generating
+                | JobStatus::Ready
+                | JobStatus::Blocked
+                | JobStatus::Failed
+                | JobStatus::Unknown
+                | JobStatus::Cancelled
         ) {
             return Err("This request is no longer running. Review or discard its result.".into());
         }
         record.view.status = JobStatus::Cancelled;
+        record.view.candidate = None;
         record.view.message = if record.view.authentication == AuthenticationMethod::Chatgpt {
-            "Generation cancelled. A submitted request may still consume ChatGPT plan allowance or credits. Late output cannot be applied.".into()
+            "Stopped. A submitted request may still consume ChatGPT plan allowance or credits. Late output cannot be applied.".into()
         } else {
-            "Generation cancelled. A submitted request may still incur a charge. Late output cannot be applied.".into()
+            "Stopped. A submitted request may still incur a charge. Late output cannot be applied."
+                .into()
         };
         if let Some(attempt) = record.view.attempts.last_mut() {
             attempt.status = JobStatus::Cancelled;
@@ -1643,7 +1659,7 @@ pub async fn prepare_generation(
         (service.authentication, service.provider)
     };
     let account_id = if authentication == AuthenticationMethod::Chatgpt {
-        let mut view = chatgpt.view().await;
+        let view = chatgpt.view().await;
         let account = view
             .accounts
             .iter()
@@ -1658,27 +1674,8 @@ pub async fn prepare_generation(
             return Err("Keep Desegnos open and repair this account's secure storage in AI settings before generating.".into());
         }
         let account_id = account.id;
-        let model = state.lock().map_err(message)?.settings.model.clone();
-        if view.models.is_empty() {
-            let client = state.lock().map_err(message)?.client.clone()?;
-            view = chatgpt
-                .manager()?
-                .discover_models(account_id, &client, &CancellationToken::new())
-                .await
-                .map_err(message)?;
-            if view.active_account_id != Some(account_id) {
-                return Err("The selected ChatGPT account changed. Generate again using the current account.".into());
-            }
-        }
-        if !view.models.iter().any(|available| available.id == model) {
-            return Err(view.models_error.unwrap_or_else(|| {
-                "Test ChatGPT access and choose an available verified model before generating."
-                    .into()
-            }));
-        }
         Some(account_id)
     } else {
-        let _key = credential_key(&state, provider).await?;
         None
     };
     let workspace = workspace.lock().map_err(message)?;
@@ -1838,19 +1835,6 @@ async fn submit(
         )
     };
     let epoch = account_id.map(|id| chatgpt.epoch(id)).transpose()?;
-    let key = if authentication == AuthenticationMethod::Chatgpt {
-        chatgpt
-            .manager()?
-            .bearer(
-                account_id
-                    .ok_or("This ChatGPT request has no bound account. Prepare a new request.")?,
-                &CancellationToken::new(),
-            )
-            .await
-            .map_err(message)?
-    } else {
-        credential_key(&state, provider).await?
-    };
     let begin = || {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?.clone();
@@ -1868,86 +1852,127 @@ async fn submit(
     let request = view.clone();
     tauri::async_runtime::spawn(async move {
         let ordinal = request.attempts.len();
-        let (shared_app, request_ref, key_ref, cancel_ref, client_ref) =
-            (&app, &request, &key, &cancellation, &client);
-        let ask = |requirements: &RequirementsSnapshot| {
-            let progress_app = shared_app.clone();
-            let requirements = requirements.clone();
-            async move {
-                let schema = desegni_core::result_schema(&requirements);
-                client_ref
-                    .generate_for_auth(
-                        request_ref.authentication,
-                        &requirements,
-                        request_ref.generation_mode,
-                        &schema,
-                        &request_ref.settings,
-                        key_ref,
-                        cancel_ref,
-                        move |progress| {
-                            if let Ok(mut service) =
-                                progress_app.state::<Mutex<GenerationService>>().lock()
-                            {
-                                service.progress(job_id, ordinal, progress);
-                            }
-                        },
-                    )
-                    .await
-            }
-        };
-        let mut result = ask(&request.requirements).await;
-        // An element fix may ask once for other elements' HTML; reply automatically and keep
-        // the final answer tied to the frozen requirements.
-        if let Ok(first) = &result
-            && let Ok(Some(follow_up)) = request
-                .requirements
-                .context_follow_up(&first.text, &original)
-        {
-            let usage = first.usage;
-            let persisted = (|| -> NativeResult<()> {
-                let service_state = shared_app.state::<Mutex<GenerationService>>();
-                let mut service = service_state.lock().map_err(message)?;
-                let mut record = service
-                    .jobs
-                    .get(&job_id)
-                    .cloned()
-                    .ok_or("The active job is unavailable.")?;
-                if record.view.status != JobStatus::Generating || cancel_ref.is_cancelled() {
-                    return Err("The request was cancelled.".into());
+        let result = async {
+            // Keep preparation local. All credential refresh/model discovery belongs to
+            // the registered, cancellable attempt, before any paid generation submission.
+            let credentials = async {
+                if authentication == AuthenticationMethod::Chatgpt {
+                    let account_id = account_id.ok_or("This ChatGPT request has no bound account. Prepare a new request.")?;
+                    let chatgpt = app.state::<ChatgptState>();
+                    let manager = chatgpt.manager()?;
+                    let mut available = chatgpt.view().await;
+                    if available.models.is_empty() {
+                        let client = app.state::<Mutex<GenerationService>>().lock().map_err(message)?.client.clone()?;
+                        available = manager.discover_models(account_id, &client, &cancellation).await.map_err(message)?;
+                    }
+                    if available.active_account_id != Some(account_id)
+                        || !available.models.iter().any(|model| model.id == request.settings.model)
+                    {
+                        return Err("Test ChatGPT access and choose an available verified model before generating.".into());
+                    }
+                    manager.bearer(account_id, &cancellation).await.map_err(message)
+                } else {
+                    credential_key(&app.state::<Mutex<GenerationService>>(), provider).await
                 }
-                record.view.context = Some(follow_up.clone());
-                service.persist(record)?;
-                Ok(())
-            })();
-            result = if persisted.is_ok() {
-                ask(&follow_up).await
-            } else {
-                Err(ProviderError::new(
-                    ErrorKind::InvalidRequirements,
-                    SubmissionOutcome::Received,
-                ))
-            }
-            .map_err(|mut error| {
-                error.usage = total_usage(usage, error.usage);
-                error
-            })
-            .map(|mut response| {
-                if let Ok(text) = request
+            };
+            let key = cancellation.run_until_cancelled(credentials).await
+                .ok_or_else(|| ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::NotSubmitted))?
+                .map_err(|_| ProviderError::new(ErrorKind::MissingCredential, SubmissionOutcome::NotSubmitted))?;
+
+            let (shared_app, request_ref, key_ref, cancel_ref, client_ref) =
+                (&app, &request, &key, &cancellation, &client);
+            let ask = |requirements: &RequirementsSnapshot| {
+                let progress_app = shared_app.clone();
+                let requirements = requirements.clone();
+                async move {
+                    let schema = desegni_core::result_schema(&requirements);
+                    client_ref
+                        .generate_for_auth(
+                            request_ref.authentication,
+                            &requirements,
+                            request_ref.generation_mode,
+                            &schema,
+                            &request_ref.settings,
+                            key_ref,
+                            cancel_ref,
+                            move |progress| {
+                                if let Ok(mut service) =
+                                    progress_app.state::<Mutex<GenerationService>>().lock()
+                                {
+                                    service.progress(job_id, ordinal, progress);
+                                }
+                            },
+                        )
+                        .await
+                }
+            };
+            let mut result = ask(&request.requirements).await;
+            // An element fix may ask once for other elements' HTML; reply automatically and keep
+            // the final answer tied to the frozen requirements.
+            if let Ok(first) = &result
+                && let Ok(Some(follow_up)) = request
                     .requirements
-                    .adopt_follow_up_reply(&follow_up, &response.text)
-                {
-                    response.text = text;
+                    .context_follow_up(&first.text, &original)
+            {
+                let usage = first.usage;
+                let persisted = (|| -> NativeResult<()> {
+                    let service_state = shared_app.state::<Mutex<GenerationService>>();
+                    let mut service = service_state.lock().map_err(message)?;
+                    let mut record = service
+                        .jobs
+                        .get(&job_id)
+                        .cloned()
+                        .ok_or("The active job is unavailable.")?;
+                    if record.view.status != JobStatus::Generating || cancel_ref.is_cancelled() {
+                        return Err("The request was cancelled.".into());
+                    }
+                    record.view.context = Some(follow_up.clone());
+                    service.persist(record)?;
+                    Ok(())
+                })();
+                result = if persisted.is_ok() {
+                    ask(&follow_up).await
+                } else {
+                    Err(ProviderError::new(
+                        ErrorKind::InvalidRequirements,
+                        SubmissionOutcome::Received,
+                    ))
                 }
-                response.usage = total_usage(usage, response.usage);
-                response
-            });
-        }
-        let result = match result {
-            Ok(response) => Ok(client
-                .download_images(response, &request.requirements, &original, &cancellation)
-                .await),
-            Err(error) => Err(error),
-        };
+                .map_err(|mut error| {
+                    error.usage = total_usage(usage, error.usage);
+                    error
+                })
+                .map(|mut response| {
+                    if let Ok(text) = request
+                        .requirements
+                        .adopt_follow_up_reply(&follow_up, &response.text)
+                    {
+                        response.text = text;
+                    }
+                    response.usage = total_usage(usage, response.usage);
+                    response
+                });
+            }
+            match result {
+                Ok(response) => {
+                    let response = client
+                        .download_images(response, &request.requirements, &original, &cancellation)
+                        .await;
+                    Ok(client
+                        .generate_images(
+                            response,
+                            request.authentication,
+                            &request.settings,
+                            &request.requirements,
+                            &original,
+                            &key,
+                            &cancellation,
+                        )
+                        .await)
+                }
+                Err(error) => Err(error),
+            }
+        }.await;
         let workspace_state = app.state::<Mutex<Workspace>>();
         let service_state = app.state::<Mutex<GenerationService>>();
         if let Ok(mut workspace) = workspace_state.lock()
@@ -2053,7 +2078,7 @@ pub fn apply_generation(
         return Ok(workspace.view());
     }
     if record.view.status != JobStatus::Ready {
-        return Err("Only a complete, current candidate can be applied.".into());
+        return Err("Only a current candidate with ready regions can be applied.".into());
     }
     let candidate = record
         .view

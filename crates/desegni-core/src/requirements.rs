@@ -12,17 +12,44 @@ use uuid::Uuid;
 pub struct GenerationCapabilities {
     pub web_search: bool,
     pub image_downloads: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_generation: Option<ImageGenerationCapability>,
+}
+/// Native post-processing, never a tool granted by HTML or task data.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImageGenerationCapability {
+    pub max_images: u8,
+    pub sizes: Vec<String>,
+}
+impl Default for ImageGenerationCapability {
+    fn default() -> Self {
+        Self {
+            max_images: 2,
+            sizes: vec!["1024x1024".into()],
+        }
+    }
 }
 impl Default for GenerationCapabilities {
     fn default() -> Self {
         Self {
             web_search: true,
             image_downloads: 8,
+            image_generation: None,
         }
     }
 }
 impl GenerationCapabilities {
     pub fn validate(&self) -> Result<()> {
+        if let Some(images) = &self.image_generation {
+            ensure(
+                images.max_images > 0
+                    && images.max_images <= 2
+                    && images.sizes.len() == 1
+                    && images.sizes[0] == "1024x1024",
+                "The image generation capability is invalid.",
+            )?;
+        }
         ensure(
             self.image_downloads <= 8,
             "The image download limit is invalid.",
@@ -177,17 +204,7 @@ impl Project {
             Uuid::new_v4(),
             self.revision,
             &targets,
-            if self
-                .imported_identity
-                .as_ref()
-                .is_some_and(|identity| !identity.pages.is_empty())
-            {
-                16
-            } else if targets.iter().any(|(_, region)| !region.shape.is_rect()) {
-                15
-            } else {
-                14
-            },
+            17,
             dossier_context,
             Some(capabilities),
         )
@@ -471,7 +488,17 @@ impl Project {
         if format >= 12 && targets.iter().any(|(_, region)| region.has_targets()) {
             md.push_str("\n## Selected-element styling additions\n\nFor an existing-element request, existing CSS remains byte-for-byte unchanged. You may append new rules whose selectors match only a selected root's own [data-desegnos-id=\"ID\"]. Optional hover, focus, focus-visible, focus-within, active, disabled, checked, before and after states are allowed. No descendant, sibling, selector-function, nested-selector, global at-rule or unselected-ID rules. Media queries may wrap these same scoped rules. For an element-fix reply, each page's css field holds only these additions (empty when unused); it must never repeat or replace the shared stylesheet.\n\n");
         }
-        md.push_str("\n## Structured result contract\n\nReturn one JSON object matching this schema. Use the job ID above and the requirements SHA-256 supplied with this file. Account for every requested region exactly once. When every region is implemented, return exactly one complete source entry for every affected page. A page with an unresolved region conflict cannot be returned as complete. Component requests, proposed decisions, and criticism may refer only to the requested scope. New decisions remain suggestions; only explicitly selected proposals can become accepted decisions. Do not return filesystem paths, route changes, patches, commands, imports requiring packages, or installation instructions. Design feedback is advisory and must not claim measured accessibility or execution results.\n\n");
+        if format >= 17 {
+            md.push_str("\n## Structured result contract\n\n### Independent region delivery\n\nDeliver every implementable region completely even when another region conflicts. Account for every region once. Return source for every page containing an implemented region, preserving conflicting regions exactly as they are. On a new page leave a single data-desegnos-region root with data-desegnos-placeholder=\"conflict\" and a short local label for each conflicting region. Omit pages containing only conflicts. On a mixed existing page preserve shared CSS and JavaScript; use inline styles for ready regions. Existing conflicted areas must retain their region root or selected element unchanged. When a conflicting rectangle has no old root, add its short conflict placeholder and preserve existing content outside ready region roots or selected elements. For selected-element replies omit conflicted elements. Only implemented regions are completed on apply; conflicts stay open with their explanations. Do not withhold ready regions because another region needs new pixels or an unavailable service. Component requests, proposals and criticism remain within requested scope. Decisions are suggestions until selected. Return only the supplied JSON schema.\n\n");
+            if capabilities
+                .as_ref()
+                .is_some_and(|c| c.image_generation.is_some())
+            {
+                md.push_str("## Native image generation\n\nTo create new pixels use <img data-desegnos-generate=\"Describe the desired image or edit\" src=\"#\" alt=\"Short description\" data-desegnos-size=\"1024x1024\">. For an edit, also set data-desegnos-source to an attachment ID from this request or an exact desegnos-asset: URL from the project. Desegnos sends the reference image itself; do not describe an edit as complete using only CSS. For cut-outs set data-desegnos-background=\"transparent\" (PNG); otherwise opaque is used. No URLs, files, credentials or additional tools are authorized. At most two distinct images, 4096 prompt characters each, 256 KiB per stored PNG and 512 KiB total. Generation runs after the reply, is cancellable, and its allowance is included in the job estimate. Failed or excessive requests leave a clearly marked local image placeholder; deliver the rest of the page. A generation marker counts as implemented, not as an unavailable component.\n\n");
+            }
+        } else {
+            md.push_str("\n## Structured result contract\n\nReturn one JSON object matching this schema. Use the job ID above and the requirements SHA-256 supplied with this file. Account for every requested region exactly once. When every region is implemented, return exactly one complete source entry for every affected page. A page with an unresolved region conflict cannot be returned as complete. Component requests, proposed decisions, and criticism may refer only to the requested scope. New decisions remain suggestions; only explicitly selected proposals can become accepted decisions. Do not return filesystem paths, route changes, patches, commands, imports requiring packages, or installation instructions. Design feedback is advisory and must not claim measured accessibility or execution results.\n\n");
+        }
         if element_fix {
             if format >= 12 {
                 md.push_str("Each pages entry lists selected-element replacements and any permitted CSS additions. Never return a whole page or the existing stylesheet.\n\n");
@@ -576,7 +603,7 @@ impl Project {
 
 impl RequirementsSnapshot {
     pub fn format_version(&self) -> Result<u8> {
-        (3..=16)
+        (3..=17)
             .find(|format| {
                 self.markdown.starts_with(&format!(
                     "# Generation requirements\n\nRequirements format: {format}\n\n"
@@ -611,6 +638,10 @@ impl RequirementsSnapshot {
         )?;
         if let Some(capabilities) = &self.capabilities {
             capabilities.validate()?;
+            ensure(
+                format >= 17 || capabilities.image_generation.is_none(),
+                "Image generation requires new requirements.",
+            )?;
         }
         ensure(
             format >= 4 || self.dossier_context.is_none(),

@@ -43,6 +43,12 @@ pub struct ProviderSettings {
     pub max_output_tokens: u32,
     pub reasoning_effort: ReasoningEffort,
     pub spending_limit_usd: f64,
+    #[serde(default = "image_generation_default")]
+    pub image_generation: bool,
+}
+
+fn image_generation_default() -> bool {
+    true
 }
 
 impl Default for ProviderSettings {
@@ -52,6 +58,7 @@ impl Default for ProviderSettings {
             max_output_tokens: MAX_OUTPUT_TOKENS,
             reasoning_effort: ReasoningEffort::Medium,
             spending_limit_usd: 2.0,
+            image_generation: true,
         }
     }
 }
@@ -154,7 +161,17 @@ pub fn estimate_for_auth(
     let (counted, reserve) = without_previews(snapshot);
     let result = request_body(authentication, &counted, mode, schema, settings)
         .and_then(|body| estimate_body_with_reserve(authentication, &body, settings, reserve));
-    result.map_err(|error| error.with_authentication(authentication))
+    result
+        .and_then(|mut estimate| {
+            estimate.estimate_usd += image_generation_reserve(authentication, snapshot);
+            if authentication == AuthenticationMethod::ApiKey
+                && estimate.estimate_usd > settings.spending_limit_usd
+            {
+                return Err(ProviderError::before(ErrorKind::SpendingLimit));
+            }
+            Ok(estimate)
+        })
+        .map_err(|error| error.with_authentication(authentication))
 }
 
 /// Picture previews are billed per image, not per Base64 byte: estimate the request without
@@ -174,9 +191,7 @@ pub(crate) fn prepare_body(
     settings: &ProviderSettings,
 ) -> Result<Vec<u8>> {
     let body = request_body(authentication, snapshot, mode, schema, settings)?;
-    let (counted, reserve) = without_previews(snapshot);
-    let counted = request_body(authentication, &counted, mode, schema, settings)?;
-    estimate_body_with_reserve(authentication, &counted, settings, reserve)?;
+    estimate_for_auth(authentication, snapshot, mode, schema, settings)?;
     Ok(body)
 }
 
@@ -398,4 +413,20 @@ mod web_search_tests {
             assert_eq!(body["tool_choice"], "none");
         }
     }
+}
+
+/// Reserve $0.50 per bounded low-quality image call, including reference and orchestration.
+/// An estimate allowance, not a guaranteed provider billing cap.
+pub(crate) fn image_generation_reserve(
+    auth: AuthenticationMethod,
+    snapshot: &RequirementsSnapshot,
+) -> f64 {
+    if auth != AuthenticationMethod::ApiKey || snapshot.format_version().unwrap_or(0) < 17 {
+        return 0.0;
+    }
+    snapshot
+        .capabilities
+        .as_ref()
+        .and_then(|c| c.image_generation.as_ref())
+        .map_or(0.0, |images| f64::from(images.max_images) * 0.50)
 }
