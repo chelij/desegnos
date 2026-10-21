@@ -379,7 +379,7 @@ fn conflicts_and_unavailable_components_never_become_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 10"));
+    assert!(snapshot.markdown.contains("Requirements format: 14"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -485,26 +485,23 @@ fn selected_decisions_and_source_commit_together_without_replacing_accepted_iden
         .apply_generation(&snapshot, &candidate, &[0])
         .unwrap();
     assert_eq!(next.revision, project.revision + 1);
+    // The AI's one-line code is kept in a readable layout.
+    let readable = format_site_content(&candidate.pages[0].content);
     assert_eq!(
         without_editor_ids(&next.pages[0].content.as_ref().unwrap().html),
-        candidate.pages[0].content.html
+        readable.html
     );
-    assert_eq!(
-        next.pages[0].content.as_ref().unwrap().css,
-        candidate.pages[0].content.css
-    );
+    assert_eq!(next.pages[0].content.as_ref().unwrap().css, readable.css);
     assert_eq!(
         next.pages[0].content.as_ref().unwrap().javascript,
         candidate.pages[0].content.javascript
     );
+    let readable = format_site_content(&candidate.pages[1].content);
     assert_eq!(
         without_editor_ids(&next.pages[1].content.as_ref().unwrap().html),
-        candidate.pages[1].content.html
+        readable.html
     );
-    assert_eq!(
-        next.pages[1].content.as_ref().unwrap().css,
-        candidate.pages[1].content.css
-    );
+    assert_eq!(next.pages[1].content.as_ref().unwrap().css, readable.css);
     assert_eq!(
         next.pages[1].content.as_ref().unwrap().javascript,
         candidate.pages[1].content.javascript
@@ -666,6 +663,8 @@ fn source_candidate_and_requirements_limits_fail_without_truncation() {
     let mut excessive = project.clone();
     excessive.pages[0].regions = (0..MAX_GENERATION_REGIONS + 1)
         .map(|_| Region {
+            shape: Default::default(),
+            area_bounds: vec![],
             element: None,
             elements: vec![],
             allow_target_removal: false,

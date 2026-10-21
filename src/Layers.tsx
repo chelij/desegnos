@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SiteLayer } from './siteLayers';
 import type { LayerDirection, Page, Region } from './types';
+import { RequestShapeIcon } from './RegionOutline';
 
 export function layerName(tag: string, text: string): string {
   return ({ main: 'Main content', header: 'Header', footer: 'Footer', nav: 'Navigation' }[tag]) || text.trim().slice(0, 80) || ({ div: 'Group', section: 'Section', img: 'Image', svg: 'Graphic', button: 'Button', a: 'Link', p: 'Paragraph', form: 'Form', input: 'Input', h1: 'Main heading', h2: 'Heading' }[tag] ?? 'Page item');
@@ -75,13 +76,12 @@ export function LayersPopover({ open, page, siteLayers, selectedElement, selecte
     </div>
     <div className="layer-list">
       <h3>Website</h3>
-      {page.content && !ready ? <p role="status">Loading layers…</p> : siteLayers.length ? rows(siteLayers) : <p className="muted">Your website elements will appear here.</p>}
+      {page.content && !ready ? <p role="status">Loading layers…</p> : siteLayers.length ? rows(siteLayers) : <p className="muted">No elements.</p>}
       <h3>Requests</h3>
       {pending.length ? pending.map((region, index) => <div key={region.id} className="layer-row" data-selected={selectedRequest === region.id} data-region-id={region.id} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); contextRequest(region.id, { x: event.clientX, y: event.clientY }); }}>
-        <span className="layer-spacer" /><button type="button" className="layer-select" aria-pressed={selectedRequest === region.id} disabled={busy} onClick={() => chooseRequest(region)} title={region.prompt || 'Empty request'}><span className="request-layer-mark" aria-hidden="true" /><span>{region.prompt.trim().slice(0, 80) || `Request ${page.regions.indexOf(region) + 1}`}</span><span className="sr-only">, layer {index + 1} from front</span></button>
+        <span className="layer-spacer" /><button type="button" className="layer-select" aria-pressed={selectedRequest === region.id} disabled={busy} onClick={() => chooseRequest(region)} title={region.prompt || 'Empty request'}><span className="request-layer-mark" aria-hidden="true">{region.shape && region.shape.kind !== 'rect' && <RequestShapeIcon kind={region.shape.kind} />}</span><span>{region.prompt.trim().slice(0, 80) || `Request ${page.regions.indexOf(region) + 1}`}</span><span className="sr-only">, layer {index + 1} from front</span></button>
       </div>) : <p className="muted">No pending requests.</p>}
     </div>
-    <p className="layers-hint">Front is at the top. Select a group to move its contents together.</p>
   </section>;
 }
 

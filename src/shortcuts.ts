@@ -1,16 +1,17 @@
-export type EditorShortcut = 'new' | 'open' | 'save' | 'saveAs' | 'undo' | 'redo' | 'zoomIn' | 'zoomOut' | 'fit' | 'actualSize' | 'doubleSize' | 'nextPage' | 'previousPage' | 'remove' | 'help' | 'selectTool' | 'requestTool' | 'panTool' | 'askAI' | 'cutLayer' | 'copyLayer' | 'pasteLayer' | 'layerForward' | 'layerBackward' | 'layerFront' | 'layerBack';
+export type EditorShortcut = 'new' | 'open' | 'save' | 'saveAs' | 'undo' | 'redo' | 'zoomIn' | 'zoomOut' | 'fit' | 'actualSize' | 'doubleSize' | 'nextPage' | 'previousPage' | 'remove' | 'help' | 'selectTool' | 'requestTool' | 'rectangleTool' | 'circleTool' | 'freehandTool' | 'panTool' | 'askAI' | 'undoElement' | 'cutLayer' | 'copyLayer' | 'pasteLayer' | 'layerForward' | 'layerBackward' | 'layerFront' | 'layerBack';
 export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented?: boolean; isComposing?: boolean };
 
 export const SHORTCUT_HELP = [
   ['New project', 'Ctrl/Cmd+N'], ['Open project', 'Ctrl/Cmd+O'], ['Save', 'Ctrl/Cmd+S'], ['Save as', 'Ctrl/Cmd+Shift+S'],
   ['Copy / cut / paste selected layer', 'Ctrl/Cmd+C / X / V outside text'], ['Bring forward / send backward', 'Ctrl/Cmd+] / ['], ['Bring to front / send to back', 'Ctrl/Cmd+Shift+] / ['],
-  ['Undo', 'Ctrl/Cmd+Z'], ['Redo', 'Ctrl/Cmd+Shift+Z · Ctrl+Y'],
+  ['Undo', 'Ctrl/Cmd+Z'], ['Undo changes to the selected element only', 'Alt+Z'], ['Redo', 'Ctrl/Cmd+Shift+Z · Ctrl+Y'],
   ['Zoom in / out', 'Ctrl/Cmd++ / − · Ctrl+wheel'], ['Fit screen guide', 'Ctrl/Cmd+0'], ['Actual size', 'Ctrl/Cmd+1'], ['200% view', 'Ctrl/Cmd+2'],
   ['Next / previous page', 'Ctrl+Tab / Ctrl+Shift+Tab · Ctrl+Page Down / Page Up'],
   ['Select an element', 'Single-click'], ['Edit selected element', 'F2'], ['Move selected element', 'Arrow keys · Shift for 10 px'], ['Delete selected element', 'Delete / Backspace'],
   ['Move / resize element', 'Drag selection / its corners'], ['Element actions', 'Right-click'],
   ['Edit text in place', 'Double-click website text · Enter to save · Escape to cancel'],
   ['Select / Add request / Pan', 'V / R / H'], ['Ask AI about selection', 'Ctrl/Cmd+K'],
+  ['Rectangle / Circle / Freehand request', 'Shift+R / C / L'], ['Perfect circle', 'Shift while drawing a circle'],
   ['Open a request', 'Double-click empty canvas · Add request tool'],
   ['Pan canvas', 'Drag empty space · Space+drag · Middle drag'], ['Draw an area', 'Shift+drag'],
   ['New request in view', 'Enter on blank canvas · Shift+Enter'], ['Next element / parent', 'Enter / Alt+Enter on generated canvas'],
@@ -19,7 +20,8 @@ export const SHORTCUT_HELP = [
 ] as const;
 
 export function editorShortcut(event: ShortcutInput, editingText: boolean): EditorShortcut | null {
-  if (event.defaultPrevented || event.isComposing || event.altKey) return null;
+  if (event.defaultPrevented || event.isComposing) return null;
+  if (event.altKey) return !editingText && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key.toLowerCase() === 'z' || event.code === 'KeyZ') ? 'undoElement' : null;
   // WebKitGTK reports Shift+Tab as Unidentified with the physical Tab code.
   const key = (event.key === 'Unidentified' && event.code === 'Tab' ? 'Tab' : event.key).toLowerCase();
   const command = event.ctrlKey || event.metaKey;
@@ -47,6 +49,9 @@ export function editorShortcut(event: ShortcutInput, editingText: boolean): Edit
   }
   if (!editingText && !event.shiftKey && key === 'v') return 'selectTool';
   if (!editingText && !event.shiftKey && key === 'r') return 'requestTool';
+  if (!editingText && event.shiftKey && key === 'r') return 'rectangleTool';
+  if (!editingText && !event.shiftKey && key === 'c') return 'circleTool';
+  if (!editingText && !event.shiftKey && key === 'l') return 'freehandTool';
   if (!editingText && !event.shiftKey && key === 'h') return 'panTool';
   if (!editingText && (key === 'f1' || key === '?')) return 'help';
   if (!editingText && !event.shiftKey && (key === 'delete' || key === 'backspace')) return 'remove';

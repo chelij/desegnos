@@ -44,7 +44,7 @@ async function historyJump(driver, row, expectedPosition) {
 
 export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provider) {
   const output=join(evidence,'cleanup-extras');await mkdir(output);
-  const projectPath=join(output,'Workflow website.desegnos');
+  let projectPath=join(output,'Workflow website.desegnos');
   const picture=join(output,'picture.png');await writeFile(picture,Buffer.from(png,'base64'));
   let project,home,about;
   await step('First-run tips advance, dismiss and persist while the canvas stays free of sidebars',async()=>{
@@ -56,6 +56,21 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     assert.equal(await driver.execute(()=>document.querySelector('.first-run-tips')),null);
     await assertCanvasOnly(driver);await physical.initialize(evidence);
     project=(await workspace(driver)).project;home=project.homePageId;
+  });
+  await step('Style guide and every brief tab retain controls without explanatory filler',async()=>{
+    await driver.menu(['Style guide']);
+    await driver.ready('.style-guide');
+    assert.doesNotMatch(await driver.execute(()=>document.querySelector('.style-guide').textContent),/These rules tell|Pick one, then|Generate a page to see/);
+    assert.equal(await driver.execute(()=>document.querySelectorAll('.style-guide input[type="color"]').length),4);
+    await driver.button('Open project brief');
+    for(const tab of ['Overview','Brief','Rules','Exceptions']){
+      await driver.button(tab);
+      assert.doesNotMatch(await driver.execute(()=>document.querySelector('.notes').textContent),/Updated automatically|Saved locally as you type|Keep colors, type|Let one part|Suggestions, with room/);
+    }
+    await driver.menu(['PROJECT.md'],'Project brief options');
+    await driver.ready('pre[aria-label="PROJECT.md source"]');
+    assert.doesNotMatch(await driver.execute(()=>document.querySelector('.notes').textContent),/Saved with your project/);
+    await driver.click('button[aria-label="Close Project brief"]');await closed(driver);
   });
   await step('History distinguishes repeated content, ordinary Undo/Redo, branching and settings',async()=>{
     for(const name of ['History B','History A']){
@@ -73,7 +88,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     await physical.captureWindow(join(output,'history.png'));
   });
   await step('Install two real editable pages for checks, preview and picture workflows',async()=>{
-    await chooseFile(physical,()=>driver.button('Save'),projectPath,output,'initial-save');
+    projectPath=(await driver.invoke('get_workspace')).path;await driver.button('Save');
     project=(await workspace(driver)).project;
     project=(await driver.invoke('edit_project',{revision:project.revision,command:{type:'add_page',name:'About',path:'/about'}})).project;about=project.pages.at(-1).id;
     for(const [pageId,name] of [[home,'Home'],[about,'About']]){
@@ -182,8 +197,8 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     await driver.click(editor);await physical.keys('End',1,['Control']);await physical.keys('Return');await physical.raw({action:'text',text:'// Immediate project save'});
     const typed=await waitFor(()=>driver.execute(query=>{const value=document.querySelector(query).innerText;return value.endsWith('// Immediate project save')&&value;},editor),'Native typing did not reach the editor');
     await physical.keys('Z',1,['Control']);
-    assert.notEqual(await driver.execute(query=>document.querySelector(query).innerText,editor),typed);assert.notEqual(typed,text);assert.equal((await workspace(driver)).history.position,position);
-    await physical.keys('Z',1,['Control','Shift']);assert.equal(await driver.execute(query=>document.querySelector(query).innerText,editor),typed);await physical.keys('S',1,['Control']);
+    await waitFor(async()=>await driver.execute(query=>document.querySelector(query).innerText,editor)!==typed,'Native Undo did not update the code editor');assert.notEqual(typed,text);assert.equal((await workspace(driver)).history.position,position);
+    await physical.keys('Z',1,['Control','Shift']);await waitFor(async()=>await driver.execute(query=>document.querySelector(query).innerText,editor)===typed,'Native Redo did not restore the code draft');await physical.keys('S',1,['Control']);
     await waitFor(async()=>{const state=await workspace(driver);return !state.dirty&&state.project.pages.find(page=>page.id===about).content.javascript.endsWith('// Immediate project save');},'Ctrl+S did not flush the newest code into the actual archive');
     const saved=(await workspace(driver)).project;await verifyArchive(projectPath,saved,await driver.invoke('get_project_notes'));
     await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Code"]','xpath');await waitFor(()=>driver.execute(()=>document.querySelector('.design-pane').getClientRects().length===0),'Code view did not finish flushing drafts before hiding the canvas');

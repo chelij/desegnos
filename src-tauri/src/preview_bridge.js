@@ -22,9 +22,17 @@
     if (href.startsWith('#')) return;
     event.preventDefault();
     try {
+      if (script.dataset.fileMode === 'true') {
+        const destination = new URL(href, document.baseURI);
+        if (destination.origin === location.origin && destination.host === location.host) { location.href = destination.href; return; }
+        if (/^https?:$/.test(destination.protocol)) parent.postMessage({ type: 'desegni-preview-link', sessionId, pageId, url: destination.href.slice(0, 2048) }, '*');
+        return;
+      }
       const destination = new URL(href, 'https://desegni.invalid' + currentPath);
       if (destination.origin !== 'https://desegni.invalid') {
-        report('External navigation is blocked in the isolated preview.');
+        // The editor offers to open web links in the browser; the preview itself never leaves.
+        if (/^https?:$/.test(destination.protocol)) parent.postMessage({ type: 'desegni-preview-link', sessionId, pageId, url: destination.href.slice(0, 2048) }, '*');
+        else report(`${destination.protocol.replace(':', '')} links work on the published site, not in the preview.`);
         return;
       }
       const path = decodeURIComponent(destination.pathname).replace(/\/$/, '') || '/';

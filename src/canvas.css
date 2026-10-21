@@ -124,6 +124,12 @@
 
 .free-workspace .request-controls { position: absolute; pointer-events: none; }
 .free-workspace .request-controls > button { pointer-events: auto; }
+.free-workspace .region-outline { pointer-events: none; overflow: hidden; fill: color-mix(in srgb, var(--annotation-surface) 28%, transparent); stroke: var(--annotation-border); stroke-width: 2px; stroke-dasharray: 6 4; }
+.free-workspace .region-outline:hover { fill: color-mix(in srgb, var(--annotation-surface) 55%, transparent); }
+.free-workspace .region-outline.selected, .free-workspace .region-outline.draft { stroke: var(--annotation-focus); }
+.free-workspace .region-outline.selected { stroke-dasharray: none; }
+.free-workspace.repicking .region-outline { pointer-events: none; opacity: .2; }
+.free-workspace.repicking .region-outline > * { pointer-events: none; }
 
 /* Image placeholders: drop a picture from the file manager, or click to browse. */
 .free-workspace .image-drop-target { position: absolute; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-height: 0; padding: 6px; border: 2px dashed var(--annotation-focus); border-radius: 6px; background: color-mix(in srgb, var(--surface) 70%, transparent); color: var(--text); font-size: 13px; text-align: center; cursor: pointer; overflow: hidden; }

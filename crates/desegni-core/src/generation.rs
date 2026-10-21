@@ -3,7 +3,7 @@ use crate::{
     RequirementsSnapshot, Result, Scope, digest, ensure, model::validate_text,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const MAX_GENERATION_BYTES: usize = 8 * 1024 * 1024;
@@ -328,7 +328,7 @@ impl GenerationCandidate {
             )?;
         }
         if snapshot.format_version()? >= 8 {
-            self.validate_project_images()?;
+            self.validate_project_images(project, snapshot.format_version()? >= 12)?;
         }
         if snapshot.format_version()? >= 9 {
             for page in &self.pages {
@@ -479,6 +479,7 @@ impl Project {
             .revision
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
+        let mut placed = BTreeMap::new();
         for page in &candidate.pages {
             let target = next
                 .pages
@@ -487,19 +488,27 @@ impl Project {
                 .ok_or_else(|| Error("A generated page no longer exists.".into()))?;
             let mut content = page.content.clone();
             // Attached pictures are stored with their requests and inserted here, after the AI
-            // has placed them, so the picture bytes are never part of the AI request.
+            // has placed them, scaled to the size they are shown at.
             let attachments: Vec<_> = target
                 .regions
                 .iter()
                 .flat_map(|region| region.attachments.iter())
                 .collect();
-            if let Some(html) =
-                crate::attachments::insert_attached_images(&content.html, &attachments)?
-            {
+            if let Some(html) = crate::attachments::insert_attached_images(
+                &content.html,
+                &attachments,
+                target.viewport.width,
+                &mut placed,
+            )? {
                 content.html = html;
                 content.validate()?;
             }
             content.html = crate::source::assign_editor_ids(&content.html)?;
+            // The AI writes one long line; keep a readable layout (sent compact again from format 14).
+            let formatted = crate::format_site_content(&content);
+            if formatted.validate().is_ok() {
+                content = formatted;
+            }
             target.content = Some(content);
         }
         for page in &mut next.pages {
@@ -516,9 +525,14 @@ impl Project {
                         && region.prompt.trim().is_empty())
                 {
                     region.completed = true;
+                    // Only the placed, display-sized copies are kept.
+                    region
+                        .attachments
+                        .retain(|item| item.kind != crate::AttachmentKind::Image);
                 }
             }
         }
+        next.pictures.extend(placed);
         for index in &selected {
             let proposal = &candidate.decision_proposals[*index];
             if !next.decisions.iter().any(|existing| {
@@ -548,6 +562,7 @@ impl Project {
         dossier.applied_at_revision = Some(next.revision);
         dossier.accepted_decision_indices = selected.into_iter().collect();
         next.latest_generation = Some(dossier);
+        next.store_inline_images()?;
         next.validate()?;
         Ok(next)
     }

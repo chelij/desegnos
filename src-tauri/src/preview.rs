@@ -48,6 +48,9 @@ pub struct PreviewDescriptor {
     pub url: String,
     pub session_id: Uuid,
     pub source_sha256: Option<String>,
+    pub content: Option<desegni_core::SiteContent>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub website: bool,
 }
 
 struct Resource {
@@ -57,6 +60,7 @@ struct Resource {
 
 struct PreviewSession {
     resources: BTreeMap<(Uuid, &'static str), Resource>,
+    site: BTreeMap<String, Resource>,
     byte_len: usize,
     scripts_enabled: bool,
 }
@@ -96,6 +100,9 @@ impl PreviewRegistry {
         if !project.pages.iter().any(|page| page.id == page_id) {
             return Err("The preview page no longer exists.".into());
         }
+        if project.website.is_some() && candidate.is_none() {
+            return self.register_website(project, page_id, run_scripts);
+        }
         let session_id = Uuid::new_v4();
         let routes: BTreeMap<_, _> = project
             .pages
@@ -109,6 +116,7 @@ impl PreviewRegistry {
             })
             .collect();
         let routes = attribute(&serde_json::to_string(&routes).map_err(|error| error.to_string())?);
+        let mut preview_content = None;
         let mut resources = BTreeMap::new();
         let mut byte_len = 0_usize;
         for page in &project.pages {
@@ -121,10 +129,15 @@ impl PreviewRegistry {
                         .map(|generated| &generated.content)
                 })
                 .or(page.content.as_ref());
-            if let Some(content) = content {
-                content.validate().map_err(|error| error.to_string())?;
+            let resolved = content
+                .map(|content| project.resolve_site_content(content))
+                .transpose()
+                .map_err(|error| error.to_string())?;
+            if page.id == page_id {
+                preview_content = resolved.clone();
             }
-            let (html, css, javascript) = content
+            let (html, css, javascript) = resolved
+                .as_ref()
                 .map(|content| {
                     (
                         content.html.as_str(),
@@ -209,12 +222,15 @@ impl PreviewRegistry {
             session_id,
             PreviewSession {
                 resources,
+                site: BTreeMap::new(),
                 byte_len,
                 scripts_enabled: run_scripts,
             },
         );
         self.order.push_back(session_id);
         Ok(PreviewDescriptor {
+            website: false,
+            content: preview_content,
             url: resource_url(session_id, page_id),
             session_id,
             source_sha256: candidate
@@ -235,6 +251,108 @@ impl PreviewRegistry {
                 .map(desegni_core::SiteContent::sha256)
                 .transpose()
                 .map_err(|error| error.to_string())?,
+        })
+    }
+
+    fn register_website(
+        &mut self,
+        project: &Project,
+        page_id: Uuid,
+        run_scripts: bool,
+    ) -> Result<PreviewDescriptor, String> {
+        let session_id = Uuid::new_v4();
+        let page = project.page(page_id).map_err(|e| e.to_string())?;
+        let imported = project.website.as_ref().expect("website");
+        let path = imported
+            .page_files
+            .get(&page_id)
+            .ok_or("This page has no imported file.")?;
+        let mut files = if run_scripts {
+            project.website_live_files()
+        } else {
+            project.website_files()
+        }
+        .map_err(|e| e.to_string())?
+        .expect("website");
+        let bridge_name = format!("desegnos-{session_id}.js");
+        files.insert(
+            bridge_name.clone(),
+            include_bytes!("preview_bridge.js").to_vec(),
+        );
+        for (id, file) in &imported.page_files {
+            if let Some(bytes) = files.get_mut(file) {
+                let mut html = String::from_utf8(bytes.clone()).map_err(|e| e.to_string())?;
+                if run_scripts {
+                    let bridge = format!(
+                        "<script src=\"/{bridge_name}\" crossorigin=\"anonymous\" data-file-mode=\"true\" data-session=\"{session_id}\" data-page=\"{id}\" data-path=\"/\" data-routes=\"{{}}\"></script>"
+                    );
+                    if let Some(position) = html.to_ascii_lowercase().rfind("</body>") {
+                        html.insert_str(position, &bridge);
+                    } else {
+                        html.push_str(&bridge);
+                    }
+                }
+                *bytes = html.into_bytes();
+            }
+        }
+        let byte_len = files.values().map(Vec::len).sum::<usize>();
+        if byte_len > MAX_PREVIEW_BYTES {
+            return Err("The complete preview exceeds the 64 MiB local limit.".into());
+        }
+        while self.sessions.len() >= MAX_PREVIEW_SESSIONS
+            || self.sessions.values().map(|s| s.byte_len).sum::<usize>() + byte_len
+                > MAX_PREVIEW_BYTES
+        {
+            let Some(expired) = self.order.pop_front() else {
+                break;
+            };
+            self.sessions.remove(&expired);
+        }
+        let site = files
+            .into_iter()
+            .map(|(path, bytes)| {
+                let mime = site_mime(&path);
+                (
+                    path,
+                    Resource {
+                        content_type: mime,
+                        bytes: bytes.into(),
+                    },
+                )
+            })
+            .collect();
+        self.sessions.insert(
+            session_id,
+            PreviewSession {
+                resources: BTreeMap::new(),
+                site,
+                byte_len,
+                scripts_enabled: run_scripts,
+            },
+        );
+        self.order.push_back(session_id);
+        let prefix = if cfg!(target_os = "windows") {
+            format!("http://{session_id}.desegni-preview.localhost")
+        } else {
+            format!("desegni-preview://{session_id}.localhost")
+        };
+        Ok(PreviewDescriptor {
+            url: format!("{prefix}/{path}"),
+            session_id,
+            website: true,
+            source_sha256: page
+                .content
+                .as_ref()
+                .map(desegni_core::SiteContent::sha256)
+                .transpose()
+                .map_err(|e| e.to_string())?,
+            content: if run_scripts {
+                None
+            } else {
+                project
+                    .website_canvas_content(page)
+                    .map_err(|e| e.to_string())?
+            },
         })
     }
 
@@ -262,10 +380,67 @@ impl PreviewRegistry {
                 b"Preview resource is unavailable.".to_vec(),
             )
         };
-        if !matches!(request.method().as_str(), "GET" | "HEAD")
-            || request.uri().query().is_some()
-            || !request.body().is_empty()
+        if !matches!(request.method().as_str(), "GET" | "HEAD") || !request.body().is_empty() {
+            return denied();
+        }
+        let host = request.uri().host().unwrap_or_default();
+        if let Some(id) = host
+            .strip_suffix(".localhost")
+            .and_then(|h| h.strip_suffix(".desegni-preview").or(Some(h)))
+            .and_then(|h| Uuid::parse_str(h).ok())
         {
+            let Some(package) = self.sessions.get(&id) else {
+                return denied();
+            };
+            let Some(decoded) = decode_site_path(request.uri().path()) else {
+                return denied();
+            };
+            let path = decoded.trim_start_matches('/');
+            let directory = path.trim_end_matches('/');
+            let Some(resource) = package
+                .site
+                .get(path)
+                .or_else(|| package.site.get(&format!("{directory}/index.html")))
+                .or_else(|| package.site.get(&format!("{directory}/index.htm")))
+                .or_else(|| package.site.get(&format!("{directory}.html")))
+                .or_else(|| package.site.get(&format!("{directory}.htm")))
+                .or_else(|| {
+                    (path.is_empty())
+                        .then(|| {
+                            package
+                                .site
+                                .get("index.html")
+                                .or_else(|| package.site.get("index.htm"))
+                        })
+                        .flatten()
+                })
+            else {
+                return denied();
+            };
+            let mut result = response(
+                StatusCode::OK,
+                resource.content_type,
+                if request.method() == "HEAD" {
+                    vec![]
+                } else {
+                    resource.bytes.to_vec()
+                },
+            );
+            let script = if package.scripts_enabled {
+                "'unsafe-inline' desegni-preview: http: https:"
+            } else {
+                "'none'"
+            };
+            let policy = format!(
+                "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegni-preview: http: https: data:; img-src desegni-preview: http: https: data:; font-src desegni-preview: http: https: data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri desegni-preview: http: https:; form-action 'none'; media-src desegni-preview: http: https: data:; worker-src 'none'"
+            );
+            result.headers_mut().insert(
+                "content-security-policy",
+                policy.parse().expect("fixed website policy"),
+            );
+            return result;
+        }
+        if request.uri().query().is_some() {
             return denied();
         }
         let path: Vec<_> = request.uri().path().split('/').collect();
@@ -394,10 +569,121 @@ fn source_response(
     result
 }
 
+fn decode_site_path(path: &str) -> Option<String> {
+    let mut decoded = Vec::new();
+    let mut bytes = path.bytes();
+    while let Some(byte) = bytes.next() {
+        decoded.push(if byte == b'%' {
+            ((bytes.next()? as char).to_digit(16)? * 16 + (bytes.next()? as char).to_digit(16)?)
+                as u8
+        } else {
+            byte
+        });
+    }
+    let value = String::from_utf8(decoded).ok()?;
+    (!value.contains(['\\', '\0']) && !value.split('/').any(|p| p == ".." || p == "."))
+        .then_some(value)
+}
+
+fn site_mime(path: &str) -> &'static str {
+    match path
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "html" | "htm" => "text/html; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "js" | "mjs" => "text/javascript; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "avif" => "image/avif",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "json" => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use desegni_core::{Appearance, SiteContent, Viewport};
+
+    #[test]
+    fn imported_preview_preserves_file_layout_queries_and_script_isolation() {
+        let files = BTreeMap::from([
+            ("index.html".into(), b"<!doctype html><html><head><link rel='stylesheet' href='/css/site.css?v=1'></head><body><h1>Home</h1><a href='about.html'>About</a><script type='module' src='main.js'></script></body></html>".to_vec()),
+            ("about.html".into(), b"<!doctype html><h1>About</h1>".to_vec()),
+            ("css/site.css".into(), b"h1{color:red}".to_vec()),
+            ("main.js".into(), b"import './module.js';".to_vec()),
+            ("module.js".into(), b"document.body.dataset.loaded='yes';".to_vec()),
+        ]);
+        let project = desegni_core::import_website_files("Website", &files).unwrap();
+        let mut registry = PreviewRegistry::default();
+        let live = registry
+            .register(&project, None, project.home_page_id, true)
+            .unwrap();
+        let document = registry.serve(&Request::get(&live.url).body(vec![]).unwrap());
+        assert_eq!(document.status(), StatusCode::OK);
+        let html = String::from_utf8(document.body().clone()).unwrap();
+        assert!(html.contains("href=\"about.html\""));
+        assert!(html.contains("src=\"main.js\""));
+        assert!(
+            document.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("script-src 'unsafe-inline'")
+        );
+        let origin = live.url.trim_end_matches("/index.html");
+        for path in ["css/site.css?v=1", "about.html", "module.js"] {
+            assert_eq!(
+                registry
+                    .serve(
+                        &Request::get(format!("{origin}/{path}"))
+                            .body(vec![])
+                            .unwrap()
+                    )
+                    .status(),
+                StatusCode::OK
+            );
+        }
+        assert_eq!(
+            registry
+                .serve(
+                    &Request::get(format!("{origin}/%2e%2e/private"))
+                        .body(vec![])
+                        .unwrap()
+                )
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        let canvas = registry
+            .register(&project, None, project.home_page_id, false)
+            .unwrap();
+        assert!(canvas.content.unwrap().html.contains("h1{color:red}"));
+        let response = registry.serve(&Request::get(canvas.url).body(vec![]).unwrap());
+        assert!(
+            response.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("script-src 'none'")
+        );
+        registry.release(live.session_id);
+        assert_eq!(
+            registry
+                .serve(&Request::get(live.url).body(vec![]).unwrap())
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
 
     fn project() -> Project {
         let mut project = Project::new(

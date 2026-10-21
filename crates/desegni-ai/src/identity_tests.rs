@@ -229,6 +229,60 @@ fn identity_images_have_separate_bounded_cost_and_context_reservations() {
     );
 }
 
+#[test]
+fn every_provider_sizes_photo_previews_as_low_detail_and_uses_the_same_preflight() {
+    let frozen = identity_snapshot();
+    let photo = IdentityImage {
+        photo: true,
+        data_uri: "data:image/jpeg;base64,/9j/".into(),
+    };
+    for provider in [
+        ProviderId::Openai,
+        ProviderId::Anthropic,
+        ProviderId::Google,
+    ] {
+        let settings = ProviderSettings {
+            spending_limit_usd: 10_000.0,
+            ..provider.defaults()
+        };
+        let client = ProviderClient::new(provider, OpenAiClient::new().unwrap()).unwrap();
+        let estimate = |images: &[IdentityImage]| {
+            estimate_identity_for_provider(
+                provider,
+                AuthenticationMethod::ApiKey,
+                &frozen,
+                &identity_schema(),
+                &settings,
+                images,
+            )
+            .unwrap()
+        };
+        let none = estimate(&[]);
+        let photos = vec![photo.clone(); 12];
+        let with_photos = estimate(&photos);
+        assert!(
+            with_photos.input_token_upper_bound
+                >= none.input_token_upper_bound + 12 * IDENTITY_PHOTO_TOKEN_RESERVE
+        );
+        assert!(
+            with_photos.input_token_upper_bound
+                < none.input_token_upper_bound + IDENTITY_IMAGE_TOKEN_RESERVE
+        );
+        assert_eq!(
+            client
+                .estimate_identity(
+                    AuthenticationMethod::ApiKey,
+                    &frozen,
+                    &identity_schema(),
+                    &settings,
+                    &photos
+                )
+                .unwrap(),
+            with_photos
+        );
+    }
+}
+
 #[tokio::test]
 async fn identity_invalid_packet_schema_and_images_fail_before_connecting() {
     let frozen = identity_snapshot();

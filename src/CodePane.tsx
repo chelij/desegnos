@@ -20,7 +20,8 @@ export type CodePaneHandle = { synchronize: () => Promise<void> };
 export const CodePane = forwardRef<CodePaneHandle, {
   content: SiteContent | null; target: ElementTarget | null; map: SourceMapView | null;
   save?: (language: Tab, text: string, expected: string) => Promise<SiteContent>; pick?: (selector: string, id?: string) => void; saveProject?: () => void;
-}>(function CodePane({ content, target, map, save, pick, saveProject }, ref) {
+  tidy?: () => void;
+}>(function CodePane({ content, target, map, save, pick, saveProject, tidy }, ref) {
   const [tab, setTab] = useState<Tab>('html');
   const [query, setQuery] = useState('');
   const [hit, setHit] = useState(0);
@@ -180,11 +181,12 @@ export const CodePane = forwardRef<CodePaneHandle, {
   return <section className="code-pane" aria-label="Page code">
     <header className="code-pane-bar">
       <div className="code-tabs" role="tablist" aria-label="Code files">{TABS.map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { void commit(tab); setTab(value); }}>{label}{drafts[value] && drafts[value]!.text !== projections[value].text ? ' •' : ''}</button>)}</div>
+      {tidy && content && <button type="button" className="code-tidy" title="Tidy code" disabled={Object.values(statuses).some(item => item?.kind === 'saving')} onClick={tidy}>Tidy code</button>}
       <input ref={searchInput} className="code-search" type="search" placeholder="Find in code" aria-label="Find in code" value={query} onChange={event => setQuery(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && matches.length) { event.preventDefault(); setHit(value => value + (event.shiftKey ? matches.length - 1 : 1)); } }} />
-      {content?.html.includes('data-desegnos-') && tab === 'html' && <label className="code-meta-toggle" title="Editor attributes stay attached to elements and are removed on export."><input type="checkbox" checked={showMeta} disabled={!!drafts.html || statuses.html?.kind === 'saving'} onChange={event => { setShowMeta(event.target.checked); try { localStorage.setItem('desegnos.code-show-meta', event.target.checked ? 'yes' : 'no'); } catch {} }} />Show editor attributes</label>}
+      {content?.html.includes('data-desegnos-') && tab === 'html' && <label className="code-meta-toggle"><input type="checkbox" checked={showMeta} disabled={!!drafts.html || statuses.html?.kind === 'saving'} onChange={event => { setShowMeta(event.target.checked); try { localStorage.setItem('desegnos.code-show-meta', event.target.checked ? 'yes' : 'no'); } catch {} }} />Show editor attributes</label>}
       {query && <span className="code-count" aria-live="polite">{matches.length ? `${hit % matches.length + 1}/${matches.length}` : '0'}</span>}
     </header>
-    {!content ? <p className="code-empty">Generate the page to see its code here.</p> : <Suspense fallback={<p className="code-empty" role="status">Opening code…</p>}>{TABS.map(([language, label]) => {
+    {!content ? <p className="code-empty">No generated code.</p> : <Suspense fallback={<p className="code-empty" role="status">Opening code…</p>}>{TABS.map(([language, label]) => {
       const value = drafts[language]?.text ?? projections[language].text;
       const marks = new Map<number, CodeLineMark>();
       const mark = (line: number, className: string, title?: string) => { const old = marks.get(line); marks.set(line, { line, className: [old?.className, className].filter(Boolean).join(' '), title: title ?? old?.title }); };

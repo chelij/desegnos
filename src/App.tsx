@@ -4,13 +4,15 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { native, edit } from './api';
 import { Canvas, type CanvasHandle, type RequestPatch } from './Canvas';
-import { CanvasTools, type CanvasTool } from './CanvasTools';
+import { CanvasTools, type CanvasTool, type RequestShapeKind } from './CanvasTools';
 import { Modal } from './Modal';
 import { SaveConflictDialog, type SaveConflict, type SaveOutcome, type SaveChoice } from './SaveConflict';
 import { regionTargets, sameTargets } from './elementTargets';
 import brandLight from './assets/brand/desegnos-wordmark-light.svg';
 import brandDark from './assets/brand/desegnos-wordmark-dark.svg';
 import { NewProject } from './NewProject';
+import { ProjectLocationSettings } from './ProjectLocation';
+import type { ProjectLocationView } from './types';
 import { Notes, type DossierSection } from './Notes';
 import { MenuButton, type MenuItem } from './Menus';
 import './shell.css';
@@ -23,12 +25,13 @@ import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from
 import { FirstRunTips } from './Onboarding';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
+import type { WebsiteFolderSelection } from './types';
 import { GenerationLog } from './GenerationLog';
 import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './deletePreference';
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
 import { useHistory } from './useHistory';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AiSettingsView, Appearance, Brief, Command, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, Page, Project, Rect, RecoveryInfo, Region, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent, RequestAttachment } from './types';
+import type { AiSettingsView, Appearance, Brief, Command, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, Page, Project, Rect, RecoveryInfo, Region, RegionShape, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent, RequestAttachment } from './types';
 
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
@@ -38,6 +41,7 @@ const PROJECT_COLOURS = ['#2f6fde', '#d9480f', '#2b8a3e', '#ae3ec9', '#0c8599', 
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : String(error); }
 // Open each page fitted to the window: web pages by width, mobile pages by height.
 function initialZoom(width: number, height = 900) { const fit = width > 600 ? (window.innerWidth - 96) / width : (window.innerHeight - 240) / height; return Math.max(0.1, Math.min(1, fit)); }
+function readRequestShape(): RequestShapeKind { try { const value = localStorage.getItem('desegnos.request-shape'); return value === 'ellipse' || value === 'freehand' ? value : 'rect'; } catch { return 'rect'; } }
 function readRulerUnit(): 'pixels' | 'percent' { try { return localStorage.getItem('desegnos.ruler-unit') === 'percent' ? 'percent' : 'pixels'; } catch { return 'pixels'; } }
 function readCodeWidth() { try { return Math.min(0.75, Math.max(0.2, Number(localStorage.getItem('desegnos.code-width')) || 0.42)); } catch { return 0.42; } }
 function readCodeView(projectId: string): CodeView { try { const value = localStorage.getItem(`desegnos.code-view.${projectId}`); return value === 'split' || value === 'code' ? value : 'design'; } catch { return 'design'; } }
@@ -57,14 +61,21 @@ export default function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [dismissedMigration, setDismissedMigration] = useState('');
+  // The recovery error can be put aside for this session; the recovery files stay on disk.
+  const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [pageId, setPageId] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [focusPrompt, setFocusPrompt] = useState(false);
   const [zoom, setZoom] = useState(0.75);
   const [tool, setTool] = useState<CanvasTool>('select');
+  const [requestShape, setRequestShape] = useState<RequestShapeKind>(readRequestShape);
+  useEffect(() => { try { localStorage.setItem('desegnos.request-shape', requestShape); } catch { /* Preference storage can be unavailable. */ } }, [requestShape]);
   const [rulerUnit, setRulerUnit] = useState<'pixels' | 'percent'>(readRulerUnit);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [projectLocation, setProjectLocation] = useState<ProjectLocationView | null>(null);
+  const [showProjectLocation, setShowProjectLocation] = useState(false);
+  const [dismissedSiteWarnings, setDismissedSiteWarnings] = useState('');
   const [exported, setExported] = useState<WebsiteExport | null>(null);
   const [exporting, setExporting] = useState(false);
   const [resultReview, setResultReview] = useState<{ jobId: string; revision: number } | null>(null);
@@ -78,6 +89,18 @@ export default function App() {
   const [showCheck, setShowCheck] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [importFolder, setImportFolder] = useState<WebsiteFolderSelection | null>(null);
+  const [importAsNew, setImportAsNew] = useState(false);
+  function startBrandImport() { setImportFolder(null); setImportAsNew(true); setShowNew(false); setShowImport(true); }
+  async function editWebsite(folderId: string) {
+    await synchronize(); await settle();
+    await queue(async () => {
+      const opened = await native<WorkspaceView>('edit_website_folder', { folderId });
+      accept(opened); setSelected(null); setShowNew(false); setNotice('Website opened.');
+      if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height));
+      void refreshRecent().catch(() => {});
+    });
+  }
   const [offerRestyle, setOfferRestyle] = useState<string | false>(false);
   const [showLog, setShowLog] = useState(false);
   const [pendingImages, setPendingImages] = useState(0);
@@ -150,23 +173,30 @@ export default function App() {
     if (value.error) setError(`Recent projects: ${value.error}`);
   }, []);
   useEffect(() => { void refreshRecent().catch(error => setError(errorMessage(error))); }, [refreshRecent]);
+  useEffect(() => { void native<ProjectLocationView>('get_project_location').then(setProjectLocation).catch(error => setError(errorMessage(error))); }, []);
+  async function changeProjectLocation(reset: boolean) {
+    const path = reset ? null : await native<string | null>('pick_project_location');
+    if (!reset && !path) return;
+    setProjectLocation(await native<ProjectLocationView>('set_project_location', { path }));
+  }
   useEffect(() => { try { localStorage.setItem('desegnos.ruler-unit', rulerUnit); } catch {} }, [rulerUnit]);
 
   const accept = useCallback((next: WorkspaceView) => { current.current = next; setView(next); }, []);
-  const queue = useCallback(<T,>(operation: (workspace: WorkspaceView | null) => Promise<T>, reportErrors = true): Promise<T> => {
-    setPending(count => count + 1);
+  // quiet: typing saves skip the busy count, which would re-render the whole editor twice per key.
+  const queue = useCallback(<T,>(operation: (workspace: WorkspaceView | null) => Promise<T>, reportErrors = true, quiet = false): Promise<T> => {
+    if (!quiet) setPending(count => count + 1);
     const result = tail.current.then(() => operation(current.current));
     tail.current = result.then(() => undefined, () => undefined);
-    return result.catch(error => { if (reportErrors) setError(errorMessage(error)); throw error; }).finally(() => setPending(count => count - 1));
+    return result.catch(error => { if (reportErrors) setError(errorMessage(error)); throw error; }).finally(() => { if (!quiet) setPending(count => count - 1); });
   }, []);
-  const mutate = useCallback((command: Command | ((project: Project) => Command | null)) => queue(async workspace => {
+  const mutate = useCallback((command: Command | ((project: Project) => Command | null), quiet = false) => queue(async workspace => {
     const project = workspace?.project;
     if (!project) throw new Error('Create or open a project first.');
     const resolved = typeof command === 'function' ? command(project) : command;
     if (!resolved) return workspace!;
     const next = await edit(project.revision, resolved);
     accept(next); return next;
-  }), [queue, accept]);
+  }, true, quiet), [queue, accept]);
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try { const loaded = await native<WorkspaceView>('get_workspace'); accept(loaded); if (loaded.project) setZoom(initialZoom(loaded.project.viewport.width, loaded.project.viewport.height)); }
@@ -241,7 +271,7 @@ export default function App() {
         outcome = await queue(() => native<SaveOutcome>('resolve_save_conflict', { token: conflict.token, choice }));
       }
       if (outcome.status === 'cancelled') return null;
-      accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent().catch(() => {});
+      accept(outcome.workspace); setDismissedSiteWarnings(''); setNotice('Project saved.'); void refreshRecent().catch(() => {});
       return outcome.workspace;
     };
     saveFlight.current = operation().finally(() => { saveFlight.current = null; });
@@ -261,15 +291,16 @@ export default function App() {
       });
     });
   }
-  async function importContext(analysisId: string, findings: number[], assets: string[]) {
+  async function importContext(analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) {
     await synchronize(); await settle();
     await queue(async workspace => {
-      if (!workspace?.project) throw new Error('Open a project first.');
-      const next = await native<WorkspaceView>('import_context', { revision: workspace.project.revision, identityAnalysisId: analysisId, identityFindingIndices: findings, identityAssetIds: assets });
+      const next = importAsNew || !workspace?.project
+        ? await native<WorkspaceView>('create_project', { name: 'Imported brand', viewport: { width: 1440, height: 900 }, discard: false, identityAnalysisId: analysisId, identityFindingIndices: findings, identityAssetIds: assets, identityPhotoIds: photos, identityItemIndices: items, identityPagePaths: pages })
+        : await native<WorkspaceView>('import_context', { revision: workspace.project.revision, identityAnalysisId: analysisId, identityFindingIndices: findings, identityAssetIds: assets, identityPhotoIds: photos, identityItemIndices: items, identityPagePaths: pages, attachMatchingPages: attachMatching });
       accept(next);
       setNotice('Context added to the project brief.');
       // Pages generated before this import don't follow it yet: offer to rebuild them.
-      if (next.project?.pages.some(item => item.content)) setOfferRestyle('Context added. Your existing pages don’t use it yet.');
+      if (next.project?.pages.some(item => item.content)) setOfferRestyle('Existing pages need restyling.');
     });
   }
   // Opening, creating or recovering adds a project tab group; the current project stays open.
@@ -296,11 +327,9 @@ export default function App() {
       try {
         let attachment: RequestAttachment;
         if (/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
-          if (file.size > 1024 * 1024) throw new Error(`${file.name} is larger than 1 MB.`);
           attachment = { id: 'new', name: file.name.slice(0, 120), kind: 'image', dataUri: await readImage(file) };
         } else if (file.type.startsWith('text/') || /\.(txt|md|csv|json|html?)$/i.test(file.name)) {
           const text = await readText(file);
-          if (text.length > 32_000) throw new Error(`${file.name} is longer than 32,000 characters.`);
           attachment = { id: 'new', name: file.name.slice(0, 120), kind: 'text', text };
         } else throw new Error(`${file.name}: only pictures (PNG, JPEG, WebP, GIF) and text files can be attached.`);
         await mutate({ type: 'add_region_attachment', page_id: owner.id, region_id: regionId, attachment });
@@ -319,7 +348,7 @@ export default function App() {
     for (const item of target.pages.filter(entry => entry.appearance !== next)) {
       await mutate(project => { const page = project.pages.find(entry => entry.id === item.id); return page && page.appearance !== next ? { type: 'update_page', page_id: page.id, name: page.name, path: page.path, viewport: page.viewport, appearance: next, included: page.included } : null; });
     }
-    if (target.pages.some(entry => entry.content && entry.appearance !== next)) setOfferRestyle(`Pages switched to ${next}. Pages already built keep their colours until they're regenerated.`);
+    if (target.pages.some(entry => entry.content && entry.appearance !== next)) setOfferRestyle(`Existing pages need restyling for ${next} mode.`);
   }
   async function regenerateWithContext() {
     setOfferRestyle(false);
@@ -332,10 +361,11 @@ export default function App() {
     }
     generate();
   }
-  async function open() {
+  async function open(folder = false) {
     await openAlongside(async discard => {
       await queue(async () => {
-        const opened = await native<WorkspaceView | null>('open_project', { discard });
+        const opened = await native<WorkspaceView | { website: WebsiteFolderSelection } | null>('open_project', { discard, folder });
+        if (opened && 'website' in opened) { setImportFolder(opened.website); setImportAsNew(false); setShowNew(false); setShowImport(true); return; }
         if (opened) { accept(opened); setSelected(null); setNotice('Project opened.'); setShowNew(false); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
       });
     });
@@ -347,8 +377,13 @@ export default function App() {
         accept(opened); setSelected(null); setShowNew(false); setNotice('Project opened.');
         if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height));
         void refreshRecent().catch(() => {});
-      });
+      }, false);
     });
+  }
+  async function forgetRecent(path: string) {
+    await queue(async () => {
+      setRecentProjects(await native<RecentProject[]>('forget_recent_project', { path }));
+    }, false);
   }
   async function exportWebsite() {
     await synchronize(); await settle();
@@ -361,12 +396,13 @@ export default function App() {
     } catch (error) { setError(errorMessage(error)); }
     finally { setExporting(false); }
   }
-  async function create(name: string, viewport: Viewport) {
+  async function create(name: string, viewport: Viewport, parentDirectory?: string) {
     await openAlongside(async discard => {
       await queue(async () => {
-        accept(await native<WorkspaceView>('create_project', { name, viewport, appearance: 'light', discard }));
+        accept(await native<WorkspaceView>('create_project', { name, viewport, parentDirectory: parentDirectory ?? null, appearance: resolvedTheme, discard }));
         setSelected(null); setShowNew(false); setNotice('Blank project created.');
         setZoom(initialZoom(viewport.width, viewport.height));
+        void refreshRecent().catch(() => {});
       });
     });
   }
@@ -377,7 +413,7 @@ export default function App() {
         accept(recovered);
         if (recovered.project) setZoom(initialZoom(recovered.project.viewport.width, recovered.project.viewport.height));
         setSelected(null); setShowRecovery(false);
-        setNotice('Project recovered. Save it to keep a project file.');
+        setNotice('Project recovered.');
       });
     });
   }
@@ -434,6 +470,7 @@ export default function App() {
         if (shortcut === 'undo' ? current.current?.canUndo : current.current?.canRedo) action = () => travel(shortcut === 'undo' ? 'undo_project' : 'redo_project');
       } else if (shortcut === 'zoomIn' || shortcut === 'zoomOut') { event.preventDefault(); setZoom(value => steppedZoom(value, shortcut === 'zoomIn' ? 1 : -1)); return; }
       else if (shortcut === 'actualSize' || shortcut === 'doubleSize') { event.preventDefault(); setZoom(shortcut === 'actualSize' ? 1 : 2); return; }
+      else if (shortcut === 'rectangleTool' || shortcut === 'circleTool' || shortcut === 'freehandTool') { event.preventDefault(); setRequestShape(shortcut === 'rectangleTool' ? 'rect' : shortcut === 'circleTool' ? 'ellipse' : 'freehand'); setTool('request'); return; }
       else if (shortcut === 'selectTool' || shortcut === 'requestTool' || shortcut === 'panTool') { event.preventDefault(); setTool(shortcut === 'selectTool' ? 'select' : shortcut === 'requestTool' ? 'request' : 'pan'); return; }
       else if (shortcut === 'cutLayer') { if (activeLayer || selected) { event.preventDefault(); void canvas.current?.cutLayer(); } return; }
       else if (shortcut === 'copyLayer') { if (activeLayer || selected) { event.preventDefault(); void canvas.current?.copyLayer(); } return; }
@@ -442,6 +479,7 @@ export default function App() {
         if (activeLayer || selected) { event.preventDefault(); void canvas.current?.arrangeLayer(({ layerForward: 'forward', layerBackward: 'backward', layerFront: 'front', layerBack: 'back' } as const)[shortcut]); } return;
       }
       else if (shortcut === 'askAI') { event.preventDefault(); canvas.current?.askAI(); return; }
+      else if (shortcut === 'undoElement') { event.preventDefault(); void canvas.current?.undoElement(); return; }
       else if (shortcut === 'fit') { event.preventDefault(); recenter('fit'); return; }
       else if (shortcut === 'remove' && selected) { event.preventDefault(); removeRegion(selected); return; }
       else if (shortcut === 'nextPage' || shortcut === 'previousPage') {
@@ -457,6 +495,10 @@ export default function App() {
   });
 
   const project = view?.project ?? null;
+  const importedImages = [...(project?.importedIdentity?.assets ?? []), ...(project?.importedIdentity?.photos ?? [])];
+  const storedImages = Object.entries(project?.pictures ?? {}).map(([id, dataUri], index) => ({ id, dataUri,
+    name: importedImages.find(image => image.dataUri === dataUri)?.name ?? `Picture ${index + 1}` }));
+  const projectImages = [...storedImages, ...importedImages.filter(image => !storedImages.some(stored => stored.dataUri === image.dataUri))];
   const page = project?.pages.find(page => page.id === pageId) ?? project?.pages.find(page => page.id === project.homePageId) ?? null;
   const region = page?.regions.find(region => region.id === selected) ?? null;
   const requestedAreas = project?.pages.reduce((count, page) => count + page.regions.filter(region => !region.completed && region.prompt.trim()).length, 0) ?? 0;
@@ -551,10 +593,10 @@ export default function App() {
     if (cleanEmpty) void dismissEmpty(id).catch(() => {});
   }
   async function selectPage(id: string, keep: string | null = null) { await synchronize(); await settle(); await dismissEmpty(keep); setPageId(id); setSelected(null); }
-  async function addRegion(rect: Rect) {
+  async function addRegion(rect: Rect, shape?: RegionShape) {
     if (!page) return;
     const id = page.id;
-    const next = await mutate({ type: 'add_region', page_id: id, rect });
+    const next = await mutate(shape && shape.kind !== 'rect' ? { type: 'add_shaped_region', page_id: id, rect, shape } : { type: 'add_region', page_id: id, rect });
     setSelected(next.project!.pages.find(page => page.id === id)!.regions.at(-1)!.id); setFocusPrompt(true);
   }
   async function pickElement(selections: ElementSelection[]) {
@@ -594,7 +636,7 @@ export default function App() {
   async function deleteElements(elements: ElementTarget[]) {
     if (!page) return;
     await mutate({ type: 'delete_elements', page_id: page.id, elements });
-    setNotice('Items deleted. You can undo this.');
+    setNotice('Items deleted.');
   }
   async function inspectElement(target: ElementTarget): Promise<ElementDetails> {
     if (!page || !project) throw new Error('Select an element first.');
@@ -611,6 +653,16 @@ export default function App() {
       if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns this element.');
       const result = await native<ElementEditView>('edit_element', { projectId, pageId, revision: workspace.project.revision, target, change });
       accept(result.workspace); setNotice('Element updated.'); return result.element;
+    }, false);
+  }
+  async function undoElementNative(target: ElementTarget): Promise<ElementTarget | null> {
+    if (!page || !project) throw new Error('Select an element first.');
+    const projectId = project.id; const pageId = page.id; setError('');
+    await synchronize(); await settle();
+    return queue(async workspace => {
+      if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns this element.');
+      const result = await native<ElementEditView>('undo_element', { projectId, pageId, revision: workspace.project.revision, target });
+      accept(result.workspace); setNotice('Element stepped back to its previous version.'); return result.element;
     }, false);
   }
   async function copyLayerNative(target: LayerTarget, styles: ElementStyleEdit[]) {
@@ -657,10 +709,10 @@ export default function App() {
       const area = project.pages.find(page => page.id === targetPageId)?.regions.find(region => region.id === regionId);
       if (!area) throw new Error('This area is no longer in the project.');
       const rect = typeof patch.rect === 'function' ? patch.rect(area.rect) : { ...area.rect, ...patch.rect };
-      const prompt = patch.prompt ?? area.prompt;
+      const prompt = (typeof patch.prompt === 'function' ? patch.prompt() : patch.prompt) ?? area.prompt;
       if (rect.x === area.rect.x && rect.y === area.rect.y && rect.width === area.rect.width && rect.height === area.rect.height && prompt === area.prompt) return null;
       return { type: 'update_region', page_id: targetPageId, region_id: regionId, rect, prompt };
-    }).then(next => next.project!.pages.find(page => page.id === targetPageId)!.regions.find(region => region.id === regionId)!);
+    }, typeof patch.prompt === 'function').then(next => next.project!.pages.find(page => page.id === targetPageId)!.regions.find(region => region.id === regionId)!);
   }
   function removeRegion(id = region?.id) {
     if (!page || !id) return;
@@ -668,13 +720,13 @@ export default function App() {
     const action = async () => { await mutate({ type: 'remove_region', page_id, region_id }); setSelected(null); requestAnimationFrame(() => { if (!document.querySelector('dialog[open]')) document.getElementById('page-canvas')?.focus(); }); };
     if (!askBeforeDelete()) { run(action); return; }
     setSkipNextAsk(false);
-    setConfirmation({ title: 'Remove request?', message: 'Remove this request? You can undo this. Remove any linked choices or exceptions from the project brief first.', action, skippable: true });
+    setConfirmation({ title: 'Remove request?', message: 'Remove this request? Remove any linked choices or exceptions from the project brief first.', action, skippable: true });
   }
   async function removePage() {
     if (!page) return;
     await synchronize();
     const page_id = page.id;
-    setConfirmation({ title: 'Remove page?', message: `Remove “${page.name}” and its ${page.regions.length} requests? You can undo this. Remove any linked choices or exceptions from the project brief first.`,
+    setConfirmation({ title: 'Remove page?', message: `Remove “${page.name}” and its ${page.regions.length} requests? Remove any linked choices or exceptions from the project brief first.`,
       action: async () => { await mutate({ type: 'delete_page', page_id }); setPageId(project!.homePageId); setSelected(null); } });
   }
 
@@ -731,7 +783,7 @@ export default function App() {
     if (!added) return;
     if (added.prompt.includes(item.fix)) { setSelected(added.id); return; }
     await changeRegion(target.id, added.id, { prompt: added.prompt.trim() ? `${added.prompt.trim()}\n${item.fix}` : item.fix });
-    setSelected(added.id); setNotice('Added a request. Press Generate when you’re ready.');
+    setSelected(added.id); setNotice('Request added.');
   }
 
   // Keep this menu short: only what someone building a website reaches for.
@@ -739,9 +791,14 @@ export default function App() {
   const menuItems: MenuItem[] = [
     { id: 'new', label: 'New project', shortcut: 'Ctrl/Cmd+N', action: () => setShowNew(true) },
     { id: 'open', label: 'Open project', shortcut: 'Ctrl/Cmd+O', action: () => run(open) },
+    { id: 'open-folder', label: 'Open project folder…', action: () => run(() => open(true)) },
     { id: 'save', label: 'Save', shortcut: 'Ctrl/Cmd+S', disabled: !project, action: () => run(() => save()) },
     { id: 'close-project', label: 'Close project', disabled: !project, action: () => run(closeProject) },
     { id: 'save-as', label: 'Save as', shortcut: 'Ctrl/Cmd+Shift+S', disabled: !project, action: () => run(() => save(true)) },
+    { id: 'move-project', label: 'Move into project folder', disabled: !project || !!view?.projectFolder, action: () => run(async () => {
+      await synchronize(); await settle();
+      await queue(async () => { accept(await native<WorkspaceView>('move_into_project_folder')); setNotice('Project moved into its folder. The original archive was kept as a backup.'); void refreshRecent().catch(() => {}); });
+    }) },
     ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => setShowRecovery(true) }] : []),
     { id: 'file-divider', label: '', separator: true },
     { id: 'add-page', label: 'Add page', disabled: !project || project.pages.length >= 100, action: () => setPageDialog('new') },
@@ -758,10 +815,11 @@ export default function App() {
     { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible — small adjustments only' : 'Precise — follow placement closely', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
     { id: 'page-check', label: fixCount ? `Check page (${fixCount})` : 'Check page', disabled: !project?.pages.some(item => item.content), action: () => setShowCheck(true) },
     { id: 'style-guide', label: 'Style guide', disabled: !project, action: () => setShowStyleGuide(true) },
-    { id: 'import-context', label: 'Import context…', disabled: !project, action: () => setShowImport(true) },
+    { id: 'import-context', label: 'Import context…', disabled: !project, action: () => { setImportFolder(null); setImportAsNew(false); setShowImport(true); } },
     { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
     { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
+    { id: 'project-location', label: 'Default project location', action: () => setShowProjectLocation(true) },
     { id: 'ask-delete', label: 'Ask before deleting', checked: askDelete, action: () => setAskBeforeDelete(!askDelete) },
     { id: 'help', label: 'Keyboard shortcuts', shortcut: 'F1', action: () => setShowShortcuts(true) },
   ];
@@ -773,25 +831,25 @@ export default function App() {
       {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
         <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
-        {project && <button type="button" title="Add your brand from a website, folder, project or ZIP" onClick={() => setShowImport(true)}>Import context</button>}
-        {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo || pending > 0} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo || pending > 0} onClick={() => run(() => travel('redo_project'))}>Redo</button>
-          <MenuButton label="History" className="history-menu" ariaLabel="Change history" title="Go back to an earlier point" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
-        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Use the page like a visitor: scripts run and links work. You can still add requests.'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
+        {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import context</button>}
+        {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo} onClick={() => run(() => travel('redo_project'))}>Redo</button>
+          <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
+        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live preview'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
         {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
-        {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} title={showLog ? 'Hide the AI conversation' : 'Show what was sent to the AI and its reply'} onClick={() => setShowLog(value => !value)}>AI log</button>}
+        {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} onClick={() => setShowLog(value => !value)}>AI log</button>}
         {project && <button className="primary" title={requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={(requestedAreas === 0 && pendingImages === 0) || working} onClick={generate}>{working ? 'Generating…' : 'Generate'}</button>}
       </div>
     </header>
     {error && <div className="message error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
     {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span title={exported.path}>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'}{exported.warnings.length > 0 && ` · ${exported.warnings.length} to check`}</span>{exported.warnings.length > 0 && <details><summary>Things to check</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
     {offerRestyle && project && <div className="message info restyle-offer" role="status"><span>{offerRestyle}</span><button className="primary" disabled={pending > 0 || working} onClick={() => run(regenerateWithContext)}>Regenerate pages</button><button onClick={() => setOfferRestyle(false)}>Not now</button></div>}
-    {view?.recoveryError && <div className="message error" role="alert">Recovery could not be loaded: {view.recoveryError}</div>}
+    {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <div className="message error" role="alert"><span>Recovery could not be loaded: {view.recoveryError}</span><button onClick={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} aria-label="Dismiss recovery error">Dismiss</button></div>}
+    {project?.website?.framework && <p className="field-help" role="note">Edits don't change the {project.website.framework} source files.</p>}
+    {!!project?.website?.skipped.length && <details className="field-help"><summary>Skipped {project.website.skipped.length} files</summary><p>{project.website.skipped.slice(0, 5).join(", ")}</p></details>}
     {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <div className="message warning migration-notice" role="status"><span>{view.migrationNotice}</span><button onClick={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} aria-label="Dismiss migration notice">Dismiss</button></div>}
-    {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><p className="muted">Projects are managed by the native application.</p><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
-      {view.recoveries.length > 0 && <section className="recovery-notice" aria-label="Project recovery"><h2>Recover unsaved projects</h2>
-        <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} /></section>}
-      <NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} />
+    {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
+      <NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} />
     </main> : <>
       <div className="page-strip"><div className="page-tabs" role="tablist" aria-label="Project pages">
         {(view.openProjects?.length ? view.openProjects : [{ id: project.id, name: project.name, dirty: !!view.dirty, active: true, pages: [] }]).map((open, groupIndex, groups) => <div key={open.id} data-project-id={open.id} className={`project-tab-group${open.active ? ' active' : ''}${groups.length > 1 ? ' labelled' : ''}`} style={{ '--project-colour': PROJECT_COLOURS[groupIndex % PROJECT_COLOURS.length] } as CSSProperties} role="group" aria-label={`Project ${open.name}`}>
@@ -810,7 +868,7 @@ export default function App() {
       </div></div>
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
-      {page && <Canvas pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={[...(project.importedIdentity?.assets ?? []), ...(project.importedIdentity?.photos ?? []).map(photo => ({ id: photo.id, name: photo.name, mime: "image/jpeg", dataUri: photo.dataUri, sha256: photo.sha256 }))]} ref={canvas} canUndo={!!view?.canUndo && pending === 0} canRedo={!!view?.canRedo && pending === 0} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id).map(area => area.rect) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={rect => { void addRegion(rect).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {(showGenerationStatus || resultReview) && <div className="canvas-pill" role="region" aria-label="Generation status">
         {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
@@ -828,25 +886,27 @@ export default function App() {
         <strong>Live</strong>
         <div className="segmented" role="group" aria-label="Live device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
         {liveDevice !== 'desktop' && (liveDevice === 'tablet' ? 768 : 390) !== page.viewport.width && <span className="live-note">Add requests at page width</span>}
-        {liveDevice === 'phone' && <button type="button" title="AI adjusts this page for phones and keeps the desktop design as it is" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
+        {liveDevice === 'phone' && <button type="button" title="Fix on phones" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
         <button type="button" onClick={() => setLive(false)}>Exit live</button>
       </div>}
       {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}
-      <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
+      <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} requestShape={requestShape} setRequestShape={setRequestShape} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
       </div>
       {codeView !== 'design' && <>
         {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}
-        <CodePane ref={code} saveProject={() => run(() => save())} key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id); }} />
+        <CodePane ref={code} saveProject={() => run(() => save())} tidy={page?.content ? () => run(async () => { await synchronize(); await mutate({ type: 'format_page_code', page_id: page.id }); setNotice('Code tidied. Undo puts it back.'); }) : undefined} key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id); }} />
       </>}
       {showLog && project && <GenerationLog job={generation.job} operation={generation.operation} error={generation.error} project={project} close={() => setShowLog(false)} />}
       </main>
-      <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
+      <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? requestShape === 'freehand' ? 'Draw around an area; release to close' : requestShape === 'ellipse' ? 'Drag an ellipse · Shift for a circle' : 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
     </>}
-    {showShortcuts && <Modal title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><p className="field-help">Text selection, copy, paste and text undo keep their normal behavior inside prompts.</p><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></Modal>}
-    {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject busy={pending > 0} create={create} open={open} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} /></Modal>}
+    {showShortcuts && <Modal title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></Modal>}
+    {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} /></Modal>}
+    {!!view?.siteWarnings?.length && dismissedSiteWarnings !== `${project?.id}:${view.siteWarnings.join('\n')}` && <div className="message warning" role="status"><span>Project saved. {view.siteWarnings.join(' ')}</span><button aria-label="Dismiss website warning" onClick={() => setDismissedSiteWarnings(`${project?.id}:${view.siteWarnings?.join('\n')}`)}>Dismiss</button></div>}
+    {showProjectLocation && <Modal title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></Modal>}
     {showRecovery && view && <Modal title="Recover unsaved projects" close={() => setShowRecovery(false)}><DialogError error={error} dismiss={() => setError('')} />
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} /></Modal>}
-    {showImport && project && <Modal title="Import context" wide close={() => setShowImport(false)}><ImportContext busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} /></Modal>}
+    {showImport && <Modal title="Import context" wide close={() => setShowImport(false)}><ImportContext initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} /></Modal>}
     {showStyleGuide && project && <Modal title="Style guide" wide close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></Modal>}
     {showNotes && project && <Modal title="Project brief" wide close={() => setShowNotes(null)}><DialogError error={error} dismiss={() => setError('')} /><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} markdown={getNotes} /></Modal>}
     {showGridSettings && project && <Modal title="Grid and rulers" close={() => setShowGridSettings(false)}><DialogError error={error} dismiss={() => setError('')} /><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
@@ -959,7 +1019,6 @@ function GridForm({ settings, showGrid, busy, submit, rulerUnit, changeRulerUnit
     <label className="check-label"><input type="checkbox" checked={draft.snap} onChange={event => setDraft({ ...draft, snap: event.target.checked })} />Snap requests to the grid</label>
     <label className="check-label"><input type="checkbox" checked={draft.rulers} onChange={event => setDraft({ ...draft, rulers: event.target.checked })} />Show rulers</label>
     <label>Ruler units<select value={rulerUnit} onChange={event => changeRulerUnit(event.target.value as 'pixels' | 'percent')}><option value="pixels">Pixels</option><option value="percent">Percent</option></select></label>
-    <p className="field-help">Percentages follow the screen guide. Hold Alt to place freely.</p>
     <div className="form-actions"><button className="primary" disabled={busy || saving || !valid}>Save grid settings</button></div>
   </form>;
 }

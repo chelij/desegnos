@@ -112,6 +112,8 @@ struct GenerationArea {
     page_id: Uuid,
     region_id: Uuid,
     rect: desegni_core::Rect,
+    #[serde(default, skip_serializing_if = "desegni_core::RegionShape::is_rect")]
+    shape: desegni_core::RegionShape,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -121,6 +123,12 @@ pub struct GenerationJobView {
     project_id: Uuid,
     base_revision: u64,
     requirements: RequirementsSnapshot,
+    #[serde(default)]
+    context: Option<RequirementsSnapshot>,
+    #[serde(default)]
+    raw_reply: Option<String>,
+    #[serde(default)]
+    created_at: Option<String>,
     #[serde(default)]
     areas: Vec<GenerationArea>,
     generation_mode: GenerationMode,
@@ -232,6 +240,32 @@ fn private_directory(path: &Path) -> NativeResult<()> {
         builder.mode(0o700);
     }
     builder.create(path).map_err(message)
+}
+
+fn regular_directory(path: &Path) -> NativeResult<()> {
+    let metadata = fs::symlink_metadata(path).map_err(message)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err("The generation folder is not a regular directory.".into());
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationJobSummary {
+    job_id: Uuid,
+    created_at: Option<String>,
+    status: JobStatus,
+    usage: Option<TokenUsage>,
+    summary: String,
+    first_request: String,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenerationHistory {
+    jobs: Vec<GenerationJobSummary>,
+    skipped: usize,
+    truncated: bool,
 }
 
 fn regular_file(path: &Path) -> NativeResult<()> {
@@ -521,12 +555,136 @@ impl GenerationService {
         } else {
             write_markdown(&markdown, &record.view.requirements.markdown).map_err(message)?;
         }
+        if let Some(context) = &record.view.context {
+            if context.markdown.len() > desegni_core::MAX_REQUIREMENTS_BYTES
+                || context.sha256 != digest(context.markdown.as_bytes())
+                || context.job_id != record.view.job_id
+                || !context
+                    .markdown
+                    .starts_with(&record.view.requirements.markdown)
+            {
+                return Err("The follow-up context is invalid.".into());
+            }
+            let path = directory.join("CONTEXT.md");
+            if path.exists() {
+                regular_file(&path)?;
+                if fs::metadata(&path).map_err(message)?.len()
+                    > desegni_core::MAX_REQUIREMENTS_BYTES as u64
+                    || fs::read(&path).map_err(message)? != context.markdown.as_bytes()
+                {
+                    return Err(
+                        "The saved follow-up context changed. The original was preserved.".into(),
+                    );
+                }
+            } else {
+                write_markdown(&path, &context.markdown).map_err(message)?;
+            }
+        }
+        if let Some(reply) = &record.view.raw_reply {
+            if reply.len() > 64 * 1024 {
+                return Err("The failed reply exceeds its diagnostic limit.".into());
+            }
+            write_markdown(&directory.join("REPLY.txt"), reply).map_err(message)?;
+        }
         write_json(&directory.join("job.json"), &record)?;
         let view = record.view.clone();
         self.unsaved_jobs.remove(&view.job_id);
         self.jobs.insert(view.job_id, record);
         self.trim_cache(view.job_id);
         Ok(view)
+    }
+
+    fn saved_job(&self, project_id: Uuid, job_id: Uuid) -> NativeResult<GenerationJobView> {
+        let record = if let Some(record) = self.jobs.get(&job_id) {
+            record.clone()
+        } else {
+            let directory = self.job_directory(project_id, job_id);
+            regular_directory(&directory)?;
+            read_json::<JobRecord>(&directory.join("job.json"), MAX_JOB_BYTES)?
+        };
+        let view = record.view;
+        if record.version != 1
+            || view.project_id != project_id
+            || view.job_id != job_id
+            || view.requirements.project_id != project_id
+            || view.requirements.job_id != job_id
+            || view.requirements.markdown.len() > desegni_core::MAX_REQUIREMENTS_BYTES
+            || view.requirements.sha256 != digest(view.requirements.markdown.as_bytes())
+        {
+            return Err("The saved generation record is invalid.".into());
+        }
+        Ok(view)
+    }
+
+    fn past_jobs(&self, project_id: Uuid) -> NativeResult<GenerationHistory> {
+        let directory = self.directory.join(project_id.to_string());
+        if !directory.exists() {
+            return Ok(GenerationHistory {
+                jobs: vec![],
+                skipped: 0,
+                truncated: false,
+            });
+        }
+        regular_directory(&directory)?;
+        let mut jobs = Vec::new();
+        let mut skipped = 0;
+        let mut count = 0;
+        for entry in fs::read_dir(&directory).map_err(message)? {
+            let entry = entry.map_err(message)?;
+            let Some(id) = entry
+                .file_name()
+                .to_str()
+                .and_then(|name| Uuid::parse_str(name).ok())
+            else {
+                continue;
+            };
+            count += 1;
+            if count > 4096 {
+                break;
+            }
+            match self.saved_job(project_id, id) {
+                Ok(view) => {
+                    let first_request = frozen_first_request(&view);
+                    let created_at = view
+                        .created_at
+                        .or_else(|| {
+                            view.attempts
+                                .first()
+                                .map(|attempt| attempt.started_at.clone())
+                        })
+                        .or_else(|| {
+                            fs::metadata(entry.path().join("job.json"))
+                                .ok()?
+                                .modified()
+                                .ok()
+                                .and_then(|time| OffsetDateTime::from(time).format(&Rfc3339).ok())
+                        });
+                    jobs.push(GenerationJobSummary {
+                        job_id: id,
+                        created_at,
+                        status: view.status,
+                        usage: view.usage,
+                        first_request,
+                        summary: view
+                            .candidate
+                            .map_or(view.message, |candidate| candidate.summary),
+                    });
+                }
+                Err(_) => skipped += 1,
+            }
+        }
+        jobs.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| b.job_id.cmp(&a.job_id))
+        });
+        let truncated = count > 4096 || jobs.len() > 100;
+        jobs.truncate(100);
+        Ok(GenerationHistory {
+            jobs,
+            skipped,
+            truncated,
+        })
     }
 
     fn persist_retaining(&mut self, record: JobRecord) -> NativeResult<GenerationJobView> {
@@ -589,6 +747,7 @@ impl GenerationService {
                 && record.view.areas.len() != record.view.requirements.region_count)
             || record.view.areas.iter().any(|area| {
                 area.rect.validate(project.viewport).is_err()
+                    || area.shape.validate().is_err()
                     || !record
                         .view
                         .requirements
@@ -631,6 +790,7 @@ impl GenerationService {
                             page_id: page.id,
                             region_id: region.id,
                             rect: region.rect,
+                            shape: region.shape.clone(),
                         })
                 })
                 .collect();
@@ -691,7 +851,7 @@ impl GenerationService {
             && record.view.status != JobStatus::Applied
         {
             record.view.status = JobStatus::Applied;
-            record.view.message = "This generation was already applied. Paid requests are not replayed by recovery or undo.".into();
+            record.view.message = "Generation already applied.".into();
             return self.persist(record).map(Some);
         }
         if matches!(
@@ -730,7 +890,7 @@ impl GenerationService {
             })
         {
             record.view.status = JobStatus::Ready;
-            record.view.message = "The current requirements match this complete candidate again. Review it before applying; no provider request was repeated.".into();
+            record.view.message = "Result ready to apply.".into();
             return self.persist(record).map(Some);
         }
         if self.unsaved_jobs.contains(&record.view.job_id) {
@@ -810,6 +970,9 @@ impl GenerationService {
                 project_id: project.id,
                 base_revision: project.revision,
                 requirements,
+                context: None,
+                raw_reply: None,
+                created_at: Some(now()),
                 areas: project
                     .pages
                     .iter()
@@ -821,6 +984,7 @@ impl GenerationService {
                                 page_id: page.id,
                                 region_id: region.id,
                                 rect: region.rect,
+                                shape: region.shape.clone(),
                             })
                     })
                     .collect(),
@@ -835,9 +999,9 @@ impl GenerationService {
                 estimate_usd: estimate.estimate_usd,
                 received_bytes: 0,
                 message: if self.authentication == AuthenticationMethod::Chatgpt {
-                    "Review the exact requirements and selected ChatGPT account. Sending uses that account's plan allowance or credits; no generation request has been sent.".into()
+                    "Sending uses this ChatGPT account's plan allowance or credits.".into()
                 } else {
-                    "Review the exact requirements, provider and estimated cost before sending. No request has been sent.".into()
+                    "Ready to send.".into()
                 },
                 candidate: None,
                 usage: None,
@@ -922,13 +1086,40 @@ impl GenerationService {
                 error,
             )?;
         }
+        let directory = self.job_directory(project.id, job_id);
+        if let Some(context) = &record.view.context {
+            write_markdown(
+                &directory.join(format!("attempt-{}-CONTEXT.md", record.view.attempts.len())),
+                &context.markdown,
+            )
+            .map_err(message)?;
+            let path = directory.join("CONTEXT.md");
+            if path.exists() {
+                regular_file(&path)?;
+                fs::remove_file(path).map_err(message)?;
+            }
+        }
+        if let Some(reply) = &record.view.raw_reply {
+            write_markdown(
+                &directory.join(format!("attempt-{}-reply.txt", record.view.attempts.len())),
+                reply,
+            )
+            .map_err(message)?;
+        }
+        record.view.context = None;
+        let reply_path = directory.join("REPLY.txt");
+        if reply_path.exists() {
+            regular_file(&reply_path)?;
+            fs::remove_file(reply_path).map_err(message)?;
+        }
+        record.view.raw_reply = None;
         record.view.status = JobStatus::Generating;
         record.view.candidate = None;
         record.view.usage = None;
         record.view.received_bytes = 0;
         record.view.failure_kind = None;
         record.view.provider_error = None;
-        record.view.message = "Sending the frozen REQUIREMENTS.md and global generation mode to OpenAI. Partial output is not applied.".into();
+        record.view.message = "Generating…".into();
         record.error = None;
         record.view.attempts.push(GenerationAttempt {
             ordinal,
@@ -1045,7 +1236,7 @@ impl GenerationService {
                 )?;
                 match GenerationCandidate::from_reply(&response.text, &record.view.requirements, original).and_then(|mut candidate| {
                     let format = record.view.requirements.format_version()?;
-                    if format >= 8 { candidate.resolve_project_assets(original)?; }
+                    if (8..12).contains(&format) { candidate.resolve_project_assets(original)?; }
                     candidate.validate(&record.view.requirements, original)?;
                     if format >= 7
                         && !candidate.image_download_urls()?.is_empty() {
@@ -1069,13 +1260,14 @@ impl GenerationService {
                                 "The generated result is stale: {error} Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements."
                             )
                         } else if candidate.is_ready() {
-                            "Review the generated website, component choices, identity proposals and design feedback before applying.".into()
+                            "Result ready to apply.".into()
                         } else {
-                            "Some requests need a choice. You can edit them or generate a draft with labelled placeholders.".into()
+                            "Some requests need a choice.".into()
                         };
                         record.view.candidate = Some(candidate);
                     }
                     Err(error) => {
+                        record.view.raw_reply = Some(desegni_ai::scrub_diagnostic_reply(&response.text, None));
                         record.view.status = JobStatus::Blocked;
                         record.view.message = format!(
                             "Desegnos rejected the candidate: {error} Nothing was applied."
@@ -1083,7 +1275,12 @@ impl GenerationService {
                     }
                 }
             }
-            Err(error) => {
+            Err(mut error) => {
+                record.view.raw_reply = error
+                    .response_format
+                    .as_mut()
+                    .and_then(|format| format.diagnostic_reply.take())
+                    .map(String::from);
                 record.view.failure_kind = Some(error.kind);
                 record.view.provider_error = Some(error.clone());
                 if let Some(format) = &error.response_format {
@@ -1418,7 +1615,9 @@ pub async fn test_ai_access(
         {
             return Err(view.models_error.unwrap_or_else(|| "The selected model is not available for this ChatGPT account. Choose one of Desegnos's verified models returned by your account.".into()));
         }
-        return Ok(AccessResult { message: "OpenAI confirmed ChatGPT plan permission and access to the selected model. No generation request was made.".into() });
+        return Ok(AccessResult {
+            message: "Connected · ChatGPT plan and model access confirmed.".into(),
+        });
     }
     let key = credential_key(&state, provider).await?;
     ProviderClient::new(provider, client)
@@ -1426,7 +1625,9 @@ pub async fn test_ai_access(
         .test_model_access(&settings, &key, &CancellationToken::new())
         .await
         .map_err(message)?;
-    Ok(AccessResult { message: "The AI service accepted the key and confirmed access to the selected model. No text generation request was made.".into() })
+    Ok(AccessResult {
+        message: "Connected · Model access confirmed.".into(),
+    })
 }
 
 #[tauri::command]
@@ -1512,6 +1713,35 @@ pub fn get_generation(
         .transpose()
 }
 
+#[tauri::command]
+pub fn list_generations(
+    window: WebviewWindow,
+    workspace: WorkspaceState<'_>,
+    state: AiState<'_>,
+    project_id: Uuid,
+) -> NativeResult<GenerationHistory> {
+    trusted(&window)?;
+    if workspace.lock().map_err(message)?.project()?.id != project_id {
+        return Err("The active project changed.".into());
+    }
+    state.lock().map_err(message)?.past_jobs(project_id)
+}
+
+#[tauri::command]
+pub fn get_past_generation(
+    window: WebviewWindow,
+    workspace: WorkspaceState<'_>,
+    state: AiState<'_>,
+    project_id: Uuid,
+    job_id: Uuid,
+) -> NativeResult<GenerationJobView> {
+    trusted(&window)?;
+    if workspace.lock().map_err(message)?.project()?.id != project_id {
+        return Err("The active project changed.".into());
+    }
+    state.lock().map_err(message)?.saved_job(project_id, job_id)
+}
+
 fn maintain_dossier(
     workspace: &mut Workspace,
     service: &mut GenerationService,
@@ -1546,6 +1776,45 @@ fn maintain_dossier(
         service.persist(record)?;
     }
     Ok(view)
+}
+
+fn frozen_first_request(view: &GenerationJobView) -> String {
+    let mut fence = None;
+    let mut block = String::new();
+    for line in view.requirements.markdown.lines() {
+        if let Some(end) = &fence {
+            if line == end {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&block)
+                    && value.get("regionId").is_some()
+                    && let Some(prompt) = value.get("prompt").and_then(|value| value.as_str())
+                {
+                    return prompt.into();
+                }
+                fence = None;
+            } else {
+                block.push_str(line);
+                block.push('\n');
+            }
+        } else if let Some(start) = line.strip_suffix("json")
+            && start.len() >= 3
+            && start.bytes().all(|byte| byte == b'`')
+        {
+            fence = Some(start.to_owned());
+            block.clear();
+        }
+    }
+    String::new()
+}
+
+fn total_usage(first: Option<TokenUsage>, second: Option<TokenUsage>) -> Option<TokenUsage> {
+    match (first, second) {
+        (Some(a), Some(b)) => Some(TokenUsage {
+            input_tokens: a.input_tokens.saturating_add(b.input_tokens),
+            output_tokens: a.output_tokens.saturating_add(b.output_tokens),
+            total_tokens: a.total_tokens.saturating_add(b.total_tokens),
+        }),
+        (a, b) => b.or(a),
+    }
 }
 
 async fn submit(
@@ -1635,21 +1904,41 @@ async fn submit(
                 .context_follow_up(&first.text, &original)
         {
             let usage = first.usage;
-            result = ask(&follow_up).await.map(|mut response| {
+            let persisted = (|| -> NativeResult<()> {
+                let service_state = shared_app.state::<Mutex<GenerationService>>();
+                let mut service = service_state.lock().map_err(message)?;
+                let mut record = service
+                    .jobs
+                    .get(&job_id)
+                    .cloned()
+                    .ok_or("The active job is unavailable.")?;
+                if record.view.status != JobStatus::Generating || cancel_ref.is_cancelled() {
+                    return Err("The request was cancelled.".into());
+                }
+                record.view.context = Some(follow_up.clone());
+                service.persist(record)?;
+                Ok(())
+            })();
+            result = if persisted.is_ok() {
+                ask(&follow_up).await
+            } else {
+                Err(ProviderError::new(
+                    ErrorKind::InvalidRequirements,
+                    SubmissionOutcome::Received,
+                ))
+            }
+            .map_err(|mut error| {
+                error.usage = total_usage(usage, error.usage);
+                error
+            })
+            .map(|mut response| {
                 if let Ok(text) = request
                     .requirements
                     .adopt_follow_up_reply(&follow_up, &response.text)
                 {
                     response.text = text;
                 }
-                response.usage = match (usage, response.usage) {
-                    (Some(a), Some(b)) => Some(desegni_ai::TokenUsage {
-                        input_tokens: a.input_tokens + b.input_tokens,
-                        output_tokens: a.output_tokens + b.output_tokens,
-                        total_tokens: a.total_tokens + b.total_tokens,
-                    }),
-                    (a, b) => b.or(a),
-                };
+                response.usage = total_usage(usage, response.usage);
                 response
             });
         }
@@ -1744,7 +2033,7 @@ pub fn discard_generation(
         );
     }
     record.view.status = JobStatus::Discarded;
-    record.view.message = "Candidate discarded. The project was not changed; the job's request and paid-attempt records remain available locally.".into();
+    record.view.message = "Result discarded.".into();
     service.persist(record)
 }
 
@@ -1816,7 +2105,7 @@ pub fn apply_generation(
         return Err(error);
     }
     record.view.status = JobStatus::Applied;
-    record.view.message = "Generated site and selected identity decisions applied together. A safety checkpoint was retained; undo does not replay the paid request.".into();
+    record.view.message = "Page updated.".into();
     if let Err(error) = service.persist(record.clone()) {
         record.view.message = format!(
             "The project was applied and kept locally, but its job-history update failed: {error} The applied job ID prevents duplicate changes."
@@ -1878,6 +2167,12 @@ pub(super) struct IdentityAccess {
     pub settings: ProviderSettings,
     pub client: ProviderClient,
     pub key: ApiKey,
+}
+
+impl GenerationService {
+    pub(super) fn identity_settings(&self) -> (ProviderId, AuthenticationMethod, ProviderSettings) {
+        (self.provider, self.authentication, self.settings.clone())
+    }
 }
 
 pub(super) async fn identity_access(

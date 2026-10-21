@@ -129,6 +129,8 @@
 .layer-disclosure { display: grid; place-items: center; border: 0; background: transparent; padding: 0; min-width: 20px; width: 20px; min-height: 28px; }
 .layer-spacer { width: 20px; flex-shrink: 0; }
 .request-layer-mark { width: 16px; height: 14px; border: 1px dashed currentColor; flex-shrink: 0; }
+.request-layer-mark:has(svg) { border: 0; }
+.request-layer-mark svg { width: 16px; height: 14px; stroke-dasharray: 3 2; }
 .layers-hint { margin: 10px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
 .canvas-tools button[data-layers-trigger] { display: flex; align-items: center; gap: 5px; }
 .canvas-tools button[data-layers-trigger] svg, .element-toolbar button[aria-label="Bring forward"] svg, .element-toolbar button[aria-label="Send backward"] svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.4; }
@@ -242,9 +244,11 @@
 .generation-log > header button { min-height: 28px; padding: 0 8px; border-color: transparent; background: transparent; font-size: 20px; }
 .log-messages { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px; font-size: 13px; }
 .log-empty { color: var(--muted); }
-.log-message { max-width: 94%; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: 12px; }
+.log-message { min-width: 0; max-width: 94%; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: 12px; }
 .log-message.from-you { align-self: flex-end; border-bottom-right-radius: 3px; background: color-mix(in srgb, var(--accent) 12%, var(--surface)); }
 .log-message.from-ai { align-self: flex-start; border-bottom-left-radius: 3px; background: var(--background); }
+.log-message[aria-label="Past generations"] { width: 94%; }
+.log-message[aria-label="Past generations"] button { width: 100%; min-width: 0; max-width: 100%; text-align: left; white-space: normal; }
 .log-message.failed { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 .log-message p { margin: 0 0 6px; }
 .log-who { font-size: 11px; font-weight: 600; color: var(--muted); }

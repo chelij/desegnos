@@ -8,6 +8,10 @@ import type { ElementSelection, ElementTarget, ElementStyleEdit, LayerDirection,
 function validLocation(descriptor: PreviewDescriptor, pageId: string) {
   try {
     const url = new URL(descriptor.url);
+    if (descriptor.website) {
+      return ((url.protocol === 'desegni-preview:' && url.hostname === `${descriptor.sessionId}.localhost`) ||
+        (url.protocol === 'http:' && url.hostname === `${descriptor.sessionId}.desegni-preview.localhost`)) && !url.username && !url.password && !url.port && !url.search && !url.hash;
+    }
     const supported = (url.protocol === 'desegni-preview:' && url.hostname === 'localhost') ||
       ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname === 'desegni-preview.localhost');
     return supported && !url.username && !url.password && !url.port && !url.search && !url.hash &&
@@ -18,8 +22,8 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
 export type ElementMover = { preview: (x: number, y: number) => ElementSelection | null; style: (x: number, y: number) => string; cancel: () => void };
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
-export type CanvasPreviewHandle = { previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
-const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
+export type CanvasPreviewHandle = { measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline' https: http: data:; img-src data: https: http:; connect-src 'none'; font-src data: https: http:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   pageId: string; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
@@ -32,6 +36,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [observations, setObservations] = useState<string[]>([]);
+  // A web link clicked in the preview, waiting for the user to open it in their browser.
+  const [outsideLink, setOutsideLink] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const picked = useRef<Element | null>(null);
   const mounted = useRef<{ document: Document; session: string } | null>(null);
@@ -164,6 +170,13 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     find(target) { return selected(findNode(target), false, true); },
     contains(target) { return !!findNode(target); },
     layers() { const doc = frame.current?.contentDocument; return doc && identify(doc.body) ? siteLayerTree(doc, node => selected(node, false, true)) : []; },
+    measuredElements() {
+      const doc = frame.current?.contentDocument;
+      if (!doc || !identify(doc.body)) return [];
+      const nodes = Array.from(doc.querySelectorAll('[data-desegnos-id]'));
+      if (nodes.length > 10_000) throw new Error('This page has more than 10,000 elements. Select individual elements for this request.');
+      return nodes.map(node => selected(node, false, true)).filter((item): item is ElementSelection => !!item);
+    },
     layerStyles(target, direction) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteLayerStyles(node, direction, value => identify(value)?.target ?? null); },
     copyStyles(target) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteCopyStyles(node, value => identify(value)?.target ?? null); },
     visual,
@@ -266,7 +279,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
         const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
         if (digest !== value.sourceSha256) throw new Error('The page changed while opening its preview. Reopen the page.');
       }
-      if (active) { registeredVersion.current = { pageId, revision }; setPreviewSource(content ?? null); setDescriptor(value); }
+      if (active) { registeredVersion.current = { pageId, revision }; setPreviewSource(value.content ?? content ?? null); setDescriptor(value); }
     }).catch(error => { if (active) { setError(error instanceof Error ? error.message : String(error)); setLoading(false); } });
     return () => { active = false; if (registered) void native('release_preview', { sessionId: registered }).catch(() => {}); };
   }, [pageId, jobId, runScripts, revision, retry]);
@@ -278,6 +291,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       if (now - rate.current.started > 1000) rate.current = { started: now, count: 0 };
       if (++rate.current.count > 10) return;
       const value = event.data as Record<string, unknown>;
+      if (value.type === 'desegni-preview-link' && value.sessionId === descriptor!.sessionId && value.pageId === pageId &&
+        typeof value.url === 'string' && /^https?:\/\//.test(value.url) && value.url.length <= 2048 && Object.keys(value).length === 4) { setOutsideLink(value.url); return; }
       if (value.type !== 'desegni-preview-error' || value.sessionId !== descriptor!.sessionId || value.pageId !== pageId ||
         typeof value.message !== 'string' || value.message.length > 4096 || Object.keys(value).length !== 4) return;
       const message = value.message;
@@ -312,6 +327,9 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
         } catch { invalidated.current = true; mounted.current = null; picked.current = null; setError('This page left its editable preview. Reopen the page to select elements.'); onReady?.(); }
       }}
       onError={() => { setError('The preview document could not be loaded.'); setLoading(false); }} />}
+    {!staticView && outsideLink && <div className="message info preview-link" role="status"><span>This link leaves your site: <strong title={outsideLink}>{outsideLink.replace(/^https?:\/\//, '').slice(0, 80)}</strong></span>
+      <button className="primary" onClick={() => { const url = outsideLink; setOutsideLink(null); void native('open_preview_link', { url }).catch(error => setObservations(previous => [...previous.slice(-9), error instanceof Error ? error.message : String(error)])); }}>Open in browser</button>
+      <button aria-label="Dismiss link" onClick={() => setOutsideLink(null)}>×</button></div>}
     {!staticView && observations.length > 0 && <section className="preview-observations" aria-label="Preview runtime observations"><h3>Preview reported errors</h3>
       <ul>{observations.map((message, index) => <li key={index}>{message}</li>)}</ul><button onClick={() => setObservations([])}>Clear observations</button>
     </section>}
@@ -346,7 +364,7 @@ export function PagePreview({ page, revision, jobId = null, initialDevice, fixOn
     <div className="preview-toolbar">
       <div className="segmented device-switch" role="group" aria-label="Preview device">{DEVICES.map(item => <button key={item.id} type="button" aria-pressed={deviceId === item.id} onClick={() => setDeviceId(item.id)}>{item.label}</button>)}</div>
       <span className="field-help">{device.width} px wide{scale < 1 ? ` · shown at ${Math.round(scale * 100)}%` : ''}</span>
-      {deviceId === 'phone' && fixOnPhones && <button type="button" className="primary" title="AI adjusts this page for phones and keeps the desktop design as it is" onClick={fixOnPhones}>Fix on phones</button>}
+      {deviceId === 'phone' && fixOnPhones && <button type="button" className="primary" title="Fix on phones" onClick={fixOnPhones}>Fix on phones</button>}
       <label className="check-label"><input type="checkbox" checked={runScripts} onChange={event => setRunScripts(event.target.checked)} />Try buttons and links</label>
     </div>
     <div ref={stage} className="device-stage" style={{ height: height * scale }}>

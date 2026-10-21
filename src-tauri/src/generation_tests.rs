@@ -1553,7 +1553,7 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     let mut workspace =
         crate::workspace::open_archive_for_tests(workspace_directory.clone(), &archive_path);
     let before = workspace.project().unwrap().clone();
-    assert_eq!(before.schema_version, 7);
+    assert_eq!(before.schema_version, desegni_core::SCHEMA_VERSION);
     assert_eq!(before.id, project_id);
     let region = &before.pages[0].regions[0];
     assert_eq!(
@@ -1669,10 +1669,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_but_cannot_submit_after_sour
     service.cancel(&project, job_id).unwrap();
     let fresh = service.prepare(&project).unwrap();
     assert_ne!(fresh.job_id, job_id);
-    assert_eq!(
-        fresh.requirements.format_version().unwrap(),
-        desegni_core::ELEMENT_FIX_FORMAT
-    );
+    assert_eq!(fresh.requirements.format_version().unwrap(), 14);
     assert!(
         fresh
             .requirements
@@ -1690,4 +1687,68 @@ fn schema_six_prepared_format_nine_job_is_preserved_but_cannot_submit_after_sour
         packet
     );
     assert_eq!(workspace.project().unwrap(), &project);
+}
+
+#[test]
+fn saved_context_failed_replies_and_past_jobs_survive_restart_without_changing_latest() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let project = project();
+    let first = service.prepare(&project).unwrap();
+    let mut record = service.record(&project, first.job_id).unwrap();
+    let mut context = first.requirements.clone();
+    context
+        .markdown
+        .push_str("\n## Requested context\n\nReference-only elements.\n");
+    context.sha256 = digest(context.markdown.as_bytes());
+    record.view.context = Some(context.clone());
+    service.persist(record).unwrap();
+    let directory = service.job_directory(project.id, first.job_id);
+    assert_eq!(
+        fs::read_to_string(directory.join("CONTEXT.md")).unwrap(),
+        context.markdown
+    );
+    let (_, _) = service.begin(&project, first.job_id, false).unwrap();
+    service
+        .finish(
+            &project,
+            Some(&project),
+            first.job_id,
+            1,
+            Ok(ProviderResponse {
+                text: "invalid reply with api_key=private-test-secret".into(),
+                response_id: "fixture_reply".into(),
+                usage: None,
+            }),
+        )
+        .unwrap();
+    let failed = service.saved_job(project.id, first.job_id).unwrap();
+    assert!(failed.raw_reply.as_ref().unwrap().contains("[redacted]"));
+    assert!(
+        !fs::read_to_string(directory.join("REPLY.txt"))
+            .unwrap()
+            .contains("private-test-secret")
+    );
+    assert!(directory.join("attempt-0-CONTEXT.md").exists());
+    let mut record = service.record(&project, first.job_id).unwrap();
+    record.view.status = JobStatus::Discarded;
+    service.persist(record).unwrap();
+    let next = service.prepare(&project).unwrap();
+    drop(service);
+    let mut reopened = temp.service();
+    let history = reopened.past_jobs(project.id).unwrap();
+    assert_eq!(history.jobs.len(), 2);
+    assert!(!history.jobs[0].first_request.is_empty());
+    assert!(
+        reopened
+            .saved_job(project.id, first.job_id)
+            .unwrap()
+            .raw_reply
+            .is_some()
+    );
+    assert_eq!(
+        reopened.latest(&project).unwrap().unwrap().job_id,
+        next.job_id
+    );
+    assert!(reopened.saved_job(Uuid::new_v4(), first.job_id).is_err());
 }

@@ -47,6 +47,23 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         project: &Project,
     ) -> Result<()> {
+        if snapshot.format_version()? < 14 {
+            return self.validate_scope_exact(snapshot, project);
+        }
+        // From format 14 the AI sees compact page sources. Both sides are compared in that
+        // form, so layout whitespace on either side never counts as a change.
+        let mut candidate = self.clone();
+        for page in &mut candidate.pages {
+            page.content = crate::compact_site_content(&page.content);
+        }
+        candidate.validate_scope_exact(snapshot, &project.compact_pages())
+    }
+
+    fn validate_scope_exact(
+        &self,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+    ) -> Result<()> {
         if snapshot.format_version()? < 8 {
             return Ok(());
         }
@@ -95,6 +112,16 @@ impl GenerationCandidate {
                 validate_phone_scope(original, &page.content)?;
                 continue;
             }
+            if snapshot.format_version()? >= 15
+                && original.content.is_some()
+                && regions.iter().any(|region| !region.shape.is_rect())
+                && regions
+                    .iter()
+                    .all(|region| region.has_targets() || !region.shape.is_rect())
+            {
+                validate_shaped_scope(original, &page.content, &regions)?;
+                continue;
+            }
             // Rectangular requests on an existing page have no trustworthy mapping
             // to old DOM nodes. Do not invent one from labels or model claims.
             let targeted = regions.iter().all(|region| region.has_targets());
@@ -102,7 +129,12 @@ impl GenerationCandidate {
                 && regions.iter().any(|region| region.has_targets())
                 && original.content.is_some()
             {
-                validate_stable_scope(original, &page.content, &regions)?;
+                validate_stable_scope(
+                    original,
+                    &page.content,
+                    &regions,
+                    snapshot.format_version()? >= 12,
+                )?;
                 continue;
             }
             if original
@@ -182,14 +214,206 @@ impl GenerationCandidate {
     }
 }
 
-fn validate_stable_scope(
+fn validate_shaped_scope(
     original: &crate::Page,
     candidate: &crate::SiteContent,
     regions: &[&crate::Region],
 ) -> Result<()> {
     let source = original.content.as_ref().expect("checked source");
+    if source.css != candidate.css {
+        validate_selected_css(&source.css, &candidate.css, regions)?;
+    }
     ensure(
-        source.css == candidate.css && source.javascript == candidate.javascript,
+        source.javascript == candidate.javascript,
+        "The AI changed shared behavior outside the requested shapes. Your page is unchanged.",
+    )?;
+    let before = crate::editing::parse(&source.html)?;
+    let after = crate::editing::parse(&candidate.html)?;
+    let shared = |doc: &dom_query::Document| {
+        doc.select("style, script, link")
+            .nodes()
+            .iter()
+            .copied()
+            .map(canonical)
+            .collect::<Vec<_>>()
+    };
+    ensure(
+        shared(&before) == shared(&after),
+        "The AI changed embedded shared styling or scripts. Your page is unchanged.",
+    )?;
+    let handlers = |doc: &dom_query::Document| {
+        doc.select("*")
+            .nodes()
+            .iter()
+            .flat_map(|node| {
+                let id = node
+                    .attr(crate::ELEMENT_ID_ATTRIBUTE)
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| node.node_name().unwrap_or_default().to_string());
+                node.attrs()
+                    .into_iter()
+                    .filter(|attr| attr.name.local.starts_with("on"))
+                    .map(move |attr| {
+                        (
+                            (id.clone(), attr.name.local.to_string()),
+                            attr.value.to_string(),
+                        )
+                    })
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    let old_handlers = handlers(&before);
+    ensure(
+        handlers(&after)
+            .iter()
+            .all(|(key, value)| old_handlers.get(key) == Some(value)),
+        "The AI changed shared script behavior through an event handler. Your page is unchanged.",
+    )?;
+    let mut editable: BTreeSet<String> = regions
+        .iter()
+        .flat_map(|region| region.elements_in_area())
+        .map(|bound| bound.target.id.clone())
+        .collect();
+    let mut target_roots = Vec::new();
+    let mut replacement_roots = Vec::new();
+    for region in regions.iter().filter(|region| region.has_targets()) {
+        for target in region.targets() {
+            let root = crate::editing::locate(&before, target)?;
+            let replacement = match crate::editing::locate(&after, target) {
+                Ok(root) => Some(root),
+                Err(_) if region.allow_target_removal => None,
+                Err(error) => return Err(error),
+            };
+            target_roots.push(root);
+            replacement_roots.push(replacement);
+            editable.extend(
+                before
+                    .select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+                    .nodes()
+                    .iter()
+                    .filter(|node| crate::stable_targets::contains(root, **node))
+                    .filter_map(|node| {
+                        node.attr(crate::ELEMENT_ID_ATTRIBUTE)
+                            .map(|id| id.to_string())
+                    }),
+            );
+        }
+    }
+    let before_ids: BTreeMap<_, _> = before
+        .select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+        .nodes()
+        .iter()
+        .filter_map(|node| {
+            node.attr(crate::ELEMENT_ID_ATTRIBUTE)
+                .map(|id| (id.to_string(), *node))
+        })
+        .collect();
+    for node in after
+        .select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+        .nodes()
+    {
+        let id = node
+            .attr(crate::ELEMENT_ID_ATTRIBUTE)
+            .expect("selected attribute");
+        let previous = before_ids
+            .get(id.as_ref())
+            .ok_or_else(|| crate::Error("The AI assigned an editor ID to a new element.".into()))?;
+        let old_scope = target_roots
+            .iter()
+            .position(|root| crate::stable_targets::contains(*root, *previous));
+        let new_scope = replacement_roots
+            .iter()
+            .position(|root| root.is_some_and(|root| crate::stable_targets::contains(root, *node)));
+        ensure(
+            old_scope == new_scope,
+            "The AI moved content outside its selected element scope. Your page is unchanged.",
+        )?;
+    }
+    let areas: BTreeSet<_> = regions
+        .iter()
+        .filter(|region| !region.has_targets())
+        .map(|region| region.id.to_string())
+        .collect();
+    for id in &areas {
+        let roots = after.select(&format!("[{MARKER}=\"{id}\"]"));
+        ensure(
+            roots.nodes().len() == 1,
+            "The AI did not identify each requested shape exactly once. Your page is unchanged.",
+        )?;
+        ensure(
+            roots.nodes()[0]
+                .attr(crate::ELEMENT_ID_ATTRIBUTE)
+                .is_none_or(|id| editable.contains(id.as_ref())),
+            "The AI marked an element outside the requested shape as editable. Your page is unchanged.",
+        )?;
+        ensure(
+            !replacement_roots
+                .iter()
+                .flatten()
+                .any(|root| crate::stable_targets::contains(roots.nodes()[0], *root)),
+            "The AI included a selected element inside a new area. Your page is unchanged.",
+        )?;
+    }
+    // Remove only each in-scope element's own attributes/text. Its out-of-scope
+    // descendants keep their exact content and order, even inside a large wrapper.
+    fn masked(
+        node: NodeRef<'_>,
+        editable: &BTreeSet<String>,
+        areas: &BTreeSet<String>,
+        in_scope: bool,
+    ) -> Vec<serde_json::Value> {
+        if node.is_comment() {
+            return vec![];
+        }
+        if node.is_text() {
+            return if in_scope {
+                vec![]
+            } else {
+                vec![canonical(node)]
+            };
+        }
+        let id = node.attr(crate::ELEMENT_ID_ATTRIBUTE);
+        let allowed = id.as_ref().is_some_and(|id| editable.contains(id.as_ref()))
+            || id.is_none() && in_scope
+            || node
+                .attr(MARKER)
+                .is_some_and(|area| areas.contains(area.as_ref()));
+        let children: Vec<_> = node
+            .children()
+            .into_iter()
+            .flat_map(|child| masked(child, editable, areas, allowed))
+            .collect();
+        if allowed {
+            return children;
+        }
+        let attrs: BTreeMap<_, _> = node
+            .attrs()
+            .into_iter()
+            .map(|attr| (format!("{:?}", attr.name), attr.value.to_string()))
+            .collect();
+        vec![
+            serde_json::json!({"name":node.node_name().map(|name|name.to_string()),"attrs":attrs,"children":children}),
+        ]
+    }
+    ensure(
+        masked(before.root(), &editable, &BTreeSet::new(), false)
+            == masked(after.root(), &editable, &areas, false),
+        "The AI changed an element outside the requested shape. Your page is unchanged.",
+    )
+}
+
+fn validate_stable_scope(
+    original: &crate::Page,
+    candidate: &crate::SiteContent,
+    regions: &[&crate::Region],
+    scoped_css: bool,
+) -> Result<()> {
+    let source = original.content.as_ref().expect("checked source");
+    if scoped_css && source.css != candidate.css {
+        validate_selected_css(&source.css, &candidate.css, regions)?;
+    }
+    ensure(
+        (source.css == candidate.css || scoped_css) && source.javascript == candidate.javascript,
         "The AI changed shared styling or behavior outside the selected elements. Your page is unchanged.",
     )?;
     let before = crate::editing::parse(&source.html)?;
@@ -440,6 +664,95 @@ fn validate_phone_scope(original: &crate::Page, candidate: &crate::SiteContent) 
         desktop_css(&source.css)? == desktop_css(&candidate.css)?,
         "The AI changed the desktop design during a phone fix. Your page is unchanged.",
     )
+}
+
+/// New rules may only match selected roots themselves. Nested selectors, global at-rules,
+/// selector functions and sibling/descendant combinators cannot broaden the edit.
+fn validate_selected_css(before: &str, after: &str, regions: &[&crate::Region]) -> Result<()> {
+    use lightningcss::rules::{CssRule, CssRuleList};
+    use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
+    use lightningcss::traits::ToCss;
+    let suffix = after
+        .strip_prefix(before)
+        // Compact sources (format 14) join the additions without a line break.
+        .map(|value| value.strip_prefix('\n').unwrap_or(value))
+        .ok_or_else(|| crate::Error("Existing CSS must remain unchanged.".into()))?;
+    let sheet = StyleSheet::parse(suffix, ParserOptions::default())
+        .map_err(|_| crate::Error("Scoped CSS could not be parsed.".into()))?;
+    let ids: BTreeSet<_> = regions
+        .iter()
+        .flat_map(|region| {
+            region
+                .targets()
+                .into_iter()
+                .chain(region.elements_in_area().map(|bound| &bound.target))
+        })
+        .map(|target| target.id.as_str())
+        .collect();
+    fn rules(list: &CssRuleList<'_>, ids: &BTreeSet<&str>, depth: usize) -> Result<()> {
+        ensure(
+            depth <= 8 && list.0.len() <= 512,
+            "Scoped CSS is too complex.",
+        )?;
+        for rule in &list.0 {
+            match rule {
+                CssRule::Style(style) => {
+                    ensure(
+                        style.rules.0.is_empty(),
+                        "Nested CSS is outside the selected scope.",
+                    )?;
+                    let selectors = style
+                        .selectors
+                        .to_css_string(PrinterOptions::default())
+                        .map_err(|_| {
+                            crate::Error("Scoped CSS selectors could not be read.".into())
+                        })?;
+                    for selector in selectors.split(',').map(str::trim) {
+                        let valid = ids.iter().any(|id| {
+                            let quoted = format!("[data-desegnos-id=\"{id}\"]");
+                            let unquoted = format!("[data-desegnos-id={id}]");
+                            let Some(mut tail) = selector
+                                .strip_prefix(&quoted)
+                                .or_else(|| selector.strip_prefix(&unquoted))
+                            else {
+                                return false;
+                            };
+                            while !tail.is_empty() {
+                                let Some(next) = [
+                                    "::before",
+                                    "::after",
+                                    ":before",
+                                    ":after",
+                                    ":focus-visible",
+                                    ":focus-within",
+                                    ":disabled",
+                                    ":checked",
+                                    ":hover",
+                                    ":focus",
+                                    ":active",
+                                ]
+                                .iter()
+                                .find_map(|pseudo| tail.strip_prefix(pseudo)) else {
+                                    return false;
+                                };
+                                tail = next;
+                            }
+                            true
+                        });
+                        ensure(valid, "A CSS rule targets an unselected element.")?;
+                    }
+                }
+                CssRule::Media(media) => rules(&media.rules, ids, depth + 1)?,
+                _ => {
+                    return Err(crate::Error(
+                        "Global CSS rules are outside the selected scope.".into(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+    rules(&sheet.rules, &ids, 0)
 }
 
 #[cfg(test)]

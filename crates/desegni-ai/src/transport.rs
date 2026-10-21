@@ -669,7 +669,8 @@ async fn non_stream_error(
     let mut error = ProviderError::new(kind, outcome)
         .with_authentication(authentication)
         .with_provider_metadata(key, Some(status), code, param, request_id.as_deref())
-        .with_response_format(key, content_type.as_deref(), body_kind, received, message);
+        .with_response_format(key, content_type.as_deref(), body_kind, received, message)
+        .with_diagnostic_reply(&String::from_utf8_lossy(&body), key);
     if truncated {
         let format = error
             .response_format
@@ -806,7 +807,8 @@ async fn check_status(
             response_body_kind(&body, error.as_ref()),
             body.len(),
             error.as_ref().and_then(provider_message),
-        ))
+        )
+        .with_diagnostic_reply(&String::from_utf8_lossy(&body), key))
 }
 
 async fn bounded_body(

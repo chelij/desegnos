@@ -1,5 +1,5 @@
 use super::*;
-use desegni_ai::{ApiKey, ErrorKind, OpenAiClient, ProviderError, ProviderSettings};
+use desegni_ai::{ApiKey, OpenAiClient, ProviderError};
 
 struct Temp(PathBuf);
 impl Temp {
@@ -185,7 +185,7 @@ fn frozen_selected_files_are_exact_bounded_evidence_and_svg_never_becomes_an_ima
             Uuid::new_v4()
         )
         .unwrap_err()
-        .contains("512 KiB")
+        .contains(TOO_MUCH)
     );
 }
 
@@ -715,5 +715,300 @@ fn per_analysis_schema_only_allows_the_sent_file_and_logo_identifiers() {
             .unwrap_err()
             .to_string()
             .contains("UUID")
+    );
+}
+
+#[test]
+fn import_selection_accepts_only_reviewed_distinct_items_and_can_keep_content_alone() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let source = temp.source();
+    let view = reserve(&mut service, &source);
+    service
+        .begin(view.job_id, &access(AuthenticationMethod::ApiKey, None))
+        .unwrap();
+    let mut value = candidate(service.latest.as_ref().unwrap());
+    value.content = vec![desegni_core::ImportedItem {
+        source_pages: vec![],
+        kind: "project".into(),
+        title: "Actual work".into(),
+        url: "/work/actual".into(),
+        summary: "A real item from the source".into(),
+    }];
+    service.finish(view.job_id, Ok(response(&value))).unwrap();
+    let selected = service
+        .reviewed_context_selected(view.job_id, &[], &[], Some(&[]), Some(&[0]), None)
+        .unwrap();
+    assert!(
+        selected.findings.is_empty() && selected.assets.is_empty() && selected.photos.is_empty()
+    );
+    assert_eq!(selected.content, value.content);
+    let legacy_page = service
+        .reviewed_context_selected(
+            view.job_id,
+            &[],
+            &[],
+            Some(&[]),
+            Some(&[0]),
+            Some(&["/".into()]),
+        )
+        .unwrap();
+    assert_eq!(legacy_page.pages[0].path, "/");
+    assert_eq!(legacy_page.content[0].source_pages[0].title, "Home");
+    let legacy_project = service
+        .project_with_context(
+            legacy_page,
+            "Legacy content".into(),
+            Viewport {
+                width: 1440,
+                height: 900,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        legacy_project.imported_identity.unwrap().pages[0].page_id,
+        legacy_project.home_page_id
+    );
+
+    assert!(
+        service
+            .reviewed_context_selected(view.job_id, &[], &[], Some(&[]), Some(&[]), None)
+            .is_err()
+    );
+    assert!(
+        service
+            .reviewed_context_selected(view.job_id, &[0], &[], Some(&[]), Some(&[0, 0]), None)
+            .is_err()
+    );
+    assert!(
+        service
+            .reviewed_context_selected(
+                view.job_id,
+                &[0],
+                &[],
+                Some(&[Uuid::new_v4()]),
+                Some(&[]),
+                None
+            )
+            .is_err()
+    );
+    assert!(
+        service
+            .reviewed_context_selected(view.job_id, &[0], &[], Some(&[]), Some(&[1]), None)
+            .is_err()
+    );
+}
+
+#[test]
+fn automatic_picking_fits_the_complete_request_and_skips_large_lower_ranked_files() {
+    let temp = Temp::new();
+    let path = temp.0.join("small-budget");
+    fs::create_dir_all(path.join("src/pages")).unwrap();
+    fs::write(path.join("global.css"), ":root{--brand:blue}".repeat(100)).unwrap();
+    fs::write(
+        path.join("src/pages/about.astro"),
+        "<h1>About</h1>".repeat(12_000),
+    )
+    .unwrap();
+    fs::write(path.join("src/pages/contact.astro"), "<h1>Contact</h1>").unwrap();
+    let source = normalize_source(collect_identity_source(&path).unwrap()).unwrap();
+    let settings = ProviderSettings {
+        spending_limit_usd: 0.7,
+        ..Default::default()
+    };
+    let check = |ids: &[Uuid]| {
+        check_selection(
+            &source,
+            ids,
+            ProviderId::Openai,
+            AuthenticationMethod::ApiKey,
+            &settings,
+        )
+    };
+    let selected = select_files(&source, None, check);
+    assert!(selected.fits, "{selected:?}");
+    assert!(selected.message.is_none());
+    assert_eq!(selected.file_ids, [source.files[0].id, source.files[2].id]);
+    let (snapshot, images) = freeze(&source, &selected.file_ids, Uuid::new_v4()).unwrap();
+    desegni_ai::estimate_identity_for_provider(
+        ProviderId::Openai,
+        AuthenticationMethod::ApiKey,
+        &snapshot,
+        &candidate_schema_for(&source, &selected.file_ids),
+        &settings,
+        &images,
+    )
+    .unwrap();
+    let all = source.files.iter().map(|file| file.id).collect();
+    assert!(!select_files(&source, Some(all), check).fits);
+    assert_eq!(
+        select_files(&source, None, check).file_ids,
+        selected.file_ids
+    );
+    // A small model budget still keeps the highest-ranked file, then continues
+    // past a file that cannot fit rather than stopping at that file.
+    let small = |ids: &[Uuid]| {
+        let (snapshot, _) = freeze(&source, ids, source.id).map_err(|message| (message, false))?;
+        if snapshot.markdown.len() <= 16_000 {
+            Ok(())
+        } else {
+            Err((TOO_MUCH.into(), false))
+        }
+    };
+    let selected = select_files(&source, None, small);
+    assert!(selected.fits);
+    assert_eq!(selected.file_ids, [source.files[0].id, source.files[2].id]);
+    let manual = select_files(
+        &source,
+        Some(source.files.iter().map(|file| file.id).collect()),
+        small,
+    );
+    assert!(!manual.fits);
+    assert_eq!(manual.message.as_deref(), Some(TOO_MUCH));
+    assert!(!manual.needs_settings);
+}
+
+#[test]
+fn real_astro_folder_default_selection_fits_without_sending_or_changing_files() {
+    let path = Path::new("~/Projects/chelib");
+    if !path.is_dir() {
+        return;
+    }
+    let source = normalize_source(collect_identity_source(path).unwrap()).unwrap();
+    assert!(
+        source
+            .files
+            .iter()
+            .any(|file| file.name == "src/pages/index.astro")
+    );
+    assert!(
+        !source
+            .files
+            .iter()
+            .any(|file| file.name.ends_with("OFL.txt")
+                || file.name == "public/play/solopong/game.js")
+    );
+    for provider in [
+        ProviderId::Openai,
+        ProviderId::Anthropic,
+        ProviderId::Google,
+    ] {
+        let settings = provider.defaults();
+        let methods = if provider == ProviderId::Openai {
+            vec![AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt]
+        } else {
+            vec![AuthenticationMethod::ApiKey]
+        };
+        for authentication in methods {
+            let selected = select_files(&source, None, |ids| {
+                check_selection(&source, ids, provider, authentication, &settings)
+            });
+            assert!(
+                selected.fits,
+                "{provider:?}/{authentication:?}: {selected:?}"
+            );
+            assert!(!selected.file_ids.is_empty());
+            for name in ["src/layouts/Layout.astro", "src/pages/index.astro"] {
+                let file = source.files.iter().find(|file| file.name == name).unwrap();
+                assert!(
+                    selected.file_ids.contains(&file.id),
+                    "{provider:?}/{authentication:?} omitted {name}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn reviewed_pages_create_only_selected_routes_with_their_own_content() {
+    let temp = Temp::new();
+    let path = temp.0.join("page-site");
+    fs::create_dir_all(&path).unwrap();
+    fs::write(path.join("index.html"), "<title>Home</title>").unwrap();
+    fs::write(
+        path.join("projects.html"),
+        "<title>Our projects</title><a href='/projects/robot'>Robot build</a>",
+    )
+    .unwrap();
+    fs::write(path.join("about.html"), "<title>About us</title>").unwrap();
+    let source = normalize_source(collect_identity_source(&path).unwrap()).unwrap();
+    let mut service = temp.service();
+    let view = reserve(&mut service, &source);
+    service
+        .begin(view.job_id, &access(AuthenticationMethod::ApiKey, None))
+        .unwrap();
+    let mut result = candidate(service.latest.as_ref().unwrap());
+    let page = source
+        .pages
+        .iter()
+        .find(|page| page.path == "/projects")
+        .unwrap();
+    result.content = vec![desegni_core::ImportedItem {
+        kind: "project".into(),
+        title: "Robot build".into(),
+        url: "/projects/robot".into(),
+        summary: "A robot.".into(),
+        source_pages: vec![page.reference()],
+    }];
+    service.finish(view.job_id, Ok(response(&result))).unwrap();
+    let context = service
+        .reviewed_context_selected(
+            view.job_id,
+            &[],
+            &[],
+            Some(&[]),
+            Some(&[0]),
+            Some(&["/projects".into()]),
+        )
+        .unwrap();
+    let project = service
+        .project_with_context(
+            context,
+            "New site".into(),
+            Viewport {
+                width: 1440,
+                height: 900,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        project
+            .pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/", "/projects"]
+    );
+    assert_eq!(project.pages[1].name, "Our projects");
+    assert_eq!(project.home_page_id, project.pages[0].id);
+    let identity = project.imported_identity.unwrap();
+    assert_eq!(identity.pages[0].page_id, project.pages[1].id);
+    assert_eq!(identity.pages[0].content[0].title, "Robot build");
+    assert!(
+        !service
+            .reviewed_context_selected(
+                view.job_id,
+                &[],
+                &[],
+                Some(&[]),
+                Some(&[]),
+                Some(&["/about".into()])
+            )
+            .unwrap()
+            .pages
+            .is_empty(),
+        "empty pages are selectable"
+    );
+    assert!(
+        service
+            .reviewed_context_selected(
+                view.job_id,
+                &[],
+                &[],
+                Some(&[]),
+                Some(&[]),
+                Some(&["/missing".into()])
+            )
+            .is_err()
     );
 }

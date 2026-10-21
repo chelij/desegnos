@@ -67,7 +67,7 @@ const MAX_BYTES: usize = 128 * 1024 * 1024;
 fn io(error: impl std::fmt::Display) -> Error {
     Error(format!("The website export could not be written: {error}"))
 }
-fn validate(export: &WebsiteExport) -> Result<()> {
+pub(crate) fn validate(export: &WebsiteExport) -> Result<()> {
     if export.files.is_empty()
         || !export.files.contains_key("index.html")
         || export.files.len() > 10_000
@@ -96,7 +96,7 @@ fn validate(export: &WebsiteExport) -> Result<()> {
     }
     Ok(())
 }
-fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
+pub(crate) fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
     let mut path = root.to_path_buf();
     for component in Path::new(relative).components() {
         let Component::Normal(name) = component else {
@@ -113,7 +113,7 @@ fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
     }
     Ok(path)
 }
-fn parent_directory(parent: &Path) -> Result<PathBuf> {
+pub(crate) fn parent_directory(parent: &Path) -> Result<PathBuf> {
     if !parent.is_absolute()
         || parent
             .components()
@@ -183,6 +183,28 @@ pub fn write_website_export(
     };
     written.verify()?;
     Ok(written)
+}
+
+/// The same synced, no-replace publication used by export, with a caller-owned name.
+/// Used for live-site staging and the immutable first-import backup.
+pub(crate) fn stage_files(
+    parent: &Path,
+    name: &str,
+    files: BTreeMap<String, Vec<u8>>,
+) -> Result<PathBuf> {
+    let parent = parent_directory(parent)?;
+    let stage_name = format!(".desegnos-export-{}", Uuid::new_v4());
+    write_at(
+        &parent,
+        &stage_name,
+        name,
+        &WebsiteExport {
+            files,
+            page_count: 0,
+            warnings: vec![],
+        },
+    )?;
+    Ok(parent.join(name))
 }
 
 #[cfg(unix)]

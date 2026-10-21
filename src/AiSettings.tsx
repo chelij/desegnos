@@ -80,7 +80,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     setBusy(true); setError(''); setStatus('');
     try {
       const result = await native<{ message: string }>('test_ai_access');
-      receive(await refresh()); setStatus(result.message ? 'Connected. Ready to generate.' : 'Access checked.');
+      receive(await refresh()); setStatus(result.message ? 'Connected.' : 'Access checked.');
     } catch (error) {
       const original = message(error);
       try { receive(await refresh()); } catch {}
@@ -109,7 +109,6 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const canTest = !!view && !dirty && !view.configurationError && !pending && (usesChatgpt ? !!account?.connected && account.planEnabled && !account.storageRepairRequired : !!model && view.credential.configured && !key.trim());
   const testHelp = pending ? 'Finish signing in through your browser first.' : key.trim() ? 'Connect the key above before testing access.' : dirty || view?.configurationError ? 'Save your settings below before testing access.' : usesChatgpt ? !account?.connected ? 'Sign in above to test your connection.' : !account.planEnabled ? 'Allow ChatGPT plan usage when signing in.' : account.storageRepairRequired ? 'Repair secure storage above before testing access.' : 'Checks your connection without generating.' : !view?.credential.configured ? `Add and connect a ${providerName} API key above first.` : 'Checks your connection without generating.';
   return <div className="ai-settings dialog-body">
-    <p>Connect an AI account to build your website. You only need to do this once.</p>
     {error && <p className="message error" role="alert">{error}</p>}
     {pollingError && <p className="message error" role="alert">{pollingError}</p>}
     {status && <p className="operation-status" role="status">{status}</p>}
@@ -120,11 +119,11 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           ...(item.signInSupported ? [<option key="openai-chatgpt" value="openai-chatgpt">ChatGPT plan (sign in)</option>] : []),
         ] : [<option key={item.id} value={item.id} disabled={!item.available}>{item.available ? `${item.name} (API key)` : `${item.name} — coming soon`}</option>])}
       </select></label>
-      {provider && !provider.capabilities.webSearch && <p className="field-help">This provider can’t search the web, so missing pictures and facts stay as placeholders.</p>}
+      {provider && !provider.capabilities.webSearch && <p className="field-help">Web search unavailable.</p>}
       {dirty && <p className="field-help">Save or reset your changes below before changing the generation method.</p>}
       {view.configurationError && <p className="message error" role="alert">{view.configurationError} Review and save your generation settings before sending a request.</p>}
       {usesChatgpt && <section className="chatgpt-accounts" aria-label="ChatGPT account settings">
-        <h3>Use your ChatGPT plan</h3><p className="small muted">Sign in through your browser. Generation counts toward your plan or credits.</p>
+        <h3>Use your ChatGPT plan</h3><p className="small muted">Generation counts toward your plan or credits.</p>
         {view.chatgpt.storageError && <p className="message error" role="alert">{view.chatgpt.storageError}</p>}
         {view.chatgpt.message && <p className="small" role="status">{view.chatgpt.message}</p>}
         {view.chatgpt.accounts.length > 0 ? <>
@@ -136,10 +135,10 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
             {account.storageRepairRequired && <><p className="message warning" role="alert">Keep Desegnos open and repair secure storage to continue.</p>
               <div className="inline-actions"><button className="primary" disabled={busy || pending} onClick={() => { void action('retry_chatgpt_secure_storage', { accountId: account.id }); }}>Repair secure storage</button></div></>}
           </div>}
-        </> : <p>No ChatGPT account is connected. Continue with ChatGPT to add one.</p>}
+        </> : <p>No ChatGPT account connected.</p>}
         <details className="key-storage"><summary>Where to keep the sign-in</summary><fieldset className="chatgpt-storage" disabled={busy || pending}><legend>Sign-in storage</legend><label className="check-label"><input type="radio" name="chatgptStorage" checked={chatgptStorage === 'system'} onChange={() => setChatgptStorage('system')} />Save securely on this device</label>
           <label className="check-label"><input type="radio" name="chatgptStorage" checked={chatgptStorage === 'session'} onChange={() => setChatgptStorage('session')} />Current session only</label></fieldset>
-        <p className="field-help">Current-session sign-in ends when Desegnos closes.</p></details>
+        </details>
         <div className="inline-actions">
           {pending ? <button disabled={busy} onClick={() => { void action('cancel_chatgpt_sign_in'); }}>Cancel sign-in</button> : <>
             {!account && <button className="primary" disabled={busy} onClick={() => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: null }); }}>Continue with ChatGPT</button>}
@@ -160,7 +159,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           <label>{view.credential.configured ? 'Replacement API key' : `${providerName} API key`}<input disabled={busy || pending} type="password" value={key} onChange={event => setKey(event.target.value)} autoComplete="new-password" spellCheck={false} required /></label>
           <details className="key-storage"><summary>Where to keep the key</summary><fieldset disabled={busy || pending}><legend>Keep this key</legend><label className="check-label"><input type="radio" name="keyStorage" checked={storage === 'system'} onChange={() => setStorage('system')} />Save securely on this device</label>
             <label className="check-label"><input type="radio" name="keyStorage" checked={storage === 'session'} onChange={() => setStorage('session')} />Current session only</label></fieldset>
-          <p className="field-help">Your key stays private in Desegnos. Current-session access ends when the app closes.</p></details>
+          </details>
           <div className="inline-actions"><button type="submit" disabled={busy || pending || !key.trim()}>{busy ? 'Connecting…' : view.credential.configured ? 'Update key' : 'Connect key'}</button>
             {(view.credential.configured || view.credential.vaultError) && <button type="button" className="danger" disabled={busy || pending} onClick={() => { void removeKey(); }}>Remove key</button>}</div>
         </form>
@@ -182,7 +181,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         <div className={usesChatgpt ? undefined : 'field-pair'}>{!usesChatgpt && <label>Maximum output tokens<input disabled={busy} type="number" required min={1} max={32768} step={1} value={settings.maxOutputTokens} onChange={event => setSettings({ ...settings, maxOutputTokens: Number(event.target.value) })} /></label>}
           <label>Reasoning effort<select disabled={busy || pending || !model} value={settings.reasoningEffort} onChange={event => setSettings({ ...settings, reasoningEffort: event.target.value })}>{model?.reasoningEfforts.map(level => <option key={level} value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>)}</select></label></div>
         </fieldset></details>
-        {advanced && !usesChatgpt && <p className="field-help">A current-session key temporarily overrides a saved key. Remove key clears both.</p>}
+        {advanced && !usesChatgpt && <p className="field-help">Remove key clears saved and current-session keys.</p>}
         <div className="form-actions ai-save-actions">{dirty && <button type="button" disabled={busy || pending} onClick={() => setSettings(view.settings)}>Reset changes</button>}<button className="primary" disabled={busy || pending || (!model && !view.configurationError)}>Save AI settings</button></div>
       </form></details>
     </>}

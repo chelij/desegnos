@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 7;
+pub const SCHEMA_VERSION: u32 = 8;
 pub const MAX_PAGES: usize = 100;
 pub const MAX_PROMPT_CHARS: usize = 16_384;
 
@@ -185,11 +185,50 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum RegionShape {
+    #[default]
+    Rect,
+    Ellipse,
+    Freehand {
+        points: Vec<[f64; 2]>,
+    },
+}
+
+impl RegionShape {
+    pub fn is_rect(&self) -> bool {
+        matches!(self, Self::Rect)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if let Self::Freehand { points } = self {
+            ensure(
+                (3..=500).contains(&points.len()),
+                "A freehand area needs between 3 and 500 points.",
+            )?;
+            ensure(
+                points
+                    .iter()
+                    .flatten()
+                    .all(|n| n.is_finite() && (0.0..=1.0).contains(n)),
+                "Freehand points must be finite fractions between 0 and 1.",
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Region {
     pub id: Uuid,
     pub rect: Rect,
+    #[serde(default, skip_serializing_if = "RegionShape::is_rect")]
+    pub shape: RegionShape,
+    /// Measured page elements for shaped area scope; refreshed before generation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub area_bounds: Vec<crate::TargetBounds>,
     pub z_index: i32,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -302,6 +341,10 @@ pub struct Project {
     pub brief: Brief,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_identity: Option<crate::ImportedIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub website: Option<crate::ImportedWebsite>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pictures: BTreeMap<Uuid, std::sync::Arc<str>>,
     pub decisions: Vec<Decision>,
     pub exceptions: Vec<DesignException>,
     pub extensions: BTreeMap<String, ExtensionRecord>,
@@ -315,6 +358,10 @@ pub struct Project {
 pub enum Command {
     RenameProject {
         name: String,
+    },
+    /// Lay a page's code out readably (Code view → Tidy code), without the AI.
+    FormatPageCode {
+        page_id: Uuid,
     },
     SetGrid {
         enabled: bool,
@@ -343,6 +390,11 @@ pub enum Command {
     AddRegion {
         page_id: Uuid,
         rect: Rect,
+    },
+    AddShapedRegion {
+        page_id: Uuid,
+        rect: Rect,
+        shape: RegionShape,
     },
     AddElementRegion {
         page_id: Uuid,
@@ -454,6 +506,8 @@ impl Project {
             }],
             brief: Brief::default(),
             imported_identity: None,
+            website: None,
+            pictures: BTreeMap::new(),
             decisions: vec![],
             exceptions: vec![],
             extensions: BTreeMap::new(),
@@ -508,6 +562,22 @@ impl Project {
                 )?;
             }
         }
+        if let Some(identity) = &self.imported_identity {
+            for photo in &identity.photos {
+                ensure(
+                    ids.insert(photo.id),
+                    "Project photo identifiers must be unique.",
+                )?;
+            }
+        }
+        for id in self.pictures.keys() {
+            ensure(
+                ids.insert(*id),
+                "Project picture identifiers must be unique.",
+            )?;
+        }
+        self.validate_picture_store()?;
+        if let Some(site) = &self.website { site.validate(self)?; }
         let mut paths = BTreeSet::new();
         let mut source_bytes = 0_usize;
         for page in &self.pages {
@@ -531,6 +601,24 @@ impl Project {
             for region in &page.regions {
                 ensure(ids.insert(region.id), "Area identifiers must be unique.")?;
                 region.rect.validate(page.viewport)?;
+                region.shape.validate()?;
+                ensure(
+                    !region.has_targets() || region.shape.is_rect(),
+                    "Element requests must use rectangular bounds.",
+                )?;
+                ensure(
+                    region.area_bounds.len() <= 10_000,
+                    "An area supports at most 10,000 measured elements.",
+                )?;
+                let mut measured_ids = BTreeSet::new();
+                for bound in &region.area_bounds {
+                    bound.rect.validate(page.viewport)?;
+                    bound.target.validate()?;
+                    ensure(
+                        !bound.target.id.is_empty() && measured_ids.insert(&bound.target.id),
+                        "Measured elements need unique editor IDs.",
+                    )?;
+                }
                 ensure(
                     region.elements.len() <= 8,
                     "A request supports at most eight selected elements.",
@@ -548,10 +636,6 @@ impl Project {
                     )?;
                 }
                 validate_text(&region.prompt, "Area description", MAX_PROMPT_CHARS, false)?;
-                ensure(
-                    region.attachments.len() <= crate::MAX_ATTACHMENTS,
-                    "A request can hold at most six attachments.",
-                )?;
                 for attachment in &region.attachments {
                     attachment.validate()?;
                 }
@@ -670,6 +754,17 @@ impl Project {
             expected_revision == self.revision,
             "The project changed. Refresh the document before applying this edit.",
         )?;
+        if let Command::FormatPageCode { page_id } = &command {
+            let content = self
+                .page(*page_id)?
+                .content
+                .as_ref()
+                .ok_or_else(|| Error("This page has no code yet.".into()))?;
+            if crate::format_site_content(content) == *content {
+                self.validate()?;
+                return Ok(self.clone());
+            }
+        }
         if let Command::DismissEmptyRegions { keep_region_id } = &command {
             if let Some(id) = keep_region_id {
                 self.validate_scope(&Scope::Region(*id))?;
@@ -731,6 +826,7 @@ impl Project {
                 page.regions[index].z_index = i32::try_from(rank)
                     .map_err(|_| Error("This page has too many request layers.".into()))?;
             }
+            next.store_inline_images()?;
             next.validate()?;
             return Ok(next);
         }
@@ -739,8 +835,22 @@ impl Project {
             .revision
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
+        let area_shape = match &command {
+            Command::AddShapedRegion { shape, .. } => shape.clone(),
+            _ => RegionShape::Rect,
+        };
         match command {
             Command::RenameProject { name } => next.name = name.trim().into(),
+            Command::FormatPageCode { page_id } => {
+                let page = next
+                    .pages
+                    .iter_mut()
+                    .find(|page| page.id == page_id)
+                    .ok_or_else(|| Error("This page no longer exists.".into()))?;
+                if let Some(content) = &page.content {
+                    page.content = Some(crate::format_site_content(content));
+                }
+            }
             Command::SetGrid { enabled } => next.show_grid = enabled,
             Command::SetGridSettings { settings } => next.grid_settings = settings,
             Command::SetGenerationMode { mode } => next.generation_mode = mode,
@@ -777,7 +887,8 @@ impl Project {
                 )?;
                 next.pages.retain(|p| p.id != page_id);
             }
-            Command::AddRegion { page_id, rect } => {
+            Command::AddRegion { page_id, rect }
+            | Command::AddShapedRegion { page_id, rect, .. } => {
                 next.dismiss_empty_regions(None);
                 let p = next.page_mut(page_id)?;
                 let z_index = p
@@ -790,6 +901,8 @@ impl Project {
                 p.regions.push(Region {
                     id: Uuid::new_v4(),
                     rect,
+                    shape: area_shape,
+                    area_bounds: vec![],
                     z_index,
                     prompt: String::new(),
                     element: None,
@@ -818,6 +931,8 @@ impl Project {
                 page.regions.push(Region {
                     id: Uuid::new_v4(),
                     rect,
+                    shape: RegionShape::Rect,
+                    area_bounds: vec![],
                     z_index,
                     prompt: String::new(),
                     element: None,
@@ -848,6 +963,8 @@ impl Project {
                 page.regions.push(Region {
                     id: Uuid::new_v4(),
                     rect,
+                    shape: RegionShape::Rect,
+                    area_bounds: vec![],
                     z_index,
                     prompt: String::new(),
                     element: None,
@@ -876,6 +993,8 @@ impl Project {
                 region.elements = targets;
                 region.element = None;
                 region.rect = rect;
+                region.shape = RegionShape::Rect;
+                region.area_bounds.clear();
                 region.allow_target_removal = allow_target_removal;
             }
             Command::SetRegionTargetRemoval {
@@ -920,15 +1039,18 @@ impl Project {
                     .iter_mut()
                     .find(|r| r.id == region_id && !r.completed)
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                ensure(
-                    region.attachments.len() < crate::MAX_ATTACHMENTS,
-                    "A request can hold at most six attachments.",
-                )?;
                 // Identifiers are assigned here so they stay unique on the page.
                 attachment.id = (1..)
                     .map(|n| format!("a{}{n}", &region_id.simple().to_string()[..4]))
                     .find(|id| !used.contains(id))
                     .expect("an unused identifier");
+                // Decoding a large photo is slow, so its AI preview is made once, here.
+                attachment.preview = match (attachment.kind, attachment.data_uri.as_deref()) {
+                    (crate::AttachmentKind::Image, Some(data)) => {
+                        crate::ai_preview(data).map(std::sync::Arc::from)
+                    }
+                    _ => None,
+                };
                 attachment.validate()?;
                 region.attachments.push(attachment);
             }
@@ -1035,6 +1157,7 @@ impl Project {
                 next.exceptions.retain(|e| e.id != exception_id);
             }
         }
+        next.store_inline_images()?;
         next.validate()?;
         Ok(next)
     }
@@ -1060,7 +1183,7 @@ pub(crate) fn validate_text(
     )
 }
 
-fn validate_path(path: &str) -> Result<()> {
+pub(crate) fn validate_path(path: &str) -> Result<()> {
     ensure(
         path.starts_with('/') && (path == "/" || !path.ends_with('/')),
         "Page paths start with / and have no trailing slash.",

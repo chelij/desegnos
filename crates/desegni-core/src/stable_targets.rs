@@ -286,9 +286,32 @@ impl Project {
                 .iter()
                 .find(|r| r.id == entry.region_id && !r.completed)
                 .ok_or_else(|| Error("This request no longer exists.".into()))?;
+            if !region.has_targets() && !region.shape.is_rect() {
+                ensure(
+                    entry.bounds.len() <= 10_000,
+                    "An area supports at most 10,000 measured elements.",
+                )?;
+                let source = page
+                    .content
+                    .as_ref()
+                    .ok_or_else(|| Error("The page has no elements to measure.".into()))?;
+                let document = crate::editing::parse(&source.html)?;
+                let mut ids = BTreeSet::new();
+                for bound in &entry.bounds {
+                    bound.rect.validate(viewport)?;
+                    bound.target.validate()?;
+                    ensure(
+                        !bound.target.id.is_empty() && ids.insert(&bound.target.id),
+                        "Measured elements need unique editor IDs.",
+                    )?;
+                    crate::editing::locate(&document, &bound.target)?;
+                }
+                updates.push((entry.region_id, region.rect, Some(entry.bounds.clone())));
+                continue;
+            }
             let targets: Vec<_> = region.targets().into_iter().cloned().collect();
             let rect = self.target_bounds_union(page_id, &targets, &entry.bounds)?;
-            updates.push((entry.region_id, rect));
+            updates.push((entry.region_id, rect, None));
         }
         let mut next = self.clone();
         let page = next
@@ -297,7 +320,7 @@ impl Project {
             .find(|p| p.id == page_id)
             .expect("checked page");
         let mut changed = false;
-        for (id, rect) in updates {
+        for (id, rect, area_bounds) in updates {
             let region = page
                 .regions
                 .iter_mut()
@@ -305,6 +328,10 @@ impl Project {
                 .expect("checked request");
             changed |= region.rect != rect;
             region.rect = rect;
+            if let Some(area_bounds) = area_bounds {
+                changed |= region.area_bounds != area_bounds;
+                region.area_bounds = area_bounds;
+            }
         }
         if changed {
             next.revision = self

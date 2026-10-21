@@ -211,14 +211,15 @@ impl ProviderClient {
             return crate::estimate_for_auth(auth, snapshot, mode, schema, settings);
         }
         self.id.validate(settings, auth)?;
+        let (counted, reserve) = crate::settings::without_previews(snapshot);
         let body = crate::settings::request_body(
             AuthenticationMethod::ApiKey,
-            snapshot,
+            &counted,
             mode,
             schema,
             &shadow(settings),
         )?;
-        foreign_estimate(self.id, &body, settings, 0)
+        foreign_estimate(self.id, &body, settings, reserve)
     }
     pub fn estimate_identity(
         &self,
@@ -228,18 +229,7 @@ impl ProviderClient {
         settings: &ProviderSettings,
         images: &[IdentityImage],
     ) -> Result<CostEstimate> {
-        if self.id == ProviderId::Openai {
-            return crate::estimate_identity_for_auth(auth, snapshot, schema, settings, images);
-        }
-        self.id.validate(settings, auth)?;
-        let body =
-            crate::identity::identity_body(auth, snapshot, schema, &shadow(settings), images)?;
-        foreign_estimate(
-            self.id,
-            &body,
-            settings,
-            images.len() as u64 * crate::IDENTITY_IMAGE_TOKEN_RESERVE,
-        )
+        estimate_identity_for_provider(self.id, auth, snapshot, schema, settings, images)
     }
     pub async fn test_model_access(
         &self,
@@ -320,6 +310,29 @@ impl ProviderClient {
             .await
     }
 }
+
+/// The same complete request check used before sending, without credentials or network access.
+pub fn estimate_identity_for_provider(
+    provider: ProviderId,
+    auth: AuthenticationMethod,
+    snapshot: &RequirementsSnapshot,
+    schema: &Value,
+    settings: &ProviderSettings,
+    images: &[IdentityImage],
+) -> Result<CostEstimate> {
+    if provider == ProviderId::Openai {
+        return crate::estimate_identity_for_auth(auth, snapshot, schema, settings, images);
+    }
+    provider.validate(settings, auth)?;
+    let body = crate::identity::identity_body(auth, snapshot, schema, &shadow(settings), images)?;
+    foreign_estimate(
+        provider,
+        &body,
+        settings,
+        crate::identity::vision_reserve(images),
+    )
+}
+
 fn shadow(s: &ProviderSettings) -> ProviderSettings {
     ProviderSettings {
         model: crate::MODEL_ID.into(),

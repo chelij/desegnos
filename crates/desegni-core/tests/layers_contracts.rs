@@ -104,6 +104,8 @@ fn request(
 ) -> Uuid {
     let id = Uuid::new_v4();
     project.pages[0].regions.push(Region {
+        shape: Default::default(),
+        area_bounds: vec![],
         id,
         rect: Rect {
             x: 12.0,
@@ -697,7 +699,7 @@ fn visual_element_copy_paste_preserves_assets_important_styles_and_internal_refe
         doc.select("img")
             .attr("src")
             .unwrap()
-            .starts_with("data:image/svg+xml;base64,")
+            .starts_with("desegnos-asset:")
     );
     assert!(
         pasted.pages[0]

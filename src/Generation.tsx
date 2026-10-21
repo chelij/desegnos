@@ -58,17 +58,8 @@ export function GenerationFeedback({ controller, compact = false, children }: {
     ready: 'Updating your page…', blocked: 'Needs a little more detail', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your page…', applied: 'Page updated' };
   const heading = operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
-  const detail = compact ? (job?.status === 'failed' || job?.status === 'unknown' || (!job && !operation) ? 'Your work is safe.' : job?.status === 'blocked' ? 'Change a box, or build a draft anyway.' : '')
-    : operation ? 'Your changes will appear on the canvas.'
-    : job?.status === 'prepared' ? 'Checking your requests and project choices.'
-    : job?.status === 'generating' ? 'Your changes will appear on the canvas when ready.'
-    : job?.status === 'ready' ? 'Your changes are being put in place.'
-    : job?.status === 'applied' ? 'Your site and project brief are up to date.'
-    : job?.status === 'blocked' ? 'Change a box on the canvas, or build a draft anyway.'
-    : 'Your work is safe. Try again, or check AI settings.';
   return <section className={`generation-status${compact ? ' compact' : ''}`} data-job-status={job?.status} aria-label="Generation status">
     <div className="generation-status-copy"><p className="generation-heading" role="status" aria-atomic="true"><strong>{heading}</strong></p>
-      {detail && <p className="generation-detail">{detail}</p>}
       {elapsedSeconds !== null && (!compact || job?.status === 'generating' || !!operation) && <p className="generation-activity" aria-live="off">
         <span role="timer" aria-live="off">{Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}</span>
       </p>}
@@ -135,7 +126,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
       {error && <p className="message error" role="alert">{error}</p>}
       {usageError && <p className="message error" role="alert">{usageError}</p>}
       {job?.dossierError && <p className="message warning" role="alert">Your result is saved, but the project brief needs attention: {job.dossierError}</p>}
-      {!job ? <><p>{operation ? 'Desegnos is freezing your current requests and project requirements.' : 'No generation request is prepared.'}</p><div className="form-actions">
+      {!job ? <><p>{operation ? 'Preparing…' : 'No generation request is prepared.'}</p><div className="form-actions">
         <button onClick={openSettings}>AI settings</button>{!operation && <button onClick={() => { void controller.prepare().catch(() => {}); }}>Prepare request again</button>}
       </div></> : <>
         {job.status === 'unknown' && <p className="message warning">The AI may have finished this request, but the result didn’t arrive. Trying again {usesChatgpt ? 'uses your plan again' : 'may cost again'}.</p>}
@@ -147,10 +138,9 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
           {usesChatgpt ? <><dt>Account</dt><dd>{frozenAccount?.label ?? job.chatgptAccountId ?? 'No account recorded'}{frozenAccount && <span className="small muted"> · {job.chatgptAccountId}</span>}</dd><dt>Reasoning effort</dt><dd>{job.settings.reasoningEffort}</dd></> : <>
             <dt>Estimated job cost</dt><dd>{money(job.estimateUsd)}</dd><dt>Estimate allowance</dt><dd>{money(job.settings.spendingLimitUsd)}</dd>
             <dt>Output cap</dt><dd>{job.settings.maxOutputTokens.toLocaleString()} tokens · {job.settings.reasoningEffort} reasoning</dd></>}</dl>
-        {usesChatgpt && <div className="plan-disclosure"><p>Using ChatGPT plan. Eligible usage counts toward this account’s plan or credits balance. This job keeps the account and authentication method shown above, including when retried.</p>{!usageLimit && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}</div>}
+        {usesChatgpt && <div className="plan-disclosure"><p>Counts toward this account’s ChatGPT plan or credits.</p>{!usageLimit && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}</div>}
         {!usesChatgpt && pricing && <p className="small muted">Catalogue verified {pricing.verifiedAt}. Estimates may include higher long-context rates and are not guaranteed billing caps.</p>}
-        {service === 'OpenAI' ? <p className="small muted">Sending attaches these requirements, including current affected-page source, directly to OpenAI. Desegnos uses <code>store: false</code>; this does not guarantee zero retention. OpenAI’s data controls still apply: <span className="source-url">https://developers.openai.com/api/docs/guides/your-data</span></p>
-          : <p className="small muted">Sending attaches these requirements, including current affected-page source, directly to {service}. {service}’s own data and retention policies apply.</p>}
+        <p className="small muted">Sent to {usesChatgpt ? `ChatGPT (${frozenAccount?.label ?? 'current account'})` : `${service} (API key)`}</p>
         <p className="small muted">Received {job.receivedBytes.toLocaleString()} bytes from {service}.</p>
         {providerError && <section aria-label="Provider response details"><h4>Provider response</h4><dl className="generation-facts">
           <dt>Outcome</dt><dd>{providerError.outcome === 'unknown' ? 'No completed generation stream; usage is unknown' : providerError.outcome === 'received' ? 'Error received; no site was applied' : readable(providerError.outcome)}</dd>
@@ -165,16 +155,15 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
           {providerError.requestId && <><dt>Request ID</dt><dd>{providerError.requestId}</dd></>}
         </dl></section>}
         {job.usage && <p className="token-usage">Reported usage: {job.usage.inputTokens.toLocaleString()} input · {job.usage.outputTokens.toLocaleString()} output · {job.usage.totalTokens.toLocaleString()} total tokens</p>}</section>}
-        {tab === 'requirements' && <section className="generation-section"><h3>REQUIREMENTS.md</h3><p className="small">The exact requirements sent to OpenAI. Credentials stay in Desegnos’s secure storage.</p>
+        {tab === 'requirements' && <section className="generation-section"><h3>REQUIREMENTS.md</h3>
           <p className="digest">SHA-256: <code>{job.requirements.sha256}</code></p><pre className="markdown-source" tabIndex={0} aria-label="Generation REQUIREMENTS.md source">{job.requirements.markdown}</pre>
         </section>}
         {tab === 'attempts' && <section className="generation-section"><h3>Actual attempts</h3>{job.attempts.length === 0 ? <p className="muted">No provider attempt has been recorded.</p> : <ol className="attempt-list">{job.attempts.map(attempt => <li key={attempt.ordinal}>
           <strong>Attempt {attempt.ordinal} · {readable(attempt.status)}</strong><p className="small">Started {attempt.startedAt}{attempt.finishedAt ? ` · Finished ${attempt.finishedAt}` : ''}</p>
           {attempt.responseId && <p className="small response-id">Response: {attempt.responseId}</p>}{attempt.usage && <p className="small">{attempt.usage.inputTokens} input · {attempt.usage.outputTokens} output · {attempt.usage.totalTokens} total tokens</p>}
         </li>)}</ol>}</section>}
-        {tab === 'review' && <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Your requests and project brief are ready to send.</p> : job.status === 'generating' ? <p className="muted">Your page will appear on the canvas when it is ready.</p> : <><p>Couldn’t build the page this time. Your work is safe and nothing on the canvas changed.</p>{job.message && <details><summary>Show details</summary><p className="small">{job.message}</p></details>}</>}</> : <>
-          {job.status === 'blocked' ? <section aria-label="Finish your draft"><h3>Your page is unchanged</h3>
-            <p>The AI needed more detail for these boxes. Change a box, or build a draft and the AI will fill the gaps from the web.</p>
+        {tab === 'review' && <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><p>Couldn’t build the page.</p>{job.message && <details><summary>Show details</summary><p className="small">{job.message}</p></details>}</>}</> : <>
+          {job.status === 'blocked' ? <section aria-label="Finish your draft"><h3>Requests needing details</h3>
             <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
               const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
               return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
@@ -186,11 +175,11 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
             {page && <PagePreview key={`${job.jobId}:${source.pageId}`} page={page} revision={job.baseRevision} jobId={job.jobId} />}
             {showSource && <section className="candidate-source"><h3>Source code</h3><SourceView key={source.pageId} content={source.content} label="Generated" /></section>}
           </>}
-          {candidate.decisionProposals.length > 0 && <details className="proposal-list"><summary>Suggested rules ({candidate.decisionProposals.length})</summary><p className="small muted">{alreadyApplied ? 'These suggestions are recorded. Add a choice in Project brief to guide future generations.' : 'Choose which suggestions to keep in your project brief.'}</p>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
+          {candidate.decisionProposals.length > 0 && <details className="proposal-list"><summary>Suggested rules ({candidate.decisionProposals.length})</summary>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
             <input type="checkbox" checked={selected.includes(index)} disabled={job.status !== 'ready' || alreadyApplied || !!operation} onChange={event => setSelected(previous => event.target.checked ? [...previous, index] : previous.filter(value => value !== index))} />
             <span><strong>{proposal.topic}</strong><span className="preserve-text">{proposal.value}</span><span className="small muted">{scopeLabel(project, proposal.scope)} · {proposal.rationale}</span></span>
           </label>)}</details>}
-          {candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><p className="small muted">Suggestions, not rules. The creative choice is yours.</p><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.regionId ? requestLabel(project, criticism.regionId) : 'Whole site'}</strong><p>{criticism.message}</p><p className="muted">{criticism.suggestion}</p></li>)}</ul></details>}
+          {candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.regionId ? requestLabel(project, criticism.regionId) : 'Whole site'}</strong><p>{criticism.message}</p><p className="muted">{criticism.suggestion}</p></li>)}</ul></details>}
           <details className="generation-coverage"><summary>Request details</summary><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.regions.map(region => <tr key={region.regionId}><th>{requestLabel(project, region.regionId)}</th><td>{readable(region.status)}</td><td>{region.explanation}</td></tr>)}</tbody></table></div>
             {candidate.componentRequests.length > 0 && <ul className="generation-list">{candidate.componentRequests.map((component, index) => <li key={index}><strong>{component.capability}</strong><p>{component.resolution === 'native' ? 'Built in' : 'Unavailable'}: {component.reason}</p></li>)}</ul>}
           </details>

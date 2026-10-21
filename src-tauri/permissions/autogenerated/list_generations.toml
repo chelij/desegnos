@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-generations"
+description = "Enables the list_generations command without any pre-configured scope."
+commands.allow = ["list_generations"]
+
+[[permission]]
+identifier = "deny-list-generations"
+description = "Denies the list_generations command without any pre-configured scope."
+commands.deny = ["list_generations"]

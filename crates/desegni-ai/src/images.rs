@@ -117,8 +117,45 @@ pub(crate) async fn fetch_public(
     mimes: &[&str],
     limit: usize,
 ) -> Result<(Vec<u8>, String), &'static str> {
+    fetch_public_on_host(source, fixture, fixture_path, accept, mimes, limit, None).await
+}
+
+pub(crate) async fn fetch_public_on_host(
+    source: &str,
+    fixture: Option<&Url>,
+    fixture_path: &str,
+    accept: &str,
+    mimes: &[&str],
+    limit: usize,
+    required_host: Option<&str>,
+) -> Result<(Vec<u8>, String), &'static str> {
+    fetch_public_document(
+        source,
+        fixture,
+        fixture_path,
+        accept,
+        mimes,
+        limit,
+        required_host,
+    )
+    .await
+    .map(|(bytes, mime, _)| (bytes, mime))
+}
+
+pub(crate) async fn fetch_public_document(
+    source: &str,
+    fixture: Option<&Url>,
+    fixture_path: &str,
+    accept: &str,
+    mimes: &[&str],
+    limit: usize,
+    required_host: Option<&str>,
+) -> Result<(Vec<u8>, String, Url), &'static str> {
     let mut url = Url::parse(source).map_err(|_| "is not a valid web address")?;
     for _ in 0..=2 {
+        if required_host.is_some_and(|host| url.host_str() != Some(host)) {
+            return Err("redirected outside the source website");
+        }
         if !permitted_url_under(&url, fixture, fixture_path) {
             return Err("must be a public https:// address");
         }
@@ -212,7 +249,7 @@ pub(crate) async fn fetch_public(
             }
             bytes.extend_from_slice(&chunk);
         }
-        return Ok((bytes, mime));
+        return Ok((bytes, mime, url));
     }
     Err("redirected too many times")
 }
@@ -235,7 +272,7 @@ impl OpenAiClient {
         else {
             return response;
         };
-        if format >= 8 && candidate.resolve_project_assets(project).is_err() {
+        if (8..12).contains(&format) && candidate.resolve_project_assets(project).is_err() {
             return response;
         }
         if candidate.validate(snapshot, project).is_err() {

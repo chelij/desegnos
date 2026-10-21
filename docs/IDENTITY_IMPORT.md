@@ -1,5 +1,39 @@
 # Identity import
 
+Import context uses three steps: **Where is your brand?**, **Read it**, and
+**Choose what to keep**. A summary replaces the default file list. **Choose files
+yourself** holds the file choices, **Pick for me**, grouped omissions and a nested
+full skipped list. **Read my brand** stays disabled until the selected files fit;
+**Add to project** stays disabled until there are results to keep. AI settings are
+offered only when access or spending settings need attention.
+
+Folder and ZIP collection reads Astro, Vue, Svelte and the other supported text
+templates. Global styles/theme settings, layouts, home/about pages, header/footer
+components, brand notes and logos precede other pages in deterministic order.
+Licences, lockfiles, dependencies, vendor/minified files and unrelated asset app/game
+code are excluded. Build folders are used only if no original sources are found.
+Automatic picks use the configured provider's complete request check, including
+framing, output allowance, image sizes and spending limit. Files are not truncated.
+Photo reading samples at most eight thumbnails within 96 KiB; all collected photos
+remain available to keep. Unread photos keep their filenames until described later.
+
+Current import review lets the user choose findings, logos, photos and existing work.
+Photos and work start selected. `import_context` and `create_project` accept optional
+`identityPhotoIds` and `identityItemIndices`; empty lists exclude those categories,
+while omitted fields preserve existing callers' all-selected behavior. Every choice
+is validated against the completed analysis. Any single selected category can enable
+Add to project. PNG, JPEG and WebP photos are decoded within the existing size limits
+and retained as bounded JPEGs. Folder traversal sorts children before applying limits.
+
+Website address import follows same-origin page links with at most 20 page attempts,
+256 KiB per page, a 2 MiB HTML budget and a bounded queue. It prioritizes work,
+project, tutorial and blog links, deduplicates fragments and excludes query links,
+non-page files and common account/action paths. Page redirects must remain on the
+source host, and every hop retains public-address/DNS/MIME/timeout checks. The root's
+final URL supplies the base for relative links. Each retained page carries its public
+source URL so analysis can report actual destinations and summaries. Source pages
+are read without executing scripts or sending account credentials.
+
 New projects offer **New blank page** and **Import identity from project**, followed by Web/Mobile, resolution and name. Both create one empty light page. Page appearance can change afterward. Import preserves approved identity rather than copying the original site.
 
 ## Authority and storage
@@ -21,10 +55,16 @@ OpenAI receives selected source text and supported logo images directly. Request
 
 ## Bounds and compatibility
 
-Collection supports at most 128 usable files, 256 KiB per text file, 2 MiB total text, a 4 MiB source snapshot, 4096 traversed entries and 64 MiB ZIP/expanded content. Omissions are reported. Four reusable logo assets can be selected, up to 128 KiB each during collection. Persisted core identity supports four checked images up to 512 KiB each and raster dimensions from 1 to 16,384 pixels per side. Raster headers are validated without decoding codecs. SVG permits self-contained static geometry, styles and gradients; active/external content is rejected without rewriting original bytes.
+Collection supports at most 128 usable files, 256 KiB per text file, 2 MiB total text, a 4 MiB source snapshot, 4096 traversed entries and 2 GiB ZIP/expanded content. Every photo is kept (no count limit); each is stored at most 1280 px / 200 KiB, with a 256 px thumbnail available for the bounded reading sample. Omissions are reported. Four reusable logo assets can be selected, up to 128 KiB each during collection. Persisted core identity supports four checked images up to 512 KiB each and raster dimensions from 1 to 16,384 pixels per side. Raster headers are validated without decoding codecs. SVG permits self-contained static geometry, styles and gradients; active/external content is rejected without rewriting original bytes.
 
 Frozen analysis Markdown has a 512 KiB limit including framing. Oversized selections fail before submission without truncation. Vision accepts PNG/JPEG/WebP, at most four images, with 256 KiB per data URI and 512 KiB in total. SVG is text evidence; GIF and unattached raster images are explicitly excluded from visual inference. Conservative input/output estimates apply before connection.
 
 Projects persist as schema 6. Legacy schemas 1–5 are verified before conversion, and explicit save retains the exact original archive as `.previous`. Ordinary projects retain requirements format 5 and compatible frozen formats 3–5. Imported-identity projects use requirements format 6. Project import accepts both `.desegnos` and legacy `.desegni` files. New saves default to `.desegnos`; existing `.desegni` files keep their path on Save. App storage, keyring, archive protocol and registration identifiers remain unchanged.
 
 Source-format adapters can later extend collection without receiving provider, file-write or project-application authority. Core identity memory and approval remain core responsibilities.
+
+Page review groups photos and existing work by website route. Optional `sourcePages` references record the originating page path, title and public URL; folder imports resolve literal HTML, Astro and Markdown image references, then fall back to the containing folder. Optional source `pages` includes kind guesses and photo/work counts. Shared images retain all referring pages. URL import reads up to 20 pages and downloads up to 32 referenced photographs within an 8 MiB download budget using the existing public-address checks.
+
+`identityPagePaths` selects the routes to create. Empty selections import only the chosen project-wide brand context. Existing-project import can attach to matching paths (adding missing routes), or add separate pages with numbered paths on collision. Home always uses the project's home page. Selection, page creation, brand findings and content attachments form one undoable import. Repeating an attachment merges the same route and work items. New-project import starts with Home and creates only the selected additional routes.
+
+Optional `ImportedIdentity.pages` maps source pages to actual project page IDs, shared photo IDs and work items. Page assignments select requirements format 16, which nests pictures and work under the affected page's current name/path; only colours, fonts, logos, tone and any older unassigned content remain project-wide. Formats 3–15 keep their previous rendering and hashing. Existing projects and saved analysis receipts omit these fields by default and remain readable; reviewing a legacy flat receipt as Home upgrades the resulting context without rewriting that receipt.

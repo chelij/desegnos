@@ -5,6 +5,8 @@ use dom_query::Document;
 pub struct WebsiteLinks {
     pub stylesheets: Vec<String>,
     pub logos: Vec<String>,
+    pub pages: Vec<String>,
+    pub photos: Vec<String>,
 }
 
 const MAX_STYLESHEETS: usize = 4;
@@ -43,6 +45,9 @@ pub fn website_links(html: &str) -> WebsiteLinks {
             .filter_map(|name| node.attr(name).map(|value| value.to_ascii_lowercase()))
             .collect::<Vec<_>>()
             .join(" ");
+        if !hint.contains("logo") && !hint.contains("brand") {
+            push(&mut links.photos, node.attr("src").as_deref(), 32);
+        }
         if hint.contains("logo") || hint.contains("brand") {
             push(&mut links.logos, node.attr("src").as_deref(), MAX_LOGOS);
         }
@@ -61,6 +66,9 @@ pub fn website_links(html: &str) -> WebsiteLinks {
         .nodes()
     {
         push(&mut links.logos, node.attr("content").as_deref(), MAX_LOGOS);
+    }
+    for node in doc.select("a[href]").nodes() {
+        push(&mut links.pages, node.attr("href").as_deref(), 128);
     }
     links
 }

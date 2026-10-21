@@ -13,13 +13,16 @@ import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, type MenuItem } from './Menus';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type InlineText } from './Preview';
-import { alignmentLines, elementResizeRect, elementToolbarPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
-import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, Viewport } from './types';
+import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
+import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
+import { RegionOutline } from './RegionOutline';
+import type { RequestShapeKind } from './CanvasTools';
 import './canvas.css';
 
-export type RequestPatch = { prompt?: string; rect?: RectChange | Partial<Rect> };
+// A prompt function is read when the save runs, so queued keystrokes save the newest text once.
+export type RequestPatch = { prompt?: string | (() => string); rect?: RectChange | Partial<Rect> };
 export type CanvasViewAction = { serial: number; kind: 'guide' | 'selection' | 'fit' };
-type Gesture = GeometryGesture & { pointerId: number; region?: Region; active: boolean };
+type Gesture = GeometryGesture & { pointerId: number; region?: Region; active: boolean; shapeKind: RequestShapeKind; points: Point[]; freehand?: RegionShape };
 type CanvasContext = { point: Point } & ({ kind: 'element'; selection: ElementSelection } | { kind: 'request'; regionId: string } | { kind: 'canvas'; at: Point });
 type Measurements = { left: number; top: number; width: number; height: number };
 const emptyMeasurements: Measurements = { left: 0, top: 0, width: 0, height: 0 };
@@ -39,18 +42,22 @@ function paintStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSPrope
   return clipped ? viewStyle(clipped, { x: bounds.left, y: bounds.top }, zoom) : { visibility: 'hidden', left: 0, top: 0, width: 0, height: 0 };
 }
 
+function requestPromptRect(rect: Rect, zoom: number): Rect {
+  return { x: rect.x, y: rect.y + rect.height + 10 / zoom, width: Math.max(260 / zoom, Math.min(rect.width, 420 / zoom)), height: 112 / zoom };
+}
+
 type CanvasProps = {
   pendingImagesChanged: (count: number) => void; canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
-  projectImages?: import('./types').IdentityAsset[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void;
+  projectImages?: import('./types').ProjectImage[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void;
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
-  grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: Rect[]; highlighted?: Rect[];
+  requestShape?: RequestShapeKind; grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: { rect: Rect; shape?: RegionShape }[]; highlighted?: { rect: Rect; shape?: RegionShape }[];
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
   openSource?: (target: ElementTarget) => void;
-  inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>;
-  changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect) => void; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
+  inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
+  changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => void; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
-export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
   const [context, setContext] = useState<CanvasContext | null>(null);
@@ -201,6 +208,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
   const measurementsRef = useRef(emptyMeasurements);
   const [measurements, setMeasurements] = useState(emptyMeasurements);
   const [preview, setPreview] = useState<Rect | null>(null);
+  const [draftShape, setDraftShape] = useState<RegionShape>({ kind: 'rect' });
   const [cursor, setCursor] = useState<Point | null>(null);
   const [panReady, setPanReady] = useState(false);
   const [panning, setPanning] = useState(false);
@@ -364,7 +372,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     if (event.button !== 0 || gesture.current || pan.current || panKey.current) return;
     event.preventDefault(); event.stopPropagation();
     const start = point({ x: event.clientX, y: event.clientY });
-    gesture.current = { kind, start, initial: region?.rect ?? { x: start.x, y: start.y, width: 0, height: 0 }, pointerId: event.pointerId, region, active: false };
+    gesture.current = { kind, start, initial: region?.rect ?? { x: start.x, y: start.y, width: 0, height: 0 }, pointerId: event.pointerId, region, active: false, shapeKind: region ? region.shape?.kind ?? 'rect' : requestShape, points: [start] };
+    setDraftShape({ kind: requestShape === 'ellipse' ? 'ellipse' : 'rect' });
     lastPointer.current = { x: event.clientX, y: event.clientY };
     plainClicks.current = 0;
     if (region) select(region.id);
@@ -376,14 +385,23 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     const now = point(client);
     setCursor(now);
     if (!current.active) current.active = Math.hypot((now.x - current.start.x) * zoom, (now.y - current.start.y) * zoom) >= 3;
-    return current.active ? geometryForGesture(current, now, page.viewport, gridSettings, minimum) : null;
+    if (!current.active) return null;
+    if (current.kind === 'new' && current.shapeKind === 'freehand') {
+      const last = current.points.at(-1)!;
+      if (Math.hypot(now.x - last.x, now.y - last.y) * zoom >= 1) current.points.push(now);
+      if (current.points.length > 4096) current.points = current.points.filter((_, index) => index % 2 === 0);
+      const area = freehandArea(current.points, 1.5 / zoom);
+      if (!area) return null;
+      current.freehand = area.shape; setDraftShape(area.shape); return area.rect;
+    }
+    return geometryForGesture(current, now, page.viewport, gridSettings, current.shapeKind === 'rect' ? minimum : { x: 1, y: 1 });
   }
   function updateDrag(client: Point) {
     if (elementDrag.current) { updateElementDrag(client, elementDrag.current.fine); return; }
     const current = gesture.current;
     if (!current) return;
     const rect = currentRect(client, current);
-    if (rect) setPreview(current.kind === 'new' ? requestPlacement(rect, zoom) : rect);
+    if (rect) setPreview(current.kind === 'new' && current.shapeKind === 'rect' ? requestPlacement(rect, zoom) : rect);
   }
   const updateDragRef = useRef(updateDrag);
   updateDragRef.current = updateDrag;
@@ -461,6 +479,20 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     } catch (error) { if (pageRef.current.id === pageId && selectionSerial.current === ticket) setElementError(error instanceof Error ? error.message : String(error)); throw error; }
     finally { setEditingElement(false); }
   }
+  // Steps only the selected element back to its previous version; other changes stay.
+  async function stepBackElement(selected = elementRef.current) {
+    if (!undoElement || !selected || selected.element.selector === 'body' || editBusy) return;
+    const ticket = selectionSerial.current; const pageId = page.id;
+    setEditingElement(true); setElementError('');
+    try {
+      const target = await undoElement(selected.element);
+      if (pageRef.current.id === pageId && selectionSerial.current === ticket) {
+        pendingSelection.current = target;
+        storeElement(target ? { ...selected, element: target } : null);
+      }
+    } catch (error) { if (pageRef.current.id === pageId && selectionSerial.current === ticket) setElementError(error instanceof Error ? error.message : String(error)); }
+    finally { setEditingElement(false); }
+  }
   async function editTextAt(at: Point) {
     const text = site.current?.textAt(at.x, at.y);
     if (!text) { if (elementRef.current) setElementDialog('edit'); return; }
@@ -529,13 +561,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     if (syncing.current) return syncing.current;
     const work = async () => {
       const current = pageRef.current;
-      if (!current.regions.some(region => !region.completed && regionTargets(region).length)) { setStale(new Set()); return; }
+      if (!current.content || !current.regions.some(region => !region.completed && (regionTargets(region).length || region.shape && region.shape.kind !== 'rect'))) { setStale(new Set()); return; }
       await waitForSite(current.id);
       if (JSON.stringify(pageRef.current.content) !== JSON.stringify(current.content) || pageRef.current.id !== current.id) throw new Error('The page changed while measuring its items. Try again.');
-      const regions = pageRef.current.regions.filter(region => !region.completed && regionTargets(region).length);
+      const regions = pageRef.current.regions.filter(region => !region.completed && (regionTargets(region).length || region.shape && region.shape.kind !== 'rect'));
       const bounds: ElementBounds[] = []; const missing = new Set<string>();
+      const areaBounds = regions.some(region => !regionTargets(region).length) ? site.current!.measuredElements().map(item => ({ target: item.element, rect: item.rect })) : [];
       for (const region of regions) {
         const targets = regionTargets(region);
+        if (!targets.length) {
+          if (JSON.stringify(region.areaBounds ?? []) !== JSON.stringify(areaBounds)) bounds.push({ regionId: region.id, bounds: areaBounds });
+          continue;
+        }
         if (targets.some(target => !site.current?.contains(target))) { missing.add(region.id); continue; }
         const found = targets.map(target => site.current?.find(target) ?? null);
         // A hidden element still exists. Keep its last placement until it has visible bounds again.
@@ -574,7 +611,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     await flushImages();
     if (inlineSaving.current) await inlineSaving.current;
     const text = inlineTextRef.current;
-    if (text) await finishText(stage.current?.querySelector<HTMLElement>('.inline-text-editor')?.innerText ?? text.text);
+    if (text) await finishText(stage.current?.querySelector<HTMLTextAreaElement>('.inline-text-editor')?.value ?? text.text);
     while (nudge.current.promise) await nudge.current.promise;
     if (elementDrag.current) cancel();
     const target = elementRef.current?.element;
@@ -677,11 +714,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     if (found) { chooseElement(found); reveal(found.rect, false); }
     return found;
   }
-  useImperativeHandle(ref, () => ({ focusElement, addRequest: addRequestInView, focusRequest: focusRegion, askAI, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
+  useImperativeHandle(ref, () => ({ focusElement, addRequest: addRequestInView, focusRequest: focusRegion, askAI, undoElement: stepBackElement, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
     await flushImages();
     if (inlineSaving.current) await inlineSaving.current;
     const text = inlineTextRef.current;
-    if (text) { const node = stage.current?.querySelector<HTMLElement>('.inline-text-editor'); await finishText(node?.innerText ?? text.text); }
+    if (text) { const node = stage.current?.querySelector<HTMLTextAreaElement>('.inline-text-editor'); await finishText(node?.value ?? text.text); }
     while (nudge.current.promise) await nudge.current.promise;
     if (elementDrag.current) cancel();
     try { await synchronizeBounds(); } catch (error) { if (requireBounds) { setElementError(String(error)); throw error; } }
@@ -786,7 +823,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     }
     if (!gesture.current) { if (!panReady) setCursor(point(client)); return; }
     if (gesture.current.pointerId !== event.pointerId) return;
-    lastPointer.current = client; updateDrag(client);
+    lastPointer.current = client; gesture.current.proportional = gesture.current.shapeKind === 'ellipse' && event.shiftKey; updateDrag(client);
   }
   function finish(event: PointerEvent) {
     if (elementDrag.current?.pointerId === event.pointerId) {
@@ -813,11 +850,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     }
     const current = gesture.current;
     if (!current || current.pointerId !== event.pointerId) return;
+    current.proportional = current.shapeKind === 'ellipse' && event.shiftKey;
     const rect = currentRect({ x: event.clientX, y: event.clientY }, current);
     cancel();
     if (current.kind === 'new') {
-      if (current.active && rect) add(requestPlacement(rect, zoom));
-      else if (tool === 'request') add(requestAt(current.start, zoom));
+      if (current.shapeKind === 'freehand') { if (current.active && rect && current.freehand) add(rect, current.freehand); }
+      else if (current.active && rect && rect.width >= 1 && rect.height >= 1) add(current.shapeKind === 'rect' ? requestPlacement(rect, zoom) : rect, { kind: current.shapeKind });
+      else if (!current.active && tool === 'request') { const at = requestAt(current.start, zoom); add(current.shapeKind === 'ellipse' ? { ...at, height: at.width } : at, { kind: current.shapeKind }); }
       else if (tool === 'select' && page.content) { const at = point({ x: event.clientX, y: event.clientY }); toggleElement(site.current?.pick(at.x, at.y) ?? null); }
       return;
     }
@@ -830,7 +869,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
       return;
     }
     if (additive && page.content) { const at = point(client); toggleElement(site.current?.pick(at.x, at.y) ?? null); plainClicks.current = 0; lastPlainClick.current = null; return; }
-    const at = point(client); chooseElement(page.content ? site.current?.pick(at.x, at.y) ?? null : null);
+    const at = point(client);
+    const area = [...page.regions].sort((a,b) => b.zIndex-a.zIndex).find(region => !region.completed && region.shape && region.shape.kind !== 'rect' && pointInRegion(at, region.rect, region.shape));
+    if (area) { deselectElement(); select(area.id); return; }
+    chooseElement(page.content ? site.current?.pick(at.x, at.y) ?? null : null);
     if (!plain) { plainClicks.current = 0; lastPlainClick.current = null; return; }
     const previous = lastPlainClick.current; const now = performance.now();
     plainClicks.current = Math.min(2, plainClicks.current + 1);
@@ -910,7 +952,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     const direction = { x: event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0, y: event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0 };
     if (!region) { scroll.current!.scrollBy(direction.x * 80, direction.y * 80); return; }
     const resizing = event.shiftKey || resize;
-    void change(region.id, { rect: keyboardRectChange(direction, page.viewport, gridSettings, resizing, event.altKey, minimum) }).then(updated => reveal(updated.rect, resizing)).catch(() => {});
+    void change(region.id, { rect: keyboardRectChange(direction, page.viewport, gridSettings, resizing, event.altKey, region.shape && region.shape.kind !== 'rect' ? { x: 1, y: 1 } : minimum) }).then(updated => reveal(updated.rect, resizing)).catch(() => {});
   }
 
   useLayoutEffect(() => {
@@ -929,8 +971,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
   const inset = { x: scroll.current?.offsetLeft ?? 0, y: scroll.current?.offsetTop ?? 0 };
   const occupied = useMemo(() => element ? site.current?.occupied(element.element) ?? [] : [], [element, acceptedVersion]);
   const inViewport = (rect: Rect): Rect => ({ x: (rect.x - bounds.left) * zoom - measurements.left + inset.x, y: (rect.y - bounds.top) * zoom - measurements.top + inset.y, width: rect.width * zoom, height: rect.height * zoom });
-  const toolbarRect = element ? unionRect([element.rect, ...extras.map(item => item.rect)]) : page.regions.find(item => item.id === selected && !item.completed)?.rect;
-  const toolbarPoint = toolbarRect ? elementToolbarPosition(inViewport(toolbarRect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupied.map(inViewport)) : null;
+  const selectedRequest = page.regions.find(item => item.id === selected && !item.completed);
+  const shapedPrompt = selectedRequest?.shape && selectedRequest.shape.kind !== 'rect' ? inViewport({ ...requestPromptRect(preview ?? selectedRequest.rect, zoom), height: Math.max(160, measurements.height * .55) / zoom }) : null;
+  const occupiedInViewport = [...occupied.map(inViewport), ...(shapedPrompt ? [shapedPrompt] : [])];
+  const toolbarRect = element ? unionRect([element.rect, ...extras.map(item => item.rect)]) : selectedRequest?.rect;
+  const toolbarPoint = toolbarRect ? elementToolbarPosition(inViewport(toolbarRect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupiedInViewport) : null;
   const toolbarPosition = toolbarPoint ? { left: toolbarPoint.x, top: toolbarPoint.y } : {};
   const measurementRect = coordinate ? inViewport(selectedRect ?? { ...coordinate, width: 0, height: 0 }) : null;
   // The size label sits beside the selection. Near the view's edges it would cover the box (and
@@ -938,8 +983,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
   const measurementPosition = (() => {
     if (!measurementRect) return null;
     const size = { x: 245, y: 28 };
-    const position = elementToolbarPosition(measurementRect, size, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupied.map(inViewport), ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]);
-    const covers = position.x < measurementRect.x + measurementRect.width && position.x + size.x > measurementRect.x && position.y < measurementRect.y + measurementRect.height && position.y + size.y > measurementRect.y;
+    const position = elementToolbarPosition(measurementRect, size, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupiedInViewport, ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]);
+    const covers = [measurementRect, ...(shapedPrompt ? [shapedPrompt] : [])].some(rect => position.x < rect.x + rect.width && position.x + size.x > rect.x && position.y < rect.y + rect.height && position.y + size.y > rect.y);
     return covers ? null : position;
   })();
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
@@ -979,6 +1024,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
       { id: 'generate', label: 'Ask AI', disabled: editBusy, action: askAI },
       ...(fixOnPhones && elementRef.current && elementRef.current.element.selector !== 'body' ? [{ id: 'phones', label: 'Fix on phones', disabled: editBusy, action: () => { const current = elementRef.current; if (current) fixOnPhones(current); } }] : []),
       { id: 'replace', label: 'Replace', disabled: editBusy, action: () => setElementDialog('replace') },
+      ...(undoElement && elementRef.current && elementRef.current.element.selector !== 'body' ? [{ id: 'undo-element', label: 'Undo changes to this element', shortcut: 'Alt+Z', disabled: editBusy, action: () => { void stepBackElement(); } }] : []),
     ] : context.kind === 'request' ? [{ id: 'edit', label: 'Edit request', disabled: editBusy, action: () => focusRegion(context.regionId) }] : [{ id: 'add', label: 'Add request here', action: () => { deselectElement(); add(requestAt(context.at, zoom)); } }]),
     ...(context.kind === 'request' && regionTargets(page.regions.find(item => item.id === context.regionId)).length ? [{ id: 'allow-target-removal', label: 'Allow AI to remove selected items', checked: !!page.regions.find(item => item.id === context.regionId)?.allowTargetRemoval, action: () => setTargetRemoval(context.regionId, !page.regions.find(item => item.id === context.regionId)?.allowTargetRemoval) }] : []),
     ...(context.kind !== 'canvas' ? [
@@ -1044,7 +1090,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
           </div>
           {grid && !liveView && <div className="canvas-grid" aria-hidden="true" style={{ ...positioned({ x: 0, y: 0, width: page.viewport.width, height: Math.max(page.viewport.height, page.content ? previewHeight : 0) }), backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: '0 0' }} />}
           {!page.content && !page.regions.some(region => !region.completed) && <div className="canvas-empty-hint" style={positioned({ x: 0, y: 0, ...page.viewport })}>
-            <strong>This page is empty</strong><p>Place a box where something should go, then describe it.</p><button type="button" className="primary" onClick={addRequestInView}>Add request</button><p className="empty-hint-small">or double-click anywhere on the page</p>
+            <strong>This page is empty</strong><button type="button" className="primary" onClick={addRequestInView}>Add request</button>
           </div>}
           {liveRequests && page.regions.map((region, index) => {
             if (region.completed) return null;
@@ -1058,15 +1104,15 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
           </div>}
           {extras.map(item => <div key={item.element.id ?? item.element.selector} data-testid="multi-element-selection" data-element-id={item.element.id} className="element-selection multi-selection" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }} aria-hidden="true" />)}
           {inlineText && <InlineTextEditor key={`${inlineText.selection.element.sourceSha256}:${inlineText.index}`} text={inlineText} origin={origin} zoom={zoom} layer={overlayLayer + 4} disabled={editingElement} finish={finishText} />}
-          {changing.map((rect, index) => <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
+          {changing.map(({ rect, shape }, index) => shape && shape.kind !== 'rect' ? <RegionOutline key={index} shape={shape} rect={rect} bounds={bounds} zoom={zoom} layer={overlayLayer + 2} draft /> : <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
           {!editBusy && !liveView && placeholders.map(item => <button key={item.element.selector} type="button" className="image-drop-target" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }}
             onPointerDown={event => event.stopPropagation()} onClick={event => { if (event.shiftKey || event.ctrlKey || event.metaKey) toggleElement(item); else if (repicking && repick) { const id = repicking; setRepicking(null); void repick(id, item).catch(error => setElementError(String(error))); } else { chooseElement(item); browseImage(item); } }} title="Drop a picture here, or click to choose one">
             <strong>Drop a picture here</strong><span>or click to browse</span></button>)}
           {dropTarget && <div className="image-drop-highlight" style={{ ...paintStyle(dropTarget, bounds, zoom), zIndex: overlayLayer + 3 }} aria-hidden="true"><span>Drop to use this picture</span></div>}
-          {highlighted.map((rect, index) => <div key={index} className="generation-highlight" data-testid="generation-highlight" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
+          {highlighted.map(({ rect, shape }, index) => shape && shape.kind !== 'rect' ? <RegionOutline key={index} shape={shape} rect={rect} bounds={bounds} zoom={zoom} layer={overlayLayer + 2} selected /> : <div key={index} className="generation-highlight" data-testid="generation-highlight" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
           {guides.x.map(x => <div key={`x${x}`} className="alignment-guide alignment-x" aria-hidden="true" style={{ left: (x - bounds.left) * zoom, zIndex: overlayLayer + 1 }} />)}
           {guides.y.map(y => <div key={`y${y}`} className="alignment-guide alignment-y" aria-hidden="true" style={{ top: (y - bounds.top) * zoom, zIndex: overlayLayer + 1 }} />)}
-          {preview && gesture.current?.kind === 'new' && <div className="annotation-draft" style={{ ...paintStyle(preview, bounds, zoom), zIndex: overlayLayer }} />}
+          {preview && gesture.current?.kind === 'new' && (gesture.current.shapeKind === 'rect' ? <div className="annotation-draft" style={{ ...paintStyle(preview, bounds, zoom), zIndex: overlayLayer }} /> : <RegionOutline shape={draftShape} rect={preview} bounds={bounds} zoom={zoom} layer={overlayLayer} draft />)}
         </div>
       </div>
     </div>
@@ -1085,6 +1131,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
         {element.element.selector !== 'body' && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}
       </>}
       {element && foundUrl && openSource && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
+      {element && undoElement && element.element.selector !== 'body' && <button aria-label="Undo changes to this element" title="Step this element back to its previous version · Alt+Z" disabled={editBusy} onClick={() => { void stepBackElement(); }}><QuickIcon name="undo" /></button>}
       <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
       {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={site.current?.visual(element.element) ?? null} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </>}
@@ -1095,7 +1142,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
       arrange={direction => { void arrangeLayer(direction); }} copy={() => { void copyLayer(); }} paste={() => { void pasteLayer(); }} close={() => setLayersOpen(false)} />
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void stageImage(target, file); }} />
     {repicking && <div className="repick-hint" role="status">Click the element this request is for. <button type="button" onClick={() => setRepicking(null)}>Cancel</button></div>}
-    {confirmMany && <Modal title="Delete items" close={() => setConfirmMany(null)}><div className="dialog-body"><p>Delete these {confirmMany.count} items and everything inside them? You can undo this.</p>
+    {confirmMany && <Modal title="Delete items" close={() => setConfirmMany(null)}><div className="dialog-body"><p>Delete these {confirmMany.count} items and everything inside them?</p>
       <label className="check-label"><input type="checkbox" checked={confirmMany.skip} onChange={event => setConfirmMany({ ...confirmMany, skip: event.target.checked })} />Don’t ask again</label>
       <div className="form-actions"><button type="button" onClick={() => setConfirmMany(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void deleteSelected(true).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete {confirmMany.count} items</button></div></div></Modal>}
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
@@ -1126,7 +1173,7 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
 }) {
   const text = useRef<HTMLTextAreaElement>(null);
   const move = useRef<HTMLButtonElement>(null);
-  const [draft, changeDraft] = useDraftText(region.prompt, value => change({ prompt: value }).then(updated => updated.prompt));
+  const [draft, changeDraft] = useDraftText(region.prompt, (_value, latest) => change({ prompt: latest }).then(updated => updated.prompt));
   const [expanded, setExpanded] = useState(false);
   const [dropping, setDropping] = useState(false);
   const attachInput = useRef<HTMLInputElement>(null);
@@ -1139,7 +1186,8 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
   }, [focus, focusToken]);
   const targets = regionTargets(region);
   const target = targets.length > 0;
-  const promptRect = target ? { x: rect.x, y: rect.y + rect.height + 10 / zoom, width: Math.max(260 / zoom, Math.min(rect.width, 420 / zoom)), height: 112 / zoom } : rect;
+  const shaped = !target && !!region.shape && region.shape.kind !== 'rect';
+  const promptRect = target || shaped ? requestPromptRect(rect, zoom) : rect;
   useLayoutEffect(() => {
     const node = text.current; if (!node) return;
     const old = node.style.height; node.style.height = '0px'; const style = getComputedStyle(node);
@@ -1148,7 +1196,7 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
   }, [draft, promptRect.width, zoom]);
   const minimumHeight = promptRect.height * zoom;
   // Keep the box at its placement size; long text scrolls inside it instead of spilling over the page.
-  const collapseHeight = target ? Math.max(minimumHeight, maxHeight) : minimumHeight;
+  const collapseHeight = target || shaped ? Math.max(minimumHeight, maxHeight) : minimumHeight;
   const fullHeight = Math.max(minimumHeight, naturalHeight);
   const hasMore = fullHeight > collapseHeight;
   useLayoutEffect(() => { if (target && hasMore && document.activeElement === text.current) setExpanded(true); }, [target, hasMore, draft]);
@@ -1161,9 +1209,10 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
   const moveVisible = at(rect.x, rect.y);
   const resizeVisible = at(rect.x + rect.width, rect.y + rect.height);
   return <>
-  {selected && !target && <div className="element-selection request-placement" style={{ ...paintStyle(rect, bounds, zoom), zIndex: controlsLayer }} aria-hidden="true" />}
+  {shaped && <RegionOutline shape={region.shape!} rect={rect} bounds={bounds} zoom={zoom} layer={layer} selected={selected} regionId={region.id} onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); select(); }} />}
+  {selected && !target && !shaped && <div className="element-selection request-placement" style={{ ...paintStyle(rect, bounds, zoom), zIndex: controlsLayer }} aria-hidden="true" />}
   {target && <div className="element-selection" data-testid="element-selection" style={{ ...paintStyle(rect, bounds, zoom), zIndex: layer }} aria-hidden="true" />}
-  <div data-region-id={region.id} className={`annotation ${target ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...paintStyle(shown, bounds, zoom), zIndex: layer }}
+  <div data-region-id={region.id} className={`annotation ${target || shaped ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...paintStyle(shown, bounds, zoom), zIndex: layer }}
     onPointerDown={event => { if (event.target === event.currentTarget) { event.preventDefault(); event.stopPropagation(); text.current?.focus({ preventScroll: true }); } }}
     onFocusCapture={select}
     onDragOver={event => { if (!attach || !(event.dataTransfer.types.includes('Files') || event.dataTransfer.types.includes('text/uri-list'))) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; setDropping(true); }}
@@ -1177,7 +1226,7 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
     <div className="request-frame" aria-hidden="true" />
     {dropping && <div className="request-drop-hint" aria-hidden="true">Drop to attach to this request</div>}
     {!!region.attachments?.length && <ul className="request-attachments" aria-label="Attachments" onPointerDown={event => event.stopPropagation()}>{region.attachments.map(item => <li key={item.id} title={item.kind === 'link' ? item.url : item.name}>
-      {item.kind === 'image' && item.dataUri ? <img src={item.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true">{item.kind === 'link' ? '🔗' : '¶'}</span>}
+      {item.kind === 'image' && item.dataUri ? <img src={item.preview ?? item.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true">{item.kind === 'link' ? '🔗' : '¶'}</span>}
       <span className="attachment-name">{item.name}</span>{detach && <button type="button" aria-label={`Remove ${item.name}`} onClick={() => detach(item.id)}>×</button>}
     </li>)}</ul>}
     {selected && attach && <>
@@ -1187,7 +1236,7 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
     {stale && <div className="request-stale" role="alert" onPointerDown={event => event.stopPropagation()}><span>This element was removed.</span><button type="button" onClick={repickNow}>Pick again</button><button type="button" onClick={removeNow}>Remove request</button></div>}
     {!target && <span className="request-number" aria-hidden="true">{number}</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
-    <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture you want; the AI will find one online…' : target ? 'Describe the change…' : 'Describe what goes here…'}
+    <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture…' : target ? 'Describe the change…' : 'Describe what goes here…'}
       style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, background: 'transparent', outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
     {hasMore && <button type="button" className="request-expand" style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom + displayHeight, width: shown.width * zoom }} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
@@ -1202,28 +1251,30 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
 }
 
 function InlineTextEditor({ text, origin, zoom, layer, disabled, finish }: { text: InlineText; origin: Point; zoom: number; layer: number; disabled: boolean; finish: (value: string | null, restoreFocus?: boolean) => Promise<void> }) {
-  const editor = useRef<HTMLDivElement>(null);
+  // Native text-control selection stays within its value. A transient contenteditable
+  // can leave WebKitGTK's accessibility caret outside its cached Unicode text.
+  const editor = useRef<HTMLTextAreaElement>(null);
   const done = useRef(false);
-  function complete(value: string | null, restoreFocus = false) { if (!done.current) { done.current = true; void finish(value, restoreFocus).catch(() => { done.current = false; editor.current?.focus({ preventScroll: true }); }); } }
+  function complete(value: string | null, restoreFocus = false) {
+    if (done.current) return;
+    done.current = true;
+    editor.current?.setSelectionRange(0, 0);
+    void finish(value, restoreFocus).catch(() => { done.current = false; editor.current?.focus({ preventScroll: true }); });
+  }
   useLayoutEffect(() => {
     const node = editor.current; if (!node) return;
-    node.textContent = text.text; node.focus({ preventScroll: true });
-    const range = document.createRange(); range.selectNodeContents(node);
-    const selection = window.getSelection(); selection?.removeAllRanges(); selection?.addRange(range);
+    node.value = text.text; node.focus({ preventScroll: true }); node.select();
+    node.style.height = `${Math.max(text.rect.height, node.scrollHeight)}px`;
   }, []);
-  return <div ref={editor} className="inline-text-editor" role="textbox" aria-label="Edit text in place" aria-multiline="true" aria-busy={disabled} contentEditable={!disabled} suppressContentEditableWarning spellCheck
-    style={{ ...text.style, position: 'absolute', left: (text.rect.x - origin.x) * zoom, top: (text.rect.y - origin.y) * zoom, width: Math.max(24 / zoom, text.rect.width), minHeight: text.rect.height, transform: `scale(${zoom})`, transformOrigin: 'top left', zIndex: layer }}
+  return <textarea ref={editor} className="inline-text-editor" role="textbox" aria-label="Edit text in place" aria-multiline="true" aria-busy={disabled} readOnly={disabled} spellCheck rows={1}
+    style={{ ...text.style, position: 'absolute', left: (text.rect.x - origin.x) * zoom, top: (text.rect.y - origin.y) * zoom, width: Math.max(24 / zoom, text.rect.width), minHeight: text.rect.height, transform: `scale(${zoom})`, transformOrigin: 'top left', zIndex: layer, resize: 'none', overflow: 'hidden' }}
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()} onContextMenu={event => event.stopPropagation()}
-    onBlur={() => complete(editor.current?.innerText ?? text.text)}
+    onInput={event => { const node = event.currentTarget; node.style.height = 'auto'; node.style.height = `${Math.max(text.rect.height, node.scrollHeight)}px`; }}
+    onBlur={() => complete(editor.current?.value ?? text.text)}
     onKeyDown={event => {
       if (!event.ctrlKey && !event.metaKey) event.stopPropagation();
       if (event.key === 'Escape') { event.preventDefault(); complete(null, true); }
-      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); complete(editor.current?.innerText ?? text.text, true); }
-    }}
-    onPaste={event => {
-      event.preventDefault(); const value = event.clipboardData.getData('text/plain');
-      const selection = window.getSelection(); if (!selection?.rangeCount || !editor.current?.contains(selection.anchorNode)) return;
-      const range = selection.getRangeAt(0); range.deleteContents(); const node = document.createTextNode(value); range.insertNode(node); range.setStartAfter(node); range.collapse(true); selection.removeAllRanges(); selection.addRange(range);
+      if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); complete(editor.current?.value ?? text.text, true); }
     }} />;
 }
 
@@ -1231,8 +1282,8 @@ function elementName(tag: string): string {
   return ({ a: 'Link', button: 'Button', img: 'Image', input: 'Input', textarea: 'Text area', select: 'Dropdown', h1: 'Heading', h2: 'Heading', h3: 'Heading', h4: 'Heading', h5: 'Heading', h6: 'Heading', p: 'Paragraph', span: 'Text', div: 'Container', section: 'Section', nav: 'Navigation', header: 'Header', footer: 'Footer', main: 'Main', body: 'Page', ul: 'List', ol: 'List', li: 'List item', form: 'Form' } as Record<string, string>)[tag] ?? tag.charAt(0).toUpperCase() + tag.slice(1);
 }
 
-function QuickIcon({ name }: { name: 'copy' | 'cut' | 'delete' }) {
+function QuickIcon({ name }: { name: 'copy' | 'cut' | 'delete' | 'undo' }) {
   return <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {name === 'copy' ? <path d="M7 7H17V17H7ZM3 13V3H13" /> : name === 'cut' ? <><circle cx="5" cy="5" r="2.5"/><circle cx="5" cy="15" r="2.5"/><path d="M7 6.5L17 17M7 13.5L17 3M10 10L7 7"/></> : <><path d="M3 5H17M7 5V2H13V5M5 5L6 18H14L15 5M8 8V15M12 8V15"/></>}
+    {name === 'undo' ? <path d="M7 4L3 8L7 12M3 8H12A5 5 0 0 1 12 18H8" /> : name === 'copy' ? <path d="M7 7H17V17H7ZM3 13V3H13" /> : name === 'cut' ? <><circle cx="5" cy="5" r="2.5"/><circle cx="5" cy="15" r="2.5"/><path d="M7 6.5L17 17M7 13.5L17 3M10 10L7 7"/></> : <><path d="M3 5H17M7 5V2H13V5M5 5L6 18H14L15 5M8 8V15M12 8V15"/></>}
   </svg>;
 }

@@ -47,8 +47,14 @@ export async function imageResizeWorkflow(driver, physical, step, output, provid
   async function generate() {
     await driver.button('Generate');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].content.html !== original.html, 'Generate did not commit the picture');
-    const next = (await driver.invoke('get_workspace')).project.pages[0].content;
-    const uri = next.html.match(/src="(data:image\/[^\"]+)"/)[1];
+    const saved = (await driver.invoke('get_workspace')).project;
+    const next = saved.pages[0].content;
+    const reference = next.html.match(/src="desegnos-asset:([0-9a-f-]{36})"/);
+    assert.ok(reference, 'The resized picture must be stored as a project reference');
+    assert.doesNotMatch(next.html, /data:image\//);
+    const uri = saved.pictures[reference[1]];
+    assert.match(uri, /^data:image\//);
+    await waitFor(() => driver.execute(expected => { const image = document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#picture'); return image?.naturalWidth === 800 && image.getAttribute('src') === expected; }, uri), 'The saved reference did not resolve to the resized preview');
     assert.ok(Buffer.from(uri.split(',')[1], 'base64').length <= 256 * 1024);
     assert.equal(next.css, original.css); assert.equal(next.javascript, original.javascript); assert.match(next.html, /Keep this text/);
     assert.equal(provider.generationRequests().length, 0, 'Local resizing should not spend AI usage');

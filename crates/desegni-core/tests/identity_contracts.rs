@@ -25,7 +25,7 @@ fn image(mime: &str, bytes: &[u8]) -> IdentityAsset {
     }
 }
 fn identity() -> ImportedIdentity {
-    ImportedIdentity { source_name: "Studio website".into(), source_sha256: digest(b"the exact imported source"), summary: "Studio uses deep blue #16324F and Indonesian, with a rounded wordmark.".into(), assets: vec![image("image/svg+xml", br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><defs><linearGradient id="brand"><stop stop-color="#16324F"/></linearGradient></defs><rect width="20" height="20" fill="url(#brand)"/><title>Studio &amp; Company</title></svg>"##)], photos: vec![], content: vec![] }
+    ImportedIdentity { source_name: "Studio website".into(), source_sha256: digest(b"the exact imported source"), summary: "Studio uses deep blue #16324F and Indonesian, with a rounded wordmark.".into(), assets: vec![image("image/svg+xml", br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><defs><linearGradient id="brand"><stop stop-color="#16324F"/></linearGradient></defs><rect width="20" height="20" fill="url(#brand)"/><title>Studio &amp; Company</title></svg>"##)], photos: vec![], content: vec![], pages: vec![] }
 }
 fn described(mut project: Project) -> Project {
     let page_id = project.home_page_id;
@@ -204,7 +204,7 @@ fn requirements_reference_original_identity_images_without_transcribing_their_by
     assert!(markdown.contains(&imported.assets[0].id.to_string()));
     assert!(!markdown.contains("data:image/"));
     let snapshot = project.prepare_requirements().unwrap();
-    assert!(snapshot.markdown.contains("Requirements format: 10"));
+    assert!(snapshot.markdown.contains("Requirements format: 14"));
     assert!(!snapshot.markdown.contains(&imported.assets[0].data_uri));
     assert!(
         snapshot
@@ -242,7 +242,7 @@ fn requirements_reference_original_identity_images_without_transcribing_their_by
             .prepare_requirements()
             .unwrap()
             .markdown
-            .contains("Requirements format: 10")
+            .contains("Requirements format: 14")
     );
 }
 
@@ -401,7 +401,7 @@ fn stable_project_image_references_resolve_exactly_export_and_undo_without_trans
         format!("main{{background-image:url('{png_ref}')}}"),
     );
     assert!(!snapshot.markdown.contains("data:image/"));
-    assert!(candidate.validate(&snapshot, &project).is_err());
+    candidate.validate(&snapshot, &project).unwrap();
     assert_eq!(candidate.resolve_project_assets(&project).unwrap(), 3);
     assert_eq!(candidate.resolve_project_assets(&project).unwrap(), 0);
     candidate.validate(&snapshot, &project).unwrap();
@@ -430,7 +430,11 @@ fn stable_project_image_references_resolve_exactly_export_and_undo_without_trans
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().pages, project.pages);
     session.redo(|_| Ok(())).unwrap();
-    let restored = session.project().pages[0].content.as_ref().unwrap();
+    let restored = session
+        .project()
+        .resolve_site_content(session.project().pages[0].content.as_ref().unwrap())
+        .unwrap();
+    let expected = format_site_content(&expected);
     assert_eq!(without_editor_ids(&restored.html), expected.html);
     assert_eq!(restored.css, expected.css);
     assert_eq!(restored.javascript, expected.javascript);
@@ -542,6 +546,8 @@ fn import_context_merges_rules_into_an_open_project_without_overwriting_protecte
         source_name: "crumb.example".into(),
         source_sha256: "a".repeat(64),
         summary: "Brand name: Crumb & Co".into(),
+        pages: vec![],
+        attach_matching_pages: true,
         findings: vec![
             ("Brand name".into(), "Crumb & Co".into()),
             ("Tone".into(), "Warm and rustic".into()),
@@ -674,9 +680,11 @@ fn imported_photos_and_existing_work_reach_generation_without_their_bytes() {
         sha256: digest(&photo_bytes),
         width: 1280,
         height: 853,
+        source_pages: vec![],
         description: "A 3D-printed robot arm on a workbench".into(),
     };
     let item = ImportedItem {
+        source_pages: vec![],
         kind: "tutorial".into(),
         title: "Wiring a servo".into(),
         url: "/tutorials/servo".into(),
@@ -730,4 +738,147 @@ fn imported_photos_and_existing_work_reach_generation_without_their_bytes() {
         .validate()
         .is_err()
     );
+}
+
+#[test]
+fn selected_source_pages_create_routes_and_keep_generation_context_on_each_page() {
+    let home = identity_source_page("index.html", "<title>Studio home</title>").unwrap();
+    let projects =
+        identity_source_page("src/pages/projects.astro", "<h1>Our projects</h1>").unwrap();
+    let photo = |name: &str, page: &SourcePage| ProjectPhoto {
+        id: Uuid::new_v4(),
+        name: name.into(),
+        data_uri: "data:image/jpeg;base64,/9j/4A==".into(),
+        sha256: digest(name.as_bytes()),
+        width: 320,
+        height: 240,
+        description: name.into(),
+        source_pages: vec![page.reference()],
+    };
+    let photos = vec![
+        photo("Home portrait", &home),
+        photo("Project robot", &projects),
+    ];
+    let item = ImportedItem {
+        kind: "project".into(),
+        title: "Robot build".into(),
+        url: "/projects/robot".into(),
+        summary: "An actual robot.".into(),
+        source_pages: vec![projects.reference()],
+    };
+    let context = ImportedContext {
+        source_name: "Studio".into(),
+        source_sha256: digest(b"studio"),
+        summary: "Selected pages".into(),
+        findings: vec![("Tone".into(), "Warm".into())],
+        assets: vec![],
+        photos: photos.clone(),
+        content: vec![item.clone()],
+        pages: vec![home, projects],
+        attach_matching_pages: true,
+    };
+    let mut project = blank().import_context(0, context.clone()).unwrap();
+    assert_eq!(
+        project
+            .pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/", "/projects"]
+    );
+    assert_eq!(project.home_page_id, project.pages[0].id);
+    let again = project
+        .import_context(project.revision, context.clone())
+        .unwrap();
+    assert_eq!(
+        again.pages.len(),
+        2,
+        "matching paths attach without duplicates"
+    );
+    assert_eq!(
+        again.imported_identity.as_ref().unwrap().pages[1]
+            .content
+            .len(),
+        1
+    );
+    let added = project
+        .import_context(
+            project.revision,
+            ImportedContext {
+                attach_matching_pages: false,
+                ..context
+            },
+        )
+        .unwrap();
+    assert_eq!(added.pages.len(), 3);
+    assert_eq!(added.pages[2].path, "/projects-2");
+    for id in project.pages.iter().map(|page| page.id).collect::<Vec<_>>() {
+        project = project
+            .apply(
+                project.revision,
+                Command::AddRegion {
+                    page_id: id,
+                    rect: Rect {
+                        x: 0.,
+                        y: 0.,
+                        width: 300.,
+                        height: 200.,
+                    },
+                },
+            )
+            .unwrap();
+        let region = project.page(id).unwrap().regions[0].clone();
+        project = project
+            .apply(
+                project.revision,
+                Command::UpdateRegion {
+                    page_id: id,
+                    region_id: region.id,
+                    rect: region.rect,
+                    prompt: "Use this page's imported content".into(),
+                },
+            )
+            .unwrap();
+    }
+    let snapshot = project.prepare_requirements().unwrap();
+    assert_eq!(snapshot.format_version().unwrap(), 16);
+    snapshot.validate_current(&project).unwrap();
+    let catalogue = project
+        .generation_page_catalogue(&project.pages.iter().map(|page| page.id).collect::<Vec<_>>())
+        .unwrap();
+    assert!(catalogue["photos"].as_array().unwrap().is_empty());
+    assert!(catalogue["content"].as_array().unwrap().is_empty());
+    assert_eq!(
+        catalogue["pages"][0]["photos"][0]["description"],
+        "Home portrait"
+    );
+    assert!(
+        catalogue["pages"][0]["content"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        catalogue["pages"][1]["photos"][0]["description"],
+        "Project robot"
+    );
+    assert_eq!(catalogue["pages"][1]["content"][0]["title"], "Robot build");
+    assert!(!snapshot.markdown.contains("data:image/"));
+    let changed = project
+        .import_context(
+            project.revision,
+            ImportedContext {
+                pages: vec![],
+                attach_matching_pages: true,
+                source_name: "Other".into(),
+                source_sha256: digest(b"other"),
+                summary: "Changed".into(),
+                findings: vec![("Tone".into(), "Formal".into())],
+                assets: vec![],
+                photos: vec![],
+                content: vec![],
+            },
+        )
+        .unwrap();
+    assert!(snapshot.validate_current(&changed).is_err());
 }

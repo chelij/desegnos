@@ -25,3 +25,5 @@ pub type Result<T> = std::result::Result<T, ProviderError>;
 
 #[cfg(test)]
 mod tests;
+
+pub use error::scrub_diagnostic_reply;

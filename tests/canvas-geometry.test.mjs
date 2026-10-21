@@ -12,13 +12,13 @@ try {
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--jsx', 'react-jsx', '--module', 'esnext',
     '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts', 'src/layerOrder.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
+  const { pointInEllipse, pointInPolygon, pointInRegion, absolutePoints, relativePoints, simplifyFreehand, freehandArea, resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
     workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
   const { reorderedLayers } = await import(pathToFileURL(join(temporary, 'layerOrder.js')).href);
   await test('canvas tool shortcuts never interrupt text input and AI stays explicit', () => {
     const event = key => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
-    for (const [key, action] of [['v','selectTool'], ['r','requestTool'], ['h','panTool']]) {
+    for (const [key, action] of [['v','selectTool'], ['r','requestTool'], ['h','panTool'], ['c','circleTool'], ['l','freehandTool']]) {
       assert.equal(editorShortcut(event(key), false), action);
       assert.equal(editorShortcut(event(key), true), null);
       assert.equal(editorShortcut({ ...event(key), isComposing: true }, false), null);
@@ -26,6 +26,83 @@ try {
     assert.equal(editorShortcut({ ...event('k'), ctrlKey: true }, false), 'askAI');
     assert.equal(editorShortcut({ ...event('k'), metaKey: true }, false), 'askAI');
     assert.equal(editorShortcut({ ...event('k'), ctrlKey: true }, true), null);
+  });
+  await test('shape shortcuts respect modifiers, composition and request-tool memory', () => {
+    const event = { key: 'R', ctrlKey: false, metaKey: false, shiftKey: true, altKey: false };
+    assert.equal(editorShortcut(event, false), 'rectangleTool');
+    assert.equal(editorShortcut(event, true), null);
+    for (const key of ['c', 'l', 'r']) {
+      for (const extra of [{ altKey: true }, { isComposing: true }, { defaultPrevented: true }]) assert.equal(editorShortcut({ ...event, key, shiftKey: false, ...extra }, false), null);
+    }
+    assert.equal(editorShortcut({ ...event, key:'c', shiftKey:false, ctrlKey:true }, false), 'copyLayer');
+    assert.equal(editorShortcut({ ...event, key:'l', shiftKey:false, ctrlKey:true }, false), null);
+  });
+  await test('ellipse hit-testing uses radii, includes edges and excludes bounding corners', () => {
+    const rect = { x: -70, y: 20, width: 200, height: 80 };
+    for (const point of [{x:30,y:60},{x:-70,y:60},{x:130,y:60},{x:30,y:20}]) assert.equal(pointInEllipse(point,rect),true,JSON.stringify(point));
+    for (const point of [{x:-70,y:20},{x:130,y:100},{x:30,y:19}]) assert.equal(pointInEllipse(point,rect),false,JSON.stringify(point));
+    assert.equal(pointInEllipse({x:0,y:0},{x:0,y:0,width:0,height:0}),false);
+  });
+  await test('polygon hit-testing handles concavity, closure, edges and even-odd crossings', () => {
+    const polygon=[{x:0,y:0},{x:100,y:0},{x:100,y:30},{x:30,y:30},{x:30,y:100},{x:0,y:100}];
+    for(const point of [{x:10,y:10},{x:0,y:50},{x:30,y:30},{x:10,y:90}]) assert.equal(pointInPolygon(point,polygon),true);
+    for(const point of [{x:90,y:90},{x:-1,y:50}]) assert.equal(pointInPolygon(point,polygon),false);
+    assert.equal(pointInPolygon({x:10,y:10},[...polygon].reverse()),true);
+    const bow=[{x:0,y:0},{x:100,y:100},{x:0,y:100},{x:100,y:0}];
+    assert.equal(pointInPolygon({x:50,y:10},bow),true);
+    assert.equal(pointInPolygon({x:10,y:50},bow),false);
+  });
+  await test('shape hit-testing defaults old regions to rectangles', () => {
+    const rect={x:0,y:0,width:100,height:100};
+    assert.equal(pointInRegion({x:0,y:0},rect),true);
+    assert.equal(pointInRegion({x:0,y:0},rect,{kind:'ellipse'}),false);
+    assert.equal(pointInRegion({x:90,y:90},rect,{kind:'freehand',points:[[0,0],[1,0],[0,1]]}),false);
+    assert.equal(pointInRegion({x:10,y:10},rect,{kind:'freehand',points:[[0,0],[1,0],[0,1]]}),true);
+  });
+  await test('closed-loop simplification removes duplicate samples and straight-line noise', () => {
+    const stroke=[...Array.from({length:100},(_,i)=>({x:i,y:0})),{x:100,y:0},{x:100,y:100},{x:0,y:100},{x:0,y:0},{x:0,y:0}];
+    const before=structuredClone(stroke), result=simplifyFreehand(stroke,1);
+    assert.deepEqual(result,[{x:0,y:0},{x:100,y:0},{x:100,y:100},{x:0,y:100}]);
+    assert.deepEqual(stroke,before);
+  });
+  await test('lasso simplification caps noisy strokes at 200 points and retains small loops', () => {
+    const stroke=Array.from({length:8000},(_,i)=>{const t=i/8000*Math.PI*2,r=100+(i%2?4:-4);return {x:r*Math.cos(t),y:r*Math.sin(t)};});
+    const result=simplifyFreehand(stroke,.01);
+    assert.ok(result.length>=3 && result.length<=200,result.length);
+    assert.equal(pointInPolygon({x:0,y:0},result),true);
+    const triangle=freehandArea([{x:0,y:0},{x:2,y:0},{x:1,y:2},{x:0,y:0}],100);
+    assert.ok(triangle && triangle.shape.points.length===3);
+  });
+  await test('freehand areas reject clicks, lines and nonfinite samples, and close on release', () => {
+    for (const points of [[],[{x:1,y:1}],[{x:0,y:0},{x:20,y:20},{x:40,y:40}],[{x:0,y:0},{x:NaN,y:10},{x:20,y:20}]]) assert.equal(freehandArea(points),null);
+    const area=freehandArea([{x:-50,y:20},{x:100,y:20},{x:25,y:120}],0);
+    assert.deepEqual(area,{rect:{x:-50,y:20,width:150,height:100},shape:{kind:'freehand',points:[[0,0],[1,0],[.5,1]]}});
+    assert.equal(pointInRegion({x:25,y:50},area.rect,area.shape),true);
+  });
+  await test('relative lasso points survive movement and nonuniform resizing', () => {
+    const guide={width:1200,height:800}, grid={spacing:8,unit:'pixels',snap:false,rulers:true};
+    const points=[[0,0],[1,0],[.5,1]], original={x:-50,y:20,width:150,height:100};
+    const absolute=absolutePoints(points,original);
+    assert.deepEqual(relativePoints(absolute,original),points);
+    const moved=geometryForGesture({kind:'move',start:{x:0,y:0},initial:original},{x:20,y:-40},guide,{...grid,snap:false});
+    assert.deepEqual(absolutePoints(points,moved),absolute.map(p=>({x:p.x+20,y:p.y-40})));
+    const resized=geometryForGesture({kind:'resize',start:{x:0,y:0},initial:original},{x:150,y:-50},guide,{...grid,snap:false});
+    assert.deepEqual(absolutePoints(points,resized),[{x:-50,y:20},{x:250,y:20},{x:100,y:70}]);
+    assert.deepEqual(points,[[0,0],[1,0],[.5,1]]);
+  });
+  await test('Shift produces a perfect circle in every drag direction, including percent-grid snapping', () => {
+    const guide={width:1200,height:800}, grid={spacing:8,unit:'pixels',snap:false,rulers:true};
+    const start={x:40,y:40};
+    for (const point of [{x:140,y:100},{x:-60,y:100},{x:140,y:-20},{x:-60,y:-20}]) {
+      const circle=geometryForGesture({kind:'new',start,initial:{...start,width:0,height:0},proportional:true},point,guide,{...grid,snap:false});
+      assert.equal(circle.width,100); assert.equal(circle.height,100);
+      assert.equal(point.x<start.x ? circle.x+circle.width : circle.x,start.x);
+      assert.equal(point.y<start.y ? circle.y+circle.height : circle.y,start.y);
+    }
+    const circle=geometryForGesture({kind:'new',start,initial:{...start,width:0,height:0},proportional:true},{x:147,y:98},guide,{spacing:5,unit:'percent',snap:true,rulers:true});
+    assert.equal(circle.width,circle.height);
+    const ellipse=geometryForGesture({kind:'new',start,initial:{...start,width:0,height:0}},{x:140,y:100},guide,{...grid,snap:false});
+    assert.equal(ellipse.width,100); assert.equal(ellipse.height,60);
   });
   await test('layer moves change one step or an end without mutating input, and ends are true no-ops', () => {
     const input=['a','b','c'];
@@ -110,6 +187,7 @@ try {
     for (const name of ['z', 'y', 'a', 'c', 'v', 'x', 'Delete', 'Backspace']) assert.equal(key(name, {}, true), null);
     assert.equal(key('z', { isComposing: true }), null); assert.equal(key('z', { defaultPrevented: true }), null);
     assert.equal(key('z', { altKey: true }), null); assert.equal(key('z', { ctrlKey: false, metaKey: true }), 'undo');
+    assert.equal(key('z', { ctrlKey: false, altKey: true }), 'undoElement'); assert.equal(key('z', { ctrlKey: false, altKey: true }, true), null); assert.equal(key('Enter', { ctrlKey: false, altKey: true }), null);
     for (const [name, action] of [['n','new'],['o','open'],['s','save'],['+','zoomIn'],['=','zoomIn'],['-','zoomOut'],['0','fit'],['1','actualSize'],['2','doubleSize'],['PageDown','nextPage'],['PageUp','previousPage'],['Tab','nextPage']]) assert.equal(key(name), action);
     assert.equal(key('Unidentified', { code: 'Tab', shiftKey: true }), 'previousPage');
     assert.equal(key('Unidentified', { code: 'KeyQ', shiftKey: true }), null);

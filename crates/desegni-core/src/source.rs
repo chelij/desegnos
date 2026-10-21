@@ -231,17 +231,16 @@ fn validate_javascript(
     offset: usize,
     source: &str,
     diagnostics: &mut Vec<SourceDiagnostic>,
+    module: bool,
 ) {
     let map = SourceMap::default();
     let file = map.new_source_file(FileName::Custom("page.js".into()).into(), text.to_owned());
     let mut errors = vec![];
-    let result = swc_ecma_parser::parse_file_as_script(
-        &file,
-        swc_ecma_parser::Syntax::Es(Default::default()),
-        swc_ecma_ast::EsVersion::latest(),
-        None,
-        &mut errors,
-    );
+    let result = if module {
+        swc_ecma_parser::parse_file_as_module(&file, swc_ecma_parser::Syntax::Es(Default::default()), swc_ecma_ast::EsVersion::latest(), None, &mut errors).map(|_| ())
+    } else {
+        swc_ecma_parser::parse_file_as_script(&file, swc_ecma_parser::Syntax::Es(Default::default()), swc_ecma_ast::EsVersion::latest(), None, &mut errors).map(|_| ())
+    };
     if let Err(error) = result {
         errors.push(error);
     }
@@ -371,6 +370,9 @@ fn validate_css(
 }
 
 pub fn validate_page_source(content: &SiteContent) -> SourceEditResult<()> {
+    validate_page_source_for_website(content, false)
+}
+fn validate_page_source_for_website(content: &SiteContent, imported: bool) -> SourceEditResult<()> {
     content.validate()?;
     content.found_sources()?;
     // Bound the actual browser DOM before traversing a parser AST.
@@ -391,7 +393,7 @@ pub fn validate_page_source(content: &SiteContent) -> SourceEditResult<()> {
         let tag = element.tag_name.as_ref();
         if tag == "script" {
             if element.attributes.iter().any(|attr| attr.name == "src") {
-                diagnostics.push(diagnostic(&content.html,"html",element.span,base,"Remote and imported scripts are unavailable. Keep browser JavaScript in this page."));
+                if !imported { diagnostics.push(diagnostic(&content.html,"html",element.span,base,"Remote and imported scripts are unavailable. Keep browser JavaScript in this page.")); }
             } else if !element.attributes.iter().any(|attr| {
                 attr.name == "type"
                     && attr
@@ -407,6 +409,7 @@ pub fn validate_page_source(content: &SiteContent) -> SourceEditResult<()> {
                             text.span.lo.0.saturating_sub(base) as usize,
                             &content.html,
                             &mut diagnostics,
+                            imported && element.attributes.iter().any(|attr| attr.name == "type" && attr.value.as_deref() == Some("module")),
                         );
                     }
                 }
@@ -480,6 +483,7 @@ pub fn validate_page_source(content: &SiteContent) -> SourceEditResult<()> {
         0,
         &content.javascript,
         &mut diagnostics,
+        false,
     );
     if diagnostics.is_empty() {
         Ok(())
@@ -593,12 +597,12 @@ impl Project {
         if content == old {
             return Ok(self.clone());
         }
-        validate_page_source(&content)?;
+        validate_page_source_for_website(&content, self.website.is_some())?;
         content.html = assign_editor_ids(&content.html)?;
-        let after = crate::editing::parse(&content.html)?;
+        let after = self.parse_page_html(&content.html)?;
         let body = crate::editing::body(&after)?;
         let new_ids = crate::editing::ids(&after);
-        let original = crate::editing::parse(&old.html)?;
+        let original = self.parse_page_html(&old.html)?;
         let old_ids = crate::editing::ids(&original);
         for (id, count) in &new_ids {
             let allowed = old_ids.get(id).copied().unwrap_or(1);
@@ -690,6 +694,7 @@ impl Project {
             region.element = None;
         }
         page.content = Some(content);
+        next.store_inline_images()?;
         next.validate()?;
         Ok(next)
     }
@@ -780,7 +785,7 @@ impl Project {
         }
         // Only selectors that resolve in the same browser DOM used by the canvas
         // are exposed; parser-inserted/template-only nodes cannot select another item.
-        let doc = crate::editing::parse(&content.html)?;
+        let doc = self.parse_page_html(&content.html)?;
         let body = crate::editing::body(&doc)?;
         let actual: std::collections::BTreeSet<_> = doc
             .select("*")
@@ -798,4 +803,27 @@ impl Project {
             ranges,
         })
     }
+}
+
+/// Remove only the editor attributes, without serializing the authored document.
+pub(crate) fn strip_editor_ids(html: &str) -> String {
+    let (children, _, base) = parse_html(html);
+    let mut pending: Vec<_> = children.iter().collect();
+    let mut ranges = vec![];
+    while let Some(child) = pending.pop() {
+        let Child::Element(element) = child else { continue; };
+        pending.extend(&element.children);
+        if let Some(fragment) = &element.content { pending.extend(&fragment.children); }
+        for attr in &element.attributes {
+            if attr.name.as_ref() == crate::ELEMENT_ID_ATTRIBUTE && !attr.span.is_dummy() {
+                let mut start = attr.span.lo.0.saturating_sub(base) as usize;
+                if start > 0 && html.as_bytes()[start - 1] == b' ' { start -= 1; }
+                ranges.push((start, attr.span.hi.0.saturating_sub(base) as usize));
+            }
+        }
+    }
+    ranges.sort_unstable(); ranges.dedup();
+    let mut result = html.to_owned();
+    for (start, end) in ranges.into_iter().rev() { if result.get(start..end).is_some() { result.replace_range(start..end, ""); } }
+    result
 }

@@ -328,7 +328,10 @@ impl ChatgptManager {
             account_id,
             cancellation: cancellation.clone(),
         });
-        state.sign_in = ChatgptSignIn { status: ChatgptSignInStatus::AwaitingBrowser, message: Some("Complete authorization in your system browser. Existing account selection stays unchanged until identity is verified.".into()) };
+        state.sign_in = ChatgptSignIn {
+            status: ChatgptSignInStatus::AwaitingBrowser,
+            message: Some("Finish signing in through your browser.".into()),
+        };
         let attempt = Attempt {
             id,
             registration,
@@ -507,7 +510,7 @@ impl ChatgptManager {
             state.model_errors.insert(registration.id, error);
         }
         state.storage_error = None;
-        state.message = Some("ChatGPT identity verified. Model availability and plan permission are specific to this saved account.".into());
+        state.message = Some("ChatGPT connected.".into());
         Ok(())
     }
 
@@ -563,10 +566,24 @@ impl ChatgptManager {
         }
         state.pending = None;
         match result {
-            Ok(()) => state.sign_in = ChatgptSignIn { status: ChatgptSignInStatus::Complete, message: Some("ChatGPT sign-in completed. Review the selected account and available models in Desegnos.".into()) },
+            Ok(()) => {
+                state.sign_in = ChatgptSignIn {
+                    status: ChatgptSignInStatus::Complete,
+                    message: Some("ChatGPT sign-in complete.".into()),
+                }
+            }
             Err(error) => {
-                state.sign_in = ChatgptSignIn { status: if error.kind == Kind::Cancelled { ChatgptSignInStatus::Cancelled } else { ChatgptSignInStatus::Failed }, message: Some(error.message().into()) };
-                if matches!(error.kind, Kind::Storage | Kind::VaultUnavailable) { state.storage_error = Some(error.message().into()); }
+                state.sign_in = ChatgptSignIn {
+                    status: if error.kind == Kind::Cancelled {
+                        ChatgptSignInStatus::Cancelled
+                    } else {
+                        ChatgptSignInStatus::Failed
+                    },
+                    message: Some(error.message().into()),
+                };
+                if matches!(error.kind, Kind::Storage | Kind::VaultUnavailable) {
+                    state.storage_error = Some(error.message().into());
+                }
             }
         }
     }
@@ -801,7 +818,7 @@ impl ChatgptManager {
         state.pending_rotations.remove(&account_id);
         state.storage_error = None;
         state.model_errors.remove(&account_id);
-        state.message = Some("The retained ChatGPT token bundle is usable again. No refresh or inference request was repeated.".into());
+        state.message = Some("Secure storage repaired.".into());
         drop(state);
         drop(_lease);
         drop(_gate);
@@ -935,7 +952,7 @@ impl ChatgptManager {
             self.inner.state.lock().await.storage_error = Some(error.message().into());
             return Err(error);
         }
-        self.inner.state.lock().await.message = Some(if confirmed { "Signed out of this ChatGPT registration. Its renewable session was revoked; the saved client mapping is retained." } else { "Signed out locally. Remote session revocation was not confirmed. Disconnect this app in ChatGPT Settings to end remote access; the saved client mapping is retained." }.into());
+        self.inner.state.lock().await.message = Some(if confirmed { "Signed out." } else { "Signed out locally. Remote session revocation was not confirmed. Disconnect this app in ChatGPT Settings to end remote access." }.into());
         drop(_lease);
         drop(_gate);
         Ok(self.view().await)

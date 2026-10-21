@@ -73,7 +73,7 @@ function candidateFor(record, endpoint, options) {
     regions: requests.map(value => ({ regionId: value.regionId, status: conflict ? 'conflict' : 'implemented', explanation: conflict ? 'The requested remote service is unavailable in this dependency gate.' : 'Implemented with native HTML, CSS and browser DOM behavior.' })),
     pages: conflict ? [] : pageIds.map(pageId => {
       // Element fixes return replacements for selected elements only; this fixture keeps them as they are.
-      if (/^Requirements format: 11$/m.test(record.markdown)) return { pageId, elements: [] };
+      if ((record.markdown.includes("\n## Selected elements\n"))) return { pageId, elements: [], ...(/^Requirements format: 1[234]$/m.test(record.markdown) ? { css: "" } : {}) };
       let content = sourceFor(record, endpoint, options);
       const areas = requests.filter(value => value.pageId === pageId);
       const existing=jsonBlocks(record.markdown).find(value=>value?.pageId===pageId && value.content)?.content;
@@ -87,13 +87,15 @@ function candidateFor(record, endpoint, options) {
         }
         return {pageId,content};
       }
-      if (/^Requirements format: (?:8|9|10|11)$/m.test(record.markdown)) {
-        content.html = content.html.replace('<main', `<main data-desegnos-region="${areas[0].regionId}"`);
-        content.html += areas.slice(1).map(area => `<section data-desegnos-region="${area.regionId}"><p>Requested supporting content</p></section>`).join('');
+      if (/^Requirements format: (?:8|9|10|11|12|13|14|15|16)$/m.test(record.markdown)) {
+        // placeAttachments: put each attached picture in its request, as the AI is asked to.
+        const pictures = area => options.placeAttachments ? (area.attachments ?? []).filter(item => item.kind === 'image').map(item => `<img data-desegnos-attachment="${item.id}" src="#" width="320" height="200" alt="Attached picture">`).join('') : '';
+        content.html = content.html.replace('<main', `<main data-desegnos-region="${areas[0].regionId}"`).replace('</main>', `${pictures(areas[0])}</main>`);
+        content.html += areas.slice(1).map(area => `<section data-desegnos-region="${area.regionId}"><p>Requested supporting content</p>${pictures(area)}</section>`).join('');
       }
       return {pageId, content};
     }),
-    ...(/^Requirements format: 11$/m.test(record.markdown) ? { needs: [] } : {}),
+    ...((record.markdown.includes("\n## Selected elements\n")) ? { needs: [] } : {}),
     componentRequests: [{ regionId: requests[0].regionId, capability: 'Interactive button', resolution: conflict ? 'unavailable' : 'native', reason: conflict ? 'No external service is available.' : 'A native button and DOM listener provide the interaction without a package.' }],
     decisionProposals: conflict ? [] : [
       { topic: `Native fixture navigation ${record.metadata.jobId}`, value: 'Use a clear native action button.', scope: { kind: 'project' }, rationale: 'The primary action should remain recognizable across the site.' },
@@ -119,10 +121,12 @@ function identityCandidateFor(record) {
       { topic: 'Tone', value: 'Clear, warm and confident.', evidence: [notes.fileId], confidence: 'high' },
       { topic: 'Writing voice', value: 'Use clear, warm and confident language, with concise helpful labels.', evidence: [notes.fileId], confidence: 'high' },
       { topic: 'Possible audience', value: 'The source may appeal to independent creative studios; verify this before treating it as a requirement.', evidence: [notes.fileId], confidence: 'low' },
+      { topic: 'Fonts', value: 'Headings: Arial; Body: Georgia, serif.', evidence: [palette.fileId], confidence: 'high' },
+      { topic: 'Visual style', value: 'Use rounded corners and lots of white space.', evidence: [palette.fileId], confidence: 'medium' },
     ],
     logoAssetIds: images.map(file => file.asset.id), warnings: ['Confirm the intended audience before adding it to the brief.'],
     photos: (jsonBlocks(record.markdown).find(value => Array.isArray(value) && value[0]?.photoId) ?? []).map(photo => ({ id: photo.photoId, description: `Fixture photo ${photo.photo}` })),
-    content: [{ kind: 'project', title: 'Northstar case study', url: '/work/northstar', summary: 'A fixture project found in the imported source.' }],
+    content: [{ kind: 'project', title: 'Northstar case study', url: '/work/northstar', summary: 'A fixture project found in the imported source.', sourcePages: [files.find(file => file.name === 'projects.html')?.sourcePage ?? files.find(file => file.sourcePage)?.sourcePage].filter(Boolean).map(page => ({ ...page, url: page.url ?? null })) }],
   };
 }
 
@@ -152,7 +156,7 @@ function readRequest(bytes, ordinal, mode, authentication) {
   const decoded = Buffer.from(encoded[1], 'base64');
   assert.equal(decoded.toString('base64'), encoded[1], 'Non-canonical Base64 file');
   const markdown = decoded.toString('utf8');
-  const webSearch = purpose === 'generation' && /^Requirements format: (?:8|9|10|11)$/m.test(markdown);
+  const webSearch = purpose === 'generation' && /^Requirements format: (?:8|9|10|11|12|13|14|15|16)$/m.test(markdown);
   assert.deepEqual(body.tools, webSearch ? [{type:'web_search'}] : []); assert.equal(body.tool_choice, webSearch ? 'auto' : 'none');
   assert.deepEqual(Buffer.from(markdown, 'utf8'), decoded, 'Requirements are not exact valid UTF-8');
   assert.deepEqual(body.text.format.schema.properties.jobId.enum, [metadata.jobId]);
@@ -168,9 +172,16 @@ function readRequest(bytes, ordinal, mode, authentication) {
     assert.equal(content.length, 2 + 2 * images.length);
     const labels = content.filter(value => value.type === 'input_text' && value !== text);
     assert.equal(labels.length, images.length);
-    labels.forEach((label, index) => assert.match(label.text, new RegExp(`^Identity image ${index + 1}\\.`)));
+
     const raster = files.filter(value => value.asset?.analysisImage != null);
-    assert.equal(raster.length, images.length);
+    const photos = blocks.find(value => Array.isArray(value) && value[0]?.photoId) ?? [];
+    assert.equal(raster.length + photos.length, images.length);
+    labels.forEach((label, index) => {
+      const photo = index >= raster.length;
+      const number = photo ? index - raster.length + 1 : index + 1;
+      assert.match(label.text, new RegExp(`^${photo ? 'Photo' : 'Identity image'} ${number}\\.`));
+      assert.equal(images[index].detail, photo ? 'low' : 'high');
+    });
     raster.forEach(value => {
       assert.ok(Number.isInteger(value.asset.analysisImage));
       const image = images[value.asset.analysisImage - 1];
@@ -185,8 +196,11 @@ function readRequest(bytes, ordinal, mode, authentication) {
     assert.ok(body.text.format.schema.properties.findings?.items?.additionalProperties === false);
     assert.ok(body.text.format.schema.required.includes('logoAssetIds'));
   } else {
-    assert.equal(content.filter(value => value.type === 'input_text').length, 1);
-    assert.equal(content.length, 2);
+    // Format 13 adds a labelled low-detail preview per attached picture.
+    const previews = content.filter(value => value.type === 'input_image');
+    assert.ok(previews.every(value => value.detail === 'low' && value.image_url.startsWith('data:image/jpeg;base64,')));
+    assert.equal(content.filter(value => value.type === 'input_text').length, 1 + previews.length);
+    assert.equal(content.length, 2 + 2 * previews.length);
     assert.equal((markdown.match(/"generationMode"\s*:/g) ?? []).length, 1);
     assert.deepEqual(jsonBlocks(markdown).filter(value => value?.generationMode), [{ generationMode: metadata.generationMode }]);
     assert.ok(['fuzzy', 'strict'].includes(metadata.generationMode));
@@ -206,6 +220,13 @@ export async function startProviderServer() {
   const schedule = (fn, ms) => { const timer = setTimeout(() => { timers.delete(timer); fn(); }, ms); timers.add(timer); };
   const server = createServer(async (request, response) => {
     const path = new URL(request.url, 'http://127.0.0.1').pathname;
+    if (path.startsWith('/brand-site/')) {
+      assert.equal(request.headers.authorization, undefined);
+      assert.equal(request.headers.cookie, undefined);
+      if (path.endsWith('.css')) response.writeHead(200, { 'content-type': 'text/css' }).end(':root{--brand:#225577}body{font-family:Arial}');
+      else response.writeHead(200, { 'content-type': 'text/html' }).end(`<html><head><title>Northstar</title><link rel="stylesheet" href="/brand-site/global.css"></head><body><h1>Northstar Studio</h1>${path.endsWith('about.html') ? '<p>About our studio</p>' : '<a href="/brand-site/about.html">About</a>'}</body></html>`);
+      return;
+    }
     if (path.startsWith('/images/')) {
       assert.equal(request.headers.authorization, undefined); assert.equal(request.headers.cookie, undefined); assert.equal(request.headers.referer, undefined);
       probes.push({ method: request.method, path, at: new Date().toISOString() });
@@ -238,7 +259,14 @@ export async function startProviderServer() {
       for await (const chunk of request) { total += chunk.length; assert.ok(total <= 16 * 1024 * 1024, 'Provider request exceeds its 16 MiB boundary'); chunks.push(chunk); }
       const record = readRequest(Buffer.concat(chunks), records.filter(value => value.method === 'POST').length + 1, selected.kind, authentication);
       if (account) record.clientId = account.clientId;
-      record.candidate = record.purpose === 'identityAnalysis' ? identityCandidateFor(record) : candidateFor(record, endpoint, selected.options); records.push(record);
+      record.candidate = record.purpose === 'identityAnalysis' ? identityCandidateFor(record) : candidateFor(record, endpoint, selected.options);
+      if (selected.options.needsOnce && record.purpose === 'generation' && record.markdown.includes('\n## Selected elements\n') && !record.markdown.includes('\n## Requested context\n')) {
+        const source = jsonBlocks(record.markdown).find(value => value?.outline?.length);
+        const selectedIds = new Set(source.elements.map(value => value.id));
+        const id = source.outline.map(line => line.split(' ')[0]).find(id => !selectedIds.has(id));
+        assert.ok(id); record.candidate.pages = []; record.candidate.needs = [id];
+      }
+      records.push(record);
       response.on('close', () => { record.closed = true; pending.delete(record.metadata.jobId); });
       if (selected.kind === 'non-stream-error') {
         response.writeHead(200, { 'content-type': 'application/json', 'x-request-id': 'req_native_non_stream_error' }).end(JSON.stringify({ error: { code: selected.options.code === undefined ? 'subscription_sharing_unsupported_capability' : selected.options.code, param: 'text.format', message: selected.options.explanation ?? `Do not retain ${request.headers.authorization}` } })); return;

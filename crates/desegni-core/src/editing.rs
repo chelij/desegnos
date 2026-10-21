@@ -85,6 +85,15 @@ pub(crate) fn parse(html: &str) -> Result<Document> {
     bounded(&doc)?;
     Ok(doc)
 }
+/// A page body fragment (the usual form) or, when `full`, a complete document as written.
+pub(crate) fn parse_document(html: &str, full: bool) -> Result<Document> {
+    if !full {
+        return parse(html);
+    }
+    let doc = Document::from(html);
+    bounded(&doc)?;
+    Ok(doc)
+}
 pub(crate) fn bounded(doc: &Document) -> Result<()> {
     let mut pending = vec![(doc.root(), 0)];
     let mut count = 0;
@@ -284,6 +293,9 @@ pub(crate) fn tracked<'a>(
 }
 
 impl Project {
+    pub(crate) fn parse_page_html(&self, html: &str) -> Result<Document> {
+        parse_document(html, self.website.is_some())
+    }
     pub fn inspect_element(
         &self,
         page_id: Uuid,
@@ -299,7 +311,7 @@ impl Project {
             !selected.id.is_empty() || content.sha256()? == selected.source_sha256,
             "The page changed. Select this element again.",
         )?;
-        let doc = parse(&content.html)?;
+        let doc = self.parse_page_html(&content.html)?;
         let node = locate(&doc, selected)?;
         let text = text_nodes(node);
         let editable = text
@@ -361,7 +373,7 @@ impl Project {
             !selected.id.is_empty() || original.sha256()? == selected.source_sha256,
             "The page changed. Select this element again.",
         )?;
-        let doc = parse(&original.html)?;
+        let doc = self.parse_page_html(&original.html)?;
         let node = locate(&doc, selected)?;
         let before = serialized(&doc)?;
         let before_ids = ids(&doc);
@@ -417,6 +429,7 @@ impl Project {
                             ensure(
                                 node.node_name().as_deref() == Some("img")
                                     && (value.starts_with("data:image/")
+                                        || value.starts_with(crate::PROJECT_ASSET_SCHEME)
                                         || value.starts_with('/')
                                         || value.starts_with("https://")
                                         || value.starts_with("http://")),
@@ -553,7 +566,7 @@ impl Project {
         crate::stable_targets::assign_document_ids(doc)?;
         let html = serialized(doc)?;
         ensure(
-            serialized(&parse(&html)?)? == html,
+            serialized(&self.parse_page_html(&html)?)? == html,
             "This edit would be repaired differently by the browser. Choose valid markup for this layout.",
         )?;
         let original = self.page(page_id)?.content.as_ref();
@@ -622,6 +635,7 @@ impl Project {
             region.element = None;
         }
         let selected = retained.and_then(|node| target(node, body, &hash));
+        next.store_inline_images()?;
         next.validate()?;
         Ok((next, selected))
     }
@@ -694,6 +708,7 @@ impl Project {
             .revision
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
+        next.store_inline_images()?;
         next.validate()?;
         Ok(next)
     }

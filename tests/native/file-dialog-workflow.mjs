@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { waitFor } from './webdriver.mjs';
 import { assertCanvasOnly } from './workflow.mjs';
@@ -79,7 +79,7 @@ export async function chooseFile(physical, trigger, path, evidence, label, cance
   if (folder) {
     // The observed GTK Select Folder dialog opens in Recent, where Open stays
     // disabled for a typed location. Its Home row enters filesystem browsing.
-    assert.ok(['Select Folder', 'Choose where to export your website'].includes(dialog.title), 'The owned window must be the expected native folder picker');
+    assert.ok(['Select Folder', 'Choose website or brand folder', 'Choose where to export your website', 'Choose project location', 'Open project folder'].includes(dialog.title), 'The owned window must be the expected native folder picker');
     assert.ok(dialog.width >= 600 && dialog.height >= 300);
     await physical.raw({ action: 'click', point: { x: dialog.x + 60, y: dialog.y + 60 }, windowId: dialog.id });
   }
@@ -112,6 +112,15 @@ export function chooseFolder(physical, trigger, path, evidence, label) {
   return chooseFile(physical, trigger, path, evidence, label, false, true);
 }
 
+export function projectCopyPath(requested) {
+  const name = basename(requested, extname(requested));
+  return join(dirname(requested), name, `${name}.desegnos`);
+}
+
+export function chooseProjectCopy(physical, trigger, destination, evidence, label) {
+  return chooseFile(physical, trigger, join(dirname(dirname(destination)), basename(destination)), evidence, label);
+}
+
 export async function savedState(driver, path) {
   return waitFor(async () => {
     const state = await driver.invoke('get_workspace');
@@ -132,8 +141,8 @@ export async function fileDialogWorkflow(driver, physical, step, evidence) {
   const directory = join(resolve(evidence), 'picker-files');
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const suffix = randomUUID();
-  const firstPath = join(directory, `saved site ${suffix}.desegni`);
-  const secondPath = join(directory, `saved copy ${suffix}.desegni`);
+  const firstPath = (await driver.invoke('get_workspace')).path;
+  const secondPath = projectCopyPath(join(directory, `saved copy ${suffix}.desegnos`));
   const requirementsPath = join(directory, `requirements ${suffix}.md`);
   const initial = (await driver.invoke('get_workspace')).project;
   assert.ok(initial && initial.pages.some(page => page.regions.some(region => region.prompt.trim())), 'Author a described area before exercising native file dialogs');
@@ -142,8 +151,8 @@ export async function fileDialogWorkflow(driver, physical, step, evidence) {
   let savedProject;
   let savedNotes;
 
-  await step('Native Save picker writes a private archive with actual project and PROJECT.md hashes', async () => {
-    await chooseFile(physical, () => driver.button('Save'), firstPath, evidence, 'picker-01-save');
+  await step('Save writes a private archive without a first-save picker, with actual project and PROJECT.md hashes', async () => {
+    await driver.button('Save');
     const state = await savedState(driver, firstPath);
     assert.deepEqual(state.project, initial);
     archiveReports.push(await verifyArchive(firstPath, initial, initialNotes));
@@ -173,7 +182,7 @@ export async function fileDialogWorkflow(driver, physical, step, evidence) {
 
   await step('Native Save As picker changes the destination without modifying the first saved file', async () => {
     const firstBytes = await readFile(firstPath);
-    await chooseFile(physical, () => driver.button('Save as'), secondPath, evidence, 'picker-03-save-as');
+    await chooseProjectCopy(physical, () => driver.button('Save as'), secondPath, evidence, 'picker-03-save-as');
     const state = await savedState(driver, secondPath);
     assert.deepEqual(state.project, savedProject);
     assert.deepEqual(await readFile(firstPath), firstBytes);

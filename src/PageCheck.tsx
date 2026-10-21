@@ -71,16 +71,15 @@ export function checkProject(project: Project): CheckItem[] {
 export function PageCheckPanel({ items, busy, close, show, fix, source }: {
   items: CheckItem[]; busy: boolean; close: () => void; show: (item: CheckItem) => void; fix: (item: CheckItem) => void; source: (item: CheckItem) => void;
 }) {
-  const groups = useMemo(() => [['placeholder', 'Still placeholder'], ['issue', 'Things to fix'], ['found', 'Found online — check and swap if needed']] as const, []);
+  const groups = useMemo(() => [['placeholder', 'Still placeholder'], ['issue', 'Things to fix'], ['found', 'Found online']] as const, []);
   return <section className="page-check" role="dialog" aria-label="Page check">
     <header><h2>Page check</h2><button type="button" className="page-check-close" aria-label="Close page check" onClick={close}>×</button></header>
-    {items.filter(item => item.kind !== 'found').length === 0 && <p className="page-check-empty">Nothing to fix. No placeholders, and the basics look good.</p>}{groups.map(([kind, label]) => {
+    {items.filter(item => item.kind !== 'found').length === 0 && <p className="page-check-empty">No issues found.</p>}{groups.map(([kind, label]) => {
       const list = items.filter(item => item.kind === kind);
       return list.length > 0 && <section key={kind}><h3>{label} ({list.length})</h3><ul>{list.map(item => <li key={item.id}>
         <div className="page-check-text"><strong>{item.title}</strong><span>{item.pageName}{item.detail ? ` · ${item.detail}` : ''}</span></div>
         <div className="page-check-actions">{item.selector && <button type="button" onClick={() => show(item)}>Show</button>}{item.kind === 'found' ? <button type="button" onClick={() => source(item)}>Source</button> : <button type="button" disabled={busy} onClick={() => fix(item)}>Ask AI to fix</button>}</div>
       </li>)}</ul></section>;
     })}
-    <p className="page-check-note">Checks the saved page code. Colour contrast isn’t checked yet.</p>
   </section>;
 }

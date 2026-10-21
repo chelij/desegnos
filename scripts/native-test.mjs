@@ -22,6 +22,10 @@ import { layersWorkflow } from '../tests/native/layers-workflow.mjs';
 import { imageResizeWorkflow } from '../tests/native/image-resize-workflow.mjs';
 import { cleanupExtrasWorkflow } from '../tests/native/cleanup-extras-workflow.mjs';
 import { sourceEditWorkflow } from '../tests/native/source-edit-workflow.mjs';
+import { realUseWorkflow } from '../tests/native/real-use-workflow.mjs';
+import { seedRealUse } from '../tests/native/real-use-fixtures.mjs';
+import { websiteImportWorkflow } from '../tests/native/website-import-workflow.mjs';
+import { projectFoldersWorkflow } from '../tests/native/project-folders-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const guardedXvfb = '~/.local/bin/xvfb-run';
@@ -99,14 +103,18 @@ async function runIsolated() {
     input: 'Embedded WebDriver controls plus trusted OS pointer/key input through system X11/XTEST on the guarded virtual display.',
     nativeCommands: 'Real Rust commands; no invoke mocks or replacement project state.', steps: [],
     limits: ['Paid AI provider behavior is not covered.', 'This run covers Linux WebKitGTK; Windows and macOS require their own native runs.'] };
+  if (process.env.DESEGNI_NATIVE_TEST_ACCESSIBILITY === '1') process.env.ATSPI_DBUS_IMPLEMENTATION = 'dbus-daemon';
   const provider = await startProviderServer();
   process.env.DESEGNI_NATIVE_TEST_OPENAI_ENDPOINT = provider.endpoint;
+  process.env.DESEGNI_NATIVE_TEST_WEBSITE_ORIGIN = provider.endpoint.replace(/\/v1$/, '');
   report.generationProvider = 'Controlled loopback HTTP server using real native transport; synthetic credentials, no paid OpenAI calls.';
   let app;
   let driver;
+  let accessibility;
   let launch = 0;
   const logs = [];
   async function stop(signal = 'SIGTERM') {
+    accessibility?.kill('SIGTERM'); accessibility = null;
     if (signal === 'SIGKILL') {
       assert.ok(app && app.exitCode === null && app.signalCode === null, 'The crash test requires a running native app');
       const child = app;
@@ -137,12 +145,24 @@ async function runIsolated() {
     const child = app;
     child.streamsClosed = new Promise(accept => child.once('close', accept));
     await new Promise((accept, reject) => { child.once('spawn', accept); child.once('error', reject); });
-    const environment = (await readFile(`/proc/${child.pid}/environ`, 'utf8')).split('\0');
+    // A spawned child's /proc environment can still show the pre-exec process.
+    // Verify the exact isolated binding before connecting or delivering input.
+    const environment = await waitFor(async () => {
+      const values = (await readFile(`/proc/${child.pid}/environ`, 'utf8')).split('\0');
+      return values.includes(`DISPLAY=${process.env.DISPLAY}`) && values.includes('GDK_BACKEND=x11') && values;
+    }, 'The test app did not bind to the isolated X11 display', 5000);
     assert.ok(environment.includes(`DISPLAY=${process.env.DISPLAY}`), 'The test app is connected to a different display');
     assert.ok(environment.includes('GDK_BACKEND=x11'), 'The test app has not selected X11');
     driver = await new WebDriver(port).start(() => child.exitCode === null && child.signalCode === null);
     assert.equal(driver.capabilities.platformName, 'linux');
     assert.equal(driver.capabilities.browserName, 'WebKitGTK');
+    if (process.env.DESEGNI_NATIVE_TEST_ACCESSIBILITY === '1') {
+      accessibility = spawn('python', ['tests/native/accessibility-listener.py', String(child.pid)], { cwd: root, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+      let ready = false;
+      accessibility.stdout.on('data', bytes => { if (String(bytes).includes('Accessibility active')) ready = true; });
+      accessibility.stderr.pipe(log, { end: false });
+      await waitFor(() => ready, 'The isolated accessibility listener did not activate', 15000);
+    }
     await waitFor(async () => {
       const source = await driver.command('GET', '/source');
       return typeof source === 'string' && /class="application(?:\s|")/.test(source);
@@ -173,7 +193,16 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'image-resize') {
+    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'website-import') {
+      report.scope = 'As-is website import, native heading editing and read-only chelib Astro import.';
+      project = await websiteImportWorkflow(driver, physical, step, evidence);
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'project-folders') {
+      report.scope = 'Project folders, automatic saves, default/per-project locations, safe live-site sync, import, copies and legacy migration.';
+      project = await projectFoldersWorkflow(driver, physical, step, evidence);
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'real-use') {
+      report.scope = 'Real-use flows on copies of the owner\'s projects and unsaved work (scripts/usage-report.mjs).';
+      project = await realUseWorkflow(driver, physical, step, evidence, provider);
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'image-resize') {
       report.scope = 'Large original picture preview followed by Generate-time resizing.';
       project = await imageResizeWorkflow(driver, physical, step, evidence, provider);
     } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'cleanup-extras') {
@@ -189,7 +218,7 @@ async function runIsolated() {
       report.scope = 'Focused canvas input, zoom, pan and unlimited box sizing.';
       project = await canvasInputWorkflow(driver, physical, step, evidence, provider);
     } else if (['identity', 'logo-scope'].includes(process.env.DESEGNI_NATIVE_TEST_SCOPE)) {
-      report.scope = 'Focused native brand import and recovery.';
+      report.scope = 'Beginner brand import: folders, Astro ranking and automatic fitting, manual limits/reset, website addresses, ZIPs, review choices and recovery.';
       await step('Create a real source website for brand import', async () => {
         await driver.button('Blank website');
         await driver.fill('Project name', 'Native brand source');
@@ -202,8 +231,8 @@ async function runIsolated() {
         await driver.invoke('set_ai_key', { key: provider.key(), storage: 'session' });
         provider.setMode('complete'); await driver.button('Generate');
         await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].content, 'The source website did not generate', 25000);
-        const destination = join(evidence, 'focused site.desegni');
-        await chooseFile(physical, () => driver.button('Save'), destination, evidence, 'focused-save');
+        const destination = (await driver.invoke('get_workspace')).path;
+        await driver.button('Save');
         await savedState(driver, destination);
       });
     } else {
@@ -233,22 +262,25 @@ async function runIsolated() {
     });
     await writeFile(join(evidence, 'authored.png'), Buffer.from(await driver.screenshot(), 'base64'));
     await writeFile(join(evidence, 'authored-project.json'), JSON.stringify(project, null, 2));
+    const generationBeforeRestart = await driver.invoke('get_generation', { projectId: project.id });
     await step('Crash the native app with SIGKILL before any session teardown', () => stop('SIGKILL'));
     const submittedCount = provider.generationRequests().length;
     const identitySubmittedCount = provider.identityRequests().length;
-    await recoverProject(await start(), project, step);
+    const restarted = await start();
+    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'website-import') { restarted.requestTimeout = 120000; await restarted.command('POST', '/timeouts', { script: 120000, implicit: 0, pageLoad: 120000 }); }
+    await recoverProject(restarted, project, step);
     await step('Restart preserves project data and recent paths, drops the session key and never replays paid work', async () => {
       const ai = await driver.invoke('get_ai_settings');
       assert.equal(ai.credential.configured, false);
       assert.equal(ai.credential.storage, 'none');
       assert.equal(ai.chatgpt.accounts.some(account => account.connected || account.planEnabled || account.storage !== 'none'), false);
       const job = await driver.invoke('get_generation', { projectId: project.id });
+      assert.equal(job?.jobId ?? null, generationBeforeRestart?.jobId ?? null);
       if (project.importedIdentity) {
-        if (project.latestGeneration) assert.equal(job?.jobId, project.latestGeneration.jobId); else assert.equal(job, null);
         const identity = await driver.invoke('get_identity_analysis');
         assert.equal(identity.status, 'complete');
         assert.equal(identity.source.sha256, project.importedIdentity.sourceSha256);
-      } else if (project.latestGeneration) assert.equal(job?.jobId, project.latestGeneration.jobId);
+      }
       const recent = await driver.invoke('get_recent_projects');
       if (process.env.DESEGNI_NATIVE_TEST_SCOPE !== 'image-resize') assert.ok(recent.projects.length > 0);
       assert.equal(provider.identityRequests().length, identitySubmittedCount);
@@ -289,16 +321,19 @@ async function runIsolated() {
 
 async function main() {
   if (args.includes('--help')) {
-    console.log('node scripts/native-test.mjs [--skip-build] [--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
+    console.log('node scripts/native-test.mjs [--skip-build] [--project-folders-only|--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only|--real-use-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
     return;
   }
   if (process.platform !== 'linux') throw new Error('This runner requires the guarded Linux Xvfb route. Native Windows/macOS isolation must be configured on those runners.');
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--image-resize-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--website-import-only', '--project-folders-only', '--image-resize-only', '--real-use-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
+  if (args.includes('--website-import-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'website-import';
+  if (args.includes('--project-folders-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'project-folders';
   if (args.includes('--image-resize-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'image-resize';
+  if (args.includes('--real-use-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'real-use';
   if (args.includes('--canvas-input-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'canvas-input';
   if (args.includes('--identity-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'identity';
   if (args.includes('--generation-only') || args.includes('--ux-audit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'audit';
@@ -310,7 +345,7 @@ async function main() {
   const target = resolve('target/native-tests');
   const binary = resolve(binaryIndex === -1 ? join(target, 'debug/desegnos') : args[binaryIndex + 1]);
   if (!skipBuild) {
-    const build = spawn(process.execPath, ['scripts/tauri.mjs', 'build', '--debug', '--no-bundle', '--features', 'native-tests,gtk-dialogs', '--config', 'src-tauri/tauri.test.conf.json', '--', '--no-default-features'],
+    const build = spawn(process.execPath, ['scripts/tauri.mjs', 'build', '--debug', '--no-bundle', '--features', 'native-tests,gtk-dialogs', '--config', 'src-tauri/tauri.test.conf.json', '--config', JSON.stringify({ build: { beforeBuildCommand: 'npm run build' } }), '--', '--no-default-features'],
       { cwd: root, env: { ...toolchainEnvironment(), CARGO_TARGET_DIR: target }, stdio: 'inherit' });
     const status = await childExit(build);
     if (status !== 0) throw new Error(`The explicit native-tests build failed (${status})`);
@@ -322,6 +357,14 @@ async function main() {
   const scratch = await mkdtemp(join(tmpdir(), 'dsgn-native-'));
   const profile = Object.fromEntries(['data', 'config', 'cache', 'runtime'].map(name => [name, join(scratch, name)]));
   for (const path of Object.values(profile)) { await mkdir(path); await chmod(path, 0o700); }
+  // Automatic project creation must never write to the owner's real Documents folder.
+  const documents = join(scratch, 'Documents');
+  await mkdir(documents, { mode: 0o700 });
+  await writeFile(join(profile.config, 'user-dirs.dirs'), `XDG_DOCUMENTS_DIR="${documents}"\n`, { mode: 0o600 });
+  if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'real-use') {
+    const seeded = await seedRealUse(profile.data, evidence);
+    console.log(`Real-use data: ${seeded.projects.length} projects, ${seeded.recoveries.length} recoveries from ${seeded.source}`);
+  }
   const original = await desktopState();
   let result = 1;
   let desktop;
@@ -331,6 +374,7 @@ async function main() {
       cwd: root, detached: true, stdio: 'inherit', env: { ...process.env,
         XDG_DATA_HOME: profile.data, XDG_CONFIG_HOME: profile.config, XDG_CACHE_HOME: profile.cache, XDG_RUNTIME_DIR: profile.runtime,
         GDK_SCALE: '1', GDK_DPI_SCALE: '1',
+        ...(process.env.DESEGNI_NATIVE_TEST_ACCESSIBILITY === '1' ? { ATSPI_DBUS_IMPLEMENTATION: 'dbus-daemon' } : {}),
         DESEGNI_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNI_NATIVE_TEST_BINARY: binary, DESEGNI_NATIVE_TEST_EVIDENCE: evidence },
     });
     const interrupt = () => terminateGroup(isolated, 'SIGTERM');

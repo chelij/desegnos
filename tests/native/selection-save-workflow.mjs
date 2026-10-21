@@ -4,7 +4,7 @@ import {createHash} from 'node:crypto';
 import {readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {waitFor} from './webdriver.mjs';
-import {chooseFile, savedState, verifyArchive} from './file-dialog-workflow.mjs';
+import {chooseFile, chooseProjectCopy, projectCopyPath, savedState, verifyArchive} from './file-dialog-workflow.mjs';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const workspace=driver=>driver.invoke('get_workspace');
 async function ready(driver){await waitFor(()=>driver.execute(()=>document.querySelector('.static-preview')?.dataset.previewReady==='true'),'Canvas did not finish rendering');}
@@ -110,10 +110,10 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
   assert.equal(hash(await readFile(projectPath)),hash(changed));assert.equal((await workspace(driver)).project.name,'Safe draft');
   assert.equal((await workspace(driver)).project.id,before.id);assert.equal((await workspace(driver)).dirty,true);
  });
- const copyPath=join(output,'Safe copy.desegnos');
+ const copyPath=projectCopyPath(join(output,'Safe copy.desegnos'));
  await step('Save as copy writes the current project while retaining the changed original',async()=>{
   const original=await readFile(projectPath);await driver.button('Save');await conflict(driver,'Save as copy');
-  await chooseFile(physical,()=>driver.button('Save as copy'),copyPath,output,'conflict-copy');
+  await chooseProjectCopy(physical,()=>driver.button('Save as copy'),copyPath,output,'conflict-copy');
   const saved=await savedState(driver,copyPath);await verifyArchive(copyPath,saved.project,await driver.invoke('get_project_notes'));
   assert.equal(hash(await readFile(projectPath)),hash(original));
  });

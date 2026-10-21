@@ -86,12 +86,10 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
     </div><MenuButton label="More" ariaLabel="Project brief options" items={[{ id: 'markdown', label: 'PROJECT.md', action: () => setTab('markdown') }]} /></div>
     <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={tab === 'markdown' ? undefined : `${tabId}-${tab}`} aria-label={tab === 'markdown' ? 'PROJECT.md' : undefined}>
     {tab === 'overview' && <div className="notes-section dossier-overview">
-      <p className="muted">Updated automatically after generation.</p>
       {project.importedIdentity && <section aria-label="Imported brand"><h3>Imported brand</h3><p className="preserve-text">{project.importedIdentity.summary}</p><p className="field-help">From {project.importedIdentity.sourceName}</p>{project.importedIdentity.assets.length > 0 && <div className="dossier-identity-logos">{project.importedIdentity.assets.map(asset => <figure key={asset.id}><img src={asset.dataUri} alt={asset.name} /><figcaption>{asset.name}</figcaption></figure>)}</div>}</section>}
       {latest ? <>
         <div className="record-heading"><h3>Latest generation</h3><span className="badge">{latest.applicationStatus === 'applied' ? 'On canvas' : latest.applicationStatus === 'undone' ? 'Undone' : 'Not applied'}</span></div>
         <p className="preserve-text">{latest.summary}</p>
-        {latest.applicationStatus === 'draft' && <p className="field-help">Suggested rules are saved when you accept them.</p>}
         {reviewGeneration && <button onClick={reviewGeneration}>View generation details</button>}
         {latest.decisionProposals.length > 0 && <section className="dossier-generated"><h3>{latest.applicationStatus === 'draft' ? 'Suggested choices' : 'Generated choices'}</h3>
           <div className="record-list">{latest.decisionProposals.map((proposal, index) => <article className="note-record" key={`${proposal.topic}:${index}`}>
@@ -100,20 +98,18 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
             {proposal.rationale && <p className="field-help preserve-text">{proposal.rationale}</p>}
           </article>)}</div>
         </section>}
-        {latest.criticism.length > 0 && <section className="dossier-generated"><h3>Design feedback</h3><p className="field-help">Suggestions, with room for your creative choices.</p>
+        {latest.criticism.length > 0 && <section className="dossier-generated"><h3>Design feedback</h3>
           <div className="record-list">{latest.criticism.map((item, index) => <article className="note-record" key={index}><p className="preserve-text">{item.message}</p>{item.suggestion && <p className="preserve-text">{item.suggestion}</p>}</article>)}</div>
         </section>}
-      </> : !project.importedIdentity && <p className="empty-message">Generate your first design to start the project brief.</p>}
+      </> : !project.importedIdentity && <p className="empty-message">No brief yet.</p>}
     </div>}
     {tab === 'brief' && <div className="notes-section brief-form">
       <DraftText label="Purpose" value={project.brief.purpose} commit={value => changeBrief({ purpose: value }).then(brief => brief.purpose)} multiline />
       <DraftText label="Audience" value={project.brief.audience} commit={value => changeBrief({ audience: value }).then(brief => brief.audience)} multiline />
       <DraftText label="Brand name" value={project.brief.brandName} commit={value => changeBrief({ brandName: value }).then(brief => brief.brandName)} />
       <DraftText label="Voice and tone" value={project.brief.tone} commit={value => changeBrief({ tone: value }).then(brief => brief.tone)} multiline />
-      <p className="field-help">Saved locally as you type.</p>
     </div>}
     {tab === 'decisions' && <div className="notes-section">
-      <p className="muted">Keep colors, type, names and facts consistent.</p>
       <div className="record-list">{project.decisions.length === 0 ? <p className="empty-message">No rules yet.</p> : project.decisions.map(decision => <article className="note-record" key={decision.id}>
         <div className="record-heading"><h3>{decision.topic}</h3>{decision.protected && <span className="badge">Fixed</span>}</div>
         <p className="preserve-text">{decision.value}</p><p className="small muted">{scopeLabel(project, decision.scope)}</p>
@@ -128,7 +124,6 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
       </form>
     </div>}
     {tab === 'exceptions' && <div className="notes-section">
-      <p className="muted">Let one part of the site break a rule on purpose.</p>
       <div className="record-list">{project.exceptions.length === 0 ? <p className="empty-message">No exceptions yet.</p> : project.exceptions.map(exception => <article className="note-record" key={exception.id}>
         <h3>{exception.rule}</h3><p className="preserve-text">{exception.reason}</p><p className="small muted">{scopeLabel(project, exception.scope)}</p>
         <button className="subtle danger" onClick={() => { void apply({ type: 'remove_exception', exception_id: exception.id }).catch(() => {}); }}>Remove exception</button>
@@ -140,7 +135,7 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
         <button className="primary" disabled={busy || !rule.trim() || !reason.trim()}>Add exception</button>
       </form>
     </div>}
-    {tab === 'markdown' && <div className="notes-section"><p className="muted">Saved with your project.</p>
+    {tab === 'markdown' && <div className="notes-section">
       {sourceLoading ? <p role="status">Loading project document…</p> : sourceError ? <p role="alert" className="error-text">{sourceError}</p> : <pre className="markdown-source" tabIndex={0} aria-label="PROJECT.md source">{source}</pre>}
     </div>}
     </div>

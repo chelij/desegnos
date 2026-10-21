@@ -11,7 +11,6 @@ pub const MAX_IDENTITY_IMAGES: usize = 4;
 pub const MAX_IDENTITY_IMAGE_URI_BYTES: usize = 256 * 1024;
 pub const MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES: usize = 512 * 1024;
 /// Photo thumbnails are looked at in low detail only, to describe what each photo shows.
-pub const MAX_IDENTITY_PHOTOS: usize = 16;
 pub const MAX_IDENTITY_PHOTO_URI_BYTES: usize = 96 * 1024;
 pub const IDENTITY_PHOTO_TOKEN_RESERVE: u64 = 1_024;
 // Compressed logo bytes do not bound visual token use. Reserve 64K tokens per high-detail image
@@ -62,7 +61,7 @@ pub(crate) fn prepare_identity_body(
     Ok(body)
 }
 
-fn vision_reserve(images: &[IdentityImage]) -> u64 {
+pub(crate) fn vision_reserve(images: &[IdentityImage]) -> u64 {
     // Called only after identity_body validates the image count.
     images
         .iter()
@@ -166,7 +165,7 @@ pub(crate) fn identity_body(
 
 fn validate_images(images: &[IdentityImage]) -> Result<()> {
     let photos = images.iter().filter(|image| image.photo).count();
-    if images.len() - photos > MAX_IDENTITY_IMAGES || photos > MAX_IDENTITY_PHOTOS {
+    if images.len() - photos > MAX_IDENTITY_IMAGES {
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
     let mut total = 0_usize;

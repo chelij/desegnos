@@ -1,5 +1,68 @@
 # OpenAI generation contract
 
+Rectangle and element requests use **format 14**. Shaped area requests use **format 15**:
+`placementHint` remains the bounding box, with an inscribed ellipse or rounded page-pixel
+freehand polygon alongside it. The browser measures existing element boxes before
+generation; Rust includes an element when its box intersects the actual shape, using
+32 vertices for ellipses. Format 15 lists those IDs and protects elements outside the
+shape, including descendants of intersecting containers. Existing CSS/JavaScript stay
+unchanged, with the existing selected-ID CSS addition rules applied to in-area IDs.
+Freehand paths use even-odd fill and normalized points in schema 8; absent shape means
+rectangle, so no project migration is needed. Measurement is bounded to 10,000 elements
+per page; larger pages can use element-target requests. Formats 3–14 retain their frozen
+wording and default rectangle serialization.
+
+Format 14 is format 13 plus readable code at no token cost.
+The AI writes every page as one long line; after a generation Desegnos stores HTML and CSS
+in a readable layout (`format_site_content`), and requirements send pages compact again
+(`compact_site_content`). HTML only gains or loses whitespace-only text where it cannot
+render: between block-level elements, never inside pre/textarea/script/style and never
+beside elements the page's CSS makes inline, floated, positioned, hidden or whitespace-
+preserving; a page with nothing to lay out stays byte for byte as written. CSS is reprinted
+by lightningcss (comments are dropped). JavaScript is left exactly as written. Scope checks
+compact both the stored page and the AI's answer before comparing them.
+
+Format 13 is format 12 plus picture previews: each
+image attachment is sent beside REQUIREMENTS.md as a low-detail JPEG, shrunk by a
+quarter at a time until it is at most 512 px and 48 KiB (one image tile on every
+provider). The estimate reserves 512 tokens per preview instead of counting its
+Base64 bytes. The AI places the picture with its largest displayed `width`/`height`;
+on apply the original is scaled to twice that width (or the page width when no
+width is given), stored once in `pictures`, and the request's picture attachments
+are dropped, so only the displayed copy is kept. GIFs are inserted unchanged.
+Pictures no page uses any more are removed from the store; Undo keeps its own copy.
+There is no limit on attachment count, picture size or picture store size.
+
+Format 12: the result schema travels only as the strict
+structured-output schema; REQUIREMENTS.md contains the instructions without a
+second written schema. Formats 3–11 retain their frozen rendering. Existing-element
+requests still send selected outer HTML, a stylesheet and a bounded outline. Their
+reply contains replacements, `needs`, and a per-page `css` field for additions only.
+New CSS selectors must match a selected root's own `data-desegnos-id`, optionally
+with supported state/pseudo-element selectors. Media queries are allowed; descendant,
+sibling, selector-function, nested-selector and global rules are rejected. Existing
+CSS and JavaScript remain unchanged.
+
+An automatic `needs` round is frozen as **CONTEXT.md** before sending. The job view
+exposes `context`, and usage includes both rounds, including a failed second round.
+Failed final answers and non-stream replies retain at most 64 KiB of scrubbed text
+as `rawReply` and **REPLY.txt**; a reply containing the active credential is omitted.
+Retry archives prior context and replies. These local diagnostics are outside project
+archives. The AI log shows both rounds, failed replies and read-only past jobs.
+
+`list_generations({projectId})` returns up to 100 newest local job summaries (time,
+status, first frozen request, summary and tokens), plus skipped/truncated indicators.
+Scanning is bounded to 4,096 job directories. `get_past_generation({projectId, jobId})`
+opens an existing record without changing the active job or allowing replay.
+
+Project schema **8** stores placed image URLs as `desegnos-asset:<uuid>` references
+and shared, content-addressed bytes in `pictures`. Opening an older project extracts
+inline images after checking its original integrity. The source archive stays intact
+until explicit Save, which retains its normal previous-file backup. Previews, image
+editing/copying and export resolve references at their output boundary. Placed bytes
+survive replacement of the import catalogue. The older version notes below describe
+the earlier contract history.
+
 Current draft policy and native image adapter: [Draft content and downloaded images](DRAFT_IMAGES.md). Requirements format 7 permits visibly labelled missing-content placeholders, honest disabled actions and system-font fallbacks. Explicit image markers request bounded native PNG/JPEG downloads; provider tools and preview networking remain disabled. Formats 3–6 retain their frozen contracts. Successful generations apply directly on the canvas; the earlier review/send description below is historical.
 
 Implementation gate: Generate freezes Desegnos's requirements Markdown and global mode, sends the exact UTF-8 file bytes to OpenAI, receives a bounded structured candidate, previews it in an unprivileged frame, and offers transactional Apply/Discard. Provider HTTP and credentials cannot mutate projects. Core validation and the native job coordinator cannot be bypassed by a provider or plugin.
@@ -90,3 +153,5 @@ The native Workspace menu and Ctrl/Cmd+Shift+R recreate the editor with scripts 
 Test the provider wire contract with an actual controlled HTTP server: decode the attachment, compare every Markdown byte/hash and mode, stream a complete typed result, and exercise refusals, malformed/truncated output, authentication/quota/rate limits, redirects, size limits, cancellation and uncertain failures. Clearly distinguish this from a live OpenAI check. Exercise the real native UI on a guarded virtual display, including settings, disclosure, progress/cancel, candidate preview/Apply/Discard, stale rejection, saved/recovered generated content and credential non-disclosure. Live access requires private user sign-in/plan consent or key entry in Desegnos. The ChatGPT contract adds signed OAuth, account isolation, rotating-token recovery, plan failures and native secure-store checks.
 
 This first generation gate stores and renders native HTML/CSS/browser-JavaScript source. It does not complete the planned visual document compiler, qualified React catalogue, JSX compilation, media pipeline, portable/React exports or executable plugin host. Submitted annotations remain editable; archiving/clearing submitted drafts and targeted visual-subtree revision are remaining release work. Their absence must stay visible in the implementation record rather than being represented by simulated results.
+
+Requirements format 16 adds imported page context. It is selected only when the project has reviewed source-page assignments. The catalogue nests photos and work under actual affected page IDs and current routes, while identity assets and accepted brand decisions remain project-wide. Photo bytes still travel through verified `desegnos-asset:` references. Format recognition accepts 16; renderers for formats 3–15 are unchanged, including their byte/hash contracts.

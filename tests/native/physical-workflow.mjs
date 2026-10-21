@@ -108,6 +108,7 @@ export class PhysicalInput {
   click(point) { return this.raw({ action: 'click', point: this.rootPoint(point) }); }
   rightClick(point) { return this.raw({ action: 'click', button: 3, point: this.rootPoint(point) }); }
   drag(from, to, modifiers = []) { return this.raw({ modifiers, action: 'drag', from: this.rootPoint(from), to: this.rootPoint(to) }); }
+  path(points, cancelDrag = false) { return this.raw({ action: 'drag', from: this.rootPoint(points[0]), to: this.rootPoint(points.at(-1)), path: points.map(point => this.rootPoint(point)), cancelDrag }); }
   wheel(point, direction, modifiers = [], count = 1) { return this.raw({ action: 'wheel', point: this.rootPoint(point), direction, modifiers, count }); }
   keys(key, count = 1, modifiers = []) { return this.raw({ modifiers, action: 'key', key, count }); }
   resetEvents() { return this.driver.execute(() => { window.__desegniNativeEvents = []; }); }

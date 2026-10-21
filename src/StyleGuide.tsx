@@ -43,7 +43,7 @@ function samples(project: Project) {
   // Scripts never run here: the frame is sandboxed without allow-scripts.
   return `<!doctype html><html><head><meta charset="utf-8"><style>${css}\n${styles}\nbody{margin:0;padding:20px}.sg-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:14px}</style></head><body>
 <h1>Main heading</h1><h2>Section heading</h2><h3>Small heading</h3>
-<p>Body text looks like this. It is the paragraph style your visitors read most, with <a href="#">a link</a> inside it.</p>
+<p>Body text with <a href="#">a link</a>.</p>
 <div class="sg-row"><button type="button">Button</button><a href="#">Text link</a></div></body></html>`;
 }
 
@@ -67,7 +67,6 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
     finally { setBusy(false); }
   }
   return <div className="dialog-body style-guide">
-    <p className="field-help">These rules tell the AI how your brand looks. Changing one here doesn’t restyle existing pages by itself. The next Generate follows it.</p>
     {error && <p className="message error" role="alert">{error}</p>}
     <section aria-label="Brand colours"><h3>Colours</h3><div className="sg-roles">
       {COLOUR_ROLES.map(topic => { const value = normal(rule(topic)?.value ?? '') ?? null; return <div key={topic} className="sg-role">
@@ -77,7 +76,7 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
         <div><strong>{topic}</strong><span>{value ?? 'Not set'}</span>{value && <button type="button" className="link-button" disabled={busy} onClick={() => { void clear(topic); }}>Clear</button>}</div>
       </div>; })}
     </div>
-      {found.colours.length > 0 && <><h4>Used on your pages</h4><p className="field-help">Pick one, then choose which role it plays.</p><div className="sg-found">{found.colours.map(colour => <details key={colour} className="sg-found-colour">
+      {found.colours.length > 0 && <><h4>Used on your pages</h4><div className="sg-found">{found.colours.map(colour => <details key={colour} className="sg-found-colour">
         <summary title={colour}><span style={{ background: colour }} />{colour}</summary>
         <div className="sg-found-menu">{COLOUR_ROLES.map(topic => <button key={topic} type="button" disabled={busy} onClick={event => { (event.currentTarget.closest('details') as HTMLDetailsElement).open = false; void save(topic, colour); }}>Use as {topic.toLowerCase()}</button>)}</div>
       </details>)}</div></>}
@@ -88,11 +87,11 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
         <select value={value} disabled={busy} onChange={event => { if (event.target.value) void save(topic, event.target.value); else void clear(topic); }}>
           <option value="">Not set: let the AI choose</option>{choices.map(choice => <option key={choice} value={choice}>{choice.split(',')[0].replace(/"/g, '')}{found.fonts.includes(choice) ? ' · used on your pages' : ''}</option>)}
         </select>
-        <span className="sg-font-sample" style={{ fontFamily: value || undefined }}>{topic === 'Heading font' ? 'Big, clear headings' : 'Easy-to-read paragraphs for your visitors.'}</span>
+        <span className="sg-font-sample" style={{ fontFamily: value || undefined }}>{topic === 'Heading font' ? 'Heading text' : 'Body text'}</span>
       </label>; })}
     </div></section>
     <section aria-label="How your site looks now"><h3>How your site looks now</h3>
-      {project.pages.some(page => page.content) ? <iframe className="sg-samples" title="Text and button samples using your site’s styles" sandbox="" srcDoc={preview} /> : <p className="field-help">Generate a page to see your headings, text and buttons here.</p>}
+      {project.pages.some(page => page.content) ? <iframe className="sg-samples" title="Text and button samples using your site’s styles" sandbox="" srcDoc={preview} /> : <p className="field-help">No generated pages.</p>}
     </section>
     <div className="form-actions"><button type="button" onClick={openBrief}>Open project brief</button></div>
   </div>;

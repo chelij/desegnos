@@ -46,8 +46,9 @@ fn found_metadata_survives_generation_and_serialization_but_export_keeps_only_pu
         .unwrap();
     let restored: Project = serde_json::from_slice(&serde_json::to_vec(&applied).unwrap()).unwrap();
     let restored_content = restored.pages[0].content.as_ref().unwrap();
-    assert_eq!(without_editor_ids(&restored_content.html), content.html);
-    assert_eq!(restored_content.css, content.css);
+    let readable = format_site_content(&content);
+    assert_eq!(without_editor_ids(&restored_content.html), readable.html);
+    assert_eq!(restored_content.css, readable.css);
     assert_eq!(restored_content.javascript, content.javascript);
     let found = content.found_sources().unwrap();
     assert_eq!(found.len(), 2);
@@ -111,7 +112,7 @@ fn capabilities_are_frozen_without_granting_search_to_an_adapter_that_lacks_it()
             image_downloads: 8,
         })
         .unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 10);
+    assert_eq!(snapshot.format_version().unwrap(), 14);
     assert!(snapshot.markdown.contains("\"webSearch\": false"));
     assert!(
         !snapshot

@@ -8,11 +8,11 @@ use std::collections::BTreeMap;
 use uuid::Uuid;
 
 pub const LEGACY_GENERATION_NAMESPACE: &str = "io.desegni.legacy-generation";
-pub const GENERATION_MIGRATION_NOTICE: &str = "This project used per-area Fuzzy/Strict settings. Desegnos now uses one generation setting, initially Fuzzy. Original area settings are preserved in the project; review the global setting before generating. Prompt boxes now express placement intent while the AI coordinates actual layout. Saved generation results tied to the previous source need Generate again; your requests remain available.";
-pub const CONTENT_MIGRATION_NOTICE: &str = "This project predates saved generated page source. Its pages, prompts, generation setting, decisions, and extension data are preserved. Save to upgrade this copy; the previous project file will be retained as a backup. Saved generation results tied to the previous source need Generate again; your requests remain available.";
-pub const ELEMENT_MIGRATION_NOTICE: &str = "Your site, requests, and project choices are preserved. Requests from the last applied generation are now kept in history so you can select and edit the site directly. Save to upgrade this copy and keep the previous project file as a backup. Saved generation results tied to the previous source need Generate again; your requests remain available.";
-pub const IDENTITY_MIGRATION_NOTICE: &str = "Your pages, site, requests, choices, and saved generation notes are preserved. This update supports portable imported identity images. Save to upgrade this copy and keep the previous project file as a backup. Saved generation results tied to the previous source need Generate again; your requests remain available.";
-pub const CANVAS_MIGRATION_NOTICE: &str = "Your pages, prompt positions, generated site, accepted choices, and grid visibility are preserved. Screen size now guides an open canvas. Grid spacing starts at 8 pixels with snapping and rulers on. New generation notes will build automatically. Save to upgrade this copy and keep the previous project file as a backup. Saved generation results tied to the previous source need Generate again; your requests remain available.";
+pub const GENERATION_MIGRATION_NOTICE: &str = "Review the global generation setting before generating; it defaults to Fuzzy. Generate again to replace older results.";
+pub const CONTENT_MIGRATION_NOTICE: &str = "This project has no saved generated page source. Save to upgrade this copy; the previous project file will be retained as a backup. Generate again to replace older results.";
+pub const ELEMENT_MIGRATION_NOTICE: &str = "Save to upgrade this copy and keep the previous project file as a backup. Generate again to replace older results.";
+pub const IDENTITY_MIGRATION_NOTICE: &str = "Save to upgrade this copy and keep the previous project file as a backup. Generate again to replace older results.";
+pub const CANVAS_MIGRATION_NOTICE: &str = "Save to upgrade this copy and keep the previous project file as a backup. Generate again to replace older results.";
 
 pub struct DecodedProject {
     pub project: Project,
@@ -34,7 +34,7 @@ impl DecodedProject {
             4 => Some(ELEMENT_MIGRATION_NOTICE),
             5 => Some(IDENTITY_MIGRATION_NOTICE),
             6 => Some(
-                "Your pages and requests are preserved. Element selections now stay attached while you edit. Save to upgrade this copy and keep the previous file as a backup. Saved generation results tied to the previous source need Generate again; your requests remain available.",
+                "Save to upgrade this copy and keep the previous file as a backup. Generate again to replace older results.",
             ),
             _ => None,
         }
@@ -160,7 +160,9 @@ impl VersionThreeProject {
             home_page_id: self.home_page_id,
             pages: self.pages,
             brief: self.brief,
+            website: None,
             imported_identity: None,
+            pictures: BTreeMap::new(),
             decisions: self.decisions,
             exceptions: self.exceptions,
             extensions: self.extensions,
@@ -207,7 +209,9 @@ impl VersionTwoProject {
                 })
                 .collect(),
             brief: self.brief,
+            website: None,
             imported_identity: None,
+            pictures: BTreeMap::new(),
             decisions: self.decisions,
             exceptions: self.exceptions,
             extensions: self.extensions,
@@ -274,6 +278,8 @@ impl LegacyProject {
                         .regions
                         .into_iter()
                         .map(|region| Region {
+                            shape: Default::default(),
+                            area_bounds: vec![],
                             id: region.id,
                             rect: region.rect,
                             z_index: region.z_index,
@@ -462,7 +468,7 @@ fn decode_source(
                 source_project_markdown,
             })
         }
-        6 | SCHEMA_VERSION => {
+        6 | 7 | SCHEMA_VERSION => {
             let mut project: Project =
                 serde_json::from_slice(bytes).map_err(|error| Error(error.to_string()))?;
             let source = project.clone();
@@ -490,6 +496,8 @@ fn decode_source(
     if decoded.source_schema_version < SCHEMA_VERSION {
         decoded.project.assign_stable_targets()?;
     }
+    decoded.project.store_inline_images()?;
+    decoded.project.verify_picture_bytes()?;
     decoded.project.validate()?;
     Ok(decoded)
 }

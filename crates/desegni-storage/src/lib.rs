@@ -1,3 +1,5 @@
+pub mod website_detection;
+pub use website_detection::{WebsiteFolder, detect_website_folder, import_detected_website};
 use desegni_core::{
     DecodedProject, Error, Project, Result, SCHEMA_VERSION, decode_project_with_notes,
     decode_project_with_source_hash, digest,
@@ -8,15 +10,23 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use uuid::Uuid;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 pub mod identity_source;
+pub mod project_folder;
 pub use identity_source::{
     IdentitySource, IdentitySourceAsset, IdentitySourceFile, collect_identity_source,
-    identity_source_from_files,
+    identity_source_from_files, identity_source_from_files_attributed,
+};
+pub use project_folder::{
+    create_project_folder, import_website_folder, is_project_folder, manage_project_folder,
+    project_in_folder, sanitize_project_name,
 };
 
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -94,6 +104,8 @@ pub struct ProjectFile {
     path: PathBuf,
     _lock: Arc<File>,
     stamp: Mutex<Option<FileStamp>>,
+    site_warnings: Mutex<Vec<String>>,
+    managed: AtomicBool,
 }
 
 impl ProjectFile {
@@ -148,10 +160,13 @@ impl ProjectFile {
         lock.try_lock().map_err(|_| {
             Error("This project is already open for writing in another window.".into())
         })?;
+        let managed = project_folder::is_project_folder(&path);
         Ok(Self {
             path,
             _lock: Arc::new(lock),
             stamp: Mutex::new(None),
+            site_warnings: Mutex::new(vec![]),
+            managed: AtomicBool::new(managed),
         })
     }
 
@@ -170,12 +185,23 @@ impl ProjectFile {
     }
 
     pub fn save_checked(&self, project: &Project) -> std::result::Result<(), Box<SaveFailure>> {
+        self.save_archive(project, true)
+    }
+
+    fn save_archive(
+        &self,
+        project: &Project,
+        sync_site: bool,
+    ) -> std::result::Result<(), Box<SaveFailure>> {
         let mut stamp = self
             .stamp
             .lock()
             .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))?;
         let next = self.save_exact(project, stamp.as_ref(), false)?;
         *stamp = Some(next);
+        if sync_site {
+            self.sync_site(project);
+        }
         Ok(())
     }
 
@@ -193,7 +219,37 @@ impl ProjectFile {
             .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))?;
         let next = self.save_exact(project, Some(observed), allow_different_project)?;
         *stamp = Some(next);
+        self.sync_site(project);
         Ok(())
+    }
+
+    fn sync_site(&self, project: &Project) {
+        let warnings = match project_folder::sync_project_site(
+            &self.path,
+            project,
+            self.is_project_folder(),
+        ) {
+            Ok(warnings) => warnings,
+            Err(error) => vec![format!("Website files could not be synced: {error}")],
+        };
+        if project_folder::is_project_folder(&self.path) {
+            self.managed.store(true, Ordering::Relaxed);
+        }
+        if let Ok(mut saved) = self.site_warnings.lock() {
+            *saved = warnings;
+        }
+    }
+
+    pub fn site_warnings(&self) -> Vec<String> {
+        self.site_warnings
+            .lock()
+            .map(|warnings| warnings.clone())
+            .unwrap_or_default()
+    }
+
+    /// Cached so ordinary edits and workspace polling never read the site manifest.
+    pub fn is_project_folder(&self) -> bool {
+        self.managed.load(Ordering::Relaxed)
     }
 
     fn check_disk(
@@ -342,6 +398,8 @@ impl ProjectFile {
             path: self.path.clone(),
             _lock: Arc::clone(&self._lock),
             stamp: Mutex::new(None),
+            site_warnings: Mutex::new(vec![]),
+            managed: AtomicBool::new(project_folder::is_project_folder(&self.path)),
         };
         let document = file.load_document()?;
         Ok((file, document))
@@ -420,7 +478,7 @@ fn read_project_document(path: &Path) -> Result<(DecodedProject, FileStamp)> {
     }
     let manifest: Manifest = serde_json::from_slice(&entries["manifest.json"]).map_err(io)?;
     if manifest.format != "desegni"
-        || ![1, 2, 3, 4, 5, 6, SCHEMA_VERSION].contains(&manifest.schema_version)
+        || ![1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION].contains(&manifest.schema_version)
     {
         return Err(Error(
             "This project format is unsupported. The original has not been changed.".into(),

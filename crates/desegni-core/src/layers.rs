@@ -1,6 +1,6 @@
 use crate::{
     ElementStyleEdit, ElementTarget, Error, Project, Rect, Result,
-    editing::{body, bounded, check_value, ids, locate, parse, tracked},
+    editing::{body, bounded, check_value, ids, locate, tracked},
     ensure,
     model::validate_text,
 };
@@ -82,6 +82,8 @@ pub enum LayerClipboardContent {
     Request {
         rect: Rect,
         prompt: String,
+        #[serde(default, skip_serializing_if = "crate::RegionShape::is_rect")]
+        shape: crate::RegionShape,
     },
     Element {
         html: String,
@@ -534,7 +536,12 @@ impl LayerClipboard {
             "The clipboard layer format or version is unsupported.",
         )?;
         match &self.content {
-            LayerClipboardContent::Request { rect, prompt } => {
+            LayerClipboardContent::Request {
+                rect,
+                prompt,
+                shape,
+            } => {
+                shape.validate()?;
                 rect.validate(crate::Viewport {
                     width: 1,
                     height: 1,
@@ -625,6 +632,7 @@ impl Project {
                 LayerClipboardContent::Request {
                     rect: region.rect,
                     prompt: region.prompt.clone(),
+                    shape: region.shape.clone(),
                 }
             }
             LayerTarget::Element { target } => {
@@ -640,7 +648,7 @@ impl Project {
                     !target.id.is_empty() || source.sha256()? == target.source_sha256,
                     "The page changed. Select this layer again.",
                 )?;
-                let doc = parse(&source.html)?;
+                let doc = self.parse_page_html(&source.html)?;
                 unique_ids(&doc)?;
                 let root = locate(&doc, target)?;
                 static_subtree(root)?;
@@ -697,10 +705,16 @@ impl Project {
                 }
                 snapshots.sort_by(|left, right| left.path.cmp(&right.path));
                 LayerClipboardContent::Element {
-                    html: root
-                        .try_html()
-                        .ok_or_else(|| Error("This layer could not be copied.".into()))?
-                        .to_string(),
+                    html: self
+                        .resolve_site_content(&crate::SiteContent {
+                            html: root
+                                .try_html()
+                                .ok_or_else(|| Error("This layer could not be copied.".into()))?
+                                .to_string(),
+                            css: String::new(),
+                            javascript: String::new(),
+                        })?
+                        .html,
                     context: LayerElementContext {
                         namespace: parent_name.ns.to_string(),
                         parent_tag: parent_name.local.to_string(),
@@ -735,7 +749,12 @@ impl Project {
         if let Some(insertion) = insertion {
             self.inspect_element(page_id, insertion)?;
         }
-        if let LayerClipboardContent::Request { rect, prompt } = &clipboard.content {
+        if let LayerClipboardContent::Request {
+            rect,
+            prompt,
+            shape,
+        } = &clipboard.content
+        {
             let mut rect = *rect;
             rect.x += 24.0;
             rect.y += 24.0;
@@ -762,6 +781,8 @@ impl Project {
             page.regions.push(crate::Region {
                 id,
                 rect,
+                shape: shape.clone(),
+                area_bounds: vec![],
                 prompt: prompt.clone(),
                 z_index: 0,
                 element: None,
@@ -775,6 +796,7 @@ impl Project {
                 page.regions[index].z_index = i32::try_from(rank)
                     .map_err(|_| Error("This page has too many request layers.".into()))?;
             }
+            next.store_inline_images()?;
             next.validate()?;
             return Ok((
                 next,
@@ -792,7 +814,7 @@ impl Project {
         else {
             unreachable!()
         };
-        let doc = parse(
+        let doc = self.parse_page_html(
             page.content
                 .as_ref()
                 .map(|content| content.html.as_str())

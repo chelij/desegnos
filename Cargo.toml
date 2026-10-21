@@ -18,6 +18,38 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
+# Picture decoding, scaling and previews are far too slow unoptimised; keep them fast in
+# debug builds and native tests too.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+
+[profile.dev.package.zune-core]
+opt-level = 3
+
+[profile.dev.package.png]
+opt-level = 3
+
+[profile.dev.package.fdeflate]
+opt-level = 3
+
+[profile.dev.package.image-webp]
+opt-level = 3
+
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+
+[profile.dev.package.crc32fast]
+opt-level = 3
+
+[profile.dev.package.adler2]
+opt-level = 3
+
+[profile.dev.package.simd-adler32]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

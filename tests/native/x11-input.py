@@ -225,6 +225,11 @@ def main():
             raise RuntimeError("File dragging requires one unambiguous mapped source window")
         source_window = sources[0] if source_pid is not None else target
         positions = [point(request["point"])] if action in ("move", "click", "wheel") else [point(request["from"], source_window), point(request["to"])] if action == "drag" else []
+        if "path" in request:
+            path = request["path"]
+            if action != "drag" or source_pid is not None or not isinstance(path, list) or not 3 <= len(path) <= 500:
+                raise RuntimeError("A drawn path needs 3 to 500 points in the owned test window")
+            positions = [point(value) for value in path]
         raise_window(display, target["id"])
         set_focus(display, target["id"], 2, 0)
         if source_pid is not None:
@@ -260,14 +265,15 @@ def main():
                 sync(display, 0)
                 time.sleep(0.04)
                 if action == "drag":
-                    drag_steps = 24 if source_pid is not None else 8
-                    for index in range(1, drag_steps + 1):
-                        px = round(positions[0][0] + (positions[1][0] - positions[0][0]) * index / drag_steps)
-                        py = round(positions[0][1] + (positions[1][1] - positions[0][1]) * index / drag_steps)
-                        if not motion(display, screen, px, py, 0):
-                            raise RuntimeError("XTEST refused drag motion")
-                        sync(display, 0)
-                        time.sleep(0.025 if source_pid is not None else 0.012)
+                    drag_steps = 2 if "path" in request else 24 if source_pid is not None else 8
+                    for start, end in zip(positions, positions[1:]):
+                        for index in range(1, drag_steps + 1):
+                            px = round(start[0] + (end[0] - start[0]) * index / drag_steps)
+                            py = round(start[1] + (end[1] - start[1]) * index / drag_steps)
+                            if not motion(display, screen, px, py, 0):
+                                raise RuntimeError("XTEST refused drag motion")
+                            sync(display, 0)
+                            time.sleep(0.025 if source_pid is not None else 0.012)
                     if request.get("cancelDrag", False):
                         code = keysym_to_code(display, string_to_keysym(b"Escape"))
                         key(display, code, 1, 0); key(display, code, 0, 0); sync(display, 0)

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-prepare-identity-selection"
+description = "Enables the prepare_identity_selection command without any pre-configured scope."
+commands.allow = ["prepare_identity_selection"]
+
+[[permission]]
+identifier = "deny-prepare-identity-selection"
+description = "Denies the prepare_identity_selection command without any pre-configured scope."
+commands.deny = ["prepare_identity_selection"]

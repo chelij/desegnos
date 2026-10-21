@@ -126,15 +126,15 @@ async function replaceMain(driver, physical, about) {
 
 export async function uxAuditWorkflow(driver, physical, step, evidence, provider) {
   const output = join(resolve(evidence), 'ux-audit'); await mkdir(output, { recursive: true, mode: 0o700 });
-  const projectPath = join(output, 'Audit website.desegnos');
+  let projectPath = join(output, 'Audit website.desegnos');
   const longPrompt = 'Create a welcoming studio homepage with a clear heading and one useful action.\n' + Array.from({ length: 85 }, (_, index) => `Detail ${index + 1}: use clear labels and welcoming, readable content.`).join('\n');
   let projectId, homeId, aboutId, cancelled, applied, savedProject, exportedRoot;
 
-  await step('Fresh onboarding explains the creation loop and offers described cards without sidebars', async () => {
+  await step('Fresh onboarding offers labelled choices without filler or sidebars', async () => {
     assert.equal((await workspace(driver)).project, null);
     await driver.ready('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
     assert.equal(await driver.execute(() => !!document.querySelector('button[aria-label="Use my existing brand"]')), false);
-    assert.match(await driver.execute(() => document.querySelector('.new-project-intro')?.textContent), /describe.*generate.*edit.*export/i);
+    assert.equal(await driver.execute(() => !!document.querySelector('.new-project-intro')), false);
     assert.equal(await driver.execute(() => !!document.querySelector('input[name="projectName"]')), false);
     await assertCanvasOnly(driver); await physical.initialize(output);
     await physical.captureWindow(join(output, '01-onboarding-window.png'));
@@ -276,7 +276,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.button('Fit');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
     await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'My unfinished edit must survive' });
-    await waitFor(() => driver.execute(() => document.querySelector('.inline-text-editor')?.textContent === 'My unfinished edit must survive'), 'The native typing did not settle in the inline editor');
+    await waitFor(() => driver.execute(() => (document.querySelector('.inline-text-editor')?.value ?? document.querySelector('.inline-text-editor')?.textContent) === 'My unfinished edit must survive'), 'The native typing did not settle in the inline editor');
     provider.release(held.jobId);
     await waitFor(async () => (await driver.invoke('get_generation', { projectId }))?.receivedBytes > 0, 'The draft-test reply did not start streaming');
     provider.release(held.jobId); await jobAt(driver, projectId, ['blocked']);
@@ -288,7 +288,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.ready('.canvas-pill[aria-label="Generation status"]');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
     await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Result review preserves newer typing' });
-    await waitFor(() => driver.execute(() => document.querySelector('.inline-text-editor')?.textContent === 'Result review preserves newer typing'), 'The native typing did not settle in the inline editor');
+    await waitFor(() => driver.execute(() => (document.querySelector('.inline-text-editor')?.value ?? document.querySelector('.inline-text-editor')?.textContent) === 'Result review preserves newer typing'), 'The native typing did not settle in the inline editor');
     await driver.click('//*[@role="region" and @aria-label="Generation status"]//button[normalize-space(.)="Undo"]','xpath');
     await previewReady(driver, 'Result review preserves newer typing');
     assert.equal((await workspace(driver)).project.latestGeneration.jobId, applied.jobId, 'Result Undo undid a newer local edit');
@@ -302,8 +302,21 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await previewReady(driver, 'Edited directly on the page');
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview'); await driver.button('Redo'); await previewReady(driver, 'Edited directly on the page');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]'); await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Cancelled text change' }); await physical.keys('Escape');
-    await previewReady(driver, 'Edited directly on the page'); assert.equal(requestCount(provider), requests);
-    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar > button')].map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['Edit', 'Ask AI', 'Style', 'Delete layer']);
+    await previewReady(driver, 'Edited directly on the page');
+    for (const value of ['Emoji 🧑‍💻 café é — العربية 中文', 'Short']) {
+      await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
+      await driver.fill('Edit text in place', value);
+      await physical.keys('Return'); await previewReady(driver, value);
+      if (value.startsWith('Emoji')) {
+        await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
+        await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Short replacement' });
+        await physical.keys('Return'); await previewReady(driver, 'Short replacement');
+        await driver.button('Undo'); await previewReady(driver, value);
+      }
+      await driver.button('Undo'); await previewReady(driver, 'Edited directly on the page');
+    }
+    assert.equal(requestCount(provider), requests);
+    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar > button')].map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['Edit', 'Ask AI', 'Style', 'Undo changes to this element', 'Delete layer']);
     assert.equal(await driver.execute(() => !!document.querySelector('.element-toolbar .style-bar')), false);
     await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
     await driver.ready('.element-toolbar .style-bar [aria-label="Larger text"]');
@@ -332,8 +345,41 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await physical.captureWindow(join(output,'12-request-navigation-window.png'));
   });
 
+  await step('AI conversation records follow-up context, failed replies and read-only past generations', async () => {
+    const count = requestCount(provider);
+    provider.setMode('complete', { needsOnce: true, chunkDelayMs: 1, chunkSize: 4096 });
+    const previousJobId = (await driver.invoke('get_generation', { projectId }))?.jobId;
+    await driver.button('Generate');
+    const applied = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.jobId !== previousJobId && value?.status === 'applied' && value; }, 'The follow-up generation did not finish', 25000);
+    assert.equal(requestCount(provider), count + 2);
+    assert.ok(applied.context?.markdown.includes('## Requested context'));
+    assert.equal(applied.usage.inputTokens, 422); assert.equal(applied.usage.outputTokens, 178);
+    if (!await driver.execute(() => !!document.querySelector('.generation-log'))) await driver.button('AI log');
+    await driver.ready('.generation-log');
+    assert.match(await driver.execute(() => document.querySelector('.generation-log').textContent), /Asked for 1 more element/);
+    await driver.click('//aside[@aria-label="AI conversation"]//summary[normalize-space(.)="Context sent"]', 'xpath');
+    assert.match(await driver.execute(() => document.querySelector('[aria-label="Context sent"]').textContent), /## Requested context/);
+    await driver.button('Undo'); await previewReady(driver, 'Edited directly on the page');
+    provider.setMode('malformed'); await driver.button('Generate');
+    const failed = await jobAt(driver, projectId, ['failed']);
+    assert.match(failed.rawReply, /not-complete-json/);
+    await waitFor(() => driver.execute(() => !!document.querySelector('[aria-label="Failed raw reply"]')), 'The failed raw reply is absent');
+    const history = await driver.invoke('list_generations', { projectId });
+    assert.ok(history.jobs.length >= 3); assert.equal(history.jobs[0].jobId, failed.jobId);
+    await driver.click('.generation-log details[aria-label="Past generations"] > summary');
+    await driver.click('.generation-log details[aria-label="Past generations"] p:nth-of-type(2) button');
+    await waitFor(() => driver.execute(() => !![...document.querySelectorAll('.generation-log button')].find(node => node.textContent === 'Back to current generation')), 'The historical conversation did not open');
+    assert.ok(await driver.execute(() => !!document.querySelector('[aria-label="Context sent"]')));
+    assert.equal((await driver.invoke('get_generation', { projectId })).jobId, failed.jobId);
+    assert.equal(await driver.execute(() => { const node = document.querySelector('.log-messages'); return node.scrollWidth <= node.clientWidth + 1; }), true, 'The conversation or history row overflows the sidebar');
+    await physical.captureWindow(join(output, '11b-generation-history.png'));
+    await driver.button('Back to current generation'); await driver.button('Hide AI conversation');
+    provider.setMode('complete', { editorAudit: true, chunkDelayMs: 2, chunkSize: 1024 });
+  });
+
   await step('Native Save writes a real archive and recent-project history stores its actual name and path', async () => {
-    await chooseFile(physical, () => driver.button('Save'), projectPath, output, 'audit-save');
+    projectPath = (await driver.invoke('get_workspace')).path;
+    await driver.button('Save');
     savedProject = (await savedState(driver, projectPath)).project; await verifyArchive(projectPath, savedProject, await driver.invoke('get_project_notes'));
     const recent = await driver.invoke('get_recent_projects'); assert.deepEqual(recent.projects[0], { name: 'Audit website', path: projectPath });
     await driver.menu(['New project']);
@@ -346,6 +392,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.equal((await workspace(driver)).dirty, false);
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
     await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Closing preserves this draft' });
+    await waitFor(() => driver.execute(() => document.querySelector('.inline-text-editor')?.value === 'Closing preserves this draft'), 'The native typing did not settle before Close');
     assert.equal((await workspace(driver)).dirty, false, 'The regression requires an uncommitted inline draft');
     await physical.raw({ action: 'close' });
     const dialog = await waitFor(async () => (await physical.inspect()).windows.find(window => window.title === 'Unsaved project changes'), 'Close did not show the native unsaved-changes confirmation');

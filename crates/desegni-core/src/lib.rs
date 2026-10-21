@@ -1,4 +1,6 @@
+mod area_geometry;
 mod attachments;
+mod code_format;
 mod dossier;
 mod editing;
 mod element_fix;
@@ -6,10 +8,12 @@ mod export;
 mod generation;
 mod generation_scope;
 mod identity;
+mod identity_pages;
 mod images;
 mod layers;
 mod migration;
 mod model;
+mod picture_scaling;
 mod project_assets;
 mod provenance;
 mod requirements;
@@ -17,18 +21,24 @@ mod session;
 mod source;
 mod stable_targets;
 mod website;
+mod website_import;
 
 pub use attachments::*;
+pub use code_format::{compact_site_content, format_site_content};
 pub use dossier::*;
 pub use editing::*;
 pub use element_fix::{ELEMENT_FIX_FORMAT, element_fix_schema, result_schema};
 pub use export::*;
 pub use generation::*;
 pub use identity::*;
+pub use identity_pages::*;
 pub use images::*;
 pub use layers::*;
 pub use migration::*;
 pub use model::*;
+pub use picture_scaling::{
+    AI_PREVIEW_BYTES, AI_PREVIEW_EDGE, AI_PREVIEW_TOKEN_RESERVE, ai_preview, scaled_for_display,
+};
 pub use project_assets::*;
 pub use provenance::*;
 pub use requirements::*;
@@ -36,6 +46,7 @@ pub use session::*;
 pub use source::*;
 pub use stable_targets::*;
 pub use website::*;
+pub use website_import::{ImportedWebsite, import_website_files};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

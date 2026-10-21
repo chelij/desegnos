@@ -14,7 +14,7 @@ export function SaveConflictDialog({ conflict, choose }: { conflict: SaveConflic
   const title = conflict.kind === 'changed' ? 'This file changed since you opened it.' : different ? conflict.canReplace ? `${conflict.fileName} is a different project. Replace it?` : 'Save your project with a new name' : 'Choose another file name';
   return <Modal title={title} close={() => choose('cancel')}>
     <div className="dialog-body save-conflict">
-      <p>{conflict.kind === 'changed' ? 'Save a copy to keep both versions, or replace the file with your current work.' : different ? conflict.canReplace ? 'Replacing it keeps a backup of the other project.' : 'Your project needs its own file. Save a copy with another name.' : 'This file can’t be replaced. Choose a name ending in .desegnos.'}</p>
+      <p>{conflict.kind === 'changed' ? 'Replacing overwrites the file with your current work.' : different ? conflict.canReplace ? 'Replacing overwrites the other project.' : 'Choose another file name.' : 'This file can’t be replaced. Choose a name ending in .desegnos.'}</p>
       <p className="muted">{conflict.fileName}</p>
       <details><summary>Show details</summary><p className="wrap-path">{conflict.path}</p><p>{conflict.message}</p>
         {(['expected', 'actual'] as const).map(key => { const stamp = conflict.details[key]; return <div key={key}><strong>{key === 'expected' ? 'When opened or last saved' : 'File on disk'}</strong>{stamp ? <dl><dt>Project</dt><dd>{stamp.projectId}</dd><dt>Revision</dt><dd>{stamp.revision}</dd><dt>File hash</dt><dd className="wrap-path">{stamp.manifestSha256}</dd></dl> : <p>Unavailable</p>}</div>; })}

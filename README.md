@@ -34,6 +34,8 @@ Projects save their website source, brief, and approved choices. Existing `.dese
 
 ## Run and build
 
+Run `./scripts/build-release.sh` to typecheck and rebuild the frontend, then build `target/release/desegnos` in release mode with the default portal dialogs and embedded UI, skipping installer bundles. It uses npm (no pnpm required), finds Node through mise when needed, prints the binary's size and timestamp, and runs a five-second startup check on guarded Xvfb. The check uses private temporary app data and saves its screenshot and logs under `test-results/startup/`.
+
 From the WebMaker folder, launch `target/release/desegnos` after a release build. Development commands:
 
 ```sh

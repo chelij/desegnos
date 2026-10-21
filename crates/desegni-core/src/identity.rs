@@ -8,7 +8,6 @@ use uuid::Uuid;
 pub const MAX_IDENTITY_ASSETS: usize = 4;
 pub const MAX_IDENTITY_ASSET_BYTES: usize = 512 * 1024;
 /// The user's own pictures from an imported folder (portfolio photos, products, team).
-pub const MAX_PROJECT_PHOTOS: usize = 16;
 pub const MAX_PROJECT_PHOTO_BYTES: usize = 200 * 1024;
 pub const MAX_PHOTO_DESCRIPTION_CHARS: usize = 200;
 
@@ -18,12 +17,56 @@ pub const MAX_IMPORTED_ITEMS: usize = 64;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourcePageRef {
+    pub path: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SourcePage {
+    pub path: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    pub kind: String,
+    #[serde(default)]
+    pub photo_count: usize,
+    #[serde(default)]
+    pub item_count: usize,
+}
+impl SourcePage {
+    pub fn reference(&self) -> SourcePageRef {
+        SourcePageRef {
+            path: self.path.clone(),
+            title: self.title.clone(),
+            url: self.url.clone(),
+        }
+    }
+}
+
+/// The content reviewed for an actual Desegnos page. Photo bytes remain shared in identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedPageContext {
+    pub page_id: Uuid,
+    pub source: SourcePage,
+    pub photo_ids: Vec<Uuid>,
+    pub content: Vec<ImportedItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedItem {
     pub kind: String,
     pub title: String,
     /// A public https address or a site path such as /projects/robot; empty when unknown.
     pub url: String,
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_pages: Vec<SourcePageRef>,
 }
 
 impl ImportedItem {
@@ -36,6 +79,9 @@ impl ImportedItem {
             "An imported item has an unknown kind.",
         )?;
         validate_text(&self.title, "Imported item title", 160, true)?;
+        for page in &self.source_pages {
+            crate::validate_source_page_ref(page)?;
+        }
         validate_text(&self.summary, "Imported item summary", 300, false)?;
         validate_text(&self.url, "Imported item link", 2048, false)?;
         ensure(
@@ -59,6 +105,8 @@ pub struct ProjectPhoto {
     pub width: u32,
     pub height: u32,
     pub description: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_pages: Vec<SourcePageRef>,
 }
 
 impl ProjectPhoto {
@@ -67,6 +115,9 @@ impl ProjectPhoto {
             !self.id.is_nil(),
             "A project photo needs a valid identifier.",
         )?;
+        for page in &self.source_pages {
+            crate::validate_source_page_ref(page)?;
+        }
         validate_text(&self.name, "Photo name", 240, true)?;
         validate_text(
             &self.description,
@@ -114,6 +165,8 @@ pub struct ImportedIdentity {
     pub photos: Vec<ProjectPhoto>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub content: Vec<ImportedItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<ImportedPageContext>,
 }
 
 fn valid_digest(value: &str) -> bool {
@@ -222,6 +275,8 @@ pub struct ImportedContext {
     pub assets: Vec<IdentityAsset>,
     pub photos: Vec<ProjectPhoto>,
     pub content: Vec<ImportedItem>,
+    pub pages: Vec<SourcePage>,
+    pub attach_matching_pages: bool,
 }
 
 impl ImportedIdentity {
@@ -249,10 +304,6 @@ impl ImportedIdentity {
                 "Identity asset identifiers must be unique.",
             )?;
         }
-        ensure(
-            self.photos.len() <= MAX_PROJECT_PHOTOS,
-            "A project keeps at most 16 imported photos.",
-        )?;
         for photo in &self.photos {
             photo.validate()?;
             ensure(
@@ -266,6 +317,29 @@ impl ImportedIdentity {
         )?;
         for item in &self.content {
             item.validate()?;
+        }
+        ensure(
+            self.pages.len() <= crate::MAX_PAGES * crate::MAX_PAGES,
+            "Too many imported page contexts.",
+        )?;
+        for page in &self.pages {
+            crate::validate_source_page_ref(&page.source.reference())?;
+            ensure(
+                page.content.len() <= MAX_IMPORTED_ITEMS,
+                "Too many work items on an imported page.",
+            )?;
+            validate_text(&page.source.title, "Source page title", 240, true)?;
+            ensure(
+                !page.page_id.is_nil()
+                    && page
+                        .photo_ids
+                        .iter()
+                        .all(|id| self.photos.iter().any(|photo| photo.id == *id)),
+                "An imported page references a missing photo.",
+            )?;
+            for item in &page.content {
+                item.validate()?;
+            }
         }
         Ok(())
     }
@@ -284,10 +358,12 @@ impl Project {
             !context.findings.is_empty()
                 || !context.assets.is_empty()
                 || !context.photos.is_empty()
-                || !context.content.is_empty(),
+                || !context.content.is_empty()
+                || !context.pages.is_empty(),
             "Choose at least one finding, logo, photo or content item to import.",
         )?;
         let mut next = self.clone();
+        next.store_inline_images()?;
         next.revision = revision
             .checked_add(1)
             .ok_or_else(|| crate::Error("Project revision limit reached.".into()))?;
@@ -319,6 +395,7 @@ impl Project {
                 }),
             }
         }
+        let page_contexts = next.import_source_pages(&context)?;
         let identity = match next.imported_identity.take() {
             Some(mut existing) => {
                 for asset in context.assets {
@@ -333,16 +410,8 @@ impl Project {
                         existing.assets.push(asset);
                     }
                 }
-                // Newer photos replace the oldest once the project holds the maximum.
                 for photo in context.photos {
-                    if !existing
-                        .photos
-                        .iter()
-                        .any(|item| item.sha256 == photo.sha256 || item.id == photo.id)
-                    {
-                        if existing.photos.len() == MAX_PROJECT_PHOTOS {
-                            existing.photos.remove(0);
-                        }
+                    if !existing.photos.iter().any(|item| item.id == photo.id) {
                         existing.photos.push(photo);
                     }
                 }
@@ -355,6 +424,29 @@ impl Project {
                         existing.content.remove(0);
                     }
                     existing.content.push(item);
+                }
+                for page in page_contexts.clone() {
+                    if let Some(old) = existing.pages.iter_mut().find(|old| {
+                        old.page_id == page.page_id && old.source.path == page.source.path
+                    }) {
+                        for id in page.photo_ids {
+                            if !old.photo_ids.contains(&id) {
+                                old.photo_ids.push(id);
+                            }
+                        }
+                        for item in page.content {
+                            old.content.retain(|existing| {
+                                !(existing.title.eq_ignore_ascii_case(&item.title)
+                                    && existing.url == item.url)
+                            });
+                            if old.content.len() == MAX_IMPORTED_ITEMS {
+                                old.content.remove(0);
+                            }
+                            old.content.push(item);
+                        }
+                    } else {
+                        existing.pages.push(page);
+                    }
                 }
                 existing.source_name = context.source_name;
                 existing.source_sha256 = context.source_sha256;
@@ -376,11 +468,80 @@ impl Project {
                 assets: context.assets,
                 photos: context.photos,
                 content: context.content,
+                pages: page_contexts,
             },
         };
         next.imported_identity = Some(identity);
         next.validate()?;
         Ok(next)
+    }
+
+    pub fn import_source_pages(
+        &mut self,
+        context: &ImportedContext,
+    ) -> Result<Vec<ImportedPageContext>> {
+        let mut seen = BTreeSet::new();
+        let mut result = Vec::new();
+        for source in &context.pages {
+            crate::validate_source_page_ref(&source.reference())?;
+            ensure(
+                seen.insert(&source.path),
+                "Choose each source page only once.",
+            )?;
+            let matching = self.pages.iter().position(|page| page.path == source.path);
+            let index = if let Some(index) =
+                matching.filter(|_| context.attach_matching_pages || source.path == "/")
+            {
+                index
+            } else {
+                let mut path = source.path.clone();
+                let mut suffix = 2;
+                while self.pages.iter().any(|page| page.path == path) {
+                    path = format!("{}-{suffix}", source.path);
+                    suffix += 1;
+                }
+                self.pages.push(crate::Page {
+                    id: Uuid::new_v4(),
+                    name: source.title.chars().take(120).collect(),
+                    path,
+                    included: true,
+                    viewport: self.viewport,
+                    appearance: self.appearance,
+                    regions: vec![],
+                    content: None,
+                });
+                self.pages.len() - 1
+            };
+            if self.pages[index].id == self.home_page_id && self.revision == 0 {
+                self.pages[index].name = source.title.chars().take(120).collect();
+            }
+            result.push(ImportedPageContext {
+                page_id: self.pages[index].id,
+                source: source.clone(),
+                photo_ids: context
+                    .photos
+                    .iter()
+                    .filter(|photo| {
+                        photo
+                            .source_pages
+                            .iter()
+                            .any(|page| page.path == source.path)
+                    })
+                    .map(|photo| photo.id)
+                    .collect(),
+                content: context
+                    .content
+                    .iter()
+                    .filter(|item| {
+                        item.source_pages
+                            .iter()
+                            .any(|page| page.path == source.path)
+                    })
+                    .cloned()
+                    .collect(),
+            });
+        }
+        Ok(result)
     }
 
     pub fn set_initial_identity(&self, identity: ImportedIdentity) -> Result<Self> {

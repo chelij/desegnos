@@ -151,9 +151,19 @@ pub fn estimate_for_auth(
     schema: &Value,
     settings: &ProviderSettings,
 ) -> Result<CostEstimate> {
-    let result = request_body(authentication, snapshot, mode, schema, settings)
-        .and_then(|body| estimate_body(authentication, &body, settings));
+    let (counted, reserve) = without_previews(snapshot);
+    let result = request_body(authentication, &counted, mode, schema, settings)
+        .and_then(|body| estimate_body_with_reserve(authentication, &body, settings, reserve));
     result.map_err(|error| error.with_authentication(authentication))
+}
+
+/// Picture previews are billed per image, not per Base64 byte: estimate the request without
+/// them and reserve a fixed number of tokens for each instead.
+pub(crate) fn without_previews(snapshot: &RequirementsSnapshot) -> (RequirementsSnapshot, u64) {
+    let reserve = snapshot.images.len() as u64 * desegni_core::AI_PREVIEW_TOKEN_RESERVE;
+    let mut counted = snapshot.clone();
+    counted.images.clear();
+    (counted, reserve)
 }
 
 pub(crate) fn prepare_body(
@@ -164,7 +174,9 @@ pub(crate) fn prepare_body(
     settings: &ProviderSettings,
 ) -> Result<Vec<u8>> {
     let body = request_body(authentication, snapshot, mode, schema, settings)?;
-    estimate_body(authentication, &body, settings)?;
+    let (counted, reserve) = without_previews(snapshot);
+    let counted = request_body(authentication, &counted, mode, schema, settings)?;
+    estimate_body_with_reserve(authentication, &counted, settings, reserve)?;
     Ok(body)
 }
 
@@ -264,6 +276,12 @@ pub(crate) fn request_body(
         ]}],
         "text": {"format": {"type":"json_schema","name":"desegni_generation_candidate","schema":schema,"strict":true}}
     });
+    if let Some(content) = body["input"][0]["content"].as_array_mut() {
+        for image in &snapshot.images {
+            content.push(json!({"type":"input_text","text":format!("Preview of image attachment {}.", image.attachment_id)}));
+            content.push(json!({"type":"input_image","image_url":image.data_uri,"detail":"low"}));
+        }
+    }
     if authentication == AuthenticationMethod::ApiKey {
         body["service_tier"] = json!("default");
         body["max_output_tokens"] = json!(settings.max_output_tokens);
@@ -274,14 +292,6 @@ pub(crate) fn request_body(
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
     Ok(bytes)
-}
-
-fn estimate_body(
-    authentication: AuthenticationMethod,
-    body: &[u8],
-    settings: &ProviderSettings,
-) -> Result<CostEstimate> {
-    estimate_body_with_reserve(authentication, body, settings, 0)
 }
 
 pub(crate) fn estimate_body_with_reserve(
@@ -349,6 +359,7 @@ mod web_search_tests {
             dependencies: Default::default(),
             dossier_context: None,
             capabilities: None,
+            images: vec![],
         }
     }
 

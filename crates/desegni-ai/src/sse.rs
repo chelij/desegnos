@@ -366,7 +366,9 @@ impl<'a> ResponseStream<'a> {
                         return Err(self.byte_limit_error(MAX_OUTPUT_BYTES, outcome));
                     }
                     if self.key.appears_in(text) {
-                        return Err(self.reject(ResponseRejection::CredentialEcho, outcome));
+                        return Err(self
+                            .reject(ResponseRejection::CredentialEcho, outcome)
+                            .with_diagnostic_reply(text, self.key));
                     }
                     parts.push(MessagePart::Text(text));
                 }
@@ -943,18 +945,28 @@ impl<'a> ResponseStream<'a> {
         }
         let text = answers[0].concat();
         if self.key.appears_in(&text) {
-            return Err(self.reject(ResponseRejection::CredentialEcho, outcome));
+            return Err(self
+                .reject(ResponseRejection::CredentialEcho, outcome)
+                .with_diagnostic_reply(&text, self.key));
         }
-        let candidate: Value = serde_json::from_str(&text)
-            .map_err(|_| self.reject(ResponseRejection::CandidateJson, outcome))?;
+        let candidate: Value = serde_json::from_str(&text).map_err(|_| {
+            self.reject(ResponseRejection::CandidateJson, outcome)
+                .with_diagnostic_reply(&text, self.key)
+        })?;
         if !candidate.is_object() {
-            return Err(self.reject(ResponseRejection::CandidateShape, outcome));
+            return Err(self
+                .reject(ResponseRejection::CandidateShape, outcome)
+                .with_diagnostic_reply(&text, self.key));
         }
         if candidate.get("jobId").and_then(Value::as_str) != Some(&self.job_id) {
-            return Err(self.reject(ResponseRejection::JobMismatch, outcome));
+            return Err(self
+                .reject(ResponseRejection::JobMismatch, outcome)
+                .with_diagnostic_reply(&text, self.key));
         }
         if candidate.get("requirementsSha256").and_then(Value::as_str) != Some(self.digest) {
-            return Err(self.reject(ResponseRejection::RequirementsMismatch, outcome));
+            return Err(self
+                .reject(ResponseRejection::RequirementsMismatch, outcome)
+                .with_diagnostic_reply(&text, self.key));
         }
         Ok(ProviderResponse {
             text,

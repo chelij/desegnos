@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 
-export function useDraftText(value: string, commit: (value: string) => Promise<string>) {
+// commit also gets the newest draft, for saves that run after later keystrokes were typed.
+export function useDraftText(value: string, commit: (value: string, latest: () => string) => Promise<string>) {
   const [draft, setDraft] = useState(value);
+  const newest = useRef(value);
   const latest = useRef(value);
   const sequence = useRef(0);
   const pending = useRef(0);
   useEffect(() => { latest.current = value; if (pending.current === 0) setDraft(value); }, [value]);
   function change(value: string) {
-    setDraft(value);
+    setDraft(value); newest.current = value;
     const ticket = ++sequence.current;
     pending.current += 1;
-    void commit(value).then(accepted => {
+    void commit(value, () => newest.current).then(accepted => {
       if (ticket === sequence.current) setDraft(accepted);
     }, () => {
       if (ticket === sequence.current) setDraft(latest.current);

@@ -1,9 +1,13 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { Command, WorkspaceView } from './types';
+import { recordCommand } from './usage';
 
 export function native<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri()) return Promise.reject(new Error('Open Desegnos as a desktop application to access your projects.'));
-  return invoke<T>(command, args);
+  const started = performance.now();
+  return invoke<T>(command, args).then(
+    value => { recordCommand(command, args, started, true); return value; },
+    error => { recordCommand(command, args, started, false); throw error; });
 }
 
 export function edit(revision: number, command: Command) {

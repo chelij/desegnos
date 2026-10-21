@@ -11,10 +11,40 @@ pub struct Session {
     history_id: uuid::Uuid,
     history_start: usize,
     history_version: u64,
+    element_steps: Option<ElementSteps>,
+    /// The request whose text is being typed, and when it last changed: a burst of typing in
+    /// one box is one history step, not one per letter.
+    typing: Option<(uuid::Uuid, std::time::Instant)>,
+}
+
+/// Typing that pauses longer than this starts a new history step.
+const TYPING_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Repeated "undo this element" presses walk further back through one element's versions.
+struct ElementSteps {
+    page_id: uuid::Uuid,
+    element_id: String,
+    /// Newest first; index 0 is the version the walk started from.
+    versions: Vec<String>,
+    index: usize,
+    revision_after: u64,
+}
+
+/// The selected element's outer HTML, or None when that page has no such element.
+fn element_version(project: &Project, page_id: uuid::Uuid, element_id: &str) -> Option<String> {
+    let html = &project.page(page_id).ok()?.content.as_ref()?.html;
+    let doc = crate::editing::parse(html).ok()?;
+    let nodes = doc.select(&format!(
+        "[{}=\"{}\"]",
+        crate::ELEMENT_ID_ATTRIBUTE,
+        element_id
+    ));
+    (nodes.nodes().len() == 1).then(|| nodes.nodes()[0].html().to_string())
 }
 
 impl Session {
-    pub fn new(project: Project) -> Result<Self> {
+    pub fn new(mut project: Project) -> Result<Self> {
+        project.store_inline_images()?;
         project.validate()?;
         let user_revision_floor = project.revision;
         Ok(Self {
@@ -25,6 +55,8 @@ impl Session {
             history_id: uuid::Uuid::new_v4(),
             history_start: 0,
             history_version: user_revision_floor,
+            element_steps: None,
+            typing: None,
         })
     }
     pub fn project(&self) -> &Project {
@@ -56,12 +88,39 @@ impl Session {
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<()> {
         self.assert_revision(revision)?;
+        // Only the text of a request changed (its box stayed put).
+        let typed = match &command {
+            Command::UpdateRegion {
+                region_id, rect, ..
+            } => self
+                .project
+                .pages
+                .iter()
+                .flat_map(|page| &page.regions)
+                .find(|region| region.id == *region_id)
+                .filter(|region| region.rect == *rect)
+                .map(|region| region.id),
+            _ => None,
+        };
         let candidate = self.project.apply(self.project.revision, command)?;
         if candidate.revision == self.project.revision {
             return Ok(());
         }
         durable(&candidate)?;
-        self.commit(candidate);
+        let continues = typed.is_some()
+            && !self.undo.is_empty()
+            && self
+                .typing
+                .is_some_and(|(id, at)| Some(id) == typed && at.elapsed() < TYPING_PAUSE);
+        if continues {
+            self.user_revision_floor = candidate.revision;
+            self.history_version = candidate.revision;
+            self.project = candidate;
+            self.redo.clear();
+        } else {
+            self.commit(candidate);
+        }
+        self.typing = typed.map(|id| (id, std::time::Instant::now()));
         Ok(())
     }
 
@@ -202,7 +261,87 @@ impl Session {
         Ok(())
     }
 
+    /// Steps one element back to its previous version while every other change stays. Each
+    /// further press goes one version older. It is an ordinary edit, so Undo reverts it.
+    /// Only the element's own HTML (inline styles included) is restored, not shared CSS.
+    pub fn undo_element(
+        &mut self,
+        revision: u64,
+        page_id: uuid::Uuid,
+        target: &crate::ElementTarget,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<Option<crate::ElementTarget>> {
+        self.assert_revision(revision)?;
+        ensure(
+            !target.id.is_empty(),
+            "This element has no earlier version to go back to.",
+        )?;
+        let continuing = self.element_steps.as_ref().is_some_and(|steps| {
+            steps.page_id == page_id
+                && steps.element_id == target.id
+                && steps.revision_after == self.project.revision
+        });
+        if !continuing {
+            let mut versions: Vec<String> = Vec::new();
+            let mut last_html: Option<&str> = None;
+            for project in std::iter::once(&self.project).chain(self.undo.iter().rev()) {
+                // Snapshots that left this page untouched need no parsing.
+                let html = project
+                    .page(page_id)
+                    .ok()
+                    .and_then(|page| page.content.as_ref())
+                    .map(|content| content.html.as_str());
+                if html.is_some() && html == last_html {
+                    continue;
+                }
+                last_html = html;
+                let Some(version) = element_version(project, page_id, &target.id) else {
+                    break;
+                };
+                if versions.last() != Some(&version) {
+                    versions.push(version);
+                }
+            }
+            self.element_steps = Some(ElementSteps {
+                page_id,
+                element_id: target.id.clone(),
+                versions,
+                index: 0,
+                revision_after: self.project.revision,
+            });
+        }
+        let steps = self.element_steps.as_ref().expect("set above");
+        let html = steps
+            .versions
+            .get(steps.index + 1)
+            .cloned()
+            .ok_or_else(|| Error("This element has no earlier version.".into()))?;
+        let (next, element) = self.project.edit_element(
+            self.project.revision,
+            page_id,
+            target,
+            &crate::ElementEdit::Replace {
+                html,
+                keep_style: false,
+            },
+        )?;
+        if next.revision == self.project.revision {
+            // Equal after normalisation: move past it so the next press goes further back.
+            if let Some(steps) = self.element_steps.as_mut() {
+                steps.index += 1;
+            }
+            return Ok(element);
+        }
+        durable(&next)?;
+        self.commit(next);
+        let steps = self.element_steps.as_mut().expect("set above");
+        steps.index += 1;
+        steps.revision_after = self.project.revision;
+        Ok(element)
+    }
+
     fn commit(&mut self, candidate: Project) {
+        self.typing = None;
         self.user_revision_floor = candidate.revision;
         self.history_version = candidate.revision;
         self.undo
@@ -245,6 +384,7 @@ impl Session {
         }
         candidate.validate()?;
         durable(&candidate)?;
+        self.typing = None;
         self.user_revision_floor = candidate.revision;
         self.undo.pop();
         self.redo
@@ -286,6 +426,7 @@ impl Session {
         }
         candidate.validate()?;
         durable(&candidate)?;
+        self.typing = None;
         self.user_revision_floor = candidate.revision;
         self.redo.pop();
         self.undo

@@ -8,7 +8,7 @@ const digest=value=>createHash('sha256').update(value).digest('hex');
 export async function sourceEditWorkflow(driver,physical,step,evidence) {
   const output=join(evidence,'source-edit');await mkdir(output,{recursive:true});
   let project,original,accepted;
-  const projectPath=join(output,'Typed source.desegnos');
+  let projectPath=join(output,'Typed source.desegnos');
   const html="<main>\n<h1 id='title' data-desegnos-found='https://example.org/history'>Typed creation 💡</h1>\n<p>Local copy with a <a href='https://example.org/history'>source credit</a>.</p>\n</main>\n";
   const css="main { padding: 24px; }\nh1 { color: #245583; }";
   const javascript="document.querySelector('h1').dataset.ready = 'yes';";
@@ -24,7 +24,7 @@ export async function sourceEditWorkflow(driver,physical,step,evidence) {
     assert.equal(map.htmlSha256,digest(content.html));assert.equal(map.sourceSha256,digest(JSON.stringify({html:content.html,css:content.css,javascript:content.javascript})));
     const range=map.ranges.find(r=>r.selector==='body > main:nth-of-type(1) > h1:nth-of-type(1)');assert.equal(range.startLine,2);assert.equal(range.endLine,2);
     await writeFile(join(output,'source-map.json'),JSON.stringify(map,null,2));
-    await chooseFile(physical,()=>driver.button('Save'),projectPath,output,'typed-first-save');
+    projectPath=(await driver.invoke('get_workspace')).path;await driver.button('Save');
     await waitFor(()=>driver.execute(()=>document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#title')?.textContent==='Typed creation 💡'),'Typed source did not render in the actual canvas');
     const matching=await driver.execute(selector=>document.querySelector('.static-preview iframe').contentDocument.querySelectorAll(selector).length,range.selector);assert.equal(matching,1);
     await physical.captureWindow(join(output,'typed-canvas.png'));

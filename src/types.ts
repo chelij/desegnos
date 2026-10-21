@@ -1,16 +1,22 @@
+export type SourcePageRef = { path: string; title: string; url?: string | null };
+export type SourcePage = SourcePageRef & { kind: string; photoCount: number; itemCount: number };
+export type ImportedPageContext = { pageId: string; source: SourcePage; photoIds: string[]; content: ImportedItem[] };
 export type Appearance = 'light' | 'dark';
 export type IdentityAsset = { id: string; name: string; mime: string; dataUri: string; sha256: string };
-export type ProjectPhoto = { id: string; name: string; dataUri: string; sha256: string; width: number; height: number; description: string };
-export type ImportedItem = { kind: 'project' | 'tutorial' | 'article' | 'page' | 'product' | 'other'; title: string; url: string; summary: string };
-export type ImportedIdentity = { sourceName: string; sourceSha256: string; summary: string; assets: IdentityAsset[]; photos?: ProjectPhoto[]; content?: ImportedItem[] };
-export type IdentitySource = { id: string; name: string; sha256: string; files: { id: string; name: string; textBytes: number; asset: IdentityAsset | null }[]; skipped: string[]; photos?: { id: string; name: string; width: number; height: number; thumbnail: string }[] };
+export type ProjectImage = Pick<IdentityAsset, 'id' | 'name' | 'dataUri'>;
+export type ProjectPhoto = { id: string; name: string; dataUri: string; sha256: string; width: number; height: number; description: string; sourcePages?: SourcePageRef[] };
+export type ImportedItem = { kind: 'project' | 'tutorial' | 'article' | 'page' | 'product' | 'other'; title: string; url: string; summary: string; sourcePages?: SourcePageRef[] };
+export type ImportedIdentity = { sourceName: string; sourceSha256: string; summary: string; assets: IdentityAsset[]; photos?: ProjectPhoto[]; content?: ImportedItem[]; pages?: ImportedPageContext[] };
+export type IdentitySource = { id: string; name: string; sha256: string; files: { id: string; name: string; textBytes: number; sourcePage?: SourcePageRef | null; asset: IdentityAsset | null }[]; skipped: string[]; photos?: { id: string; name: string; width: number; height: number; thumbnail: string; sourcePages?: SourcePageRef[] }[]; pages?: SourcePage[] };
+export type IdentitySelection = { fileIds: string[]; fits: boolean; message: string | null; needsSettings: boolean };
 export type IdentityCandidate = { jobId: string; requirementsSha256: string; summary: string; brandName: string; tone: string; findings: { topic: string; value: string; evidence: string[]; confidence: 'high' | 'medium' | 'low' }[]; logoAssetIds: string[]; warnings: string[]; photos?: { id: string; description: string }[]; content?: ImportedItem[] };
 export type IdentityAnalysis = { jobId: string; sourceId: string; source: IdentitySource; fileIds: string[]; authentication?: AuthenticationMethod | null; chatgptAccountId?: string | null; status: 'analyzing' | 'complete' | 'failed' | 'unknown' | 'cancelled'; message: string; receivedBytes: number; candidate: IdentityCandidate | null; error: string | null };
-export type NewProjectIdentity = { identityAnalysisId: string; identityFindingIndices: number[]; identityAssetIds: string[] };
+export type NewProjectIdentity = { identityAnalysisId: string; identityFindingIndices: number[]; identityAssetIds: string[]; identityPhotoIds?: string[]; identityItemIndices?: number[]; identityPagePaths?: string[] };
 export type GenerationMode = 'fuzzy' | 'strict';
 export type Viewport = { width: number; height: number };
 export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: boolean; rulers: boolean };
 export type Rect = { x: number; y: number; width: number; height: number };
+export type RegionShape = { kind: 'rect' } | { kind: 'ellipse' } | { kind: 'freehand'; points: [number, number][] };
 export type ElementTarget = { id?: string; selector: string; tag: string; label: string; sourceSha256?: string };
 export type LayerDirection = 'forward' | 'backward' | 'front' | 'back';
 export type LayerPseudoStyle = { pseudo: 'before' | 'after' | 'marker'; style: string };
@@ -24,25 +30,27 @@ export type ElementBounds = { regionId: string; bounds: { target: ElementTarget;
 export type ElementDetails = { target: ElementTarget; texts: { index: number; text: string }[]; textsTruncated: boolean; attributes: Record<string, string>; inlineStyle: string; html: string; canMove: boolean; canMoveBefore: boolean; canMoveAfter: boolean };
 export type ElementEditView = { workspace: WorkspaceView; element: ElementTarget | null };
 export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string; textAlign?: string };
-export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; text?: string; url?: string };
-export type Region = { attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
+export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; preview?: string; text?: string; url?: string };
+export type Region = { shape?: RegionShape; areaBounds?: { target: ElementTarget; rect: Rect }[]; attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
 export type SiteContent = { html: string; css: string; javascript: string };
 export type Page = { id: string; name: string; path: string; included: boolean; viewport: Viewport; appearance: Appearance; regions: Region[]; content: SiteContent | null };
 export type Brief = { purpose: string; audience: string; brandName: string; tone: string };
 export type Scope = { kind: 'project' } | { kind: 'page' | 'region'; id: string };
 export type Decision = { id: string; topic: string; value: string; scope: Scope; protected: boolean; acceptedAtRevision: number };
 export type DesignException = { id: string; rule: string; reason: string; scope: Scope; acceptedAtRevision: number };
-export type Project = { schemaVersion: number; id: string; name: string; revision: number; viewport: Viewport;
+export type Project = { website?: { framework: string | null; skipped: string[] }; pictures?: Record<string, string>; schemaVersion: number; id: string; name: string; revision: number; viewport: Viewport;
   importedIdentity?: ImportedIdentity;
   appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; brief: Brief;
   decisions: Decision[]; exceptions: DesignException[]; appliedJobIds: string[]; extensions: Record<string, { schemaVersion: number; data: unknown }> };
 export type RecoveryInfo = { projectId: string; name: string; revision: number; savedPath: string | null; editedAtMs: number };
 export type RecentProject = { path: string; name: string };
 export type RecentProjectsView = { projects: RecentProject[]; error: string | null };
+export type ProjectLocationView = { path: string; systemDefault: string; customized: boolean };
 export type WebsiteExport = { path: string; indexPath: string; pageCount: number; fileCount: number; warnings: string[] };
 export type HistoryView = { sessionId: string; start: number; position: number; end: number; version: number };
 export type OpenProjectSummary = { id: string; name: string; dirty: boolean; active: boolean; pages: { id: string; name: string }[] };
 export type WorkspaceView = { openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
+  siteWarnings?: string[]; projectFolder?: boolean;
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null; migrationNotice: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;
   regionCount: number; pageCount: number; dependencies: Record<string, string> };
@@ -74,7 +82,7 @@ export type GenerationCandidate = {
   decisionProposals: DecisionProposal[];
   criticism: DesignCriticism[];
 };
-export type GenerationJobView = { jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; areas: { pageId: string; regionId: string; rect: Rect }[]; generationMode: GenerationMode;
+export type GenerationJobView = { jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; context?: RequirementsSnapshot | null; rawReply?: string | null; createdAt?: string | null; areas: { pageId: string; regionId: string; rect: Rect; shape?: RegionShape }[]; generationMode: GenerationMode;
   settings: ProviderSettings; status: GenerationStatus; estimateUsd: number; receivedBytes: number; message: string; candidate: GenerationCandidate | null;
   usage: TokenUsage | null; attempts: GenerationAttempt[]; acceptedDecisionIndices: number[]; recommendedDecisionIndices: number[];
   provider?: ProviderId; authentication: AuthenticationMethod; chatgptAccountId: string | null; failureKind: string | null; dossierError: string | null; providerError: ProviderError | null };
@@ -88,16 +96,18 @@ export type ResponseCorrelation = {
 export type ProviderError = { kind: string; outcome: 'notSubmitted' | 'rejected' | 'unknown' | 'received';
   httpStatus: number | null; code: string | null; param: string | null; requestId: string | null;
   responseFormat?: { contentType: string | null; bodyKind: 'unavailable' | 'eventStream' | 'empty' | 'jsonError' | 'jsonDetail' | 'jsonResponse' | 'jsonOther' | 'html' | 'text' | 'binary'; bodyBytes: number; providerMessage?: string | null; bodyTruncated?: boolean; limitBytes?: number | null; rejection?: ResponseRejection | null; correlation?: ResponseCorrelation | null } | null };
-export type PreviewDescriptor = { url: string; sessionId: string; sourceSha256: string | null };
+export type PreviewDescriptor = { website?: boolean; content?: SiteContent | null; url: string; sessionId: string; sourceSha256: string | null };
 export type Command =
   | { type: 'rename_project'; name: string }
   | { type: 'set_grid'; enabled: boolean }
+  | { type: 'format_page_code'; page_id: string }
   | { type: 'set_grid_settings'; settings: GridSettings }
   | { type: 'set_generation_mode'; mode: GenerationMode }
   | { type: 'add_page'; name: string; path: string }
   | { type: 'update_page'; page_id: string; name: string; path: string; viewport: Viewport; appearance: Appearance; included: boolean }
   | { type: 'delete_page'; page_id: string }
   | { type: 'add_region'; page_id: string; rect: Rect }
+  | { type: 'add_shaped_region'; page_id: string; rect: Rect; shape: RegionShape }
   | { type: 'add_element_region'; page_id: string; rect: Rect; element: ElementTarget }
   | { type: 'add_element_regions'; page_id: string; elements: ElementTarget[]; bounds: { target: ElementTarget; rect: Rect }[] }
   | { type: 'retarget_region'; page_id: string; region_id: string; elements: ElementTarget[]; bounds: { target: ElementTarget; rect: Rect }[] }
@@ -115,3 +125,7 @@ export type Command =
   | { type: 'remove_decision'; decision_id: string }
   | { type: 'add_exception'; rule: string; reason: string; scope: Scope }
   | { type: 'remove_exception'; exception_id: string };
+
+export type GenerationHistory = { jobs: { jobId: string; createdAt: string | null; status: GenerationStatus; usage: TokenUsage | null; summary: string; firstRequest: string }[]; skipped: number; truncated: boolean };
+
+export type WebsiteFolderSelection = { id: string; name: string; website: { path: string; framework: string | null; output: string | null; fresh: boolean; pages: string[]; buildCommand: string[] | null; installCommand: string | null } | null };

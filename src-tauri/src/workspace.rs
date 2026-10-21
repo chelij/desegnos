@@ -31,6 +31,13 @@ struct RecoveryPointer {
     saved_revision: Option<u64>,
     saved_sha256: Option<String>,
     project_path: Option<PathBuf>,
+    /// The journal checksum of the saved file as silently upgraded on opening: the same project
+    /// at the same revision in newer bytes, so it holds no unsaved work.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    upgraded_sha256: Option<String>,
+    /// The saved file was upgraded with a notice; until saved, the upgrade is unsaved work.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    unsaved_migration: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -63,6 +70,8 @@ pub struct WorkspaceView {
     migration_notice: Option<String>,
     open_projects: Vec<OpenProjectSummary>,
     any_dirty: bool,
+    site_warnings: Vec<String>,
+    project_folder: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -128,6 +137,7 @@ struct PendingSaveConflict {
 
 pub struct Workspace {
     directory: PathBuf,
+    system_project_location: PathBuf,
     session: Option<Session>,
     file: Option<ProjectFile>,
     journal: Option<Journal>,
@@ -181,6 +191,15 @@ pub struct OpenPageSummary {
 }
 
 impl Workspace {
+    pub(super) fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+    pub(super) fn system_project_location(&self) -> &std::path::Path {
+        &self.system_project_location
+    }
+    fn project_location(&self) -> NativeResult<PathBuf> {
+        crate::project_location::read(&self.directory, &self.system_project_location)
+    }
     pub(super) fn project(&self) -> NativeResult<&Project> {
         self.session
             .as_ref()
@@ -227,12 +246,20 @@ impl Workspace {
     }
 
     pub fn initialize(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::from_directory(app.path().app_local_data_dir()?)
+        let mut workspace = Self::from_directory(app.path().app_local_data_dir()?)?;
+        let documents = app
+            .path()
+            .document_dir()
+            .or_else(|_| app.path().home_dir().map(|home| home.join("Documents")))?;
+        workspace.system_project_location =
+            crate::project_location::default_from_documents(&documents);
+        Ok(workspace)
     }
 
     fn from_directory(directory: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         fs::create_dir_all(&directory)?;
         let mut state = Self {
+            system_project_location: directory.join("Projects"),
             directory,
             session: None,
             file: None,
@@ -308,11 +335,48 @@ impl Workspace {
             return Ok(None);
         };
         if Some(document.project.revision) == pointer.saved_revision
-            && pointer.saved_sha256.as_ref() == Some(&document.source_sha256)
+            && (pointer.saved_sha256.as_ref() == Some(&document.source_sha256)
+                || pointer.upgraded_sha256.as_ref() == Some(&document.source_sha256)
+                || self.verify_silent_upgrade(project_id, &document, &pointer))
         {
             return Ok(None);
         }
         Ok(Some((document, pointer)))
+    }
+
+    /// Records written before `upgradedSha256` existed: check the saved file itself. If the
+    /// journal is that file silently upgraded, remember its checksum so this is checked once.
+    fn verify_silent_upgrade(
+        &self,
+        project_id: Uuid,
+        document: &DecodedProject,
+        pointer: &RecoveryPointer,
+    ) -> bool {
+        if pointer.upgraded_sha256.is_some() || pointer.unsaved_migration {
+            return false;
+        }
+        let Some(saved) = pointer
+            .project_path
+            .as_ref()
+            .and_then(|path| desegni_storage::load_project_document(path).ok())
+        else {
+            return false;
+        };
+        let clean = saved.project.id == project_id
+            && Some(saved.project.revision) == pointer.saved_revision
+            && pointer.saved_sha256.as_ref() == Some(&saved.source_sha256)
+            && saved.migrated()
+            && saved.migration_notice().is_none();
+        if clean {
+            let pointer = RecoveryPointer {
+                upgraded_sha256: Some(document.source_sha256.clone()),
+                ..pointer.clone()
+            };
+            if let Ok(json) = serde_json::to_string(&pointer) {
+                let _ = write_markdown(&self.pointer_path(project_id), &json);
+            }
+        }
+        clean
     }
 
     fn refresh_recoveries(&mut self) {
@@ -434,6 +498,15 @@ impl Workspace {
                 || self.session.as_ref().is_some_and(|s| {
                     Some(s.project().revision) != self.saved_revision || self.needs_migration_save
                 }),
+            site_warnings: self
+                .file
+                .as_ref()
+                .map(ProjectFile::site_warnings)
+                .unwrap_or_default(),
+            project_folder: self
+                .file
+                .as_ref()
+                .is_some_and(ProjectFile::is_project_folder),
         }
     }
 
@@ -448,6 +521,23 @@ impl Workspace {
 
     /// Back to the start screen. The project lock is released; its recovery journal stays,
     /// exactly as when another project replaces it.
+    /// "Discard and continue": the unsaved work is no longer offered for recovery and no longer
+    /// blocks opening the saved file. Its journal stays on disk; only the pointer moves aside.
+    fn set_aside_recovery(&mut self) -> NativeResult<()> {
+        let Some(id) = self.session.as_ref().map(|session| session.project().id) else {
+            return Ok(());
+        };
+        let pointer = self.pointer_path(id);
+        if pointer.exists() {
+            fs::rename(
+                &pointer,
+                self.directory.join(format!("{id}.recovery.discarded.json")),
+            )
+            .map_err(message)?;
+        }
+        Ok(())
+    }
+
     fn close(&mut self) {
         if let Some(session) = &self.session {
             let id = session.project().id;
@@ -575,8 +665,7 @@ impl Workspace {
         let revision = document.project.revision;
         self.start(document.project, Some(file), Some(revision))?;
         if let Some(notice) = migration_notice {
-            self.migration_notice = Some(notice.into());
-            self.needs_migration_save = true;
+            self.note_migration(notice)?;
         }
         self.remember_recent();
         Ok(())
@@ -585,6 +674,24 @@ impl Workspace {
     /// Opens a project file in its own tab. Choosing the active project's own file again reloads
     /// it from disk with fresh history, unless it has unsaved edits, which are kept as they are.
     fn open_file_tab(&mut self, path: &std::path::Path) -> NativeResult<()> {
+        if path.is_dir() {
+            if let Some(file_path) = desegni_storage::project_in_folder(path).map_err(message)? {
+                let document =
+                    desegni_storage::load_project_document(&file_path).map_err(message)?;
+                if !path.join(".desegnos-site.json").exists() {
+                    desegni_storage::manage_project_folder(
+                        &file_path,
+                        document.project.id,
+                        Default::default(),
+                    )
+                    .map_err(message)?;
+                }
+                return self.open_file_tab(&file_path);
+            }
+            let file = desegni_storage::import_detected_website(path, &self.project_location()?).map_err(message)?;
+            let document = file.load_document().map_err(message)?;
+            return self.open_tab(|state| state.open_document(file, document));
+        }
         let active = self.file.as_ref().is_some_and(|file| {
             file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
         });
@@ -617,6 +724,26 @@ impl Workspace {
             (file, document)
         };
         self.open_document(file, document)
+    }
+
+    /// The active project was upgraded from its saved file with a notice: until it is saved,
+    /// the upgrade itself is unsaved work and stays offered for recovery.
+    fn note_migration(&mut self, notice: &str) -> NativeResult<()> {
+        self.migration_notice = Some(notice.into());
+        self.needs_migration_save = true;
+        if let (Some(session), Some(journal), Some(file)) =
+            (&self.session, &self.journal, &self.file)
+        {
+            self.write_pointer(
+                session.project().id,
+                journal,
+                Some(file),
+                self.saved_revision,
+                None,
+                true,
+            )?;
+        }
+        Ok(())
     }
 
     fn remember_recent(&mut self) {
@@ -656,7 +783,7 @@ impl Workspace {
             if self.pointer_path(project.id).exists() {
                 match self.read_recovery(project.id) {
                     Ok(Some((recovered, _))) if recovered.project != project => {
-                        return Err("This project has unsaved recovery data. Recover it before opening its older saved file.".into());
+                        return Err("This project has unsaved changes from an earlier session. Open them with Menu → Recover unsaved projects, or recover and then close with Discard to open the saved file.".into());
                     }
                     Ok(_) => {}
                     Err(error) => {
@@ -688,6 +815,7 @@ impl Workspace {
             file.as_ref(),
             saved_revision,
             last_saved_path,
+            false,
         )?;
         self.pending_save = None;
         if !self.order.contains(&session.project().id) {
@@ -714,7 +842,27 @@ impl Workspace {
         file: Option<&ProjectFile>,
         saved_revision: Option<u64>,
         last_saved_path: Option<PathBuf>,
+        unsaved_migration: bool,
     ) -> NativeResult<()> {
+        let saved = file
+            .map(|file| -> NativeResult<DecodedProject> {
+                let saved = file.saved_document().map_err(message)?;
+                if saved.project.id != project_id || Some(saved.project.revision) != saved_revision {
+                    return Err("The saved file changed before its recovery state could be recorded. The project remains unsaved.".into());
+                }
+                Ok(saved)
+            })
+            .transpose()?;
+        // A silently upgraded file is journaled in newer bytes; remember them as saved too.
+        let upgraded_sha256 = match &saved {
+            Some(saved) if saved.migrated() && !unsaved_migration => {
+                Journal::recover_document(journal.path())
+                    .map_err(message)?
+                    .filter(|entry| Some(entry.project.revision) == saved_revision)
+                    .map(|entry| entry.source_sha256)
+            }
+            _ => None,
+        };
         let pointer = RecoveryPointer {
             journal_file: journal
                 .path()
@@ -723,16 +871,10 @@ impl Workspace {
                 .to_string_lossy()
                 .into_owned(),
             saved_revision,
-            saved_sha256: file
-                .map(|file| -> NativeResult<String> {
-                    let saved = file.saved_document().map_err(message)?;
-                    if saved.project.id != project_id || Some(saved.project.revision) != saved_revision {
-                        return Err("The saved file changed before its recovery state could be recorded. The project remains unsaved.".into());
-                    }
-                    Ok(saved.source_sha256)
-                })
-                .transpose()?,
+            saved_sha256: saved.map(|saved| saved.source_sha256),
             project_path: file.map(|f| f.path().to_owned()).or(last_saved_path),
+            upgraded_sha256,
+            unsaved_migration,
         };
         write_markdown(
             &self.pointer_path(project_id),
@@ -755,7 +897,20 @@ impl Workspace {
 
     fn save_destination(&self, path: Option<PathBuf>) -> NativeResult<SaveDestination> {
         let Some(path) = path else {
-            return Ok(SaveDestination::Current);
+            return if self.file.is_some() {
+                Ok(SaveDestination::Current)
+            } else {
+                let project = self.project()?;
+                let path = desegni_storage::create_project_folder(
+                    &self.project_location()?,
+                    &project.name,
+                    project.id,
+                )
+                .map_err(message)?;
+                Ok(SaveDestination::Chosen(
+                    ProjectFile::acquire(&path).map_err(message)?,
+                ))
+            };
         };
         let path = if path.extension().is_none() {
             path.with_extension("desegnos")
@@ -794,6 +949,7 @@ impl Workspace {
             Some(self.destination_file(&destination)?),
             Some(project.revision),
             None,
+            false,
         )?;
         if let SaveDestination::Chosen(file) = destination {
             self.file = Some(file);
@@ -801,6 +957,18 @@ impl Workspace {
         self.saved_revision = Some(project.revision);
         self.migration_notice = None;
         self.needs_migration_save = false;
+        self.remember_recent();
+        Ok(())
+    }
+
+    fn create_in_folder(&mut self, project: Project, parent: Option<PathBuf>) -> NativeResult<()> {
+        let parent = parent.map(Ok).unwrap_or_else(|| self.project_location())?;
+        let path = desegni_storage::create_project_folder(&parent, &project.name, project.id)
+            .map_err(message)?;
+        let file = ProjectFile::acquire(&path).map_err(message)?;
+        file.save(&project).map_err(message)?;
+        let revision = project.revision;
+        self.open_tab(|state| state.start(project, Some(file), Some(revision)))?;
         self.remember_recent();
         Ok(())
     }
@@ -1003,8 +1171,7 @@ impl Workspace {
             pointer.project_path,
         )?;
         if let Some(notice) = migration_notice {
-            self.migration_notice = Some(notice.into());
-            self.needs_migration_save = true;
+            self.note_migration(notice)?;
         }
         Ok(())
     }
@@ -1030,26 +1197,43 @@ pub fn create_project(
     identity_analysis_id: Option<Uuid>,
     identity_finding_indices: Option<Vec<usize>>,
     identity_asset_ids: Option<Vec<Uuid>>,
+    identity_photo_ids: Option<Vec<Uuid>>,
+    identity_item_indices: Option<Vec<usize>>,
+    identity_page_paths: Option<Vec<String>>,
+    parent_directory: Option<PathBuf>,
 ) -> NativeResult<WorkspaceView> {
-    let _ = appearance; // Older callers may still supply it; all new projects start light.
+    // New projects follow the editor's light/dark mode; older callers omit it and start light.
+    let appearance = appearance.unwrap_or(Appearance::Light);
     generation
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
     let _ = discard; // New projects open in their own tab group; nothing is replaced.
     let mut state = state.lock().map_err(message)?;
-    let project = if let Some(id) = identity_analysis_id {
-        identity.lock().map_err(message)?.project_from_analysis(
+    let mut project = if let Some(id) = identity_analysis_id {
+        let service = identity.lock().map_err(message)?;
+        let context = service.reviewed_context_selected(
             id,
             &identity_finding_indices.unwrap_or_default(),
             &identity_asset_ids.unwrap_or_default(),
-            name,
-            viewport,
-        )?
+            identity_photo_ids.as_deref(),
+            identity_item_indices.as_deref(),
+            identity_page_paths.as_deref(),
+        )?;
+        service.project_with_context(context, name, viewport)?
     } else {
-        if identity_finding_indices
+        if identity_page_paths
             .as_ref()
-            .is_some_and(|values| !values.is_empty())
+            .is_some_and(|paths| !paths.is_empty())
+            || identity_photo_ids
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || identity_item_indices
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
+            || identity_finding_indices
+                .as_ref()
+                .is_some_and(|values| !values.is_empty())
             || identity_asset_ids
                 .as_ref()
                 .is_some_and(|values| !values.is_empty())
@@ -1059,9 +1243,13 @@ pub fn create_project(
                     .into(),
             );
         }
-        Project::new(name, viewport, Appearance::Light).map_err(message)?
+        Project::new(name, viewport, appearance).map_err(message)?
     };
-    state.open_tab(|state| state.start(project, None, None))?;
+    project.appearance = appearance;
+    for page in &mut project.pages {
+        page.appearance = appearance;
+    }
+    state.create_in_folder(project, parent_directory)?;
     Ok(state.view())
 }
 
@@ -1092,6 +1280,9 @@ pub fn close_project(
         .ensure_switch_allowed()?;
     let mut state = state.lock().map_err(message)?;
     state.check_replace(discard)?;
+    if discard && state.view().dirty {
+        state.set_aside_recovery()?;
+    }
     state.close();
     Ok(state.view())
 }
@@ -1099,6 +1290,7 @@ pub fn close_project(
 /// Import context: merge the reviewed findings and logos of a completed analysis into the
 /// open project as one undoable change. Only a native analysis record is accepted.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn import_context(
     state: WorkspaceState<'_>,
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
@@ -1106,12 +1298,23 @@ pub fn import_context(
     identity_analysis_id: Uuid,
     identity_finding_indices: Vec<usize>,
     identity_asset_ids: Vec<Uuid>,
+    identity_photo_ids: Option<Vec<Uuid>>,
+    identity_item_indices: Option<Vec<usize>>,
+    identity_page_paths: Option<Vec<String>>,
+    attach_matching_pages: Option<bool>,
 ) -> NativeResult<WorkspaceView> {
-    let context = identity.lock().map_err(message)?.reviewed_context(
-        identity_analysis_id,
-        &identity_finding_indices,
-        &identity_asset_ids,
-    )?;
+    let mut context = identity
+        .lock()
+        .map_err(message)?
+        .reviewed_context_selected(
+            identity_analysis_id,
+            &identity_finding_indices,
+            &identity_asset_ids,
+            identity_photo_ids.as_deref(),
+            identity_item_indices.as_deref(),
+            identity_page_paths.as_deref(),
+        )?;
+    context.attach_matching_pages = attach_matching_pages.unwrap_or(true);
     let mut state = state.lock().map_err(message)?;
     let Workspace {
         session, journal, ..
@@ -1222,6 +1425,31 @@ pub fn open_found_source(
     open::that_detached(url).map_err(|_| "The source could not be opened in your browser.".into())
 }
 
+/// A web link the user clicked in a preview, opened in their browser after they confirm it.
+#[tauri::command]
+pub fn open_preview_link(window: tauri::WebviewWindow, url: String) -> NativeResult<()> {
+    if window.label() != "editor" {
+        return Err("Only the editor can open links.".into());
+    }
+    let parsed = preview_link(&url)?;
+    open::that_detached(parsed.as_str())
+        .map_err(|_| "The link could not be opened in your browser.".into())
+}
+
+fn preview_link(url: &str) -> NativeResult<desegni_ai::WebUrl> {
+    let parsed =
+        desegni_ai::WebUrl::parse(url).map_err(|_| "This link is not a valid web address.")?;
+    if url.len() > 2048
+        || !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err("Only ordinary web links can be opened from the preview.".into());
+    }
+    Ok(parsed)
+}
+
 #[tauri::command]
 pub fn get_page_source_map(
     state: WorkspaceState<'_>,
@@ -1283,6 +1511,33 @@ pub fn edit_element(
         .edit_element(revision, page_id, &target, &change, |next| {
             journal.append(next)
         })
+        .map_err(message)?;
+    Ok(ElementEditView {
+        workspace: state.view(),
+        element,
+    })
+}
+
+/// Steps the selected element back to its previous version; other changes stay.
+#[tauri::command]
+pub fn undo_element(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    target: desegni_core::ElementTarget,
+) -> NativeResult<ElementEditView> {
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let session = session.as_mut().ok_or("Open a project first.")?;
+    if session.project().id != project_id {
+        return Err("Return to the project that owns this element.".into());
+    }
+    let journal = journal.as_ref().ok_or("Open a project first.")?;
+    let element = session
+        .undo_element(revision, page_id, &target, |next| journal.append(next))
         .map_err(message)?;
     Ok(ElementEditView {
         workspace: state.view(),
@@ -1493,13 +1748,35 @@ pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     Ok(state.view())
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum OpenProjectResult {
+    Workspace(Box<WorkspaceView>),
+    Website { website: crate::website_import::FolderSelection },
+}
+#[tauri::command]
+pub async fn edit_website_folder(app: AppHandle, generation: State<'_, Mutex<crate::generation::GenerationService>>, imports: State<'_, Mutex<crate::website_import::WebsiteImports>>, folder_id: Uuid) -> NativeResult<WorkspaceView> {
+    generation.lock().map_err(message)?.ensure_switch_allowed()?;
+    let path = imports.lock().map_err(message)?.path(folder_id)?;
+    // Snapshotting pictures and writing the initial archive can take seconds. Keep the UI
+    // event loop responsive while the worker owns the workspace transaction.
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<Mutex<Workspace>>();
+        let mut state = state.lock().map_err(message)?;
+        app.state::<Mutex<crate::generation::GenerationService>>().lock().map_err(message)?.ensure_switch_allowed()?;
+        state.open_file_tab(&path)?;
+        Ok(state.view())
+    }).await.map_err(message)?
+}
 #[tauri::command]
 pub async fn open_project(
     app: AppHandle,
     state: WorkspaceState<'_>,
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
     discard: bool,
-) -> NativeResult<Option<WorkspaceView>> {
+    folder: Option<bool>,
+    imports: State<'_, Mutex<crate::website_import::WebsiteImports>>,
+) -> NativeResult<Option<OpenProjectResult>> {
     generation
         .lock()
         .map_err(message)?
@@ -1510,13 +1787,19 @@ pub async fn open_project(
         state.session.as_ref().map(|s| s.project().clone())
     };
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .add_filter(
-                "Desegnos website",
-                &desegni_storage::PROJECT_FILE_EXTENSIONS,
-            )
-            .blocking_pick_file()
+        let dialog = app.dialog().file();
+        if folder.unwrap_or(false) {
+            dialog
+                .set_title("Open project folder")
+                .blocking_pick_folder()
+        } else {
+            dialog
+                .add_filter(
+                    "Desegnos website",
+                    &desegni_storage::PROJECT_FILE_EXTENSIONS,
+                )
+                .blocking_pick_file()
+        }
     })
     .await
     .map_err(message)?;
@@ -1536,8 +1819,12 @@ pub async fn open_project(
             "A project was opened while the dialog was active. Open the file again.".into(),
         );
     }
+    if path.is_dir() && desegni_storage::project_in_folder(&path).map_err(message)?.is_none() {
+        let website = imports.lock().map_err(message)?.select(path)?;
+        return Ok(Some(OpenProjectResult::Website { website }));
+    }
     state.open_file_tab(&path)?;
-    Ok(Some(state.view()))
+    Ok(Some(OpenProjectResult::Workspace(Box::new(state.view()))))
 }
 
 #[tauri::command]
@@ -1555,7 +1842,7 @@ pub async fn save_project(
                 .ok_or("Create or open a project first.")?
                 .project()
                 .clone(),
-            save_as || state.file.is_none(),
+            save_as,
         )
     };
     let picked = if choose_path {
@@ -1579,6 +1866,8 @@ pub async fn save_project(
         None
     };
     let mut state = state.lock().map_err(message)?;
+    state.check_snapshot(&project)?;
+    let picked = copy_destination(picked, &project)?;
     state.save_snapshot(&project, picked)?;
     Ok(Some(state.view()))
 }
@@ -1601,6 +1890,62 @@ async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Opt
         .transpose()
 }
 
+/// New Save As / conflict copies get their own folder. Choosing an existing archive still
+/// runs the established conflict/Replace flow, including legacy standalone destinations.
+fn copy_destination(path: Option<PathBuf>, project: &Project) -> NativeResult<Option<PathBuf>> {
+    path.map(|path| {
+        let path = if path.extension().is_none() {
+            path.with_extension("desegnos")
+        } else {
+            path
+        };
+        if path.exists() {
+            return Ok(path);
+        }
+        if path
+            .extension()
+            .and_then(|s| s.to_str())
+            .is_none_or(|ext| !desegni_storage::PROJECT_FILE_EXTENSIONS.contains(&ext))
+        {
+            return Err("Project copies must use .desegnos or .desegni.".into());
+        }
+        let parent = path.parent().ok_or("Choose a project location.")?;
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or("Choose a project name.")?;
+        desegni_storage::create_project_folder(parent, name, project.id).map_err(message)
+    })
+    .transpose()
+}
+
+#[tauri::command]
+pub fn move_into_project_folder(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    let project = state.project()?.clone();
+    let former = state.file.as_ref().map(|file| file.path().to_owned());
+    if state
+        .file
+        .as_ref()
+        .is_some_and(ProjectFile::is_project_folder)
+    {
+        return Ok(state.view());
+    }
+    let path = desegni_storage::create_project_folder(
+        &state.project_location()?,
+        &project.name,
+        project.id,
+    )
+    .map_err(message)?;
+    // Keep the old archive as a fallback. Only the active save/recovery/recent destination moves.
+    state.save_snapshot(&project, Some(path))?;
+    if let (Some(former), Some(file)) = (former, state.file.as_ref()) {
+        state.recent_error =
+            crate::recent::moved(&state.directory, file.path(), &project.name, &former).err();
+    }
+    Ok(state.view())
+}
+
 #[tauri::command]
 pub async fn save_project_checked(
     app: AppHandle,
@@ -1610,20 +1955,24 @@ pub async fn save_project_checked(
     let (project, choose_path) = {
         let mut state = state.lock().map_err(message)?;
         state.pending_save = None;
-        (state.project()?.clone(), save_as || state.file.is_none())
+        (state.project()?.clone(), save_as)
     };
     let picked = if choose_path {
-        let Some(path) = choose_save_path(app, "website.desegnos".into()).await? else {
+        let suggested = format!(
+            "{}.desegnos",
+            desegni_storage::sanitize_project_name(&project.name)
+        );
+        let Some(path) = choose_save_path(app, suggested).await? else {
             return Ok(SaveProjectOutcome::Cancelled);
         };
         Some(path)
     } else {
         None
     };
-    state
-        .lock()
-        .map_err(message)?
-        .save_snapshot_checked(&project, picked, choose_path)
+    let mut state = state.lock().map_err(message)?;
+    state.check_snapshot(&project)?;
+    let picked = copy_destination(picked, &project)?;
+    state.save_snapshot_checked(&project, picked, choose_path)
 }
 
 #[tauri::command]
@@ -1654,10 +2003,10 @@ pub async fn resolve_save_conflict(
             let Some(path) = choose_save_path(app, suggested).await? else {
                 return Ok(SaveProjectOutcome::Cancelled);
             };
-            state
-                .lock()
-                .map_err(message)?
-                .save_snapshot_checked(&project, Some(path), true)
+            let mut state = state.lock().map_err(message)?;
+            state.check_snapshot(&project)?;
+            let path = copy_destination(Some(path), &project)?;
+            state.save_snapshot_checked(&project, path, true)
         }
     }
 }
@@ -1763,6 +2112,110 @@ mod tests {
             Appearance::Dark,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn creating_a_project_immediately_saves_a_numbered_folder_and_live_site() {
+        let temp = Temp::new();
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        let first = project("New: website");
+        workspace.create_in_folder(first.clone(), None).unwrap();
+        let path = temp.0.join("Projects/New_ website/New_ website.desegnos");
+        assert_eq!(workspace.file.as_ref().unwrap().path(), path);
+        assert_eq!(desegni_storage::load_project(&path).unwrap(), first);
+        assert!(path.parent().unwrap().join("index.html").is_file());
+        assert!(!workspace.view().dirty);
+        assert!(workspace.view().project_folder);
+        assert_eq!(crate::recent::read(&temp.0).unwrap()[0].path, path);
+        workspace
+            .create_in_folder(project("New: website"), None)
+            .unwrap();
+        assert_eq!(
+            workspace.file.as_ref().unwrap().path(),
+            temp.0
+                .join("Projects/New_ website 2/New_ website 2.desegnos")
+        );
+        let chosen = temp.0.join("Chosen parent");
+        workspace
+            .create_in_folder(project("Different parent"), Some(chosen.clone()))
+            .unwrap();
+        assert!(workspace.file.as_ref().unwrap().path().starts_with(chosen));
+    }
+
+    #[test]
+    fn opening_a_project_folder_reloads_the_full_document_with_fresh_history() {
+        let temp = Temp::new();
+        let mut workspace = Workspace::from_directory(temp.0.join("app-data")).unwrap();
+        let mut original = project("Folder with context");
+        original.brief.purpose = "Retain this brief, page content and decisions".into();
+        original.pages[0].content = Some(desegni_core::SiteContent {
+            html: "<h1>Existing page</h1>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        });
+        workspace
+            .create_in_folder(original.clone(), Some(temp.0.clone()))
+            .unwrap();
+        let folder = workspace
+            .file
+            .as_ref()
+            .unwrap()
+            .path()
+            .parent()
+            .unwrap()
+            .to_owned();
+        change_grid(&mut workspace);
+        let edited = workspace.project().unwrap().clone();
+        workspace.save_snapshot(&edited, None).unwrap();
+        assert!(workspace.view().can_undo);
+        workspace.open_file_tab(&folder).unwrap();
+        assert_eq!(workspace.project().unwrap(), &edited);
+        assert!(!workspace.view().can_undo);
+        assert!(!workspace.view().dirty);
+        assert_eq!(
+            workspace.project().unwrap().brief.purpose,
+            original.brief.purpose
+        );
+    }
+
+    #[test]
+    fn opening_a_plain_folder_imports_once_and_keeps_its_destination_through_recovery() {
+        let temp = Temp::new();
+        let folder = temp.0.join("Existing site");
+        fs::create_dir(&folder).unwrap();
+        let html = "<!doctype html><html><head><title>Original</title></head><body><h1>Website</h1></body></html>";
+        fs::write(folder.join("index.html"), html).unwrap();
+        let directory = temp.0.join("app-data");
+        let mut workspace = Workspace::from_directory(directory.clone()).unwrap();
+        workspace.open_file_tab(&folder).unwrap();
+        let path = folder.join("Existing site.desegnos");
+        assert_eq!(workspace.file.as_ref().unwrap().path(), path);
+        assert_eq!(fs::read_to_string(folder.join("index.html")).unwrap(), html);
+        assert_eq!(
+            fs::read_to_string(folder.join(".desegnos-original/index.html")).unwrap(),
+            html
+        );
+        assert!(
+            workspace.project().unwrap().pages[0]
+                .content
+                .as_ref()
+                .unwrap()
+                .html
+                .contains("data-desegnos-id")
+        );
+        change_grid(&mut workspace);
+        let edited = workspace.project().unwrap().clone();
+        drop(workspace);
+        let mut restarted = Workspace::from_directory(directory).unwrap();
+        restarted.recover(Some(edited.id), false).unwrap();
+        assert_eq!(restarted.project().unwrap(), &edited);
+        assert_eq!(restarted.file.as_ref().unwrap().path(), path);
+        restarted.save_snapshot(&edited, None).unwrap();
+        assert!(!restarted.view().dirty);
+        assert_eq!(
+            fs::read_to_string(folder.join(".desegnos-original/index.html")).unwrap(),
+            html
+        );
     }
 
     #[test]
@@ -1875,6 +2328,46 @@ mod tests {
         workspace.start(project("Unsaved"), None, None).unwrap();
         assert!(workspace.check_replace(false).is_err());
         workspace.check_replace(true).unwrap();
+    }
+
+    #[test]
+    fn only_ordinary_web_links_open_from_a_preview() {
+        assert!(preview_link("https://chelib.com/projects/desegnos").is_ok());
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "https://user:secret@example.com/",
+            "mailto:someone@example.com",
+            "not a link",
+        ] {
+            assert!(preview_link(url).is_err(), "{url}");
+        }
+    }
+
+    #[test]
+    fn discarding_on_close_stops_offering_the_work_but_keeps_its_journal() {
+        let temp = Temp::new();
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.start(project("Discard me"), None, None).unwrap();
+        change_grid(&mut workspace);
+        let id = workspace.session.as_ref().unwrap().project().id;
+        assert!(workspace.view().dirty);
+        workspace.set_aside_recovery().unwrap();
+        workspace.close();
+        assert!(workspace.recoveries.is_empty());
+        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+        assert!(restarted.recoveries.is_empty());
+        assert!(
+            temp.0
+                .join(format!("{id}.recovery.discarded.json"))
+                .exists()
+        );
+        assert!(
+            fs::read_dir(&temp.0)
+                .unwrap()
+                .flatten()
+                .any(|entry| entry.file_name().to_string_lossy().ends_with(".journal"))
+        );
     }
 
     fn change_grid(workspace: &mut Workspace) {
@@ -2177,10 +2670,11 @@ mod tests {
             );
             assert!(restarted.file.is_none(), "{condition}");
             assert!(restarted.view().dirty, "{condition}");
-            assert!(
-                restarted.save_snapshot(&expected, None).is_err(),
-                "{condition}"
-            );
+            restarted.save_snapshot(&expected, None).unwrap();
+            let recovered_path = restarted.file.as_ref().unwrap().path();
+            assert_ne!(recovered_path, path, "{condition}");
+            assert!(recovered_path.starts_with(temp.0.join("Projects")));
+            assert!(!restarted.view().dirty);
             assert_eq!(fs::read(&path).ok(), before, "{condition}");
         }
     }
@@ -2573,6 +3067,61 @@ mod tests {
         );
     }
 
+    const SCHEMA_SEVEN: &[u8] =
+        include_bytes!("../../crates/desegni-storage/tests/fixtures/schema7-untouched.desegni");
+
+    #[test]
+    fn an_untouched_silently_upgraded_file_is_not_offered_as_unsaved_work() {
+        // Opening a schema 7 file upgrades it without a notice, so its journal holds the saved
+        // file in newer bytes at the same revision. That used to be offered as unsaved work after
+        // a restart; recovered it was not dirty, so closing kept the record and the file could
+        // no longer be opened.
+        let temp = Temp::new();
+        let path = temp.0.join("site.desegni");
+        fs::write(&path, SCHEMA_SEVEN).unwrap();
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        workspace.open_file_tab(&path).unwrap();
+        let opened = workspace.session.as_ref().unwrap().project().clone();
+        assert!(!workspace.view().dirty);
+        assert!(workspace.view().migration_notice.is_none());
+        let pointer_path = workspace.pointer_path(opened.id);
+        drop(workspace);
+
+        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+        assert!(restarted.recoveries.is_empty());
+        restarted.open_file_tab(&path).unwrap();
+        assert_eq!(restarted.session.as_ref().unwrap().project(), &opened);
+        assert!(!restarted.view().dirty);
+        restarted.close();
+        assert!(restarted.recoveries.is_empty());
+        drop(restarted);
+
+        // Records written before the upgrade checksum existed are checked against the file once.
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&pointer_path).unwrap()).unwrap();
+        let upgraded = record
+            .as_object_mut()
+            .unwrap()
+            .remove("upgradedSha256")
+            .unwrap();
+        fs::write(&pointer_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+        assert!(restarted.recoveries.is_empty());
+        let record: serde_json::Value =
+            serde_json::from_slice(&fs::read(&pointer_path).unwrap()).unwrap();
+        assert_eq!(record["upgradedSha256"], upgraded);
+        assert_eq!(fs::read(&path).unwrap(), SCHEMA_SEVEN);
+
+        // Real edits are still offered.
+        restarted.open_file_tab(&path).unwrap();
+        change_grid(&mut restarted);
+        drop(restarted);
+        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+        assert_eq!(restarted.recoveries.len(), 1);
+        restarted.recover(Some(opened.id), false).unwrap();
+        assert!(restarted.view().dirty);
+    }
+
     #[test]
     fn a_schema_one_recovery_journal_migrates_without_rewriting_its_original() {
         // The actual old archive provides the original typed JSON and checksum, rather than a reconstructed model.
@@ -2600,6 +3149,8 @@ mod tests {
             saved_revision: None,
             saved_sha256: None,
             project_path: None,
+            upgraded_sha256: None,
+            unsaved_migration: false,
         };
         write_markdown(
             &temp.0.join(format!("{}.recovery.json", source.project.id)),
@@ -2650,6 +3201,21 @@ pub fn get_recent_projects(
     }
 }
 
+#[derive(Serialize)]
+pub struct RecentProjectOpenError {
+    message: String,
+    missing: bool,
+}
+
+impl From<String> for RecentProjectOpenError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            missing: false,
+        }
+    }
+}
+
 #[tauri::command]
 pub fn open_recent_project(
     window: tauri::WebviewWindow,
@@ -2657,9 +3223,11 @@ pub fn open_recent_project(
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
     path: PathBuf,
     discard: bool,
-) -> NativeResult<WorkspaceView> {
+) -> Result<WorkspaceView, RecentProjectOpenError> {
     if window.label() != "editor" {
-        return Err("Only the editor can open recent projects.".into());
+        return Err("Only the editor can open recent projects."
+            .to_owned()
+            .into());
     }
     generation
         .lock()
@@ -2672,8 +3240,22 @@ pub fn open_recent_project(
         .any(|entry| entry.path == path)
     {
         return Err(
-            "This project is not in your recent list. Use Open project to choose it.".into(),
+            "This project is not in your recent list. Use Open project to choose it."
+                .to_owned()
+                .into(),
         );
+    }
+    if let Err(error) = fs::metadata(&path) {
+        return Err(RecentProjectOpenError {
+            missing: matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ),
+            message: format!(
+                "Could not open this recent project ({}): {error}",
+                path.display()
+            ),
+        });
     }
     state.open_file_tab(&path)?;
     Ok(state.view())

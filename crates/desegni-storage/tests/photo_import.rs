@@ -66,3 +66,28 @@ fn a_folder_of_photos_becomes_small_project_photos_with_thumbnails() {
     );
     assert!(source.files.iter().any(|file| file.name == "index.html"));
 }
+
+#[test]
+fn webp_photos_are_decoded_and_folder_selection_is_deterministic() {
+    let root = std::env::temp_dir().join(format!("desegnos-webp-{}", uuid::Uuid::new_v4()));
+    fs::create_dir_all(&root).unwrap();
+    let image = image::DynamicImage::new_rgb8(320, 240);
+    image
+        .save_with_format(root.join("b.webp"), image::ImageFormat::WebP)
+        .unwrap();
+    image
+        .save_with_format(root.join("a.webp"), image::ImageFormat::WebP)
+        .unwrap();
+    let first = collect_identity_source(&root).unwrap();
+    let second = collect_identity_source(&root).unwrap();
+    assert_eq!(first.photos.len(), 1);
+    assert_eq!(first.photos[0].photo.name, "a.webp");
+    assert_eq!(first.sha256, second.sha256);
+    assert!(
+        first.photos[0]
+            .photo
+            .data_uri
+            .starts_with("data:image/jpeg;base64,")
+    );
+    fs::remove_dir_all(root).unwrap();
+}

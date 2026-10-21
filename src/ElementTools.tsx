@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Modal } from './Modal';
 import { setAskBeforeDelete } from './deletePreference';
 import { escapeHtml, imageFile } from './elementEditing';
-import type { ElementDetails, ElementEdit, ElementTarget, ElementVisual, IdentityAsset } from './types';
+import type { ElementDetails, ElementEdit, ElementTarget, ElementVisual, ProjectImage } from './types';
 
 export type ElementDialogMode = 'edit' | 'replace' | 'position' | 'remove';
 const titles = { edit: 'Edit element', replace: 'Replace element', position: 'Move element', remove: 'Delete element' };
@@ -10,7 +10,7 @@ const color = (value: string) => { const rgb = value.match(/[\d.]+/g)?.slice(0, 
 const styleFields = [['fontSize', 'Font size'], ['width', 'Width'], ['height', 'Height'], ['padding', 'Padding'], ['borderRadius', 'Corner radius']] as const;
 
 export function ElementDialog({ mode, target, visual, inspect, apply, move, close, projectImages = [] }: {
-  projectImages?: IdentityAsset[]; mode: ElementDialogMode; target: ElementTarget; visual: ElementVisual | null;
+  projectImages?: ProjectImage[]; mode: ElementDialogMode; target: ElementTarget; visual: ElementVisual | null;
   inspect: (target: ElementTarget) => Promise<ElementDetails>; apply: (change: ElementEdit) => Promise<void>;
   move: (x: number, y: number) => Promise<void>; close: () => void;
 }) {
@@ -22,7 +22,7 @@ export function ElementDialog({ mode, target, visual, inspect, apply, move, clos
     {details && <ElementForm key={`${target.id ?? target.sourceSha256}:${target.selector}:${mode}`} mode={mode} projectImages={projectImages} details={details} visual={visual} apply={apply} move={move} close={close} />}
   </div></Modal>;
 }
-function ElementForm({ mode, details, visual, apply, move, close, projectImages }: { projectImages: IdentityAsset[]; mode: ElementDialogMode; details: ElementDetails; visual: ElementVisual | null; apply: (change: ElementEdit) => Promise<void>; move: (x: number, y: number) => Promise<void>; close: () => void }) {
+function ElementForm({ mode, details, visual, apply, move, close, projectImages }: { projectImages: ProjectImage[]; mode: ElementDialogMode; details: ElementDetails; visual: ElementVisual | null; apply: (change: ElementEdit) => Promise<void>; move: (x: number, y: number) => Promise<void>; close: () => void }) {
   const [skipAsking, setSkipAsking] = useState(false);
   const [texts, setTexts] = useState(details.texts); const [attributes, setAttributes] = useState(details.attributes);
   const [styles, setStyles] = useState<Record<string, string>>({ ...visual });
@@ -61,7 +61,7 @@ function ElementForm({ mode, details, visual, apply, move, close, projectImages 
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
-  const projectImage = projectImages.find(asset => asset.dataUri === image);
+  const projectImage = projectImages.find(asset => asset.dataUri === image || `desegnos-asset:${asset.id}` === image);
   const imageControl = <>
     {projectImages.length > 0 && <><label>Project image<select value={projectImage?.id ?? ''} onChange={event => {
       const asset = projectImages.find(item => item.id === event.target.value); if (!asset) return;
@@ -72,7 +72,7 @@ function ElementForm({ mode, details, visual, apply, move, close, projectImages 
   </>;
   return <form onSubmit={event => { void submit(event); }}>
     {error && <p className="message error" role="alert">{error}</p>}
-    {mode === 'remove' ? <><p>Delete this item and everything inside it? You can undo this.</p><label className="check-label"><input type="checkbox" checked={skipAsking} onChange={event => setSkipAsking(event.target.checked)} />Don’t ask again</label></> : mode === 'position' ? <><p>Drag the selected element on the canvas, or enter an offset.</p><div className="form-row"><label>Move horizontally (px)<input type="number" value={x} step="any" onChange={event => setX(event.target.valueAsNumber)} required /></label><label>Move vertically (px)<input type="number" value={y} step="any" onChange={event => setY(event.target.valueAsNumber)} required /></label></div></> : mode === 'replace' ? <>
+    {mode === 'remove' ? <><p>Delete this item and everything inside it?</p><label className="check-label"><input type="checkbox" checked={skipAsking} onChange={event => setSkipAsking(event.target.checked)} />Don’t ask again</label></> : mode === 'position' ? <><div className="form-row"><label>Move horizontally (px)<input type="number" value={x} step="any" onChange={event => setX(event.target.valueAsNumber)} required /></label><label>Move vertically (px)<input type="number" value={y} step="any" onChange={event => setY(event.target.valueAsNumber)} required /></label></div></> : mode === 'replace' ? <>
       <label>Replace with<select value={kind} onChange={event => setKind(event.target.value)}>{[['p','Paragraph'],['h1','Main heading'],['h2','Heading'],['h3','Small heading'],['button','Button'],['a','Link'],['img','Image'],['section','Section'],['div','Container']].map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       {kind === 'html' ? <label>Replacement HTML<textarea className="code-input" value={html} onChange={event => setHtml(event.target.value)} rows={10} maxLength={1048576} required /></label> : kind === 'img' ? <>{imageControl}<label>Image description<input value={attributes.alt ?? ''} onChange={event => attr('alt', event.target.value)} /></label></> : <label>Text<textarea value={replacementText} onChange={event => setReplacementText(event.target.value)} rows={3} /></label>}
       {kind === 'a' && <label>Link address<input value={attributes.href ?? ''} onChange={event => attr('href',event.target.value)} /></label>}
@@ -84,7 +84,7 @@ function ElementForm({ mode, details, visual, apply, move, close, projectImages 
       {details.target.tag === 'img' && <>{imageControl}<label>Image description<input value={attributes.alt ?? ''} onChange={event => attr('alt',event.target.value)} /></label></>}
       {['input','textarea'].includes(details.target.tag) && <label>Hint text<input value={attributes.placeholder ?? ''} onChange={event => attr('placeholder',event.target.value)} /></label>}
       {visual && <details className="element-appearance"><summary>Appearance</summary><div className="form-row"><label>Text color<input type="color" value={color(styles.color ?? '')} onChange={event => style('color',event.target.value)} /></label><label>Background color<input type="color" value={color(styles.backgroundColor ?? '')} onChange={event => style('backgroundColor',event.target.value)} /></label></div><label className="check-label"><input type="checkbox" checked={styles.backgroundColor === 'transparent' || /rgba\([^)]*,\s*0\)/.test(styles.backgroundColor ?? '')} onChange={event => style('backgroundColor',event.target.checked ? 'transparent' : color(styles.backgroundColor ?? ''))} />Transparent background</label>
-        <div className="element-style-fields">{styleFields.map(([name,label]) => <label key={name}>{label}<input value={styles[name] ?? ''} onChange={event => style(name,event.target.value)} /></label>)}</div><p className="field-help">Sizes accept px, % and other CSS units. Leave a value empty to use the page’s style.</p>
+        <div className="element-style-fields">{styleFields.map(([name,label]) => <label key={name}>{label}<input value={styles[name] ?? ''} onChange={event => style(name,event.target.value)} /></label>)}</div>
       </details>}
       <details><summary>More options</summary><label>Accessible name<input value={attributes['aria-label'] ?? ''} onChange={event => attr('aria-label',event.target.value)} /></label><label>Hover text<input value={attributes.title ?? ''} onChange={event => attr('title',event.target.value)} /></label></details>
     </>}

@@ -4,6 +4,10 @@ Run `pnpm test:native` from WebMaker. The runner builds the explicit `native-tes
 
 The runner uses `~/.local/bin/xvfb-run -d`, a private display numbered at least 90, a private session bus/profile/data/runtime directory, and a free local port. It checks display and window ownership before input. It never moves windows or switches workspaces on the main display. Existing desktop sockets, locks and an initially working connection are checked after cleanup.
 
+`--project-folders-only` covers automatic creation and first Save without a picker, portable names and collisions, per-project and persistent default locations with reset, archive/live-site sync, foreign-file preservation, sync warnings, Save As cancellation/copy folders, legacy in-place saves and Move, plain-website import with immutable originals, folder reopening, recents and crash recovery. Every native scope gets an isolated XDG Documents directory, so automatic saves cannot reach the owner's Documents folder.
+
+`--website-import-only` covers the default edit-or-brand choice, byte-preserving plain-site import, native heading editing, shared styles, original module execution and relative navigation in Live, build progress/Stop, read-only detection of `~/Projects/chelib`, a build on its private copy, separate framework-project placement and crash recovery. The original chelib folder is only read. Large recovery requests use a two-minute test timeout; dependencies copied for the build are removed before scanning retained evidence.
+
 To reuse a test build:
 
 ```sh
@@ -46,3 +50,37 @@ The cleanup search check used exactly one owner-authorized connected ChatGPT-pla
 The expanded suite also covers stable-ID multi-selection, a single union request, a local text edit before preparation, atomic multi-delete/Undo, stale request reassignment/removal/Undo, checked-save Cancel/copy/replace, changed-during-confirmation rejection, guarded Save as, unreadable destinations, code-only Undo/Redo and immediate Ctrl+S into a verified archive. Current projects use schema 7 and new requirements use format 10; current selection assertions compare editor IDs with the actual rendered element. See [the integrated results](../../docs/SELECTION_SAVE_CODEX.md).
 
 `--image-resize-only` verifies a decodable PNG padded beyond the former 32 MB limit through file selection and a real GTK drag: original preview before Generate, automatic bounded compression on Generate, local-only processing without provider usage, Undo, and crash recovery. The focused file-selection check supplies a real File to the input; it does not exercise the native file-picker dialog.
+
+## Real use (`--real-use-only`)
+
+`node scripts/native-test.mjs --real-use-only` runs the flows the owner actually uses, on copies of their real data. Before launch, `real-use-fixtures.mjs` copies the recent projects and every unsaved-work recovery record (with its journal) from `~/.local/share/io.github.chelij.desegni` (or `DESEGNI_REAL_USE_SOURCE`) into the run's private profile and `test-results/native/<run>/real-projects/`. Originals are only read: recovery records are rewritten to point at the copies, so nothing the test app saves can reach the real files. `test-results/` is git-ignored. A journal identical to its saved file is not unsaved work, and the app rightly does not offer it.
+
+The steps come from `scripts/usage-report.mjs`, which summarizes the local usage log (`usage/*.jsonl`: control names, shortcuts, keystroke counts per field and command timings, never typed text) and the generation history (every request sent and its outcome):
+
+- every piece of unsaved work is offered after a restart, "Not now" puts one aside, and all recover;
+- the real project files open, show their pages and close (Discard sets the unsaved work aside instead of re-offering it);
+- typing a several-line request on a real element: no toolbar button flips back and forth, and the request is saved within 1.5 s of the last key arriving (Xvfb draws without a GPU, so a burst of keys reaches the box slowly; `real-typing-keys.json` records the per-key cost);
+- an element fix is generated, discarded, retried and kept, each attempt sending format 13;
+- a blank page gets two several-line boxes and a 4000×3000 camera photo; the AI gets one low-detail preview, and only a 640×480 copy (twice its 320 px display width) is kept;
+- the new project saves and reopens unchanged.
+
+Rerun the usage report after a stretch of normal use and update this suite when the patterns change. These checks use the synthetic provider; generation quality on a real account is still owner-run.
+
+## Accessibility and 2026-10-21 coverage
+
+`--canvas-input-only` also draws a Shift-constrained circle and an automatically closed
+freehand area through trusted XTEST input. It checks circle corner exclusion, shape
+picker shortcuts/memory, normalized lasso points through move/resize and Undo/Redo,
+Escape cancellation, shape outlines, archive reopen, and crash recovery.
+
+Set `DESEGNI_NATIVE_TEST_ACCESSIBILITY=1` to exercise the app with an AT-SPI listener
+on the private display/session bus. The runner selects the accessibility launcher's
+`dbus-daemon` mode before starting that bus, so it does not depend on a desktop
+systemd session. It checks the app PID and never queries the main desktop tree.
+The UX suite includes existing Unicode text, shorter replacements, native canvas
+text editing, a real `needs` follow-up, summed usage, failed raw replies and read-only
+past conversations. The identity suite checks default and unticked photo/work choices.
+It also checks the three-step Import context flow, closed file details, Astro page
+support and ranking, automatic file picking, a disabled Read my brand button when
+manual choices are too large, repeated Pick for me resets, and website-address import.
+The cleanup editor check waits for the observable Undo/Redo result after native keys.

@@ -210,6 +210,7 @@ fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
         dependencies: BTreeMap::new(),
         dossier_context: None,
         capabilities: None,
+        images: vec![],
     }
 }
 
@@ -522,7 +523,20 @@ async fn finalized_answers_merged_with_terminal_items_still_require_one_consiste
             );
             let serialized = serde_json::to_string(&error).unwrap();
             assert!(!serialized.contains(KEY));
-            assert!(!serialized.contains("Private"));
+            if *reason != Some(ResponseRejection::CandidateJson) {
+                assert!(!serialized.contains("Private"));
+            } else {
+                assert!(
+                    error
+                        .response_format
+                        .as_ref()
+                        .unwrap()
+                        .diagnostic_reply
+                        .as_ref()
+                        .unwrap()
+                        .contains("Private invalid JSON")
+                );
+            }
         }
     }
 }
@@ -1686,7 +1700,18 @@ async fn provider_explanations_without_codes_are_useful_bounded_and_credential_s
             None
         );
         let diagnostic = serde_json::to_string(&error).unwrap();
-        assert!(!diagnostic.contains(&explanation));
+        if explanation.len() <= 1024 {
+            assert!(!diagnostic.contains(&explanation));
+        }
+        assert!(
+            error
+                .response_format
+                .as_ref()
+                .unwrap()
+                .diagnostic_reply
+                .as_ref()
+                .is_none_or(|text| text.len() <= 64 * 1024)
+        );
         assert!(!diagnostic.contains(KEY));
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
@@ -2957,4 +2982,37 @@ async fn citation_annotations_do_not_modify_the_structured_json_answer() {
         .await
         .unwrap();
     assert_eq!(response.text, candidate(&frozen));
+}
+
+#[test]
+fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
+    let mut frozen = snapshot(GenerationMode::Strict);
+    let settings = ProviderSettings::default();
+    let plain = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &settings).unwrap();
+    let preview = format!("data:image/jpeg;base64,{}", "A".repeat(40_000));
+    frozen.images = vec![desegni_core::RequestImage {
+        attachment_id: "a1b2c1".into(),
+        data_uri: preview.clone(),
+    }];
+    let body: Value = serde_json::from_slice(
+        &crate::settings::request_body(
+            AuthenticationMethod::ApiKey,
+            &frozen,
+            GenerationMode::Strict,
+            &schema(),
+            &settings,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let content = body["input"][0]["content"].as_array().unwrap();
+    assert_eq!(content[2]["text"], "Preview of image attachment a1b2c1.");
+    assert_eq!(content[3]["image_url"], preview);
+    assert_eq!(content[3]["detail"], "low");
+    let with_image = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &settings).unwrap();
+    assert_eq!(
+        with_image.input_token_upper_bound - plain.input_token_upper_bound,
+        desegni_core::AI_PREVIEW_TOKEN_RESERVE,
+        "a preview costs a fixed reserve, not one token per Base64 byte"
+    );
 }

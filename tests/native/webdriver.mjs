@@ -22,7 +22,7 @@ export function xpathString(value) {
 export class WebDriver {
   constructor(port) { this.base = `http://127.0.0.1:${port}`; }
 
-  async request(method, path, body, timeout = 15_000) {
+  async request(method, path, body, timeout = this.requestTimeout ?? 15_000) {
     const response = await fetch(this.base + path, {
       method, headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),

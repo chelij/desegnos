@@ -13,8 +13,11 @@ mod image_drop;
 mod linux_startup;
 mod preview;
 mod preview_health;
+mod project_location;
 mod recent;
+mod usage;
 mod workspace;
+mod website_import;
 
 use generation::*;
 use preview_health::{editor_heartbeat, reload_workspace};
@@ -68,6 +71,7 @@ fn main() {
             ));
             app.manage(std::sync::Mutex::new(preview::PreviewRegistry::default()));
             app.manage(preview_health::PreviewHealth::default());
+            app.manage(std::sync::Mutex::new(website_import::WebsiteImports::default()));
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("editor") {
                 preview::configure_window(&window)?;
@@ -88,17 +92,29 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             export::export_website,
+            usage::record_usage,
+            workspace::open_preview_link,
             export::open_export_folder,
             identity::pick_identity_source,
             identity::fetch_identity_source,
+            identity::prepare_identity_selection,
             workspace::close_project,
             workspace::switch_project,
             workspace::import_context,
+            website_import::pick_website_folder,
+            website_import::website_build,
+            workspace::edit_website_folder,
+            identity::website_brand_source,
             identity::analyze_identity,
             identity::get_identity_analysis,
             identity::cancel_identity_analysis,
             get_workspace,
+            project_location::get_project_location,
+            project_location::pick_project_location,
+            project_location::set_project_location,
+            move_into_project_folder,
             get_recent_projects,
+            recent::forget_recent_project,
             open_recent_project,
             create_project,
             edit_project,
@@ -106,6 +122,7 @@ fn main() {
             refresh_element_bounds,
             refresh_element_target_bounds,
             edit_element,
+            undo_element,
             edit_page_source,
             get_page_source_map,
             open_found_source,
@@ -138,6 +155,8 @@ fn main() {
             test_ai_access,
             prepare_generation,
             get_generation,
+            list_generations,
+            get_past_generation,
             start_generation,
             retry_generation,
             cancel_generation,

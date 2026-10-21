@@ -53,7 +53,7 @@ export async function reviewRequirements(driver, mode, evidence, name = 'REQUIRE
   assert.equal(prepared.sha256, createHash('sha256').update(prepared.markdown).digest('hex'));
   assert.equal(prepared.regionCount, targets.length);
   assert.equal(prepared.pageCount, new Set(targets.map(target => target.page.id)).size);
-  assert.match(markdown, /^Requirements format: 10$/m);
+  assert.match(markdown, /^Requirements format: 14$/m);
   assert.match(markdown, /^## Generation setting$/m);
   assert.equal([...markdown.matchAll(/"generationMode"\s*:/g)].length, 1);
   assert.doesNotMatch(markdown, /within 1 CSS pixel/);
@@ -220,7 +220,11 @@ export async function authorProject(driver, step, evidence) {
 
 export async function recoverProject(driver, expected, step) {
   await step('A fresh process restores the exact canvas project and preserves other recoveries', async () => {
-    const action = `//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]//button[normalize-space(.)="Recover project"]`;
+    // Recovery is offered from the menu only; the start screen stays clear.
+    const action = `//dialog[@open]//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]//button[normalize-space(.)="Recover project"]`;
+    await waitFor(async () => (await driver.invoke('get_workspace')).recoveries?.some(item => item.projectId === expected.id), 'The expected named recovery was not found');
+    assert.equal(await driver.execute(() => !!document.querySelector('.recovery-notice')), false, 'The start screen still shows a recovery notice');
+    await driver.menu(['Recover unsaved projects']);
     await waitFor(async () => (await driver.all(action, 'xpath')).length === 1, 'The expected named recovery did not appear');
     const before = await driver.invoke('get_workspace');
     assert.equal(before.project, null);

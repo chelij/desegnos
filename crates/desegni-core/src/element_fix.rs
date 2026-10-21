@@ -31,6 +31,8 @@ struct ElementFixReply {
 struct ElementPageFix {
     page_id: Uuid,
     elements: Vec<ElementReplacement>,
+    #[serde(default)]
+    css: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -147,6 +149,12 @@ impl Project {
 }
 
 impl RequirementsSnapshot {
+    pub fn is_element_fix(&self) -> bool {
+        self.format_version().ok() == Some(ELEMENT_FIX_FORMAT)
+            || (self.format_version().is_ok_and(|format| format >= 12)
+                && self.markdown.contains("\n## Selected elements\n"))
+    }
+
     /// True for the one follow-up that carries elements the AI asked for.
     pub fn has_requested_context(&self) -> bool {
         self.markdown.contains(CONTEXT_HEADING)
@@ -159,9 +167,11 @@ impl RequirementsSnapshot {
         text: &str,
         project: &Project,
     ) -> Result<Option<RequirementsSnapshot>> {
-        if self.format_version()? != ELEMENT_FIX_FORMAT || self.has_requested_context() {
+        if !self.is_element_fix() || self.has_requested_context() {
             return Ok(None);
         }
+        let compacted = (self.format_version()? >= 14).then(|| project.compact_pages());
+        let project = compacted.as_ref().unwrap_or(project);
         let Ok(reply) = serde_json::from_str::<ElementFixReply>(text) else {
             return Ok(None);
         };
@@ -172,6 +182,12 @@ impl RequirementsSnapshot {
             reply.needs.len() <= MAX_CONTEXT_ELEMENTS,
             "The AI asked for too many other elements.",
         )?;
+        ensure(
+            reply.pages.is_empty()
+                && reply.job_id == self.job_id
+                && reply.requirements_sha256 == self.sha256,
+            "The AI context request did not match this job.",
+        )?;
         let pages: BTreeSet<Uuid> = self
             .target_ids()?
             .into_iter()
@@ -179,10 +195,10 @@ impl RequirementsSnapshot {
             .collect();
         let mut found = vec![];
         for id in &reply.needs {
-            let element = pages.iter().find_map(|page_id| {
+            let element = pages.iter().filter(|_| crate::stable_targets::valid_id(id)).find_map(|page_id| {
                 let content = project.page(*page_id).ok()?.content.as_ref()?;
                 let doc = editing::parse(&content.html).ok()?;
-                let nodes = doc.select(&format!("[{}=\"{}\"]", crate::ELEMENT_ID_ATTRIBUTE, id.replace('"', "")));
+                let nodes = doc.select(&format!("[{}=\"{}\"]", crate::ELEMENT_ID_ATTRIBUTE, id));
                 (nodes.nodes().len() == 1).then(|| serde_json::json!({"pageId":page_id,"id":id,"html":project.referenced(nodes.nodes()[0].html().to_string())}))
             });
             found.push(element.unwrap_or_else(|| serde_json::json!({"id":id,"missing":true})));
@@ -191,6 +207,10 @@ impl RequirementsSnapshot {
         markdown.push_str(CONTEXT_HEADING);
         markdown.push_str("You asked for these elements. They are reference only: change only the selected elements. Return the final result now, with needs empty.\n\n");
         markdown.push_str(&crate::requirements::fenced_json(&found)?);
+        ensure(
+            markdown.len() <= crate::MAX_REQUIREMENTS_BYTES,
+            "The follow-up context exceeds its size limit.",
+        )?;
         let mut follow_up = self.clone();
         follow_up.sha256 = crate::digest(markdown.as_bytes());
         follow_up.markdown = markdown;
@@ -261,9 +281,12 @@ impl GenerationCandidate {
     }
 
     fn read_reply(text: &str, snapshot: &RequirementsSnapshot, project: &Project) -> Result<Self> {
-        if snapshot.format_version()? != ELEMENT_FIX_FORMAT {
+        if !snapshot.is_element_fix() {
             return Self::from_json(text);
         }
+        // The AI saw compact sources (format 14); its replacements go into that same form.
+        let compacted = (snapshot.format_version()? >= 14).then(|| project.compact_pages());
+        let project = compacted.as_ref().unwrap_or(project);
         ensure(
             text.len() <= crate::MAX_GENERATION_BYTES,
             "The AI reply is too large.",
@@ -328,7 +351,15 @@ impl GenerationCandidate {
                 page_id: fix.page_id,
                 content: SiteContent {
                     html: editing::serialized(&doc)?,
-                    css: content.css.clone(),
+                    css: if fix.css.is_empty() {
+                        content.css.clone()
+                    } else {
+                        ensure(
+                            snapshot.format_version()? >= 12,
+                            "This older request cannot add styling rules.",
+                        )?;
+                        format!("{}\n{}", content.css, fix.css)
+                    },
                     javascript: content.javascript.clone(),
                 },
             });
@@ -348,8 +379,13 @@ impl GenerationCandidate {
 
 /// The result schema matching these requirements.
 pub fn result_schema(snapshot: &RequirementsSnapshot) -> serde_json::Value {
-    if snapshot.format_version().ok() == Some(ELEMENT_FIX_FORMAT) {
+    if snapshot.is_element_fix() {
         let mut schema = element_fix_schema();
+        if snapshot.format_version().is_ok_and(|format| format >= 12) {
+            let page = &mut schema["properties"]["pages"]["items"];
+            page["required"].as_array_mut().unwrap().push("css".into());
+            page["properties"]["css"] = serde_json::json!({"type":"string","description":"Additional CSS only. Every selector must be the selected element's own [data-desegnos-id=\"ID\"], optionally with hover/focus/active/disabled/checked or before/after. No descendant or sibling selectors. Media queries are allowed; all their rules obey the same scope. Empty when no new rules are needed."});
+        }
         if snapshot.has_requested_context() {
             schema["properties"]["needs"]["maxItems"] = 0.into();
         }

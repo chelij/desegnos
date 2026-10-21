@@ -99,6 +99,141 @@ fn folder_and_zip_collect_the_same_immutable_sources_with_stable_ids() {
 }
 
 #[test]
+fn astro_site_reads_templates_and_ranks_brand_sources_before_incidental_code() {
+    let folder = Temp::new();
+    let entries = [
+        ("src/pages/work.astro", "<h1>Our work</h1>"),
+        (
+            "src/pages/index.astro",
+            "<h1>Welcome</h1><script src=\"/play/site-menu.js\"></script>",
+        ),
+        ("src/pages/about.astro", "<h1>About us</h1>"),
+        ("src/layouts/Base.astro", "<html><slot /></html>"),
+        ("src/styles/global.css", ":root{--brand:#16324f}"),
+        (
+            "tailwind.config.ts",
+            "export default {theme:{colors:{brand:'#16324f'}}}",
+        ),
+        ("src/components/Header.vue", "<header>Studio</header>"),
+        ("src/components/Footer.svelte", "<footer>Studio</footer>"),
+        ("src/components/Work.jsx", "<div>Work</div>"),
+        ("src/pages/contact.tsx", "<main>Contact</main>"),
+        ("README.md", "# Studio"),
+        ("DESIGN.md", "Our brand uses blue."),
+        ("notes.mdx", "# Brand notes"),
+        ("theme.toml", "color = '#16324f'"),
+        ("theme.yaml", "color: '#16324f'"),
+        ("theme.yml", "color: '#16324f'"),
+        ("page.njk", "<h1>{{ title }}</h1>"),
+        ("page.hbs", "<h1>{{ title }}</h1>"),
+        ("page.liquid", "<h1>{{ title }}</h1>"),
+        ("page.php", "<h1>Studio</h1>"),
+        ("accent.scss", "$accent: blue;"),
+        ("accent.sass", "$accent: blue"),
+        ("accent.less", "@accent: blue;"),
+        (
+            "public/logo.svg",
+            "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'><path d='M0 0H10V10Z'/></svg>",
+        ),
+        (
+            "public/play/site-menu.js",
+            "document.body.classList.toggle('menu')",
+        ),
+    ];
+    let skipped = [
+        "LICENSE",
+        "LICENCE.txt",
+        "public/fonts/DM-Sans-OFL.txt",
+        "public/fonts/LICENSE.md",
+        "node_modules/a/index.js",
+        ".git/config",
+        "dist/index.html",
+        "build/site.css",
+        "out/index.html",
+        ".astro/cache.json",
+        ".next/index.html",
+        "package-lock.json",
+        "pnpm-lock.yaml",
+        "public/vendor.js",
+        "public/js/menu.min.js",
+        "public/play/solopong/game.js",
+        "public/play/solopong/index.html",
+        "public/play/solopong/styles.css",
+        "public/apps/demo/app.tsx",
+    ];
+    for (name, text) in &entries {
+        folder.write(name, text);
+    }
+    for name in skipped {
+        folder.write(name, "unrelated content");
+    }
+    let source = collect_identity_source(&folder.0).unwrap();
+    let names: Vec<_> = source.files.iter().map(|file| file.name.as_str()).collect();
+    assert_eq!(&names[..2], ["src/styles/global.css", "tailwind.config.ts"]);
+    assert!(
+        names
+            .iter()
+            .position(|name| *name == "src/layouts/Base.astro")
+            < names
+                .iter()
+                .position(|name| *name == "src/pages/about.astro")
+    );
+    assert!(
+        names
+            .iter()
+            .position(|name| *name == "src/pages/about.astro")
+            < names
+                .iter()
+                .position(|name| *name == "src/pages/work.astro")
+    );
+    for (name, text) in &entries {
+        assert_eq!(
+            source
+                .files
+                .iter()
+                .find(|file| file.name == *name)
+                .unwrap()
+                .text
+                .as_deref(),
+            Some(*text)
+        );
+    }
+    for name in skipped {
+        assert!(!names.contains(&name), "included {name}");
+    }
+    assert_eq!(source, collect_identity_source(&folder.0).unwrap());
+    let archive = Temp::new();
+    let all: Vec<_> = entries
+        .iter()
+        .map(|(name, text)| (*name, text.as_bytes()))
+        .chain(
+            skipped
+                .iter()
+                .map(|name| (*name, b"unrelated content".as_slice())),
+        )
+        .collect();
+    let zipped = collect_identity_source(&zip(&archive, "astro.zip", &all)).unwrap();
+    assert_eq!(source.files, zipped.files);
+    assert_eq!(source.sha256, zipped.sha256);
+}
+
+#[test]
+fn built_site_is_readable_when_no_original_sources_are_available() {
+    let folder = Temp::new();
+    folder.write("dist/index.html", "<h1>Built site</h1>");
+    let source = collect_identity_source(&folder.0).unwrap();
+    assert_eq!(source.files[0].name, "dist/index.html");
+    let archive = Temp::new();
+    let zipped = collect_identity_source(&zip(
+        &archive,
+        "built.zip",
+        &[("dist/index.html", b"<h1>Built site</h1>")],
+    ))
+    .unwrap();
+    assert_eq!(source.files, zipped.files);
+}
+
+#[test]
 fn project_archive_is_verified_and_read_without_writer_lock_or_changes() {
     let temp = Temp::new();
     let path = temp.0.join("website.desegni");
@@ -599,4 +734,391 @@ fn static_logo_styles_and_gradients_use_the_shared_portable_asset_validation() {
         svg
     );
     assert_eq!(fs::read(temp.0.join("logo.svg")).unwrap(), svg);
+}
+
+#[test]
+fn folder_pages_attribute_different_photos_and_shared_references() {
+    let temp = Temp::new();
+    temp.write(
+        "src/pages/index.astro",
+        "<h1>Welcome</h1><img src='/photos/home.png'>",
+    );
+    temp.write(
+        "src/pages/projects.astro",
+        "<h1>Projects</h1><img src=/photos/robot.png><img src='/photos/home.png'>",
+    );
+    for (name, color) in [
+        ("home", [240, 30, 20]),
+        ("robot", [20, 100, 230]),
+        ("loose", [40, 140, 20]),
+    ] {
+        let image = image::RgbImage::from_pixel(320, 240, image::Rgb(color));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        temp.write(&format!("public/photos/{name}.png"), bytes.into_inner());
+    }
+    let source = collect_identity_source(&temp.0).unwrap();
+    let photo = |name: &str| {
+        &source
+            .photos
+            .iter()
+            .find(|photo| photo.photo.name.ends_with(name))
+            .unwrap()
+            .photo
+    };
+    assert_eq!(
+        photo("robot.png")
+            .source_pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/projects"]
+    );
+    assert_eq!(photo("robot.png").source_pages[0].title, "Projects");
+    assert_eq!(photo("home.png").source_pages.len(), 2);
+    assert!(photo("loose.png").source_pages.is_empty());
+    assert_eq!(source.pages.len(), 2);
+    assert_eq!(
+        source
+            .pages
+            .iter()
+            .find(|page| page.path == "/projects")
+            .unwrap()
+            .photo_count,
+        2
+    );
+    assert_eq!(source, collect_identity_source(&temp.0).unwrap());
+}
+
+#[test]
+fn crawled_files_attribute_photos_to_their_original_url_and_page_title() {
+    let image = image::RgbImage::from_pixel(320, 240, image::Rgb([20, 90, 160]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    let source = identity_source_from_files("example.com", vec![
+        ("pages/02-about.html".into(), b"<!-- Source URL: https://example.com/about -->\n<title>About our studio</title><img src='/photos/team.png'>".to_vec()),
+        ("photos/team.png".into(), bytes.into_inner()),
+    ], vec![]).unwrap();
+    let page = &source.photos[0].photo.source_pages[0];
+    assert_eq!(page.path, "/about");
+    assert_eq!(page.title, "About our studio");
+    assert_eq!(page.url.as_deref(), Some("https://example.com/about"));
+    assert_eq!(source.pages[0].kind, "About");
+}
+
+#[test]
+fn crawl_metadata_attributes_cdn_and_extensionless_images_after_safe_renaming() {
+    let image = image::RgbImage::from_pixel(320, 240, image::Rgb([20, 90, 160]));
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    let reference = desegni_core::SourcePageRef {
+        path: "/about".into(),
+        title: "About our studio".into(),
+        url: Some("https://example.com/about".into()),
+    };
+    let source = identity_source_from_files_attributed("example.com", vec![
+        ("pages/02-about.html".into(), b"<!-- Source URL: https://example.com/about -->\n<title>About our studio</title><img src='https://cdn.example.net/image?id=team'>".to_vec()),
+        ("photos/verified-url-hash.png".into(), bytes.into_inner()),
+    ], vec![], std::collections::BTreeMap::from([("photos/verified-url-hash.png".into(), vec![reference.clone()])])).unwrap();
+    assert_eq!(source.photos[0].photo.source_pages, [reference]);
+    assert_eq!(source.pages.len(), 1);
+    assert_eq!(source.pages[0].photo_count, 1);
+}
+
+#[test]
+fn project_snapshots_use_real_page_metadata_instead_of_snapshot_filenames() {
+    let temp = Temp::new();
+    let project = Project::new(
+        "Studio".into(),
+        Viewport {
+            width: 1440,
+            height: 900,
+        },
+        Appearance::Light,
+    )
+    .unwrap();
+    let project = project
+        .apply(
+            0,
+            desegni_core::Command::AddPage {
+                name: "Our projects".into(),
+                path: "/projects".into(),
+            },
+        )
+        .unwrap();
+    let path = temp.0.join("studio.desegnos");
+    ProjectFile::acquire(&path).unwrap().save(&project).unwrap();
+    let source = collect_identity_source(&path).unwrap();
+    assert_eq!(
+        source
+            .pages
+            .iter()
+            .map(|page| page.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/", "/projects"]
+    );
+    assert_eq!(source.pages[1].title, "Our projects");
+    assert!(source.files.iter().any(|file| {
+        file.source_page
+            .as_ref()
+            .is_some_and(|page| page.path == "/projects")
+    }));
+}
+
+#[test]
+fn astro_routes_exclude_notes_exports_errors_drafts_and_build_copies() {
+    let temp = Temp::new();
+    let fixture = [
+        ("astro.config.mjs", "export default {}"),
+        (
+            "src/pages/index.astro",
+            "<h1>AI guides<br>and <span>tools</span><br>from Cheli.</h1>",
+        ),
+        (
+            "src/pages/projects/index.astro",
+            "<title>Projects | Cheli</title>",
+        ),
+        ("src/pages/projects/papan.astro", "<h1>Papan</h1>"),
+        (
+            "src/pages/posts/[...slug].astro",
+            "---\nconst posts = await getCollection('posts');\n---\n<h1>{post.title}</h1>",
+        ),
+        (
+            "src/content/posts/local-ai.md",
+            "---\ntitle: Local AI\ndraft: false\n---\n# Ignored heading",
+        ),
+        (
+            "src/content/posts/hidden.mdx",
+            "---\ntitle: Hidden\ndraft: true\n---",
+        ),
+        (
+            "src/content/unrouted/notes.md",
+            "---\ntitle: Not a page\n---",
+        ),
+        ("src/pages/404.astro", "<h1>Page not found.</h1>"),
+        ("src/pages/500.astro", "<h1>Error</h1>"),
+        (
+            "src/pages/draft.astro",
+            "---\ndraft: true\n---\n<h1>Draft</h1>",
+        ),
+        ("anti-slop/audit-001.md", "# Copy audit 001"),
+        ("CLAUDE.md", "# Instructions"),
+        ("README.md", "# Readme"),
+        ("chelib-redesign/index.html", "<title>Old site</title>"),
+        ("chelib-redesign/package.json", "{}"),
+        ("dist/index.html", "<title>Duplicate</title>"),
+        (
+            "dist/projects/index.html",
+            "<title>Duplicate projects</title>",
+        ),
+        ("public/copy.html", "<title>Copied page</title>"),
+        (".hidden/index.html", "<title>Hidden</title>"),
+    ];
+    for (name, text) in fixture {
+        temp.write(name, text);
+    }
+    let source = collect_identity_source(&temp.0).unwrap();
+    let pages = |source: &IdentitySource| {
+        source
+            .pages
+            .iter()
+            .map(|p| (p.path.clone(), p.kind.clone(), p.title.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        pages(&source),
+        [
+            ("/", "Home", "AI guides and tools from Cheli."),
+            ("/posts/local-ai", "Blog", "Local AI"),
+            ("/projects", "Projects", "Projects"),
+            ("/projects/papan", "Projects", "Papan"),
+        ]
+        .map(|(a, b, c)| (a.into(), b.into(), c.into()))
+    );
+    assert!(
+        source
+            .files
+            .iter()
+            .any(|f| f.name == "anti-slop/audit-001.md" && f.source_page.is_none())
+    );
+    let archive = Temp::new();
+    let entries = fixture
+        .iter()
+        .map(|(name, text)| (*name, text.as_bytes()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        pages(&collect_identity_source(&zip(&archive, "site.zip", &entries)).unwrap()),
+        pages(&source)
+    );
+}
+
+#[test]
+fn plain_html_uses_sources_and_falls_back_to_build_html_even_with_notes() {
+    let temp = Temp::new();
+    for (name, text) in [
+        ("index.html", "<title>Welcome — Studio</title>"),
+        ("about/index.html", "<h1>About <span>us</span></h1>"),
+        ("notes/notes.html", "<h1>Notes</h1>"),
+        ("404.html", "<h1>Missing</h1>"),
+        ("dist/index.html", "<title>Built copy</title>"),
+        ("public/about.html", "<h1>Copy</h1>"),
+        ("old/index.html", "<h1>Old</h1>"),
+        ("old/old.desegnos", "archive marker"),
+    ] {
+        temp.write(name, text);
+    }
+    let source = collect_identity_source(&temp.0).unwrap();
+    assert_eq!(
+        source
+            .pages
+            .iter()
+            .map(|p| (p.path.as_str(), p.title.as_str(), p.kind.as_str()))
+            .collect::<Vec<_>>(),
+        [("/", "Welcome", "Home"), ("/about", "About us", "About")]
+    );
+    let built = Temp::new();
+    built.write("README.md", "# Build instructions");
+    built.write("_site/index.html", "<title>Built site</title>");
+    built.write("_site/contact.html", "<h1>Contact us</h1>");
+    let source = collect_identity_source(&built.0).unwrap();
+    assert_eq!(
+        source
+            .pages
+            .iter()
+            .map(|p| p.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/", "/contact"]
+    );
+    let archive = Temp::new();
+    let entries: &[(&str, &[u8])] = &[
+        ("README.md", b"# Build instructions"),
+        ("_site/index.html", b"<title>Built site</title>"),
+        ("_site/contact.html", b"<h1>Contact us</h1>"),
+    ];
+    assert_eq!(
+        collect_identity_source(&zip(&archive, "built.zip", entries))
+            .unwrap()
+            .pages,
+        source.pages
+    );
+}
+
+#[test]
+fn page_titles_space_elements_and_prefer_frontmatter() {
+    let page = desegni_core::identity_source_page(
+        "src/pages/index.astro",
+        "<h1>AI guides<br>and <span>tools</span>from Cheli.</h1>",
+    )
+    .unwrap();
+    assert_eq!(page.title, "AI guides and tools from Cheli.");
+    let page = desegni_core::identity_source_page(
+        "src/pages/about.md",
+        "---\ntitle: 'Our studio | Site'\n---\n<title>Browser title</title><h1>Heading</h1>",
+    )
+    .unwrap();
+    assert_eq!(page.title, "Our studio");
+    assert!(desegni_core::identity_source_page("CLAUDE.md", "# Notes").is_none());
+    assert!(desegni_core::folder_source_page("photos/loose.jpg").is_none());
+}
+
+#[test]
+fn framework_roots_and_special_route_files_are_respected() {
+    for (config, files, expected) in [
+        (
+            "next.config.js",
+            vec![
+                ("app/(site)/page.tsx", "Home"),
+                ("app/(site)/about/page.tsx", "About"),
+                ("app/layout.tsx", "No"),
+                ("pages/api/test.ts", "No"),
+                ("pages/projects.tsx", "Projects"),
+            ],
+            vec!["/", "/about", "/projects"],
+        ),
+        (
+            "nuxt.config.ts",
+            vec![
+                ("pages/index.vue", "Home"),
+                ("pages/contact.vue", "Contact"),
+            ],
+            vec!["/", "/contact"],
+        ),
+        (
+            "svelte.config.js",
+            vec![
+                ("src/routes/+page.svelte", "Home"),
+                ("src/routes/about/+page.svelte", "About"),
+                ("src/routes/+layout.svelte", "No"),
+                ("src/routes/+error.svelte", "No"),
+            ],
+            vec!["/", "/about"],
+        ),
+        (
+            "hugo.toml",
+            vec![
+                ("content/_index.md", "Home"),
+                ("content/about.md", "About"),
+                ("content/posts/one.md", "One"),
+            ],
+            vec!["/", "/about", "/posts/one"],
+        ),
+        (
+            "gatsby-config.js",
+            vec![
+                ("src/pages/index.jsx", "Home"),
+                ("src/pages/about.jsx", "About"),
+            ],
+            vec!["/", "/about"],
+        ),
+        (
+            "vite.config.ts",
+            vec![
+                ("src/pages/index.html", "Home"),
+                ("src/pages/about.html", "About"),
+            ],
+            vec!["/", "/about"],
+        ),
+        (
+            ".eleventy.js",
+            vec![
+                ("index.njk", "Home"),
+                ("about.md", "About"),
+                ("_includes/layout.njk", "No"),
+            ],
+            vec!["/", "/about", "/outside"],
+        ),
+        (
+            "eleventy.config.js",
+            vec![
+                ("src/pages/index.njk", "Home"),
+                ("src/pages/about.md", "About"),
+            ],
+            vec!["/", "/about"],
+        ),
+    ] {
+        let temp = Temp::new();
+        temp.write(config, "export default {}");
+        temp.write("outside.html", "<h1>Not in routing root</h1>");
+        for (name, title) in files {
+            temp.write(name, format!("<h1>{title}</h1>"));
+        }
+        let source = collect_identity_source(&temp.0).unwrap();
+        assert_eq!(
+            source
+                .pages
+                .iter()
+                .map(|p| p.path.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "{config}"
+        );
+    }
+}
+
+#[test]
+fn astro_script_object_titles_are_not_frontmatter_or_markup() {
+    let text = "---\nconst steps = [{\n    title: 'Spin',\n    html: '<h1>Script text</h1>',\n}];\n---\n<h1>Wheely <span>Lucky</span>.</h1>";
+    let page =
+        desegni_core::identity_source_page("src/pages/projects/wheely-lucky.astro", text).unwrap();
+    assert_eq!(page.title, "Wheely Lucky.");
 }

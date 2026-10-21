@@ -1,27 +1,51 @@
-import type { GenerationJobView, Project } from './types';
+import { useEffect, useRef, useState } from 'react';
+import { native } from './api';
+import type { GenerationHistory, GenerationJobView, Project } from './types';
 
-// A read-only conversation view of the current generation: what was sent, then what came back.
-// It is temporary: it shows only the latest job and is not saved with the project.
+// Read-only current and locally saved conversations use the same message layout.
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
-export function GenerationLog({ job, operation, error, project, close }: {
+export function GenerationLog({ job: currentJob, operation, error, project, close }: {
   job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; close: () => void;
 }) {
+  const [history, setHistory] = useState<GenerationHistory | null>(null);
+  const [past, setPast] = useState<GenerationJobView | null>(null);
+  const [historyError, setHistoryError] = useState('');
+  const [loadingPast, setLoadingPast] = useState(false);
+  const historyEpoch = useRef(0);
+  useEffect(() => {
+    let active = true;
+    historyEpoch.current += 1; setPast(null); setHistory(null); setLoadingPast(false); setHistoryError('');
+    void native<GenerationHistory>('list_generations', { projectId: project.id }).then(value => { if (active) setHistory(value); }, error => { if (active) setHistoryError(String(error)); });
+    return () => { active = false; };
+  }, [project.id, currentJob?.jobId, currentJob?.status]);
+  async function showPast(jobId: string) {
+    const epoch = ++historyEpoch.current;
+    setLoadingPast(true); setHistoryError('');
+    try { const value = await native<GenerationJobView>('get_past_generation', { projectId: project.id, jobId }); if (epoch === historyEpoch.current) setPast(value); }
+    catch (error) { if (epoch === historyEpoch.current) setHistoryError(String(error)); }
+    finally { if (epoch === historyEpoch.current) setLoadingPast(false); }
+  }
+  const job = past ?? currentJob;
+  const frozen = jsonBlocks(job?.requirements.markdown ?? '').filter(value => value?.regionId && value?.pageId);
+  const context = jsonBlocks(job?.context?.markdown.split('\n## Requested context\n')[1] ?? '').flatMap(value => Array.isArray(value) ? value : []).filter(value => value?.id);
   const requests = (job?.areas ?? []).map(area => {
     const page = project.pages.find(item => item.id === area.pageId);
     const index = page?.regions.findIndex(region => region.id === area.regionId) ?? -1;
     const region = index >= 0 ? page!.regions[index] : undefined;
-    return { key: area.regionId, page: page?.name ?? 'Removed page', box: index + 1, prompt: region?.prompt ?? '', attachments: region?.attachments ?? [], phone: !!region?.mobileOnly };
+    const sent = frozen.find(item => item.regionId === area.regionId);
+    return { key: area.regionId, page: sent?.pageName || page?.name || 'Removed page', box: index + 1, prompt: sent?.prompt || region?.prompt || '', attachments: sent?.attachments ?? (past ? [] : region?.attachments ?? []), phone: !!(sent?.mobileOnly ?? (!past && region?.mobileOnly)) };
   });
-  const working = !!operation || job?.status === 'prepared' || job?.status === 'generating' || job?.status === 'ready' || job?.status === 'applying';
+  const working = !past && (!!operation || job?.status === 'prepared' || job?.status === 'generating' || job?.status === 'ready' || job?.status === 'applying');
   const candidate = job?.candidate;
   const failed = job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status);
   const raw = candidate ? JSON.stringify({ ...candidate, pages: candidate.pages.map(page => ({ pageId: page.pageId, html: `${page.content.html.length} characters`, css: `${page.content.css.length} characters`, javascript: `${page.content.javascript.length} characters` })) }, null, 2) : '';
   return <aside className="generation-log" aria-label="AI conversation">
-    <header><div><strong>AI conversation</strong><span>Read only · this generation</span></div><button type="button" aria-label="Hide AI conversation" title="Hide" onClick={close}>×</button></header>
+    <header><div><strong>AI conversation</strong><span>Read only · {past ? 'past generation' : 'this generation'}</span></div><button type="button" aria-label="Hide AI conversation" title="Hide" onClick={close}>×</button></header>
     <div className="log-messages">
-      {!job && !operation && !error && <p className="log-empty">Press Generate to see what is sent to the AI and what it replies.</p>}
+      {past && <button type="button" onClick={() => { historyEpoch.current += 1; setLoadingPast(false); setPast(null); }}>Back to current generation</button>}
+      {!job && !operation && !error && <p className="log-empty">No conversation yet.</p>}
       {(job || operation) && <section className="log-message from-you" aria-label="Sent to the AI">
         <p className="log-who">You → {job ? `${SERVICE[job.provider ?? 'openai']} · ${job.settings.model}` : 'AI'}</p>
         {job ? <>
@@ -29,11 +53,15 @@ export function GenerationLog({ job, operation, error, project, close }: {
           <ol className="log-requests">{requests.map(item => <li key={item.key}>
             <span className="log-meta">{item.page} · Box {item.box}{item.phone ? ' · Phone fix' : ''}</span>
             <p className="log-text">{item.prompt || <em>No description</em>}</p>
-            {item.attachments.length > 0 && <p className="log-meta">Attached: {item.attachments.map(attachment => attachment.name).join(', ')}</p>}
+            {item.attachments.length > 0 && <p className="log-meta">Attached: {item.attachments.map((attachment: { name: string }) => attachment.name).join(', ')}</p>}
           </li>)}</ol>
           <details><summary>Full instructions sent</summary><pre tabIndex={0} aria-label="Instructions sent">{job.requirements.markdown}</pre></details>
         </> : <p>{operation}</p>}
       </section>}
+      {job?.context && <>
+        <section className="log-message from-ai" aria-label="AI context request"><p className="log-who">{SERVICE[job.provider ?? 'openai']}</p><p>Asked for {context.length} more {context.length === 1 ? 'element' : 'elements'}</p><ul>{context.map(item => <li key={item.id}><code>{item.html?.match(/<([a-z][a-z0-9-]*)/i)?.[1] ?? 'element'} · {item.id}</code>{item.missing ? ' · unavailable' : ''}</li>)}</ul></section>
+        <section className="log-message from-you" aria-label="Context sent to the AI"><p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p><details><summary>Context sent</summary><pre tabIndex={0} aria-label="Context sent">{job.context.markdown}</pre></details></section>
+      </>}
       {job && <section className={`log-message from-ai${failed ? ' failed' : ''}`} aria-label="AI reply" aria-live="polite">
         <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
         {working && !candidate ? <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p> : null}
@@ -47,9 +75,38 @@ export function GenerationLog({ job, operation, error, project, close }: {
           <details><summary>Raw reply</summary><pre tabIndex={0} aria-label="Raw reply">{raw}</pre></details>
         </>}
         {failed && <p className="log-text">{job.status === 'cancelled' ? 'Stopped.' : job.message || 'The AI could not finish this request.'}{job.providerError?.responseFormat?.providerMessage ? ` ${job.providerError.responseFormat.providerMessage}` : ''}</p>}
+        {failed && job.rawReply && <details><summary>Raw reply</summary><pre tabIndex={0} aria-label="Failed raw reply">{job.rawReply}</pre></details>}
         {job.usage && <p className="log-meta">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
       </section>}
+      <details className="log-message" aria-label="Past generations"><summary>Past generations · {history?.jobs.length ?? 0}</summary>
+        {history?.jobs.map(item => <p key={item.jobId}><button type="button" disabled={loadingPast} aria-pressed={past?.jobId === item.jobId} onClick={() => { void showPast(item.jobId); }}>
+          <span className="log-meta">{item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Earlier generation'} · {statusLabel(item.status)}</span><br />
+          <span style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(item.firstRequest || item.summary).split('\n')[0].slice(0, 160)}</span>{item.usage && <><br /><span className="log-meta">{item.usage.inputTokens.toLocaleString()} sent · {item.usage.outputTokens.toLocaleString()} received</span></>}
+        </button></p>)}
+        {history?.skipped ? <p className="field-help">{history.skipped} saved records could not be read.</p> : null}
+        {history?.truncated && <p className="field-help">Showing the latest 100 saved generations.</p>}
+        {historyError && <p role="alert">{historyError}</p>}
+      </details>
       {error && <section className="log-message from-ai failed" role="alert"><p className="log-who">Desegnos</p><p className="log-text">{error}</p></section>}
     </div>
   </aside>;
+}
+
+function statusLabel(status: string) {
+  if (['applied', 'ready'].includes(status)) return 'Done';
+  if (['cancelled', 'discarded'].includes(status)) return 'Stopped';
+  if (['failed', 'unknown'].includes(status)) return 'Failed';
+  if (status === 'blocked') return 'Needs a decision';
+  return 'In progress';
+}
+
+function jsonBlocks(markdown: string): any[] {
+  const blocks: any[] = [];
+  let fence = ''; let lines: string[] = [];
+  for (const line of markdown.split('\n')) {
+    if (!fence) { const match = /^(`{3,})json$/.exec(line); if (match) { fence = match[1]; lines = []; } }
+    else if (line === fence) { try { blocks.push(JSON.parse(lines.join('\n'))); } catch { /* A partial diagnostic is still readable as text. */ } fence = ''; }
+    else lines.push(line);
+  }
+  return blocks;
 }

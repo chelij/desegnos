@@ -156,6 +156,8 @@ pub struct ResponseCorrelation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResponseFormat {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diagnostic_reply: Option<Box<str>>,
     pub content_type: Option<Box<str>>,
     pub body_kind: ResponseBodyKind,
     pub body_bytes: usize,
@@ -206,6 +208,17 @@ impl ProviderError {
             request_id: None,
             response_format: None,
         }
+    }
+
+    pub(crate) fn with_diagnostic_reply(mut self, text: &str, key: &ApiKey) -> Self {
+        if let Some(format) = &mut self.response_format {
+            format.diagnostic_reply = Some(if key.appears_in(text) {
+                "Reply body omitted because it contained a credential.".into()
+            } else {
+                scrub_diagnostic_reply(text, Some(key)).into_boxed_str()
+            });
+        }
+        self
     }
 
     pub(crate) fn before(kind: ErrorKind) -> Self {
@@ -264,6 +277,7 @@ impl ProviderError {
             })
             .map(|value| value.to_ascii_lowercase().into_boxed_str());
         self.response_format = Some(Box::new(ResponseFormat {
+            diagnostic_reply: None,
             content_type,
             body_kind,
             body_bytes,
@@ -474,4 +488,88 @@ fn safe_provider_message(key: &ApiKey, value: Option<&str>) -> Option<Box<str>> 
             .join(" ")
             .into_boxed_str(),
     )
+}
+
+/// Bounded local diagnostics. Scrub before truncation so a secret crossing the limit cannot leak.
+pub fn scrub_diagnostic_reply(text: &str, key: Option<&ApiKey>) -> String {
+    const LIMIT: usize = 64 * 1024;
+    let text = key.map_or_else(
+        || text.to_owned(),
+        |key| text.replace(key.expose(), "[redacted]"),
+    );
+    let mut output = String::new();
+    let mut redact_next = false;
+    let mut rest = text.as_str();
+    while !rest.is_empty() {
+        let end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || "_-.+/~".contains(c)))
+            .unwrap_or(rest.len());
+        if end == 0 {
+            let ch = rest.chars().next().unwrap();
+            if (!ch.is_control() || matches!(ch, '\n' | '\t'))
+                && !matches!(ch, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+            {
+                output.push(ch);
+            } else {
+                output.push_str("[control]");
+            }
+            rest = &rest[ch.len_utf8()..];
+        } else {
+            let word = &rest[..end];
+            let lower = word.to_ascii_lowercase();
+            let secret = redact_next
+                || ["sk-", "ghp_", "gho_", "github_pat_", "AIza"]
+                    .iter()
+                    .any(|prefix| word.starts_with(prefix))
+                || (word.starts_with("eyJ") && word.matches('.').count() == 2);
+            output.push_str(if secret { "[redacted]" } else { word });
+            redact_next = matches!(
+                lower.as_str(),
+                "bearer"
+                    | "authorization"
+                    | "api_key"
+                    | "apikey"
+                    | "access_token"
+                    | "accesstoken"
+                    | "refresh_token"
+                    | "refreshtoken"
+                    | "client_secret"
+                    | "password"
+            );
+            rest = &rest[end..];
+        }
+        if output.len() > LIMIT {
+            const MARKER: &str = "\n[reply truncated]";
+            while output.len() > LIMIT - MARKER.len() {
+                output.pop();
+            }
+            output.push_str(MARKER);
+            break;
+        }
+    }
+    output
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+    #[test]
+    fn failed_reply_diagnostics_scrub_credentials_before_utf8_bounding() {
+        let text = format!(
+            "Bearer private-token api_key=another-secret access_token=third-secret sk-different-secret eyJheader.payload.signature {}",
+            "é".repeat(70000)
+        );
+        let safe = scrub_diagnostic_reply(&text, None);
+        for secret in [
+            "private-token",
+            "another-secret",
+            "third-secret",
+            "sk-different-secret",
+            "eyJheader.payload.signature",
+        ] {
+            assert!(!safe.contains(secret));
+        }
+        assert!(safe.len() <= 64 * 1024);
+        assert!(safe.ends_with("[reply truncated]"));
+    }
 }

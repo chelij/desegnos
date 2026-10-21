@@ -3,9 +3,7 @@
 
 use crate::{io, load_project};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use desegni_core::{
-    Error, MAX_PROJECT_PHOTO_BYTES, MAX_PROJECT_PHOTOS, ProjectPhoto, Result, digest,
-};
+use desegni_core::{Error, MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, Result, digest};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -24,8 +22,8 @@ const MAX_ASSET_BYTES: usize = 128 * 1024;
 const MAX_ASSETS: usize = 4;
 const MAX_ASSET_URI_BYTES: usize = 512 * 1024;
 const MAX_COLLECTED_BYTES: usize = 4 * 1024 * 1024;
-const MAX_ARCHIVE_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_EXPANDED_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SKIPPED: usize = 256;
 const MAX_PHOTO_FILE_BYTES: usize = 30 * 1024 * 1024;
 const MAX_PHOTO_PIXELS: u64 = 80_000_000;
@@ -44,6 +42,8 @@ pub struct IdentitySource {
     /// Pictures that are not logos (portfolio, products, people), resized for the project.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub photos: Vec<IdentitySourcePhoto>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<desegni_core::SourcePage>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +62,8 @@ pub struct IdentitySourceFile {
     pub name: String,
     pub text: Option<String>,
     pub asset: Option<IdentitySourceAsset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_page: Option<desegni_core::SourcePageRef>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,7 +84,11 @@ struct Candidate {
 #[derive(Default)]
 struct Collector {
     candidates: Vec<Candidate>,
+    inventory: BTreeSet<String>,
     photos: Vec<IdentitySourcePhoto>,
+    photo_aliases: BTreeMap<String, Vec<String>>,
+    photo_origins: BTreeMap<String, Vec<desegni_core::SourcePageRef>>,
+    page_overrides: BTreeMap<String, desegni_core::SourcePage>,
     collected_bytes: usize,
     skipped: Vec<String>,
     omitted_reports: usize,
@@ -116,20 +122,22 @@ impl Collector {
     }
 
     fn add_photo(&mut self, name: String, bytes: &[u8]) {
-        if self.photos.len() == MAX_PROJECT_PHOTOS {
-            self.skip(&name, "only the first 16 photos are included");
-            return;
-        }
         match prepare_photo(&name, bytes) {
-            Ok(photo)
+            Ok(photo) => {
+                self.photo_aliases
+                    .entry(photo.photo.sha256.clone())
+                    .or_default()
+                    .push(name.clone());
                 if self
                     .photos
                     .iter()
-                    .any(|item| item.photo.sha256 == photo.photo.sha256) =>
-            {
-                self.skip(&name, "same photo as another file");
+                    .any(|item| item.photo.sha256 == photo.photo.sha256)
+                {
+                    self.skip(&name, "same photo as another file");
+                } else {
+                    self.photos.push(photo);
+                }
             }
-            Ok(photo) => self.photos.push(photo),
             Err(reason) => self.skip(&name, reason),
         }
     }
@@ -152,8 +160,22 @@ impl Collector {
     }
 
     fn finish(mut self, name: String) -> Result<IdentitySource> {
+        // A linked game is content on the site, not the site's own design. Keep a
+        // script in an asset app only when a site page actually loads it as a script.
+        let scripts = site_scripts(&self.candidates);
+        let mut candidates = std::mem::take(&mut self.candidates);
+        candidates.retain(|candidate| {
+            if asset_app_code(&candidate.name) && !scripts.contains(&candidate.name) {
+                self.skip(&candidate.name, "app or game code; not a site script");
+                false
+            } else {
+                true
+            }
+        });
+        self.candidates = candidates;
         self.candidates
             .sort_by_key(|candidate| (source_priority(&candidate.name), candidate.name.clone()));
+        let routes = source_routes(&self.inventory, &self.candidates);
         let selected_assets = choose_assets(&self.candidates);
         let mut files = Vec::new();
         let mut total_text = 0;
@@ -203,6 +225,18 @@ impl Collector {
             let fingerprint = digest(&candidate.bytes);
             files.push(IdentitySourceFile {
                 id: stable_id(&format!("file:{}:{fingerprint}", candidate.name)),
+                source_page: self
+                    .page_overrides
+                    .get(&candidate.name)
+                    .cloned()
+                    .or_else(|| {
+                        text.as_deref().and_then(|text| {
+                            routes.get(&candidate.name).and_then(|route| {
+                                desegni_core::source_page_at_route(&candidate.name, text, route)
+                            })
+                        })
+                    })
+                    .map(|page| page.reference()),
                 name: candidate.name,
                 text,
                 asset,
@@ -211,7 +245,70 @@ impl Collector {
         if files.is_empty() && self.photos.is_empty() {
             return Err(Error("No usable identity sources were found. Choose a Desegnos project, or a website folder or ZIP containing HTML, styles, identity notes, or logo files.".into()));
         }
-        files.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut pages: BTreeMap<_, _> = files
+            .iter()
+            .filter_map(|file| {
+                self.page_overrides.get(&file.name).cloned().or_else(|| {
+                    file.text.as_deref().and_then(|text| {
+                        routes.get(&file.name).and_then(|route| {
+                            desegni_core::source_page_at_route(&file.name, text, route)
+                        })
+                    })
+                })
+            })
+            .map(|page| (page.path.clone(), page))
+            .collect();
+        for item in &mut self.photos {
+            if let Some(aliases) = self.photo_aliases.get(&item.photo.sha256) {
+                for alias in aliases {
+                    for page in self.photo_origins.get(alias).into_iter().flatten() {
+                        if !item
+                            .photo
+                            .source_pages
+                            .iter()
+                            .any(|source| source.path == page.path)
+                        {
+                            item.photo.source_pages.push(page.clone());
+                        }
+                        pages.entry(page.path.clone()).or_insert_with(|| {
+                            desegni_core::SourcePage {
+                                path: page.path.clone(),
+                                title: page.title.clone(),
+                                url: page.url.clone(),
+                                kind: desegni_core::source_page_kind(&page.path, &page.title),
+                                photo_count: 0,
+                                item_count: 0,
+                            }
+                        });
+                    }
+                }
+            }
+            if item.photo.source_pages.is_empty() {
+                item.photo.source_pages = files
+                    .iter()
+                    .filter(|file| {
+                        file.source_page.is_some()
+                            && file.text.as_deref().is_some_and(|text| {
+                                self.photo_aliases
+                                    .get(&item.photo.sha256)
+                                    .is_some_and(|aliases| {
+                                        aliases.iter().any(|name| {
+                                            desegni_core::page_references_image(
+                                                &file.name, text, name,
+                                            )
+                                        })
+                                    })
+                            })
+                    })
+                    .filter_map(|file| file.source_page.clone())
+                    .collect();
+            }
+            for reference in &item.photo.source_pages {
+                if let Some(page) = pages.get_mut(&reference.path) {
+                    page.photo_count += 1;
+                }
+            }
+        }
         self.skipped.sort();
         self.skipped.dedup();
         if self.omitted_reports > 0 {
@@ -236,6 +333,7 @@ impl Collector {
             files,
             skipped: self.skipped,
             photos: self.photos,
+            pages: pages.into_values().collect(),
         })
     }
 }
@@ -247,12 +345,33 @@ pub fn identity_source_from_files(
     files: Vec<(String, Vec<u8>)>,
     skipped: Vec<String>,
 ) -> Result<IdentitySource> {
-    let mut collector = Collector::default();
+    identity_source_from_files_attributed(name, files, skipped, BTreeMap::new())
+}
+
+/// The crawler supplies explicit origins for image URLs whose CDN path or query
+/// cannot be reconstructed from the bounded local snapshot filename.
+pub fn identity_source_from_files_attributed(
+    name: &str,
+    files: Vec<(String, Vec<u8>)>,
+    skipped: Vec<String>,
+    photo_origins: BTreeMap<String, Vec<desegni_core::SourcePageRef>>,
+) -> Result<IdentitySource> {
+    let mut collector = Collector {
+        photo_origins,
+        ..Collector::default()
+    };
     for reason in skipped {
         collector.skip_reason(reason);
     }
     for (path, bytes) in files {
-        collector.add(path, bytes);
+        collector.inventory.insert(path.clone());
+        if excluded(&path) || !(relevant(&path) || is_photo(&path)) {
+            collector.skip(&path, "not needed to read your brand");
+        } else if is_photo(&path) {
+            collector.add_photo(path, &bytes);
+        } else {
+            collector.add(path, bytes);
+        }
     }
     collector.finish(name.to_owned())
 }
@@ -272,7 +391,15 @@ pub fn collect_identity_source(path: &Path) -> Result<IdentitySource> {
     let mut collector = Collector::default();
     if metadata.is_dir() {
         let root = path.canonicalize().map_err(io)?;
-        collect_folder(&root, &root, &mut 0, &mut collector)?;
+        collect_folder(&root, &root, &mut 0, &mut collector, false)?;
+        if source_routes(&collector.inventory, &collector.candidates).is_empty() {
+            // A downloaded static site may contain only a build folder.
+            collector.photos.clear();
+            collector.photo_aliases.clear();
+            collector.candidates.clear();
+            collector.collected_bytes = 0;
+            collect_folder(&root, &root, &mut 0, &mut collector, true)?;
+        }
     } else if metadata.is_file() {
         match extension(&name).as_str() {
             "desegnos" | "desegni" => collect_project(path, &metadata, &mut collector)?,
@@ -297,6 +424,7 @@ fn collect_folder(
     directory: &Path,
     entries: &mut usize,
     collector: &mut Collector,
+    include_build: bool,
 ) -> Result<()> {
     let mut children = Vec::new();
     for child in fs::read_dir(directory).map_err(io)? {
@@ -317,21 +445,22 @@ fn collect_folder(
             );
             continue;
         };
+        collector.inventory.insert(name.clone());
         let metadata = fs::symlink_metadata(&path).map_err(io)?;
         if metadata.file_type().is_symlink() {
             collector.skip(&name, "symbolic link; excluded");
-        } else if excluded(&name) {
+        } else if excluded(&name) || !include_build && build_path(&name) {
             collector.skip(
                 &name,
                 "private, generated, dependency, or unsupported source",
             );
+        } else if metadata.is_dir() && separate_site(&path) {
+            collector.skip(&name, "nested independent website");
         } else if metadata.is_dir() {
-            collect_folder(root, &path, entries, collector)?;
+            collect_folder(root, &path, entries, collector, include_build)?;
         } else if metadata.is_file() && is_photo(&name) {
             if metadata.len() > MAX_PHOTO_FILE_BYTES as u64 {
                 collector.skip(&name, "photo exceeds the 30 MiB file limit");
-            } else if collector.photos.len() == MAX_PROJECT_PHOTOS {
-                collector.skip(&name, "only the first 16 photos are included");
             } else {
                 let canonical = path.canonicalize().map_err(io)?;
                 if !canonical.starts_with(root) {
@@ -363,7 +492,7 @@ fn collect_folder(
 fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> Result<()> {
     if metadata.len() > MAX_ARCHIVE_BYTES {
         return Err(Error(
-            "The website ZIP exceeds the 64 MiB archive limit.".into(),
+            "The website ZIP exceeds the 2 GiB archive limit.".into(),
         ));
     }
     let mut archive = ZipArchive::new(open_unchanged(path, metadata)?).map_err(io)?;
@@ -374,6 +503,18 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
     }
     let mut total = 0_u64;
     let mut names = BTreeSet::new();
+    collector
+        .inventory
+        .extend(archive.file_names().map(str::to_owned));
+    let source_names = archive
+        .file_names()
+        .filter(|name| !excluded(name) && !build_path(name) && relevant(name))
+        .map(|name| Candidate {
+            name: name.to_owned(),
+            bytes: Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    let has_sources = !source_routes(&collector.inventory, &source_names).is_empty();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(io)?;
         let name = entry.name().to_owned();
@@ -394,7 +535,7 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
             .ok_or_else(|| Error("ZIP expanded size overflow.".into()))?;
         if total > MAX_EXPANDED_BYTES {
             return Err(Error(
-                "The website ZIP exceeds the 64 MiB expanded size limit.".into(),
+                "The website ZIP exceeds the 2 GiB expanded size limit.".into(),
             ));
         }
         if entry.size() > 1024 * 1024
@@ -407,11 +548,10 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
         if entry.is_dir() {
             continue;
         }
-        if !excluded(&name) && is_photo(&name) {
+        let skip = excluded(&name) || has_sources && build_path(&name);
+        if !skip && is_photo(&name) {
             if entry.size() > MAX_PHOTO_FILE_BYTES as u64 {
                 collector.skip(&name, "photo exceeds the 30 MiB file limit");
-            } else if collector.photos.len() == MAX_PROJECT_PHOTOS {
-                collector.skip(&name, "only the first 16 photos are included");
             } else {
                 let expected = entry.size();
                 let bytes = read_bounded(&mut entry, MAX_PHOTO_FILE_BYTES)?;
@@ -422,7 +562,7 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
                 }
                 collector.add_photo(name, &bytes);
             }
-        } else if excluded(&name) || !relevant(&name) {
+        } else if skip || !relevant(&name) {
             collector.skip(
                 &name,
                 "private, generated, dependency, or unsupported source",
@@ -455,6 +595,20 @@ fn collect_project(path: &Path, metadata: &Metadata, collector: &mut Collector) 
     );
     for (index, page) in project.pages.iter().enumerate() {
         let prefix = format!("pages/{:03}-{}", index + 1, page.id);
+        let source = desegni_core::SourcePage {
+            path: page.path.clone(),
+            title: page.name.clone(),
+            url: None,
+            kind: desegni_core::source_page_kind(&page.path, &page.name),
+            photo_count: 0,
+            item_count: 0,
+        };
+        collector
+            .page_overrides
+            .insert(format!("{prefix}/page.json"), source.clone());
+        collector
+            .page_overrides
+            .insert(format!("{prefix}/index.html"), source);
         collector.add(format!("{prefix}/page.json"), serde_json::to_vec(&serde_json::json!({ "name": page.name, "path": page.path, "appearance": page.appearance, "viewport": page.viewport })).map_err(io)?);
         if let Some(content) = &page.content {
             for (name, value) in [
@@ -499,7 +653,7 @@ fn collect_project(path: &Path, metadata: &Metadata, collector: &mut Collector) 
     Ok(())
 }
 
-fn open_unchanged(path: &Path, expected: &Metadata) -> Result<File> {
+pub(crate) fn open_unchanged(path: &Path, expected: &Metadata) -> Result<File> {
     if fs::symlink_metadata(path)
         .map_err(io)?
         .file_type()
@@ -601,6 +755,16 @@ fn is_text(name: &str) -> bool {
             | "json"
             | "svg"
             | "txt"
+            | "astro"
+            | "vue"
+            | "svelte"
+            | "njk"
+            | "hbs"
+            | "liquid"
+            | "php"
+            | "toml"
+            | "yaml"
+            | "yml"
     )
 }
 
@@ -611,9 +775,9 @@ fn is_image(name: &str) -> bool {
     )
 }
 
-/// PNG and JPEG pictures that are not logos or icons.
+/// PNG, JPEG and WebP pictures that are not logos or icons.
 fn is_photo(name: &str) -> bool {
-    matches!(extension(name).as_str(), "png" | "jpg" | "jpeg") && !logo_name(name)
+    matches!(extension(name).as_str(), "png" | "jpg" | "jpeg" | "webp") && !logo_name(name)
 }
 
 fn jpeg(image: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
@@ -692,6 +856,7 @@ fn prepare_photo(
             width,
             height,
             description: String::new(),
+            source_pages: vec![],
         },
         thumbnail: format!("data:image/jpeg;base64,{}", STANDARD.encode(&thumbnail)),
     })
@@ -709,8 +874,6 @@ fn excluded(name: &str) -> bool {
                 part.as_str(),
                 "node_modules"
                     | "target"
-                    | "dist"
-                    | "build"
                     | "coverage"
                     | "vendor"
                     | "__pycache__"
@@ -729,6 +892,15 @@ fn excluded(name: &str) -> bool {
             || part.ends_with(".map")
             || part.ends_with(".min.js")
             || part.ends_with(".min.css")
+            || part.contains(".min.")
+            || part.starts_with("vendor.")
+            || part.contains(".bundle.")
+            || part.split(['.', '-', '_']).any(|word| {
+                matches!(
+                    word,
+                    "license" | "licence" | "licenses" | "licences" | "ofl" | "copying"
+                )
+            })
             || [
                 "package-lock.json",
                 "pnpm-lock.yaml",
@@ -747,14 +919,96 @@ fn excluded(name: &str) -> bool {
             || part.contains("secret")
             || part.contains("private-key")
             || part.starts_with("config.")
-            || part.ends_with(".config.js")
-            || part.ends_with(".config.ts")
-            || part.ends_with(".config.json")
+            || (part.contains(".config.")
+                && !["tailwind", "theme", "unocss"]
+                    .iter()
+                    .any(|prefix| part.starts_with(prefix)))
             || matches!(
                 extension(&part).as_str(),
                 "pem" | "key" | "p12" | "pfx" | "keystore"
             )
     })
+}
+
+fn build_path(name: &str) -> bool {
+    name.split('/').any(|part| {
+        matches!(
+            part.to_ascii_lowercase().as_str(),
+            "dist" | "build" | "out" | "_site"
+        )
+    })
+}
+
+fn asset_app_path(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    let parts: Vec<_> = lower.split('/').collect();
+    parts.windows(2).any(|pair| {
+        matches!(pair[0], "public" | "static" | "assets")
+            && matches!(
+                pair[1],
+                "play" | "games" | "game" | "apps" | "app" | "demos" | "downloads" | "experiments"
+            )
+    })
+}
+
+fn asset_app_code(name: &str) -> bool {
+    asset_app_path(name)
+        && matches!(
+            extension(name).as_str(),
+            "js" | "mjs"
+                | "cjs"
+                | "ts"
+                | "jsx"
+                | "tsx"
+                | "html"
+                | "htm"
+                | "css"
+                | "scss"
+                | "sass"
+                | "less"
+                | "astro"
+                | "vue"
+                | "svelte"
+                | "json"
+        )
+}
+
+fn site_scripts(candidates: &[Candidate]) -> BTreeSet<String> {
+    let mut references = BTreeSet::new();
+    for candidate in candidates
+        .iter()
+        .filter(|candidate| !asset_app_path(&candidate.name))
+    {
+        let Ok(text) = std::str::from_utf8(&candidate.bytes) else {
+            continue;
+        };
+        for tag in text
+            .split("<script")
+            .skip(1)
+            .filter_map(|part| part.split_once('>').map(|(tag, _)| tag))
+        {
+            let compact = tag.split_whitespace().collect::<String>();
+            let Some((_, value)) = compact.split_once("src=") else {
+                continue;
+            };
+            let value = value
+                .trim_start_matches(['\'', '"'])
+                .split(['\'', '"', '?', '#'])
+                .next()
+                .unwrap_or_default();
+            for file in candidates {
+                let public = file
+                    .name
+                    .strip_prefix("public/")
+                    .or_else(|| file.name.strip_prefix("static/"))
+                    .unwrap_or(&file.name);
+                if value.trim_start_matches('/') == public || value == file.name {
+                    references.insert(file.name.clone());
+                }
+            }
+        }
+    }
+    references
 }
 
 fn logo_name(name: &str) -> bool {
@@ -765,28 +1019,49 @@ fn logo_name(name: &str) -> bool {
 }
 
 fn source_priority(name: &str) -> u8 {
+    if asset_app_path(name) {
+        return 9;
+    }
     let lower = name.to_ascii_lowercase();
-    if [
-        "identity",
-        "brand",
-        "token",
-        "palette",
-        "typograph",
-        "readme",
-        "project.md",
-    ]
-    .iter()
-    .any(|part| lower.contains(part))
-        && !is_image(name)
+    let stem = Path::new(&lower)
+        .file_stem()
+        .and_then(|part| part.to_str())
+        .unwrap_or_default();
+    let style = matches!(extension(name).as_str(), "css" | "scss" | "sass" | "less");
+    if (style
+        && ["global", "style", "theme", "token", "base", "main", "app"]
+            .iter()
+            .any(|part| stem.contains(part)))
+        || ["tailwind", "theme", "token", "palette", "typograph"]
+            .iter()
+            .any(|part| lower.contains(part))
+            && !is_image(name)
     {
         0
+    } else if lower.contains("layout") {
+        1
+    } else if matches!(stem, "index" | "home" | "about" | "about-us") {
+        2
+    } else if ["header", "footer", "navbar", "navigation"]
+        .iter()
+        .any(|part| stem.contains(part))
+    {
+        3
+    } else if ["readme", "design", "brand", "identity", "project.md"]
+        .iter()
+        .any(|part| lower.contains(part))
+        && !is_image(name)
+    {
+        4
+    } else if is_image(name) && logo_name(name) {
+        5
+    } else if style {
+        6
     } else {
         match extension(name).as_str() {
-            "css" | "scss" | "sass" | "less" => 1,
-            "html" | "htm" | "md" | "mdx" => 2,
-            "svg" => 3,
-            "png" | "jpg" | "jpeg" | "webp" => 4,
-            _ => 5,
+            "html" | "htm" | "astro" | "vue" | "svelte" | "jsx" | "tsx" | "md" | "mdx" | "njk"
+            | "hbs" | "liquid" | "php" => 7,
+            _ => 8,
         }
     }
 }
@@ -1136,4 +1411,218 @@ fn raster_size(name: &str, bytes: &[u8]) -> Option<(u32, u32)> {
 
 fn little_24(bytes: &[u8]) -> u32 {
     bytes[0] as u32 | (bytes[1] as u32) << 8 | (bytes[2] as u32) << 16
+}
+
+fn separate_site(path: &Path) -> bool {
+    path.join(".desegnos").exists()
+        || fs::read_dir(path).is_ok_and(|mut entries| {
+            entries.any(|entry| {
+                entry.is_ok_and(|entry| {
+                    extension(&entry.file_name().to_string_lossy()) == "desegnos"
+                })
+            })
+        })
+        || path.join("index.html").is_file() && path.join("package.json").is_file()
+}
+
+/// Routing evidence is computed before the bounded analysis snapshot is ranked.
+/// Configuration is inspected by name only; no project code is ever executed.
+fn source_routes(
+    inventory: &BTreeSet<String>,
+    candidates: &[Candidate],
+) -> BTreeMap<String, String> {
+    let has = |prefix: &str| inventory.iter().any(|name| name.starts_with(prefix));
+    let config = |prefix: &str| {
+        inventory
+            .iter()
+            .any(|name| !name.contains('/') && name.starts_with(prefix))
+    };
+    let astro = config("astro.config.");
+    let next = config("next.config.");
+    let nuxt = config("nuxt.config.");
+    let svelte = config("svelte.config.");
+    let hugo = config("hugo.")
+        || (has("content/")
+            && (inventory.contains("config.toml") || inventory.contains("config.yaml")));
+    let eleventy = config(".eleventy.") || config("eleventy.config.");
+    let framework = astro
+        || next
+        || nuxt
+        || svelte
+        || hugo
+        || eleventy
+        || config("gatsby-config.")
+        || config("vite.config.") && has("src/pages/");
+    let roots: Vec<&str> = if hugo {
+        vec!["content/"]
+    } else if svelte {
+        vec!["src/routes/"]
+    } else if next {
+        vec!["src/app/", "app/", "src/pages/", "pages/"]
+    } else if astro {
+        vec!["src/pages/"]
+    } else if nuxt {
+        vec!["app/pages/", "pages/"]
+    } else if eleventy && !has("src/pages/") && !has("pages/") {
+        // Eleventy's default input is the project directory.
+        vec![""]
+    } else {
+        vec!["src/pages/", "pages/"]
+    };
+    let framework_sources = candidates
+        .iter()
+        .any(|c| roots.iter().any(|root| c.name.starts_with(root)));
+    let source_html = candidates.iter().any(|c| {
+        matches!(extension(&c.name).as_str(), "html" | "htm")
+            && !build_path(&c.name)
+            && !c.name.starts_with("public/")
+    });
+    let mut routes = BTreeMap::new();
+    for candidate in candidates {
+        let name = &candidate.name;
+        let ext = extension(name);
+        let root = roots.iter().find(|root| name.starts_with(**root));
+        let relative = if let Some(root) = root {
+            &name[root.len()..]
+        } else if (!framework || !framework_sources && build_path(name))
+            && matches!(ext.as_str(), "html" | "htm")
+        {
+            name.as_str()
+        } else {
+            continue;
+        };
+        if name
+            .split('/')
+            .any(|p| p.starts_with('.') || p == "node_modules")
+        {
+            continue;
+        }
+        // Independent exports inside ZIPs have the same boundary as folders.
+        if name.match_indices('/').any(|(i, _)| {
+            let prefix = &name[..i];
+            inventory.contains(&format!("{prefix}/.desegnos"))
+                || inventory
+                    .iter()
+                    .any(|n| n.starts_with(&format!("{prefix}/")) && extension(n) == "desegnos")
+                || inventory.contains(&format!("{prefix}/index.html"))
+                    && inventory.contains(&format!("{prefix}/package.json"))
+        }) {
+            continue;
+        }
+        if (root.is_none() || eleventy)
+            && (source_html && (build_path(name) || name.starts_with("public/"))
+                || relative
+                    .split('/')
+                    .any(|p| ["docs", "notes", "anti-slop", "audits", "audit"].contains(&p)))
+        {
+            continue;
+        }
+        let mut route = relative
+            .rsplit_once('.')
+            .map_or(relative, |(stem, _)| stem)
+            .to_owned();
+        if next && (name.starts_with("app/") || name.starts_with("src/app/")) {
+            if !["js", "jsx", "ts", "tsx", "mdx"].contains(&ext.as_str())
+                || route.rsplit('/').next() != Some("page")
+            {
+                continue;
+            }
+            route = route
+                .strip_suffix("page")
+                .unwrap()
+                .trim_end_matches('/')
+                .split('/')
+                .filter(|part| !part.starts_with('(') && !part.starts_with('@'))
+                .collect::<Vec<_>>()
+                .join("/");
+            if relative
+                .split('/')
+                .any(|p| p.starts_with('@') || p.starts_with('_'))
+            {
+                continue;
+            }
+        } else if svelte {
+            if !relative.ends_with("+page.svelte") {
+                continue;
+            }
+            route = route
+                .trim_end_matches("+page")
+                .trim_end_matches('/')
+                .split('/')
+                .filter(|part| !part.starts_with('('))
+                .collect::<Vec<_>>()
+                .join("/");
+        } else if ![
+            "html", "htm", "astro", "md", "mdx", "vue", "js", "jsx", "ts", "tsx", "njk", "liquid",
+        ]
+        .contains(&ext.as_str())
+            || ["js", "jsx", "ts", "tsx"].contains(&ext.as_str())
+                && !next
+                && !config("gatsby-config.")
+        {
+            continue;
+        }
+        // API handlers and local administration tools are not visitor pages.
+        if route
+            .split('/')
+            .any(|part| ["api", "admin"].contains(&part))
+        {
+            continue;
+        }
+        if root.is_some()
+            && route
+                .split('/')
+                .any(|p| p.starts_with('_') && !(hugo && p == "_index"))
+        {
+            continue;
+        }
+        if hugo && route.ends_with("_index") {
+            route.truncate(route.len() - 6);
+        }
+        if route.contains('[') {
+            let prefix = route.split('[').next().unwrap().trim_end_matches('/');
+            let text = std::str::from_utf8(&candidate.bytes).unwrap_or_default();
+            // Only expand the collection named by this route, with literal evidence
+            // that the route renders that collection.
+            let collection = text
+                .split_once("getCollection(")
+                .and_then(|(_, rest)| {
+                    let rest = rest.trim_start();
+                    let quote = rest.chars().next()?;
+                    if !['\'', '"'].contains(&quote) {
+                        return None;
+                    }
+                    rest[1..]
+                        .split_once(quote)
+                        .map(|(collection, _)| collection)
+                })
+                .unwrap_or_else(|| prefix.rsplit('/').next().unwrap_or_default());
+            let content_prefix = format!("src/content/{collection}/");
+            let items: Vec<_> = candidates
+                .iter()
+                .filter(|item| {
+                    item.name.starts_with(&content_prefix)
+                        && ["md", "mdx"].contains(&extension(&item.name).as_str())
+                })
+                .collect();
+            if !items.is_empty()
+                && (text.contains(&format!("'{collection}'"))
+                    || text.contains(&format!("\"{collection}\"")))
+            {
+                for item in items {
+                    let slug = &item.name[content_prefix.len()..];
+                    let slug = slug.rsplit_once('.').unwrap().0;
+                    routes.insert(
+                        item.name.clone(),
+                        desegni_core::source_page_path(&format!("{prefix}/{slug}")),
+                    );
+                }
+            } else if items.is_empty() && !prefix.is_empty() {
+                routes.insert(name.clone(), desegni_core::source_page_path(prefix));
+            }
+            continue;
+        }
+        routes.insert(name.clone(), desegni_core::source_page_path(&route));
+    }
+    routes
 }

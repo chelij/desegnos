@@ -19,7 +19,7 @@ export async function logoScopeWorkflow(driver, physical, step, evidence, provid
       return current.pages[0].content?.html.includes('project-logo') && current;
     }, 'The approved project logo did not apply', 25000);
     const record = provider.generationRequests().at(-1);
-    assert.match(record.markdown, /Requirements format: 10/);
+    assert.match(record.markdown, /Requirements format: 14/);
     assert.ok(record.markdown.includes(`desegnos-asset:${asset.id}`));
     assert.ok(!record.markdown.includes(asset.dataUri));
     assert.match(record.markdown, /never in page HTML/);

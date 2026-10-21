@@ -6,6 +6,12 @@ import { chooseFile, savedState, verifyArchive } from './file-dialog-workflow.mj
 
 const workspace = driver => driver.invoke('get_workspace');
 const settled = driver => driver.executeAsync(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
+const measurementClear = (driver, number) => driver.execute(number => {
+  const label=document.querySelector('.workspace-measurement'), text=document.querySelector(`textarea[aria-label="Request ${number}"]`);
+  if (!label || !text) return true;
+  const a=label.getBoundingClientRect(),b=text.getBoundingClientRect();
+  return a.right<=b.left || a.left>=b.right || a.bottom<=b.top || a.top>=b.bottom;
+},number);
 
 async function sitePoint(driver) {
   return driver.execute(() => {
@@ -107,9 +113,65 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     await driver.button('Redo'); await waitFor(async()=>JSON.stringify((await workspace(driver)).project.pages[0].regions.at(-1).rect)===JSON.stringify(size),'Redo did not restore the oversized resize');
     await writeFile(join(output,'large-geometry.json'),JSON.stringify({drawn:region.rect,moved:moved.pages[0].regions.at(-1).rect,resized:size},null,2));
   });
-  await step('Large rectangles save and reopen byte-exactly as a Desegnos project', async () => {
-    const destination=join(output,'Canvas pointer and size.desegnos');
-    await chooseFile(physical,()=>driver.button('Save'),destination,evidence,'canvas-save');
+  await step('A Shift-drawn circle has a round outline and actual-shape hit testing', async () => {
+    // Park the enormous existing request away from the guide before drawing there.
+    // Its textarea otherwise covers the entire guide at ordinary zoom.
+    const largeGrip=await physical.rect('[aria-label="Move request 3"]'), largeFrom={x:largeGrip.left+largeGrip.width/2,y:largeGrip.top+largeGrip.height/2};
+    await physical.drag(largeFrom,{x:largeFrom.x+650,y:largeFrom.y}); await settled(driver);
+    await driver.button('Fit'); await driver.menu(['Circle'], 'Request shape'); await settled(driver);
+    const view = await physical.rect('.workspace-scroll'), from = { x:view.left+view.width*.55, y:view.top+90 };
+    await physical.drag(from, { x:from.x+120, y:from.y+75 }, ['Shift']);
+    await driver.fill('Request 4', 'Edit inside the circle, preserving the corners.');
+    const region = await waitFor(async () => (await workspace(driver)).project.pages[0].regions.find(region => region.shape?.kind==='ellipse'), 'The circle did not persist');
+    assert.ok(Math.abs(region.rect.width-region.rect.height)<.01, JSON.stringify(region));
+    assert.equal(await driver.execute(id => !!document.querySelector(`[data-testid="area-outline"][data-region-id="${id}"] ellipse`),region.id), true);
+    await physical.keys('Escape'); await driver.click('[aria-label="Canvas tools"] button[title^="Select"]');
+    const outline = await physical.rect(`[data-testid="area-outline"][data-region-id="${region.id}"]`);
+    await physical.click({x:outline.left+4,y:outline.top+4});
+    await waitFor(() => driver.execute(id => !document.querySelector(`[data-testid="area-outline"][data-region-id="${id}"]`).classList.contains('selected'),region.id),'Clicking a circle corner incorrectly selected the area');
+    await physical.click({x:outline.left+outline.width/2,y:outline.top+outline.height/2});
+    await waitFor(() => driver.execute(id => document.querySelector(`[data-testid="area-outline"][data-region-id="${id}"]`).classList.contains('selected'),region.id),'Clicking inside the circle did not select it');
+    await physical.keys('V'); await physical.keys('R');
+    assert.equal(await driver.execute(() => localStorage.getItem('desegnos.request-shape')), 'ellipse');
+    assert.equal(await driver.execute(() => document.querySelector('[aria-label="Request shape"]').textContent.includes('Circle')),true);
+    assert.equal(await measurementClear(driver,4),true,'The size label covers the circle prompt');
+    await physical.captureWindow(join(output,'circle-outline.png'));
+  });
+  await step('A native lasso closes, keeps relative points through move/resize, and supports Undo/Redo', async () => {
+    await physical.keys('L');
+    const view=await physical.rect('.workspace-scroll'), start={x:view.left+view.width*.78,y:view.top+view.height*.5};
+    const points=[[0,0],[70,-10],[105,35],[90,85],[35,100],[-20,65],[-30,15],[-5,5]].map(([x,y])=>({x:start.x+x,y:start.y+y}));
+    await physical.path(points); await driver.fill('Request 5','Only edit the closed freehand area.');
+    const region=await waitFor(async()=> (await workspace(driver)).project.pages[0].regions.find(region=>region.shape?.kind==='freehand'),'The freehand region did not persist');
+    assert.ok(region.shape.points.length>=3 && region.shape.points.length<=200);
+    assert.ok(region.shape.points.every(point=>point.length===2 && point.every(n=>Number.isFinite(n)&&n>=0&&n<=1)));
+    assert.equal(await driver.execute(id=>document.querySelector(`[data-testid="area-outline"][data-region-id="${id}"] path`)?.getAttribute('d').endsWith('Z'),region.id),true);
+    await physical.keys('Escape');
+    const grip=await physical.rect('[aria-label="Move request 5"]'), from={x:grip.left+grip.width/2,y:grip.top+grip.height/2};
+    await physical.drag(from,{x:from.x-25,y:from.y+10});
+    const moved=await waitFor(async()=>{const r=(await workspace(driver)).project.pages[0].regions.find(r=>r.id===region.id);return r.rect.x!==region.rect.x&&r;},'The lasso move did not persist');
+    assert.deepEqual(moved.shape,region.shape);
+    const resize=await physical.rect('[aria-label="Resize request 5"]'), corner={x:resize.left+resize.width/2,y:resize.top+resize.height/2};
+    await physical.drag(corner,{x:corner.x+30,y:corner.y+20});
+    const resized=await waitFor(async()=>{const r=(await workspace(driver)).project.pages[0].regions.find(r=>r.id===region.id);return r.rect.width!==moved.rect.width&&r;},'The lasso resize did not persist');
+    assert.deepEqual(resized.shape,region.shape);
+    await driver.button('Undo'); await waitFor(async()=>JSON.stringify((await workspace(driver)).project.pages[0].regions.find(r=>r.id===region.id).rect)===JSON.stringify(moved.rect),'Undo did not restore lasso bounds');
+    await driver.button('Redo'); await waitFor(async()=>JSON.stringify((await workspace(driver)).project.pages[0].regions.find(r=>r.id===region.id).rect)===JSON.stringify(resized.rect),'Redo did not restore lasso bounds');
+    assert.equal(await measurementClear(driver,5),true,'The size label covers the freehand prompt');
+    await writeFile(join(output,'shape-geometry.json'),JSON.stringify({circle:(await workspace(driver)).project.pages[0].regions.find(r=>r.shape?.kind==='ellipse'),drawn:region,moved,resized},null,2));
+    await physical.captureWindow(join(output,'freehand-outline.png'));
+  });
+  await step('Escape cancels a lasso without leaving a partial area', async () => {
+    await driver.click('[aria-label="Canvas tools"] button[title^="Add request"]');
+    const before=(await workspace(driver)).project.pages[0].regions.length;
+    const view=await physical.rect('.workspace-scroll'),from={x:view.right-75,y:view.top+75};
+    await physical.path([from,{x:from.x-50,y:from.y+40},{x:from.x-20,y:from.y+70},{x:from.x+15,y:from.y+30}],true); await settled(driver);
+    assert.equal((await workspace(driver)).project.pages[0].regions.length,before);
+    assert.equal(await driver.execute(()=>!!document.querySelector('[data-testid="area-draft"]')),false);
+  });
+  await step('Rectangles, circles and lassos save and reopen byte-exactly as a Desegnos project', async () => {
+    const destination=(await driver.invoke('get_workspace')).path;
+    await driver.button('Save');
     const saved=await savedState(driver,destination); await verifyArchive(destination,saved.project,await driver.invoke('get_project_notes'));
     await driver.menu(['New project']); await driver.button('Blank website'); await driver.fill('Project name','Temporary reopen check'); await driver.button('Create project');
     await waitFor(async()=>(await workspace(driver)).project.id!==saved.project.id,'The temporary project did not replace the saved one');
@@ -121,7 +183,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     await driver.button('Fit'); await driver.button('Layers'); await driver.click('section[aria-label="Layers"] .layer-row[data-region-id="'+saved.project.pages[0].regions.at(-1).id+'"] button.layer-select'); await driver.button('Close Layers'); await settled(driver);
     const anchor=await physical.rect('[data-region-id="'+saved.project.pages[0].regions.at(-1).id+'"]'),view=await physical.rect('.workspace-scroll');
     assert.ok(anchor.left>=view.left && anchor.left<view.right && anchor.top>=view.top && anchor.top<view.bottom,JSON.stringify({anchor,view}));
-    await driver.fill('Request 3','A large area preserved after reopening, with an unsaved revision.');
+    await driver.fill(`Request ${saved.project.pages[0].regions.length}`,'The shaped area is preserved after reopening, with an unsaved revision.');
     await waitFor(async()=>(await workspace(driver)).dirty,'The recovery revision did not persist');
   });
   return (await workspace(driver)).project;

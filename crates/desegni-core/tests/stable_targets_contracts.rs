@@ -179,7 +179,7 @@ fn multi_target_scope_accepts_only_selected_subtrees_and_preserves_shared_source
     let b = target(&p, "article:nth-of-type(2)");
     let p = describe(p, &[a.clone(), b]);
     let snapshot = p.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), ELEMENT_FIX_FORMAT);
+    assert_eq!(snapshot.format_version().unwrap(), 14);
     assert!(snapshot.markdown.contains("\"elements\""));
     let original = &p.pages[0].content.as_ref().unwrap().html;
     let c = candidate(
@@ -310,6 +310,8 @@ fn migration_assigns_and_remaps_without_modifying_original_bytes_or_revision() {
         source_sha256: p.pages[0].content.as_ref().unwrap().sha256().unwrap(),
     };
     p.pages[0].regions.push(Region {
+        shape: Default::default(),
+        area_bounds: vec![],
         id: Uuid::new_v4(),
         rect: Rect {
             x: 0.,
@@ -617,7 +619,7 @@ fn migration_preserves_frozen_receipts_but_never_rebinds_them_to_changed_source(
     assert_eq!(serde_json::to_vec(&snapshot).unwrap(), receipt);
     let new = preserved.prepare_requirements().unwrap();
     assert_ne!(new.sha256, snapshot.sha256);
-    assert_eq!(new.format_version().unwrap(), 10);
+    assert_eq!(new.format_version().unwrap(), 14);
     assert_eq!(
         preserved.pages[0].regions[0].prompt,
         original.pages[0].regions[0].prompt
@@ -722,6 +724,7 @@ fn attached_pictures_stay_out_of_ai_instructions_and_are_inserted_on_apply() {
             name: "bread.png".into(),
             kind: AttachmentKind::Image,
             data_uri: Some(png.into()),
+            preview: None,
             text: None,
             url: None,
         },
@@ -733,6 +736,7 @@ fn attached_pictures_stay_out_of_ai_instructions_and_are_inserted_on_apply() {
             name: "menu.txt".into(),
             kind: AttachmentKind::Text,
             data_uri: None,
+            preview: None,
             text: Some("Sourdough £4.50".into()),
             url: None,
         },
@@ -744,6 +748,7 @@ fn attached_pictures_stay_out_of_ai_instructions_and_are_inserted_on_apply() {
             name: "shop".into(),
             kind: AttachmentKind::Link,
             data_uri: None,
+            preview: None,
             text: None,
             url: Some("https://crumb.example/order".into()),
         },
@@ -763,6 +768,7 @@ fn attached_pictures_stay_out_of_ai_instructions_and_are_inserted_on_apply() {
                 name: "x.png".into(),
                 kind: AttachmentKind::Image,
                 data_uri: Some("data:image/png;base64,AAAA".into()),
+                preview: None,
                 text: None,
                 url: None,
             },
@@ -785,9 +791,33 @@ fn attached_pictures_stay_out_of_ai_instructions_and_are_inserted_on_apply() {
     let applied = p.apply_generation(&snapshot, &c, &[]).unwrap();
     let html = &applied.pages[0].content.as_ref().unwrap().html;
     assert!(
-        html.contains(png) && !html.contains(ATTACHMENT_ATTRIBUTE),
+        applied
+            .resolve_site_content(applied.pages[0].content.as_ref().unwrap())
+            .unwrap()
+            .html
+            .contains(png)
+            && html.contains("desegnos-asset:")
+            && !html.contains(ATTACHMENT_ATTRIBUTE),
         "{html}"
     );
+    // The AI saw a small preview; afterwards only the placed copy is kept.
+    assert_eq!(snapshot.images.len(), 1);
+    assert_eq!(snapshot.images[0].attachment_id, image_id);
+    assert!(
+        snapshot.images[0]
+            .data_uri
+            .starts_with("data:image/jpeg;base64,")
+    );
+    assert!(
+        applied.pages[0]
+            .regions
+            .last()
+            .unwrap()
+            .attachments
+            .iter()
+            .all(|item| item.kind != AttachmentKind::Image)
+    );
+    assert_eq!(applied.pictures.len(), 1);
     // Removing an attachment works and is validated.
     let removed = p
         .apply(
@@ -803,4 +833,68 @@ fn attached_pictures_stay_out_of_ai_instructions_and_are_inserted_on_apply() {
         removed.pages[0].regions.last().unwrap().attachments.len(),
         2
     );
+}
+
+#[test]
+fn large_attached_pictures_are_previewed_small_and_kept_at_display_size() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let mut pixels = image::RgbImage::new(4000, 2000);
+    let mut seed = 3_u32;
+    for pixel in pixels.pixels_mut() {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        *pixel = image::Rgb([seed as u8, (seed >> 8) as u8, (seed >> 16) as u8]);
+    }
+    let mut bytes = Vec::new();
+    image::DynamicImage::ImageRgb8(pixels)
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+    let original = format!("data:image/png;base64,{}", STANDARD.encode(&bytes));
+    assert!(
+        original.len() > 8 * 1024 * 1024,
+        "larger than every former limit"
+    );
+    let p = project();
+    let a = target(&p, "article:nth-of-type(1)");
+    let p = describe(p, &[a]);
+    let region = p.pages[0].regions.last().unwrap().id;
+    let p = p
+        .apply(
+            p.revision,
+            Command::AddRegionAttachment {
+                page_id: p.home_page_id,
+                region_id: region,
+                attachment: RequestAttachment {
+                    id: "x".into(),
+                    name: "field.png".into(),
+                    kind: AttachmentKind::Image,
+                    data_uri: Some(original.as_str().into()),
+                    preview: None,
+                    text: None,
+                    url: None,
+                },
+            },
+        )
+        .unwrap();
+    let id = p.pages[0].regions.last().unwrap().attachments[0].id.clone();
+    let snapshot = p.prepare_requirements().unwrap();
+    let preview = STANDARD
+        .decode(snapshot.images[0].data_uri.split_once(',').unwrap().1)
+        .unwrap();
+    let preview = image::load_from_memory(&preview).unwrap();
+    assert!(preview.width() <= desegni_core::AI_PREVIEW_EDGE);
+    assert!(snapshot.markdown.contains("width=\"W\""));
+    let html = p.pages[0].content.as_ref().unwrap().html.replace(
+        "First</h2>",
+        &format!("First</h2><img data-desegnos-attachment=\"{id}\" src=\"#\" width=\"320\" height=\"160\" alt=\"A field\">"),
+    );
+    let c = candidate(&p, &snapshot, html);
+    let applied = p.apply_generation(&snapshot, &c, &[]).unwrap();
+    let kept = applied.pictures.values().next().unwrap();
+    let kept = STANDARD.decode(kept.split_once(',').unwrap().1).unwrap();
+    let kept = image::load_from_memory(&kept).unwrap();
+    assert_eq!((kept.width(), kept.height()), (640, 320));
+    assert_eq!(applied.pictures.len(), 1);
 }

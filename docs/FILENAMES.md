@@ -1,6 +1,6 @@
 # Desegnos filenames
 
-New desktop builds produce the actual `desegnos` executable (`desegnos.exe` on Windows). New project saves and Save As default to `website.desegnos`.
+New desktop builds produce the actual `desegnos` executable (`desegnos.exe` on Windows). New projects use `<Location>/<Project Name>/<Project Name>.desegnos` alongside their live website files. Names are sanitized and numbered on collision. Save As defaults to the project name and creates its own folder for a new destination; existing standalone project paths remain supported.
 
 Open and brand import accept `.desegnos` and legacy `.desegni` projects. Saving an already opened `.desegni` project keeps its selected path. Both extensions use the same validated archive format; its `desegni` protocol marker, canonical Markdown, schema and integrity checks are unchanged. Existing projects and benchmark fixtures are not renamed.
 

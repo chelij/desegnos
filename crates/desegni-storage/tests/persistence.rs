@@ -888,7 +888,7 @@ fn real_schema_three_preserves_all_original_data_notes_and_backup_before_explici
     assert_eq!(reopened.project, document.project);
     assert!(frozen.validate_current(&reopened.project).is_err());
     let new_request = reopened.project.prepare_requirements().unwrap();
-    assert!(new_request.markdown.contains("Requirements format: 10"));
+    assert!(new_request.markdown.contains("Requirements format: 14"));
     new_request.validate_current(&reopened.project).unwrap();
 }
 
@@ -1165,11 +1165,9 @@ fn generated_sources_selected_decisions_and_applied_jobs_survive_save_undo_recov
     let reopened = file.load().unwrap();
     assert_eq!(reopened, applied);
     let accepted = reopened.pages[0].content.as_ref().unwrap();
-    assert_eq!(
-        without_editor_ids(&accepted.html),
-        candidate.pages[0].content.html
-    );
-    assert_eq!(accepted.css, candidate.pages[0].content.css);
+    let readable = format_site_content(&candidate.pages[0].content);
+    assert_eq!(without_editor_ids(&accepted.html), readable.html);
+    assert_eq!(accepted.css, readable.css);
     assert_eq!(accepted.javascript, candidate.pages[0].content.javascript);
     assert!(
         reopened
@@ -1386,6 +1384,7 @@ fn direct_element_edits_survive_archive_reopen_recovery_and_exact_source_undo() 
 fn identity_project() -> Project {
     let bytes = b"<svg xmlns='http://www.w3.org/2000/svg'/>";
     let identity = ImportedIdentity {
+        pages: vec![],
         source_name: "Original studio website.zip".into(),
         source_sha256: digest(b"selected website input"),
         summary: "Use the reviewed blue logo and Indonesian language.".into(),
@@ -1476,7 +1475,7 @@ fn schema_five_integrity_notes_frozen_requirements_and_exact_backup_are_preserve
     };
     project.pages[0].regions[0].element = Some(target);
     let frozen = project.prepare_requirements().unwrap();
-    assert!(frozen.markdown.contains("Requirements format: 10"));
+    assert!(frozen.markdown.contains("Requirements format: 14"));
     let path = temp.0.join("schema-five.desegni");
     let file = ProjectFile::acquire(&path).unwrap();
     file.save(&project).unwrap();
