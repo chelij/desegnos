@@ -262,6 +262,7 @@ mod tests {
 #[cfg(test)]
 mod adapter_tests {
     use super::*;
+    use crate::ProviderId;
     use desegni_core::*;
     use std::sync::{
         Arc,
