@@ -54,11 +54,11 @@ export type WorkspaceView = { openProjects?: OpenProjectSummary[]; anyDirty?: bo
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null; migrationNotice: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;
   regionCount: number; pageCount: number; dependencies: Record<string, string> };
-export type ProviderSettings = { model: string; maxOutputTokens: number; reasoningEffort: string; spendingLimitUsd: number };
+export type ProviderSettings = { model: string; maxOutputTokens: number; reasoningEffort: string; spendingLimitUsd: number; imageGeneration: boolean };
 export type CredentialInfo = { configured: boolean; storage: 'system' | 'session' | 'none'; maskedIdentifier: string | null; vaultError: string | null };
 export type AuthenticationMethod = 'apiKey' | 'chatgpt';
 export type ProviderId = 'openai' | 'anthropic' | 'google' | 'openrouter' | 'local';
-export type ProviderDescriptor = { id: ProviderId; name: string; available: boolean; signInSupported: boolean; capabilities: { webSearch: boolean; imageDownloads: number } };
+export type ProviderDescriptor = { id: ProviderId; name: string; available: boolean; signInSupported: boolean; capabilities: { webSearch: boolean; imageDownloads: number; imageGeneration?: { maxImages: number; sizes: string[] } } };
 export type ChatgptAccount = { id: string; label: string; email: string | null; connected: boolean; planEnabled: boolean; storage: 'system' | 'session' | 'none'; storageRepairRequired: boolean };
 export type ChatgptView = { accounts: ChatgptAccount[]; activeAccountId: string | null;
   signIn: { status: 'idle' | 'awaitingBrowser' | 'complete' | 'cancelled' | 'failed'; message: string | null };

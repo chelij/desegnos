@@ -87,7 +87,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const token = ++action.current; setOperationStartedAt(Date.now()); setOperation('Updating your canvas…'); setError('');
     try {
       const value = await call<WorkspaceView>('apply_generation', { ...args(), acceptedDecisionIndices: indices });
-      if (context.current === id) { applied(value); await refresh(); setVisible(false); }
+      if (context.current === id) { applied(value); await refresh(); setVisible(!!job?.candidate?.regions.some(region => region.status === 'conflict')); }
     } catch (error) { if (context.current === id) setError(describe(error)); throw error; }
     finally { if (context.current === id && token === action.current) setOperation(null); }
   }

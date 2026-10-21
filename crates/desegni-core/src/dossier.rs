@@ -66,6 +66,32 @@ impl GenerationDossier {
         recorded_at_revision: u64,
         attempt_ordinal: usize,
     ) -> Result<Self> {
+        let criticism = if snapshot.format_version()? >= 17 {
+            // Conflict explanations survive partial apply even when advisory feedback fills its budget.
+            let mut notes: Vec<DesignCriticism> = candidate
+                .regions
+                .iter()
+                .filter(|region| region.status == crate::RegionStatus::Conflict)
+                .map(|region| DesignCriticism {
+                    region_id: Some(region.region_id),
+                    message: region.explanation.clone(),
+                    suggestion: "This request stays open. Update its details and generate again."
+                        .into(),
+                })
+                .collect();
+            for note in &candidate.criticism {
+                if notes.len() < MAX_DESIGN_CRITICISMS
+                    && !notes.iter().any(|existing| {
+                        existing.region_id == note.region_id && existing.message == note.message
+                    })
+                {
+                    notes.push(note.clone());
+                }
+            }
+            notes
+        } else {
+            candidate.criticism.clone()
+        };
         Ok(Self {
             job_id: candidate.job_id,
             attempt_ordinal,
@@ -80,7 +106,7 @@ impl GenerationDossier {
                 .map(|(page_id, region_id)| DossierTarget { page_id, region_id })
                 .collect(),
             decision_proposals: candidate.decision_proposals.clone(),
-            criticism: candidate.criticism.clone(),
+            criticism,
             application_status: GenerationApplicationStatus::Draft,
             applied_at_revision: None,
             accepted_decision_indices: vec![],

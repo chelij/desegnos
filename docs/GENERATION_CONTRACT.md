@@ -1,6 +1,52 @@
 # OpenAI generation contract
 
-Rectangle and element requests use **format 14**. Shaped area requests use **format 15**:
+New requests use **format 17**, including rectangle, element, shaped and imported-page requests.
+Formats 3–16 retain their frozen Markdown, schemas and application behavior.
+
+Format 17 delivers regions independently: return pages containing implemented regions even
+when another region conflicts. Apply completes only implemented requests, leaves conflicts
+open, and retains their explanations in the job and project notes. Conflicted selected
+elements/region roots stay unchanged; new conflicts use a short local placeholder.
+Mixed existing pages preserve shared CSS/JavaScript. If a conflicting rectangle has no
+old DOM mapping, existing content outside ready roots/selected elements must remain unchanged.
+Pages containing only conflicts are omitted. Jobs with any validated ready source can apply.
+
+OpenAI API-key jobs advertise optional `capabilities.imageGeneration: {maxImages: 2,
+sizes: ["1024x1024"]}`. The settings switch defaults on for supported connections.
+An HTML `img` requests native processing with `data-desegnos-generate="prompt"`;
+`data-desegnos-source` optionally names a frozen request attachment or exact
+`desegnos-asset:<uuid>` reference. `data-desegnos-background="transparent"` requests
+an alpha PNG; the default is opaque. Size is fixed to `1024x1024`.
+
+After the main structured reply and image downloads, native code calls
+`POST https://api.openai.com/v1/responses` with `gpt-4.1` orchestrating one forced
+`image_generation` call using `gpt-image-1.5`, low quality and PNG output.
+This separate non-stream image response is never fed into the candidate-text SSE parser.
+References use the existing bounded 512 px JPEG preview of the frozen original.
+At most two distinct calls and 64 placements are accepted, with 4,096 characters per
+prompt, a 12 MiB wire-response ceiling, bounded PNG decoding, 256 KiB per stored PNG
+and 512 KiB total. PNGs are reduced as needed without flattening their alpha.
+The estimate reserves USD 0.50 per permitted image before main submission; the
+spending limit checks the combined estimate. This is an allowance, not a billing cap.
+Calls use cancellation/deadlines and never automatically retry.
+Failures, refusals, unavailable references at processing time, and excess requests leave
+a visible “Image generation failed” slot while keeping other content applicable.
+On apply, existing picture storage converts accepted inline results into shared
+`desegnos-asset:` references. The job log retains thumbnails and the original prompts.
+
+Both existing OpenAI text paths use `/v1/responses`: API keys use bearer keys;
+ChatGPT sign-in uses the OAuth resource token obtained for
+`https://api.openai.com/v1` with `resource.invoke chatgpt.tokens.use.direct`.
+Neither that scope nor model discovery establishes image-tool entitlement.
+**ChatGPT-sign-in image generation is disabled**, with no API-key fallback; the
+capability is absent from frozen requirements and the switch explains this limitation.
+Other providers also omit it. Official documentation confirms the API-key tool/reference
+path, not entitlement through this app's ChatGPT OAuth registration (reviewed 2026-10-22):
+[image tool](https://developers.openai.com/api/docs/guides/tools-image-generation),
+[image generation](https://developers.openai.com/api/docs/guides/image-generation).
+
+The following notes describe earlier versions. Rectangle and element requests previously
+used **format 14**. Shaped area requests used **format 15**:
 `placementHint` remains the bounding box, with an inscribed ellipse or rounded page-pixel
 freehand polygon alongside it. The browser measures existing element boxes before
 generation; Rust includes an element when its box intersects the actual shape, using

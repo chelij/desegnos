@@ -881,7 +881,7 @@ impl GenerationService {
                 .view
                 .candidate
                 .as_ref()
-                .is_some_and(|candidate| candidate.is_ready())
+                .is_some_and(|candidate| candidate.can_apply(&record.view.requirements))
             && record.view.requirements.validate_current(project).is_ok()
             && record.view.candidate.as_ref().is_some_and(|candidate| {
                 candidate
@@ -950,7 +950,10 @@ impl GenerationService {
             return Err("Apply or discard the existing generation review, or cancel its running request, before starting another.".into());
         }
         let requirements = project
-            .prepare_requirements_with_capabilities(self.provider.capabilities())
+            .prepare_requirements_with_capabilities(
+                self.provider
+                    .capabilities_for(self.authentication, &self.settings),
+            )
             .map_err(message)?;
         let estimate = self
             .adapter(self.provider)?
@@ -1242,6 +1245,9 @@ impl GenerationService {
                         && !candidate.image_download_urls()?.is_empty() {
                         return Err(desegni_core::Error("Images could not be prepared. Nothing was applied. Try generating again or remove the image request.".into()));
                     }
+                    if format >= 17 && !candidate.image_generation_requests()?.is_empty() {
+                        return Err(desegni_core::Error("Generated images could not be prepared.".into()));
+                    }
                     Ok(candidate)
                 }) {
                     Ok(candidate) => {
@@ -1250,7 +1256,7 @@ impl GenerationService {
                             .and_then(|project| {
                                 record.view.requirements.validate_current(project).err()
                             });
-                        record.view.status = if candidate.is_ready() && stale.is_none() {
+                        record.view.status = if candidate.can_apply(&record.view.requirements) && stale.is_none() {
                             JobStatus::Ready
                         } else {
                             JobStatus::Blocked
@@ -1259,7 +1265,7 @@ impl GenerationService {
                             format!(
                                 "The generated result is stale: {error} Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements."
                             )
-                        } else if candidate.is_ready() {
+                        } else if candidate.can_apply(&record.view.requirements) {
                             "Result ready to apply.".into()
                         } else {
                             "Some requests need a choice.".into()
@@ -1943,9 +1949,22 @@ async fn submit(
             });
         }
         let result = match result {
-            Ok(response) => Ok(client
-                .download_images(response, &request.requirements, &original, &cancellation)
-                .await),
+            Ok(response) => {
+                let response = client
+                    .download_images(response, &request.requirements, &original, &cancellation)
+                    .await;
+                Ok(client
+                    .generate_images(
+                        response,
+                        request.authentication,
+                        &request.settings,
+                        &request.requirements,
+                        &original,
+                        &key,
+                        &cancellation,
+                    )
+                    .await)
+            }
             Err(error) => Err(error),
         };
         let workspace_state = app.state::<Mutex<Workspace>>();
@@ -2053,7 +2072,7 @@ pub fn apply_generation(
         return Ok(workspace.view());
     }
     if record.view.status != JobStatus::Ready {
-        return Err("Only a complete, current candidate can be applied.".into());
+        return Err("Only a current candidate with ready regions can be applied.".into());
     }
     let candidate = record
         .view

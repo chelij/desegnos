@@ -389,10 +389,26 @@ pub fn result_schema(snapshot: &RequirementsSnapshot) -> serde_json::Value {
         if snapshot.has_requested_context() {
             schema["properties"]["needs"]["maxItems"] = 0.into();
         }
+        if snapshot.format_version().is_ok_and(|format| format >= 17) {
+            independent_result_schema(&mut schema);
+        }
         schema
     } else {
-        crate::candidate_schema()
+        let mut schema = crate::candidate_schema();
+        if snapshot.format_version().is_ok_and(|format| format >= 17) {
+            independent_result_schema(&mut schema);
+        }
+        schema
     }
+}
+
+fn independent_result_schema(schema: &mut serde_json::Value) {
+    schema["properties"]["regions"]["description"] = serde_json::json!(
+        "Deliver every implementable region independently. Conflicts must not withhold ready regions."
+    );
+    schema["properties"]["pages"]["description"] = serde_json::json!(
+        "Include exactly the pages with implemented regions, preserving conflicting regions unchanged or as the specified local placeholder. Omit pages containing only conflicts."
+    );
 }
 
 pub fn element_fix_schema() -> serde_json::Value {

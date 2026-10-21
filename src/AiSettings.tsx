@@ -120,6 +120,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         ] : [<option key={item.id} value={item.id} disabled={!item.available}>{item.available ? `${item.name} (API key)` : `${item.name} — coming soon`}</option>])}
       </select></label>
       {provider && !provider.capabilities.webSearch && <p className="field-help">Web search unavailable.</p>}
+      <label><input type="checkbox" disabled={busy || pending || usesChatgpt || !provider?.capabilities.imageGeneration} checked={!usesChatgpt && !!provider?.capabilities.imageGeneration && settings.imageGeneration} onChange={event => setSettings({ ...settings, imageGeneration: event.target.checked })} /> Image generation</label>
+      <p className="field-help">{usesChatgpt ? 'Image generation is unavailable with ChatGPT sign-in; support for this connection is unconfirmed.' : provider?.capabilities.imageGeneration ? 'Create or edit up to two images per job. A USD 1 image allowance is included in the estimate; final charges may vary.' : 'Image generation is unavailable with this provider.'}</p>
       {dirty && <p className="field-help">Save or reset your changes below before changing the generation method.</p>}
       {view.configurationError && <p className="message error" role="alert">{view.configurationError} Review and save your generation settings before sending a request.</p>}
       {usesChatgpt && <section className="chatgpt-accounts" aria-label="ChatGPT account settings">

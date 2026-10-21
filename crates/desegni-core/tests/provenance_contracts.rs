@@ -110,9 +110,10 @@ fn capabilities_are_frozen_without_granting_search_to_an_adapter_that_lacks_it()
         .prepare_requirements_with_capabilities(GenerationCapabilities {
             web_search: false,
             image_downloads: 8,
+            image_generation: None,
         })
         .unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 14);
+    assert_eq!(snapshot.format_version().unwrap(), 17);
     assert!(snapshot.markdown.contains("\"webSearch\": false"));
     assert!(
         !snapshot

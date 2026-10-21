@@ -2153,6 +2153,7 @@ fn authentication_and_old_persisted_errors_keep_compatible_defaults_and_secret_b
             .map(String::as_str)
             .collect::<Vec<_>>(),
         [
+            "imageGeneration",
             "maxOutputTokens",
             "model",
             "reasoningEffort",

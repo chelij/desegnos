@@ -84,9 +84,23 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   useEffect(() => { if (job?.status === 'ready') setSelected(job.recommendedDecisionIndices); }, [job?.jobId, job?.status]);
   useEffect(() => { if (job?.status === 'applied') setSelected(job.acceptedDecisionIndices); }, [job?.status, job?.acceptedDecisionIndices]);
   const candidate = job?.candidate;
+  const conflicts = candidate?.regions.filter(region => region.status === 'conflict') ?? [];
+  const generatedImages = (candidate?.pages ?? []).flatMap(page => {
+    const template = document.createElement('template');
+    template.innerHTML = page.content.html;
+    return Array.from(template.content.querySelectorAll('img[data-desegnos-generated-prompt]')).filter(node => node.getAttribute('data-desegnos-generated-job') === job?.jobId).map(node => ({
+      prompt: node.getAttribute('data-desegnos-generated-prompt') ?? '',
+      src: node.getAttribute('src') ?? '',
+      regionId: node.closest('[data-desegnos-region]')?.getAttribute('data-desegnos-region')
+        ?? project.pages.find(item => item.id === page.pageId)?.regions.find(region =>
+          [region.element, ...(region.elements ?? [])].some(target => target && node.closest('[data-desegnos-id]')?.getAttribute('data-desegnos-id') === target.id))?.id,
+      pageId: page.pageId,
+      failed: node.hasAttribute('data-desegnos-placeholder'),
+    }));
+  });
   const source = candidate?.pages.find(page => page.pageId === pageId) ?? candidate?.pages[0];
   const page = project.pages.find(page => page.id === source?.pageId);
-  const canRetry = !!job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status);
+  const canRetry = !!job && (['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status) || (job.status === 'applied' && conflicts.length > 0));
   const canDiscard = !!job && ['prepared', 'ready', 'blocked', 'failed', 'unknown', 'cancelled'].includes(job.status);
   const alreadyApplied = !!job && project.appliedJobIds.includes(job.jobId);
   const title = job?.status === 'prepared' ? 'Generation details' : job?.status === 'ready' ? 'Generation details' : 'Generation';
@@ -163,7 +177,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
           {attempt.responseId && <p className="small response-id">Response: {attempt.responseId}</p>}{attempt.usage && <p className="small">{attempt.usage.inputTokens} input · {attempt.usage.outputTokens} output · {attempt.usage.totalTokens} total tokens</p>}
         </li>)}</ol>}</section>}
         {tab === 'review' && <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><p>Couldn’t build the page.</p>{job.message && <details><summary>Show details</summary><p className="small">{job.message}</p></details>}</>}</> : <>
-          {job.status === 'blocked' ? <section aria-label="Finish your draft"><h3>Requests needing details</h3>
+          {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft"><h3>Requests needing details</h3>
             <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
               const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
               return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
@@ -171,6 +185,10 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
             })}</ul>
             <details><summary>Show details</summary><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></details>
           </section> : <><h3>Your page</h3><p>{candidate.summary}</p></>}
+          {generatedImages.length > 0 && <section aria-label="Generated images"><h3>Generated images</h3>{generatedImages.map((image, index) => <figure key={index}>
+            {image.src.startsWith('data:image/png;base64,') && !image.failed && <img src={image.src} alt="Generated result" width={144} height={144} style={{ objectFit: 'contain' }} />}
+            <figcaption><strong>{image.regionId ? requestLabel(project, image.regionId) : project.pages.find(page => page.id === image.pageId)?.name}</strong><p>{image.prompt}</p>{image.failed && <p>Image generation failed. Replace this image or try again.</p>}</figcaption>
+          </figure>)}</section>}
           {source && <><div className="candidate-page-picker"><label>Result page<select value={source.pageId} onChange={event => setPageId(event.target.value)}>{candidate.pages.map(item => <option key={item.pageId} value={item.pageId}>{project.pages.find(page => page.id === item.pageId)?.name ?? item.pageId}</option>)}</select></label></div>
             {page && <PagePreview key={`${job.jobId}:${source.pageId}`} page={page} revision={job.baseRevision} jobId={job.jobId} />}
             {showSource && <section className="candidate-source"><h3>Source code</h3><SourceView key={source.pageId} content={source.content} label="Generated" /></section>}
@@ -186,8 +204,8 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
         </>}</section>}
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
-          {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>Apply changes</button>}
-          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>{job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
+          {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready regions' : 'Apply changes'}</button>}
+          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>{conflicts.length > 0 ? 'Build remaining draft' : job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
         </div>
       </>}
     </div></Modal>

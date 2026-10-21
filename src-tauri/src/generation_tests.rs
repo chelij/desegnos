@@ -715,9 +715,10 @@ fn malformed_out_of_scope_and_conflicted_output_cannot_become_ready() {
             }
             "foreign-page" => generated.pages[0].page_id = Uuid::new_v4(),
             "conflict" => {
-                generated.regions[0].status = RegionStatus::Conflict;
-                generated.regions[0].explanation =
-                    "The requested remote service is unavailable.".into();
+                for region in &mut generated.regions {
+                    region.status = RegionStatus::Conflict;
+                    region.explanation = "The requested remote service is unavailable.".into();
+                }
                 generated.pages.clear();
             }
             "malformed" => {}
@@ -1669,7 +1670,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_but_cannot_submit_after_sour
     service.cancel(&project, job_id).unwrap();
     let fresh = service.prepare(&project).unwrap();
     assert_ne!(fresh.job_id, job_id);
-    assert_eq!(fresh.requirements.format_version().unwrap(), 14);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 17);
     assert!(
         fresh
             .requirements
@@ -1751,4 +1752,49 @@ fn saved_context_failed_replies_and_past_jobs_survive_restart_without_changing_l
         next.job_id
     );
     assert!(reopened.saved_job(Uuid::new_v4(), first.job_id).is_err());
+}
+
+#[test]
+fn independent_regions_make_partial_jobs_ready_and_persist_conflicts_after_apply() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let mut project = project();
+    project.pages[0].content = None;
+    let prepared = service.prepare(&project).unwrap();
+    service.begin(&project, prepared.job_id, false).unwrap();
+    let mut generated = candidate(&project, &prepared, "ready region");
+    let ready = generated.regions[0].region_id;
+    let conflict = generated.regions[1].region_id;
+    generated.regions[1].status = RegionStatus::Conflict;
+    generated.regions[1].explanation = "Which private account should this use?".into();
+    generated.pages[0].content = SiteContent {
+        html: format!(
+            "<section data-desegnos-region='{ready}'><p>Ready content</p></section><section data-desegnos-region='{conflict}' data-desegnos-placeholder='conflict'>Account needed</section>"
+        ),
+        css: String::new(),
+        javascript: String::new(),
+    };
+    service
+        .finish(
+            &project,
+            Some(&project),
+            prepared.job_id,
+            1,
+            Ok(response(&generated, 1)),
+        )
+        .unwrap();
+    let view = service.latest(&project).unwrap().unwrap();
+    status(&view, JobStatus::Ready);
+    let applied = project
+        .apply_generation(&view.requirements, view.candidate.as_ref().unwrap(), &[])
+        .unwrap();
+    assert_eq!(applied.pending_count(), 1);
+    assert!(applied.pages[0].regions[0].completed);
+    assert!(!applied.pages[0].regions[1].completed);
+    let restored = temp.service().latest(&applied).unwrap().unwrap();
+    status(&restored, JobStatus::Applied);
+    assert_eq!(
+        restored.candidate.unwrap().regions[1].explanation,
+        "Which private account should this use?"
+    );
 }
