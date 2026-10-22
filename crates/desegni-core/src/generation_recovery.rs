@@ -1070,6 +1070,14 @@ fn shared_dependencies(
                         Some("style" | "script" | "link")
                     )
                 }) {
+                    if snapshot.format_version()? >= 18
+                        && node.node_name().as_deref() == Some("script")
+                        && node.attr("data-desegnos-script").is_some()
+                        && node.attr("type").as_deref() == Some(crate::region_scripts::SCRIPT_TYPE)
+                    {
+                        // Ownership and AST checks run in validate_scope, including salvage.
+                        continue;
+                    }
                     let html = node.html().to_string();
                     if old_shared.contains(&html) {
                         continue;

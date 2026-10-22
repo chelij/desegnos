@@ -113,12 +113,8 @@ fn an_element_fix_sends_only_the_selection_stylesheet_and_outline() {
         !s.markdown.contains("data:image/"),
         "pictures travel as references"
     );
-    let at = s.markdown.find("dataset.ready");
-    let heading = s.markdown[..at.unwrap_or(0)]
-        .rfind("\n## ")
-        .map(|i| &s.markdown[i..i + 60])
-        .unwrap_or("");
-    assert!(at.is_none(), "scripts are not sent: {heading}");
+    assert!(s.markdown.contains("javascriptReadOnly") && s.markdown.contains("dataset.ready"));
+    assert!(s.markdown.contains("## Region scripts"));
     assert!(s.markdown.contains(&image.id) && s.markdown.contains("portrait-slot"));
     assert!(s.markdown.contains("\"outline\"") && s.markdown.contains("What I can do"));
     let schema = result_schema(&s);
@@ -355,4 +351,204 @@ fn format_fourteen_sends_compact_sources_and_keeps_results_readable() {
         compact_site_content(stored),
         compact_site_content(&format_site_content(stored))
     );
+}
+
+fn behavior_fixture(code: &str) -> (Project, RequirementsSnapshot, String) {
+    let p = project();
+    let p = p.edit_page_source(p.revision, p.home_page_id, &PageSourceEdit {
+        html: Some("<main><section class=\"shelf\"><article data-date=\"2025-01-01\"><h1>Older project</h1></article><article data-date=\"2026-10-22\"><h1>Newest project</h1></article></section><p>Unrelated region</p></main>".into()),
+        ..Default::default()
+    }).unwrap();
+    let shelf = target(&p, "section:nth-of-type(1)");
+    let p = describe(p, shelf.clone(), "want this to autosort newest at the top");
+    let s = p.prepare_requirements().unwrap();
+    let region = p.pages[0].regions.last().unwrap();
+    let content = compact_site_content(p.pages[0].content.as_ref().unwrap());
+    // Keep the selected source and all retained descendant IDs exactly as supplied.
+    let doc = dom_query::Document::from(content.html.as_str());
+    let selected = doc.select(&format!("[data-desegnos-id=\"{}\"]", shelf.id));
+    selected.nodes()[0].append_html(format!(
+        "<script type=\"application/x-desegnos-region\" data-desegnos-script=\"{}\">{code}</script>", region.id
+    ));
+    let text = reply(
+        &p,
+        &s,
+        serde_json::json!([{
+            "pageId": p.home_page_id,
+            "elements": [{"id":shelf.id,"html":selected.nodes()[0].html().to_string()}], "css":""
+        }]),
+        &[],
+    );
+    (p, s, text)
+}
+
+const AUTOSORT: &str = "const cards = Array.from(root.querySelectorAll('[data-date]')); cards.sort((a, b) => Date.parse(b.dataset.date) - Date.parse(a.dataset.date)); cards.forEach(card => root.appendChild(card));";
+
+#[test]
+fn local_sorting_is_accepted_and_undo_removes_its_owned_source() {
+    let (p, s, text) = behavior_fixture(AUTOSORT);
+    let (candidate, events) = recover_generation_reply(&text, &s, &p).unwrap();
+    assert!(
+        events.iter().all(|e| e.disposition != "conflicted"),
+        "{events:?}"
+    );
+    assert_eq!(candidate.regions[0].status, RegionStatus::Implemented);
+    candidate.validate(&s, &p).unwrap();
+    assert_eq!(
+        candidate.pages[0].content.javascript,
+        p.pages[0].content.as_ref().unwrap().javascript
+    );
+    let original = p.pages[0].content.clone();
+    let mut session = Session::new(p).unwrap();
+    session
+        .apply_generation(&s, &candidate, &[], |_| Ok(()))
+        .unwrap();
+    assert!(
+        session.project().pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .contains("data-desegnos-script")
+    );
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages[0].content, original);
+}
+
+#[test]
+fn unsafe_or_outside_region_scripts_are_retained_as_unapplied_drafts() {
+    for code in [
+        "document.querySelector('p').remove();",
+        "root.querySelector('p').remove();", // The paragraph is outside this shelf.
+        "root.parentElement.remove();",
+        "root.querySelectorAll('h1').forEach(card => card.ownerDocument.body.remove());",
+        "import('https://example.com/remote.js');",
+        "fetch('https://example.com/remote.js');",
+        "eval('root.remove()');",
+        "new Function('root.remove()')();",
+        "document.write('outside');",
+        "const key = 'constructor'; root[key]('return document')();",
+        "Math.random = () => 0;",
+        "const shared = Math; shared.random = () => 0;",
+        "const globalEvent = event; globalEvent.target.remove();",
+    ] {
+        let (p, s, text) = behavior_fixture(code);
+        let (candidate, events) = recover_generation_reply(&text, &s, &p).unwrap();
+        assert!(candidate.pages.is_empty(), "unsafe script applied: {code}");
+        let drafts = retain_generation_drafts(&text, &s, &p, Some(&candidate), &events);
+        assert_eq!(drafts.len(), 1, "{code}");
+        assert!(!drafts[0].applied);
+        assert!(
+            drafts[0].code.contains(code)
+                || drafts[0]
+                    .content
+                    .as_ref()
+                    .is_some_and(|c| c.html.contains(code))
+        );
+        assert!(
+            p.pages[0]
+                .content
+                .as_ref()
+                .unwrap()
+                .html
+                .find("data-desegnos-script")
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn export_runs_region_functions_after_unchanged_page_script() {
+    let (p, s, text) = behavior_fixture("root.querySelector('h1').classList.toggle('active');");
+    let (candidate, _) = recover_generation_reply(&text, &s, &p).unwrap();
+    let p = p.apply_generation(&s, &candidate, &[]).unwrap();
+    let export = compile_website(&p).unwrap();
+    let html = String::from_utf8(export.files["index.html"].clone()).unwrap();
+    assert!(html.find("assets/page-").unwrap() < html.find("assets/regions-").unwrap());
+    let (_, bytes) = export
+        .files
+        .iter()
+        .find(|(name, _)| name.starts_with("assets/regions-"))
+        .unwrap();
+    let runtime = std::str::from_utf8(bytes).unwrap();
+    assert!(runtime.contains("function(root, window)") && runtime.contains("block.parentElement"));
+    assert!(runtime.contains("})(root, scopedWindow)") && runtime.contains("catch (error)"));
+    assert!(runtime.contains("root.querySelector('h1')"));
+    let page_js = export
+        .files
+        .iter()
+        .find(|(name, _)| name.starts_with("assets/page-"))
+        .unwrap()
+        .1;
+    assert_eq!(
+        page_js,
+        p.pages[0].content.as_ref().unwrap().javascript.as_bytes()
+    );
+}
+
+#[test]
+fn area_behavior_preserves_shared_javascript() {
+    let (mut p, _, _) = behavior_fixture(AUTOSORT);
+    let region = &mut p.pages[0].regions[0];
+    let id = region.id;
+    region.element = None;
+    region.elements.clear();
+    let doc = dom_query::Document::from(p.pages[0].content.as_ref().unwrap().html.as_str());
+    doc.select("section").nodes()[0].set_attr("data-desegnos-region", &id.to_string());
+    p.pages[0].content.as_mut().unwrap().html =
+        doc.select("body").nodes()[0].inner_html().to_string();
+    let s = p.prepare_requirements().unwrap();
+    assert!(!s.is_element_fix());
+    let mut content = p.pages[0].content.clone().unwrap();
+    let doc = dom_query::Document::from(content.html.as_str());
+    doc.select("section").nodes()[0].append_html(format!("<script type=\"application/x-desegnos-region\" data-desegnos-script=\"{id}\">{AUTOSORT}</script>"));
+    content.html = doc.select("body").nodes()[0].inner_html().to_string();
+    let text = serde_json::json!({
+        "jobId":s.job_id,"requirementsSha256":s.sha256,"summary":"Sort projects locally",
+        "regions":[{"regionId":id,"status":"implemented","explanation":"Sorted"}],
+        "pages":[{"pageId":p.home_page_id,"content":content}],
+        "componentRequests":[],"decisionProposals":[],"criticism":[]
+    })
+    .to_string();
+    let (candidate, _) = recover_generation_reply(&text, &s, &p).unwrap();
+    assert_eq!(candidate.regions[0].status, RegionStatus::Implemented);
+    assert_eq!(
+        candidate.pages[0].content.javascript,
+        p.pages[0].content.as_ref().unwrap().javascript
+    );
+    candidate.validate(&s, &p).unwrap();
+}
+
+#[test]
+fn script_ownership_cannot_be_assigned_to_another_request() {
+    let (p, s, text) = behavior_fixture(AUTOSORT);
+    let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let html = value["pages"][0]["elements"][0]["html"].as_str().unwrap();
+    value["pages"][0]["elements"][0]["html"] = html
+        .replace(
+            &format!("data-desegnos-script=\"{}\"", p.pages[0].regions[0].id),
+            &format!("data-desegnos-script=\"{}\"", Uuid::new_v4()),
+        )
+        .into();
+    let text = value.to_string();
+    let (candidate, events) = recover_generation_reply(&text, &s, &p).unwrap();
+    assert!(candidate.pages.is_empty());
+    assert_eq!(
+        retain_generation_drafts(&text, &s, &p, Some(&candidate), &events).len(),
+        1
+    );
+}
+
+#[test]
+fn element_fix_shared_script_reference_is_bounded_and_never_written_back() {
+    let (mut p, _, _) = behavior_fixture(AUTOSORT);
+    let original = format!(
+        "  // retained shared source\n{}",
+        "window.shared = 1;\n".repeat(1000)
+    );
+    p.pages[0].content.as_mut().unwrap().javascript = original.clone();
+    let s = p.prepare_requirements().unwrap();
+    assert!(s.markdown.contains("javascriptReadOnly"));
+    assert!(s.markdown.contains("\"truncated\": true"));
+    assert_eq!(p.pages[0].content.as_ref().unwrap().javascript, original);
 }

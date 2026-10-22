@@ -333,10 +333,15 @@ impl Project {
         md.push_str(&fenced_json(&self.pages.iter().map(|p| serde_json::json!({"id":p.id,"name":p.name,"path":p.path,"included":p.included})).collect::<Vec<_>>())?);
         if element_fix {
             let selection_instructions_0 = "\n## Selected elements\n\nOnly the selected elements and each page's stylesheet are shown; the rest of the page and its JavaScript stay exactly as they are and are not available. Return a complete replacement (outer HTML) for each selected element you change, keeping its data-desegnos-id and the IDs of retained descendants. Omit unchanged elements. The stylesheet and scripts are shared with the rest of the site and cannot change here; the stylesheet is shown for reference, so restyle a selected element through its own style attribute (for example background:none to clear a background a class gives it). Change only what the request asks for. Each page also has an outline: one line per element with its ID, tag.classes and own text. If you truly need another element's HTML to finish, return its ID in needs with pages empty; Desegnos replies once with that HTML. Pictures appear as desegnos-asset: URLs; keep those references instead of reproducing bytes.\n\n";
+            let selection_instructions_0 = if format >= 18 {
+                selection_instructions_0.replace("Only the selected elements and each page's stylesheet are shown; the rest of the page and its JavaScript stay exactly as they are and are not available.", "The selected elements, page stylesheet and bounded read-only JavaScript context are shown. Other page HTML is unavailable; shared JavaScript stays exactly as it is.")
+            } else {
+                selection_instructions_0.to_string()
+            };
             if format >= 12 {
                 md.push_str(&selection_instructions_0.replace("The stylesheet and scripts are shared with the rest of the site and cannot change here; the stylesheet is shown for reference, so restyle a selected element through its own style attribute (for example background:none to clear a background a class gives it).", "Keep existing CSS and JavaScript unchanged. Use inline styles (for example background:none), or append only the selected-root CSS rules permitted below."));
             } else {
-                md.push_str(selection_instructions_0);
+                md.push_str(&selection_instructions_0);
             }
             for page in self
                 .pages
@@ -348,9 +353,31 @@ impl Project {
                     .filter(|(target, _)| target.id == page.id)
                     .map(|(_, region)| *region)
                     .collect();
-                md.push_str(&fenced_json(
-                    &sent.element_fix_source(sent.page(page.id)?, &regions)?,
-                )?);
+                let mut source = sent.element_fix_source(sent.page(page.id)?, &regions)?;
+                if format >= 18 {
+                    let content = sent
+                        .page(page.id)?
+                        .content
+                        .as_ref()
+                        .expect("element source");
+                    let doc = crate::editing::parse(&content.html)?;
+                    let mut javascript = content.javascript.clone();
+                    for script in doc.select("script:not([data-desegnos-script])").nodes() {
+                        javascript.push('\n');
+                        javascript.push_str(script.text().as_ref());
+                    }
+                    // This is reference context only: trim indentation and blank lines, never
+                    // write the compacted/truncated representation back to shared source.
+                    let javascript = javascript
+                        .lines()
+                        .map(str::trim)
+                        .filter(|line| !line.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let bounded: String = javascript.chars().take(12_000).collect();
+                    source["javascriptReadOnly"] = serde_json::json!({"source":bounded,"truncated":javascript.chars().count() > 12_000});
+                }
+                md.push_str(&fenced_json(&source)?);
                 md.push('\n');
             }
         } else if format >= 8 {
@@ -588,6 +615,7 @@ impl Project {
         }
         md.push('\n');
         if format >= 18 {
+            md.push_str("## Region scripts\n\nLocal element and area requests may add behavior without changing shared JavaScript, including on partial pages. Append one <script type=\"application/x-desegnos-region\" data-desegnos-script=\"<request region UUID>\">code</script> as a direct child of the selected root or area root. This inert source block is stored with that request's HTML; replace or remove it there to update or remove behavior. It runs after the page script in its own function with root bound to that element. Use root.querySelector/All with literal selectors resolving within that root, and native local DOM operations. Never access document, other regions, ancestors, remote code, imports, fetch, eval, Function, or document.write. window exposes only scrollY/innerWidth/innerHeight and add/removeEventListener for scroll, resize and pointer events. Preserve all existing shared scripts byte-for-byte. These region-script rules permit local behavior despite the shared-script restrictions above; validation failures become reviewable drafts.\n\n");
             md.push_str("## Whole-page requests and precedence\n\nFor each request with scope=page, change the whole page to satisfy this request; keep content and IDs unless asked. Its complete page source is listed above. The rectangle describes page intent, not a region root or fixed output size. You may restructure that page's HTML and change its shared CSS and JavaScript. Preserve existing data-desegnos-id elements and their IDs; leave new elements without IDs. Removal needs allowTargetRemoval for selected roots (and their descendants), or an explicit removal request naming the editor ID. Protected content and accepted project decisions remain authoritative; other pages cannot change. No remote code.\n\nThese page-scope rules override the area-only restrictions above only for page-scoped requests. When page and area requests share a page, the page-scoped request owns shared CSS/JavaScript and the surrounding layout. Compose requests from bottom to top by layerOrder (ascending zIndex, with original request order breaking ties). Apply areas layered above the base inside its result, in that order; where boxes overlap, the higher layer wins for its own box only. Full-width page-layout requests (including below-fold one-screen requests) are page-scoped too and refine the page layout in this same order. Element-fix rules and partial-page/conflict rules constrain only their own local regions; they must never freeze the page-scoped request's shared CSS/JavaScript or surrounding structure. Area requests do not independently authorize global changes. Page-scoped requests need no data-desegnos-region wrapper. Conflicted page requests grant no page-wide authority; preserve conflicted local targets/roots even when a page request is implemented.\n\n");
         }
         md.push_str("## Acceptance and review\n\nAccount for every target. Preserve scope, accepted identity, protected content, deliberate exceptions, and the selected generation setting. Coordinate the requested content and placement intent into a complete responsive layout. Implement actual browser behavior; disclose missing configuration. Preview and exported behavior must agree. Describe component choices, proposed identity/decision changes, and concrete design criticism. Never silently apply a new project-wide rule or replace an intentional style solely to follow a convention.\n");
@@ -1144,6 +1172,8 @@ mod whole_page_legacy_tests {
             assert_eq!(before, render(&overridden), "format {format}");
             before.validate_current(&project).unwrap();
             assert!(!before.markdown.contains("Whole-page requests"));
+            assert!(!before.markdown.contains("## Region scripts"));
+            assert!(!before.markdown.contains("javascriptReadOnly"));
             assert!(!before.markdown.contains("\"scope\": \"page\""));
         }
     }

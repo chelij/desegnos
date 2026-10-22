@@ -420,7 +420,15 @@ fn validate_page_source_for_website(content: &SiteContent, imported: bool) -> So
                 for child in &element.children {
                     if let Child::Text(text) = child {
                         validate_javascript(
-                            &text.data,
+                            &if element.attributes.iter().any(|a| {
+                                a.name == "type"
+                                    && a.value.as_deref()
+                                        == Some(crate::region_scripts::SCRIPT_TYPE)
+                            }) {
+                                format!("(function(root){{\n{}\n}})", text.data)
+                            } else {
+                                text.data.to_string()
+                            },
                             "html",
                             text.span.lo.0.saturating_sub(base) as usize,
                             &content.html,
@@ -536,6 +544,10 @@ fn authored_span(children: &[Child]) -> Option<Span> {
 /// Overrides accept local DOM behavior, but never code loaders or reflection. Unknown
 /// capabilities stay copy-only: arbitrary JavaScript cannot be proven safe by URL matching.
 pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
+    validate_behavior_javascript(text, false)
+}
+
+pub(crate) fn validate_behavior_javascript(text: &str, region: bool) -> crate::Result<()> {
     use serde_json::Value;
     use std::collections::BTreeSet;
     let map = SourceMap::default();
@@ -572,6 +584,12 @@ pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
     .into_iter()
     .map(String::from)
     .collect();
+    if region {
+        locals.remove("document");
+        locals.remove("alert");
+        locals.remove("event");
+        locals.extend(["root", "window", "Date"].map(String::from));
+    }
     fn binding(value: &Value, locals: &mut BTreeSet<String>) {
         if value["type"] == "Identifier"
             && let Some(name) = value["value"].as_str()
@@ -669,15 +687,20 @@ pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
         if let Some(object) = value.as_object() {
             let kind = value["type"].as_str().unwrap_or("");
             crate::ensure(
-                !matches!(
-                    kind,
-                    "Import"
-                        | "NewExpression"
-                        | "TaggedTemplateExpression"
-                        | "WithStatement"
-                        | "Super"
-                        | "MetaProperty"
-                ),
+                !(region && kind == "ThisExpression")
+                    && (region
+                        && kind == "NewExpression"
+                        && value["callee"]["type"] == "Identifier"
+                        && value["callee"]["value"] == "Date"
+                        || !matches!(
+                            kind,
+                            "Import"
+                                | "NewExpression"
+                                | "TaggedTemplateExpression"
+                                | "WithStatement"
+                                | "Super"
+                                | "MetaProperty"
+                        )),
                 "The draft can load or construct executable code. Copy code to keep it.",
             )?;
             if kind == "CallExpression" {
@@ -686,6 +709,11 @@ pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
                     callee["type"] == "MemberExpression"
                         || callee["type"] == "FunctionExpression"
                         || callee["type"] == "ArrowFunctionExpression"
+                        || region
+                            && callee["type"] == "Identifier"
+                            && callee["value"]
+                                .as_str()
+                                .is_some_and(|name| locals.contains(name))
                         || callee["type"] == "Identifier"
                             && callee["value"].as_str().is_some_and(|name| {
                                 [
@@ -706,6 +734,8 @@ pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
                 crate::ensure(
                     value["value"].as_str().is_some_and(|name| {
                         locals.contains(name)
+                            && (region || name != "window")
+                            && !(region && matches!(name, "document" | "alert"))
                             && ![
                                 "eval",
                                 "Function",
@@ -720,7 +750,6 @@ pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
                                 "setTimeout",
                                 "setInterval",
                                 "globalThis",
-                                "window",
                                 "self",
                                 "top",
                                 "parent",
@@ -744,7 +773,60 @@ pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
                     && !matches!(name, "constructor" | "prototype" | "__proto__");
                 crate::ensure(
                     property["type"] == "Identifier"
-                        && (properties.contains(&name) || data_property),
+                        && (properties.contains(&name)
+                            || data_property
+                            || region
+                                && [
+                                    "sort",
+                                    "append",
+                                    "appendChild",
+                                    "children",
+                                    "getAttribute",
+                                    "getBoundingClientRect",
+                                    "clientX",
+                                    "clientY",
+                                    "offsetX",
+                                    "offsetY",
+                                    "x",
+                                    "y",
+                                    "width",
+                                    "height",
+                                    "left",
+                                    "right",
+                                    "top",
+                                    "bottom",
+                                    "scrollLeft",
+                                    "scrollTop",
+                                    "scrollWidth",
+                                    "scrollHeight",
+                                    "clientWidth",
+                                    "clientHeight",
+                                    "offsetWidth",
+                                    "offsetHeight",
+                                    "scrollTo",
+                                    "scrollBy",
+                                    "at",
+                                    "slice",
+                                    "scrollY",
+                                    "innerWidth",
+                                    "innerHeight",
+                                    "now",
+                                    "from",
+                                    "compare",
+                                    "localeCompare",
+                                ]
+                                .contains(&name))
+                        && !(region && ["closest", "body", "documentElement"].contains(&name))
+                        && !(region
+                            && value["object"]["value"] == "window"
+                            && ![
+                                "addEventListener",
+                                "removeEventListener",
+                                "scrollY",
+                                "innerWidth",
+                                "innerHeight",
+                            ]
+                            .contains(&name)),
                     "The draft uses dynamic or executable script access. Copy code to keep it.",
                 )?;
                 pending.extend(

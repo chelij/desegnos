@@ -115,7 +115,7 @@ impl Project {
     }
 
     /// The selected elements (outer HTML with editor IDs), the page stylesheet and a page outline.
-    /// Scripts are not sent; they stay exactly as they are.
+    /// Requirements format 18 adds bounded read-only script context to this envelope.
     pub(crate) fn element_fix_source(
         &self,
         page: &Page,
