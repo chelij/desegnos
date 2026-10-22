@@ -1,5 +1,5 @@
-//! Account-specific discovery. Declaring a tool with choice `none` never generates an image.
-use crate::{ApiKey, AuthenticationMethod, OpenAiClient, ProviderSettings, sse::SseDecoder};
+//! Free account-specific discovery using a deliberately invalid Image API size.
+use crate::{ApiKey, AuthenticationMethod, OpenAiClient, ProviderSettings};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -45,66 +45,69 @@ impl ImageAccess {
     }
 }
 
-pub(crate) fn image_models_offered(value: &Value, auth: AuthenticationMethod) -> bool {
-    value
-        .get("data")
-        .or_else(|| value.get("models"))
-        .and_then(Value::as_array)
-        .is_some_and(|models| {
-            models.iter().any(|model| {
-                model
-                    .get("id")
-                    .or_else(|| model.get("slug"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|id| id.starts_with("gpt-image"))
-                    && (auth == AuthenticationMethod::ApiKey || model["visibility"] == "list")
-            })
-        })
-}
-
-/// Only explicit tool or plan rejections disable images. Other parameter failures are probe bugs.
-pub(crate) fn image_tool_rejected(status: u16, body: &Value) -> bool {
-    if !(400..500).contains(&status) || matches!(status, 401 | 408 | 409 | 425 | 429) {
+/// Access denials only; transient failures must never disable a credential.
+pub(crate) fn image_api_rejected(status: u16, body: &Value) -> bool {
+    if status == 429 || status >= 500 {
         return false;
     }
-    let error = body.get("error").unwrap_or(body);
-    // SSE errors carry a code without an HTTP status. Transient codes must still win.
-    let code = error["code"]
-        .as_str()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    if [
-        "rate_limit",
-        "quota",
-        "usage_limit",
-        "server_error",
-        "internal_error",
-        "invalid_api_key",
-        "authentication",
-        "token_expired",
+    if matches!(status, 401 | 403) {
+        return true;
+    }
+    if !(400..500).contains(&status) {
+        return false;
+    }
+    let description = body.to_string().to_ascii_lowercase();
+    if description.contains("organization")
+        && (description.contains("verif") || description.contains("enrolled"))
+    {
+        return true;
+    }
+    [
+        "subscription",
+        "sharing",
+        "not allowed",
+        "not authorized",
+        "permission denied",
+        "organization verification",
+        "organization must be verified",
+        "verify your organization",
+        "organization must be enrolled",
+        "unsupported_tool",
+        "unsupported tool",
+        "tools are unavailable",
+        "image_generation is unavailable",
+        "image_generation is unsupported",
+        "not available for your plan",
     ]
     .iter()
-    .any(|part| code.contains(part))
-    {
-        return false;
-    }
-    let description = ["code", "type", "param", "message"]
-        .iter()
-        .filter_map(|key| error[*key].as_str())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_ascii_lowercase();
-    description.contains("image_generation")
-        || description.contains("image generation")
-        || description.contains("tools")
-        || description.contains("unsupported_tool")
-        || description.contains("unsupported tool type")
-        || description.contains("not available for your plan")
+    .any(|part| description.contains(part))
+}
+
+/// Main connection always wins when both credentials have confirmed access.
+/// Unknown access is never permission for a paid call.
+pub fn use_image_key(main: Option<&ImageAccess>, image_key: Option<&ImageAccess>) -> bool {
+    let usable = |access: Option<&ImageAccess>| {
+        access.is_some_and(|a| {
+            a.available == ImageAvailability::Yes && !a.expired(image_access_now())
+        })
+    };
+    !usable(main) && usable(image_key)
 }
 
 pub(crate) fn image_access_error(status: u16, body: &Value, key: &ApiKey) -> ImageAccess {
-    let available = if image_tool_rejected(status, body) {
+    let available = if image_api_rejected(status, body) {
         ImageAvailability::No
+    } else if status == 400 {
+        let error = body.get("error").unwrap_or(body);
+        let message = error["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if error["param"] == "size" || (message.contains("size") && message.contains("16x16")) {
+            ImageAvailability::Yes
+        } else {
+            ImageAvailability::Unknown
+        }
     } else {
         ImageAvailability::Unknown
     };
@@ -132,7 +135,15 @@ pub(crate) fn image_access_error(status: u16, body: &Value, key: &ApiKey) -> Ima
         })
         .collect::<String>();
     let detail = scrubbed.split_whitespace().collect::<Vec<_>>().join(" ");
-    let reason = format!("http_{status}:{detail}")
+    let organization = body.to_string().to_ascii_lowercase();
+    let prefix = if organization.contains("organization")
+        && (organization.contains("verif") || organization.contains("enrolled"))
+    {
+        "API Organization Verification required: "
+    } else {
+        ""
+    };
+    let reason = format!("{prefix}http_{status}:{detail}")
         .chars()
         .take(200)
         .collect::<String>();
@@ -171,118 +182,28 @@ impl OpenAiClient {
     }
     async fn probe_images(
         &self,
-        auth: AuthenticationMethod,
-        settings: &ProviderSettings,
+        _auth: AuthenticationMethod,
+        _settings: &ProviderSettings,
         key: &ApiKey,
     ) -> ImageAccess {
-        // Model visibility is supporting evidence, never proof of Responses tool access.
-        let offered = match self
-            .client
-            .get(format!("{}/models", self.endpoint))
-            .bearer_auth(key.expose())
-            .send()
-            .await
-        {
-            Ok(mut response) if response.status().is_success() => {
-                bounded_json(&mut response, 1024 * 1024)
-                    .await
-                    .map(|value| image_models_offered(&value, auth))
-            }
-            _ => None,
-        };
-        let mut access = self.probe_image_tool(auth, settings, key).await;
-        let evidence = match offered {
-            Some(true) => ";image_model_listed",
-            Some(false) => ";image_model_not_listed",
-            None => ";models_unknown",
-        };
-        access.reason = access.reason.chars().take(200 - evidence.len()).collect();
-        access.reason.push_str(evidence);
-        access
-    }
-    async fn probe_image_tool(
-        &self,
-        auth: AuthenticationMethod,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-    ) -> ImageAccess {
-        let mut body = json!({
-            "instructions":"Reply only with ok. Do not generate images or call tools.",
-            "input":[{"role":"user","content":[{"type":"input_text","text":"ok"}]}],
-            "tools":[{"type":"image_generation"}], "tool_choice":"none"
+        // 16x16 is invalid for every supported model. Do not retry with a valid size:
+        // validation proves access without ever authorizing image generation.
+        let body = json!({"model": crate::image_generation::IMAGE_MODELS[0], "prompt": "Access check",
+            "size": "16x16", "n": 1, "quality": "low", "output_format": "png"});
+        let request = serde_json::to_vec(&body).ok().and_then(|bytes| {
+            self.image_api_request("images/generations", key, "application/json", bytes)
+                .ok()
         });
-        let probe_settings = ProviderSettings {
-            max_output_tokens: 16,
-            ..settings.clone()
-        };
-        crate::settings::configure_response_body(&mut body, auth, &probe_settings);
-        let request = serde_json::to_vec(&body)
-            .ok()
-            .and_then(|body| self.responses_request(key, body).ok());
         let Some(request) = request else {
             return ImageAccess::new(ImageAvailability::Unknown, "invalid_probe_request");
         };
         let Ok(mut response) = request.send().await else {
             return ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout");
         };
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            return image_access_error(
-                status,
-                &bounded_json(&mut response, 65_536)
-                    .await
-                    .unwrap_or(Value::Null),
-                key,
-            );
-        }
-        if response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("application/json"))
-        {
-            let value = bounded_json(&mut response, 65_536)
-                .await
-                .unwrap_or(Value::Null);
-            return if value["status"] == "completed" && value["error"].is_null() {
-                ImageAccess::new(ImageAvailability::Yes, "tool_accepted")
-            } else {
-                image_access_error(400, &value, key)
-            };
-        }
-        let mut decoder = SseDecoder::default();
-        let mut bytes = 0;
-        while let Ok(Some(chunk)) = response.chunk().await {
-            bytes += chunk.len();
-            if bytes > 65_536 {
-                break;
-            }
-            let Ok(frames) = decoder.push(&chunk) else {
-                break;
-            };
-            for frame in frames {
-                let Ok(value) = serde_json::from_str::<Value>(&frame.data) else {
-                    continue;
-                };
-                match value["type"].as_str() {
-                    Some("error" | "response.failed") => {
-                        let error = value.get("response").unwrap_or(&value);
-                        return image_access_error(400, error, key);
-                    }
-                    Some(
-                        "response.created"
-                        | "response.in_progress"
-                        | "response.completed"
-                        | "response.output_text.delta"
-                        | "response.incomplete",
-                    ) => {
-                        // Dropping the response cancels the stream immediately upon acceptance.
-                        return ImageAccess::new(ImageAvailability::Yes, "tool_accepted");
-                    }
-                    _ => {}
-                }
-            }
-        }
-        ImageAccess::new(ImageAvailability::Unknown, "unconfirmed_response")
+        let status = response.status().as_u16();
+        let value = bounded_json(&mut response, 65_536)
+            .await
+            .unwrap_or(Value::Null);
+        image_access_error(status, &value, key)
     }
 }

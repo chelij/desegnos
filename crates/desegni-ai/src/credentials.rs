@@ -163,6 +163,15 @@ impl CredentialManager {
         }
     }
 
+    pub fn for_images() -> Self {
+        Self {
+            state: Mutex::new(CredentialState::default()),
+            vault: Box::new(SystemVault {
+                service: "io.desegnos.openai.images",
+            }),
+        }
+    }
+
     pub fn status(&self) -> CredentialInfo {
         let state = self
             .state

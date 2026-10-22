@@ -29,6 +29,7 @@ impl Drop for Temp {
 fn isolated_service(directory: PathBuf) -> GenerationService {
     let mut service = GenerationService::from_directory(directory).unwrap();
     service.credentials = Arc::new(CredentialManager::isolated_for_tests());
+    service.image_credentials = Arc::new(CredentialManager::isolated_for_tests());
     service
 }
 
@@ -1232,6 +1233,10 @@ fn session_credentials_do_not_enter_disclosure_job_files_or_returned_settings() 
     let project = project();
     let prepared = service.prepare(&project).unwrap();
     let view = AiSettingsView {
+        image_credential: None,
+        image_key: CredentialManager::isolated_for_tests().status(),
+        main_image_access: None,
+        image_key_access: None,
         image_access: None,
         image_access_checking: false,
         provider: ProviderId::Openai,
@@ -1433,6 +1438,7 @@ fn provider_selection_survives_restart_and_keeps_keys_and_settings_separate() {
     assert_eq!(service.settings.model, "claude-sonnet-5-5");
     assert!(!service.credentials.status().configured);
     service.credentials = Arc::new(CredentialManager::isolated_for_tests());
+    service.image_credentials = Arc::new(CredentialManager::isolated_for_tests());
     service
         .credentials
         .set_key(
@@ -1900,7 +1906,7 @@ fn runtime_image_rejection_is_persisted_per_account_and_credential_without_secre
     service
         .store_image_access(
             first.clone(),
-            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "image_tool_rejected"),
+            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "image_api_rejected"),
         )
         .unwrap();
     service
@@ -1916,10 +1922,10 @@ fn runtime_image_rejection_is_persisted_per_account_and_credential_without_secre
     service
         .store_image_access(
             chatgpt.clone(),
-            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "image_tool_rejected"),
+            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "image_api_rejected"),
         )
         .unwrap();
-    let saved = fs::read_to_string(service.directory.join("image-access.json")).unwrap();
+    let saved = fs::read_to_string(service.directory.join("image-api-access.json")).unwrap();
     assert!(!saved.contains("sk-first") && !saved.contains("sk-second"));
     let mut reopened = GenerationService::from_directory(service.directory.clone()).unwrap();
     assert_eq!(
@@ -1937,4 +1943,55 @@ fn runtime_image_rejection_is_persisted_per_account_and_credential_without_secre
     assert!(!reopened.image_access_checking.contains_key(&chatgpt));
     assert!(!reopened.image_access.contains_key(&chatgpt));
     assert!(reopened.image_access.contains_key(&first));
+}
+
+#[test]
+fn image_key_is_separate_and_selection_prefers_the_active_connection() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    service
+        .credentials
+        .set_key("sk-text-only-credential".into(), CredentialStorage::Session)
+        .unwrap();
+    service
+        .image_credentials
+        .set_key(
+            "sk-separate-image-secret".into(),
+            CredentialStorage::Session,
+        )
+        .unwrap();
+    let main = service.image_cache_id(None).unwrap();
+    let image = service.image_key_cache_id().unwrap();
+    assert_ne!(main, image);
+    service
+        .store_image_access(
+            main.clone(),
+            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "subscription sharing"),
+        )
+        .unwrap();
+    service
+        .store_image_access(
+            image.clone(),
+            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::Yes, "invalid size"),
+        )
+        .unwrap();
+    assert_eq!(service.selected_image_cache_id(None), Some(image.clone()));
+    service
+        .store_image_access(
+            main.clone(),
+            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::Yes, "invalid size"),
+        )
+        .unwrap();
+    assert_eq!(service.selected_image_cache_id(None), Some(main));
+    service.authentication = AuthenticationMethod::Chatgpt;
+    assert_eq!(
+        service.selected_image_cache_id(Some(Uuid::new_v4())),
+        Some(image)
+    );
+    let saved = fs::read_to_string(service.directory.join("image-api-access.json")).unwrap();
+    assert!(!saved.contains("sk-separate-image-secret"));
+    assert!(!saved.contains("sk-text-only-credential"));
+    service.image_credentials.remove_key().unwrap();
+    assert!(service.credentials.status().configured);
+    assert!(!service.image_credentials.status().configured);
 }

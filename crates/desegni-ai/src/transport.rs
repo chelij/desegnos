@@ -156,6 +156,23 @@ impl OpenAiClient {
         self
     }
 
+    /// Same client, authorization header and redirect policy as text requests.
+    pub(crate) fn image_api_request(
+        &self,
+        path: &str,
+        key: &ApiKey,
+        content_type: &str,
+        body: Vec<u8>,
+    ) -> Result<reqwest::RequestBuilder> {
+        Ok(self
+            .client
+            .post(format!("{}/{path}", self.endpoint))
+            .header(AUTHORIZATION, authorization(key)?)
+            .header(CONTENT_TYPE, content_type)
+            .header(ACCEPT, "application/json")
+            .body(body))
+    }
+
     /// Shared wire contract for Responses generation and capability probes.
     pub(crate) fn responses_request(
         &self,

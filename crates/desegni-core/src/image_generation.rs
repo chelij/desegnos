@@ -7,11 +7,22 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct ImageGenerationRequest {
     pub prompt: String,
     pub source: Option<String>,
+    pub mask: Option<String>,
     pub size: String,
     pub transparent: bool,
 }
 
 impl ImageGenerationRequest {
+    pub fn mask_image(
+        &self,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+    ) -> Result<Option<String>> {
+        let mut mask = self.clone();
+        mask.source = self.mask.clone();
+        mask.reference_image(snapshot, project)
+    }
+
     /// References are resolved exclusively from frozen request attachments and project assets.
     pub fn reference_image(
         &self,
@@ -96,6 +107,26 @@ fn read(node: dom_query::NodeRef<'_>) -> Result<ImageGenerationRequest> {
             "Image edits need an attachment ID or project asset reference.",
         )?;
     }
+    let mask = node
+        .attr("data-desegnos-mask")
+        .map(|value| value.to_string());
+    ensure(
+        mask.is_none() || source.is_some(),
+        "An image mask requires a source image.",
+    )?;
+    if let Some(mask) = &mask {
+        let id = mask
+            .strip_prefix(crate::PROJECT_ASSET_SCHEME)
+            .unwrap_or(mask);
+        ensure(
+            !id.is_empty()
+                && id.len() <= 128
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            "Image masks need an attachment ID or project asset reference.",
+        )?;
+    }
     let size = node
         .attr("data-desegnos-size")
         .map(|s| s.to_string())
@@ -117,6 +148,7 @@ fn read(node: dom_query::NodeRef<'_>) -> Result<ImageGenerationRequest> {
     Ok(ImageGenerationRequest {
         prompt,
         source,
+        mask,
         size,
         transparent: background == "transparent",
     })
@@ -157,6 +189,7 @@ impl GenerationCandidate {
                 let request = read(*node)?;
                 node.remove_attr("data-desegnos-generate");
                 node.remove_attr("data-desegnos-source");
+                node.remove_attr("data-desegnos-mask");
                 node.remove_attr("data-desegnos-size");
                 node.remove_attr("data-desegnos-background");
                 node.remove_attr("srcset");

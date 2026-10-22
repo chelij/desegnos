@@ -295,6 +295,7 @@ impl GenerationCandidate {
                 )?;
                 for request in requests {
                     request.reference_image(snapshot, project)?;
+                    request.mask_image(snapshot, project)?;
                 }
             }
         }
