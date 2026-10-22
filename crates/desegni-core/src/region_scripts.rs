@@ -103,7 +103,7 @@ pub(crate) fn validate(
                 let root = script.parent().unwrap();
                 ensure(
                     if region.has_targets() {
-                        region.targets().any(|t| {
+                        region.targets().iter().any(|t| {
                             root.attr(crate::ELEMENT_ID_ATTRIBUTE).as_deref() == Some(t.id.as_str())
                         })
                     } else {
