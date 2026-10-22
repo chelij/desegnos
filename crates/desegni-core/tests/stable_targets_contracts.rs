@@ -604,15 +604,19 @@ fn migration_preserves_frozen_receipts_but_never_rebinds_them_to_changed_source(
     let snapshot = original.prepare_requirements().unwrap();
     let receipt = serde_json::to_vec(&snapshot).unwrap();
     let id = original.pages[0].regions[0].id;
+    // An unmapped rectangle can add a root while preserving the existing heading.
     let c = candidate(
         &original,
         &snapshot,
-        format!("<h1 data-desegnos-region='{id}'>Generated earlier</h1>"),
+        format!(
+            "<h1>Before upgrade</h1><section data-desegnos-region='{id}'>Generated earlier</section>"
+        ),
     );
     c.validate(&snapshot, &original).unwrap();
     original.schema_version = 6;
     let decoded = decode_project(&serde_json::to_vec(&original).unwrap()).unwrap();
     let preserved = decoded.project.clone();
+    assert_ne!(preserved.pages[0].content, original.pages[0].content);
     assert!(snapshot.validate_current(&preserved).is_err());
     assert!(preserved.apply_generation(&snapshot, &c, &[]).is_err());
     assert_eq!(decoded.project, preserved);

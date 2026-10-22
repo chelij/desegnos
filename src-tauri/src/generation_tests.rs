@@ -733,8 +733,8 @@ fn cancellation_stops_the_request_even_when_its_local_record_cannot_be_written()
 }
 
 #[test]
-fn malformed_out_of_scope_and_conflicted_output_cannot_become_ready() {
-    for condition in ["malformed", "omitted", "foreign-page", "conflict"] {
+fn malformed_foreign_page_and_all_conflicted_output_cannot_become_ready() {
+    for condition in ["malformed", "foreign-page", "conflict"] {
         let temp = Temp::new();
         let mut service = temp.service();
         let project = project();
@@ -742,9 +742,6 @@ fn malformed_out_of_scope_and_conflicted_output_cannot_become_ready() {
         service.begin(&project, prepared.job_id, false).unwrap();
         let mut generated = candidate(&project, &prepared, condition);
         match condition {
-            "omitted" => {
-                generated.regions.pop();
-            }
             "foreign-page" => generated.pages[0].page_id = Uuid::new_v4(),
             "conflict" => {
                 for region in &mut generated.regions {
@@ -779,6 +776,102 @@ fn malformed_out_of_scope_and_conflicted_output_cannot_become_ready() {
             project.pages[0].content.as_ref().unwrap().html,
             "<main>Existing accepted content</main>"
         );
+    }
+}
+
+#[test]
+fn omitted_and_invalid_regions_recover_without_applying_unsafe_source() {
+    for condition in ["omitted", "outside-scope"] {
+        let temp = Temp::new();
+        let mut service = temp.service();
+        let mut project = project();
+        let first = project.pages[0].regions[0].id;
+        let second = project.pages[0].regions[1].id;
+        // Map both existing areas so recovery can prove what must stay unchanged.
+        project.pages[0].content.as_mut().unwrap().html = format!(
+            "<main>Existing accepted content</main><section data-desegnos-region=\"{first}\">Original first</section><section data-desegnos-region=\"{second}\">Original second</section>"
+        );
+        let before = project.clone();
+        let prepared = service.prepare(&project).unwrap();
+        service.begin(&project, prepared.job_id, false).unwrap();
+        let mut generated = candidate(&project, &prepared, "Recovered first");
+        generated.pages[0].content.html = format!(
+            "<main>UNSAFE OUTSIDE CHANGE</main><section data-desegnos-region=\"{first}\">Recovered first</section><section data-desegnos-region=\"{second}\"{}>Unwanted second</section>",
+            if condition == "outside-scope" {
+                " data-desegnos-id=\"inventedid\""
+            } else {
+                ""
+            }
+        );
+        if condition == "omitted" {
+            generated.regions.pop();
+        }
+        service
+            .finish(
+                &project,
+                Some(&project),
+                prepared.job_id,
+                1,
+                Ok(response(&generated, 1)),
+            )
+            .unwrap();
+        let ready = service.latest(&project).unwrap().unwrap();
+        status(&ready, JobStatus::Ready);
+        assert_eq!(ready.usage, Some(usage(1)));
+        assert!(service.active.is_empty());
+        assert_eq!(project, before);
+        let recovered = ready.candidate.unwrap();
+        recovered
+            .validate(&prepared.requirements, &project)
+            .unwrap();
+        assert_eq!(recovered.regions[0].status, RegionStatus::Implemented);
+        let second_outcome = recovered
+            .regions
+            .iter()
+            .find(|r| r.region_id == second)
+            .unwrap();
+        if condition == "omitted" {
+            assert_eq!(second_outcome.status, RegionStatus::Implemented);
+            assert!(
+                ready
+                    .validation_events
+                    .iter()
+                    .any(|e| e.kind == "omittedRegion" && e.region_id == Some(second))
+            );
+        } else {
+            assert_eq!(second_outcome.status, RegionStatus::Conflict);
+            assert!(!second_outcome.explanation.is_empty());
+            assert!(
+                ready
+                    .validation_events
+                    .iter()
+                    .any(|e| e.disposition == "conflicted" && e.region_id == Some(second))
+            );
+        }
+        let applied = project
+            .apply_generation(&prepared.requirements, &recovered, &[])
+            .unwrap();
+        let source = applied.pages[0].content.as_ref().unwrap();
+        assert!(source.html.contains("Existing accepted content"));
+        assert!(source.html.contains("Recovered first"));
+        assert!(source.html.contains("Original second"));
+        assert!(!source.html.contains("UNSAFE"));
+        assert!(!source.html.contains("Unwanted"));
+        assert!(!source.html.contains("inventedid"));
+        assert_eq!(
+            source.css,
+            desegni_core::format_site_content(project.pages[0].content.as_ref().unwrap()).css
+        );
+        assert_eq!(
+            source.javascript,
+            project.pages[0].content.as_ref().unwrap().javascript
+        );
+        assert!(applied.pages[0].regions[0].completed);
+        assert_eq!(
+            applied.pages[0].regions[1].completed,
+            condition == "omitted"
+        );
+        assert!(applied.applied_job_ids.contains(&prepared.job_id));
     }
 }
 

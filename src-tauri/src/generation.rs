@@ -2321,15 +2321,14 @@ async fn submit(
             let mut result = ask(&request.requirements).await;
             // A completed, unambiguous final answer with malformed JSON/schema is a
             // validation failure, not a transport retry. All other provider failures stop here.
-            if request.requirements.format_version().is_ok_and(|v| v >= 17) {
-                if let Err(error) = &result {
-                    if error.outcome == SubmissionOutcome::Received && error.response_format.as_ref().is_some_and(|format|
-                        matches!(format.rejection, Some(desegni_ai::ResponseRejection::CandidateJson | desegni_ai::ResponseRejection::CandidateShape))) {
-                        if let Some(text) = error.response_format.as_ref().and_then(|format| format.diagnostic_reply.as_ref()) {
-                            result = Ok(ProviderResponse { text: text.to_string(), response_id: error.response_id.clone().unwrap_or_default(), usage: error.usage });
-                        }
-                    }
-                }
+            if request.requirements.format_version().is_ok_and(|v| v >= 17)
+                && let Err(error) = &result
+                && error.outcome == SubmissionOutcome::Received
+                && error.response_format.as_ref().is_some_and(|format|
+                    matches!(format.rejection, Some(desegni_ai::ResponseRejection::CandidateJson | desegni_ai::ResponseRejection::CandidateShape)))
+                && let Some(text) = error.response_format.as_ref().and_then(|format| format.diagnostic_reply.as_ref())
+            {
+                result = Ok(ProviderResponse { text: text.to_string(), response_id: error.response_id.clone().unwrap_or_default(), usage: error.usage });
             }
             // An element fix may ask once for other elements' HTML; reply automatically and keep
             // the final answer tied to the frozen requirements.
@@ -2379,8 +2378,9 @@ async fn submit(
             }
             // One validation repair is distinct from a user retry. It uses the same frozen
             // provider/model, cancellation token, accounting and persisted context exchange.
-            if request.requirements.format_version().is_ok_and(|v| v >= 17) {
-                if let Ok(first_response) = &mut result {
+            if request.requirements.format_version().is_ok_and(|v| v >= 17)
+                && let Ok(first_response) = &mut result
+            {
                     let recovered = desegni_core::recover_generation_reply(&first_response.text, &request.requirements, &original);
                     let (first_candidate, mut events) = match recovered {
                         Ok((candidate, events)) => (Some(candidate), events),
@@ -2486,14 +2486,13 @@ async fn submit(
                     if let Ok(candidate) = final_candidate {
                         first_response.text = serde_json::to_string(&candidate).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
                     }
-                    if let Ok(mut service) = shared_app.state::<Mutex<GenerationService>>().lock() {
-                        if let Some(mut record) = service.jobs.get(&job_id).cloned() {
+                    if let Ok(mut service) = shared_app.state::<Mutex<GenerationService>>().lock()
+                        && let Some(mut record) = service.jobs.get(&job_id).cloned()
+                    {
                             record.view.validation_events = events;
                             if let Some(reply) = initial_reply_diagnostic { record.view.raw_reply = Some(reply); }
                             let _ = service.persist_retaining(record);
-                        }
                     }
-                }
             }
             match result {
                 Ok(response) => {

@@ -838,7 +838,7 @@ fn successful_generation_builds_durable_draft_notes_without_applying_source_or_c
 
 #[test]
 fn automatic_notes_preserve_user_history_and_failed_writes_leave_the_session_unchanged() {
-    let (project, _, _) = fixture();
+    let (project, _, mut candidate) = fixture();
     let mut session = Session::new(project.clone()).unwrap();
     session
         .execute(
@@ -849,50 +849,33 @@ fn automatic_notes_preserve_user_history_and_failed_writes_leave_the_session_unc
         .unwrap();
     session.undo(|_| Ok(())).unwrap();
     assert!(session.can_redo());
+    assert!(!session.can_undo());
     let snapshot = session.project().prepare_requirements().unwrap();
-    let (_, _, mut candidate) = fixture();
     candidate.job_id = snapshot.job_id;
     candidate.requirements_sha256 = snapshot.sha256.clone();
-    candidate.regions = project
-        .pages
-        .iter()
-        .flat_map(|page| &page.regions)
-        .map(|region| RegionOutcome {
-            region_id: region.id,
-            status: RegionStatus::Implemented,
-            explanation: "Implemented every described area.".into(),
-        })
-        .collect();
-    candidate.pages = project
-        .pages
-        .iter()
-        .filter(|page| !page.regions.is_empty())
-        .map(|page| GeneratedPage {
-            page_id: page.id,
-            content: SiteContent {
-                html: format!(
-                    "<main data-desegnos-region=\"{}\"><button>Actual source</button></main>",
-                    page.regions[0].id
-                ),
-                ..source("Actual source")
-            },
-        })
-        .collect();
     candidate.component_requests.clear();
     candidate.decision_proposals.clear();
     candidate.criticism.clear();
+    candidate.validate(&snapshot, session.project()).unwrap();
     let before = session.project().clone();
+    let write_attempted = Cell::new(false);
     assert!(
         session
-            .record_generation(&snapshot, &candidate, 1, |_| Err(Error("Disk full".into())))
+            .record_generation(&snapshot, &candidate, 1, |_| {
+                write_attempted.set(true);
+                Err(Error("Disk full".into()))
+            })
             .is_err()
     );
+    assert!(write_attempted.get());
     assert_eq!(session.project(), &before);
     assert!(session.can_redo());
+    assert!(!session.can_undo());
     session
         .record_generation(&snapshot, &candidate, 1, |_| Ok(()))
         .unwrap();
     assert!(session.can_redo());
+    assert!(!session.can_undo());
     let notes = session.project().latest_generation.clone();
     session.redo(|_| Ok(())).unwrap();
     assert!(!session.project().show_grid);

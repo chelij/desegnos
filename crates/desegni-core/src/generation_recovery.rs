@@ -79,49 +79,49 @@ pub fn recover_generation_reply(
         "The reply must be a JSON object matching the supplied result schema.",
     )?;
     let mut events = vec![];
-    if !snapshot.is_element_fix() {
-        if let Some(pages) = value["pages"].as_array_mut() {
-            for generated in pages {
-                let Some(page) = generated["pageId"]
-                    .as_str()
-                    .and_then(|id| Uuid::parse_str(id).ok())
-                    .and_then(|id| project.page(id).ok())
-                else {
-                    continue;
-                };
-                if generated["content"].is_null() {
-                    generated["content"] = serde_json::json!({});
-                }
-                if !generated["content"].is_object() {
-                    continue;
-                }
-                if let Some(source) = &page.content {
-                    for (field, old, label) in [
-                        ("html", &source.html, "HTML"),
-                        ("css", &source.css, "stylesheet"),
-                        ("javascript", &source.javascript, "JavaScript"),
-                    ] {
-                        if !old.is_empty()
-                            && (generated["content"][field].is_null()
-                                || generated["content"][field].as_str() == Some(""))
-                        {
-                            generated["content"][field] = old.clone().into();
-                            event(
-                                &mut events,
-                                "omittedField",
-                                "normalised",
-                                None,
-                                format!("Kept the {label} unchanged (the AI omitted it)."),
-                            );
-                        } else if generated["content"][field].is_null() {
-                            generated["content"][field] = "".into();
-                        }
+    if !snapshot.is_element_fix()
+        && let Some(pages) = value["pages"].as_array_mut()
+    {
+        for generated in pages {
+            let Some(page) = generated["pageId"]
+                .as_str()
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .and_then(|id| project.page(id).ok())
+            else {
+                continue;
+            };
+            if generated["content"].is_null() {
+                generated["content"] = serde_json::json!({});
+            }
+            if !generated["content"].is_object() {
+                continue;
+            }
+            if let Some(source) = &page.content {
+                for (field, old, label) in [
+                    ("html", &source.html, "HTML"),
+                    ("css", &source.css, "stylesheet"),
+                    ("javascript", &source.javascript, "JavaScript"),
+                ] {
+                    if !old.is_empty()
+                        && (generated["content"][field].is_null()
+                            || generated["content"][field].as_str() == Some(""))
+                    {
+                        generated["content"][field] = old.clone().into();
+                        event(
+                            &mut events,
+                            "omittedField",
+                            "normalised",
+                            None,
+                            format!("Kept the {label} unchanged (the AI omitted it)."),
+                        );
+                    } else if generated["content"][field].is_null() {
+                        generated["content"][field] = "".into();
                     }
-                } else {
-                    for field in ["html", "css", "javascript"] {
-                        if generated["content"][field].is_null() {
-                            generated["content"][field] = "".into();
-                        }
+                }
+            } else {
+                for field in ["html", "css", "javascript"] {
+                    if generated["content"][field].is_null() {
+                        generated["content"][field] = "".into();
                     }
                 }
             }
@@ -159,17 +159,17 @@ pub fn recover_generation_reply(
             .collect();
         if let Some(pages) = value["pages"].as_array_mut() {
             for id in ready {
-                if !pages.iter().any(|p| p["pageId"] == id.to_string()) {
-                    if let Some(content) = &project.page(id)?.content {
-                        pages.push(serde_json::json!({"pageId":id,"content":content}));
-                        event(
-                            &mut events,
-                            "omittedPage",
-                            "normalised",
-                            None,
-                            format!("Kept page {id} unchanged (the AI omitted it)."),
-                        );
-                    }
+                if !pages.iter().any(|p| p["pageId"] == id.to_string())
+                    && let Some(content) = &project.page(id)?.content
+                {
+                    pages.push(serde_json::json!({"pageId":id,"content":content}));
+                    event(
+                        &mut events,
+                        "omittedPage",
+                        "normalised",
+                        None,
+                        format!("Kept page {id} unchanged (the AI omitted it)."),
+                    );
                 }
             }
         }
