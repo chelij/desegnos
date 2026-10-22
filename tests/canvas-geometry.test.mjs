@@ -13,7 +13,7 @@ try {
     '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts', 'src/layerOrder.ts', 'src/wholePageScope.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { pointInEllipse, pointInPolygon, pointInRegion, absolutePoints, relativePoints, simplifyFreehand, freehandArea, resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
-    workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
+    workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, selectionLabelPosition, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
   const { reorderedLayers } = await import(pathToFileURL(join(temporary, 'layerOrder.js')).href);
   const { isWholePage } = await import(pathToFileURL(join(temporary, 'wholePageScope.js')).href);
@@ -298,6 +298,30 @@ try {
     assert.deepEqual(rectDelta({ x: 8, y: 8 }, guide)(accepted), { ...accepted, x: 99908, y: 99928 });
     assert.deepEqual(rectDelta({ x: 8, y: 8 }, guide, true)(accepted), { ...accepted, width: 108, height: 88 });
     assert.equal(rectDelta({ x: 0, y: 0 }, guide)(accepted), accepted);
+  });
+  await test('selection labels stay above the area, flip below and clamp to the visible viewport', () => {
+    const viewport = { x: 28, y: 28, width: 800, height: 600 }, size = { x: 245, y: 28 };
+    const area = { x: 200, y: 180, width: 336, height: 440 };
+    assert.deepEqual(selectionLabelPosition(area, size, viewport), { x: 200, y: 124 });
+    assert.deepEqual(selectionLabelPosition({ ...area, y: 40, height: 100 }, size, viewport), { x: 200, y: 168 });
+    assert.deepEqual(selectionLabelPosition({ ...area, x: -100 }, size, viewport), { x: 36, y: 124 });
+    assert.deepEqual(selectionLabelPosition({ ...area, x: 790 }, size, viewport), { x: 575, y: 124 });
+    // Vertical clamping is safe only when the label remains outside the area.
+    assert.deepEqual(selectionLabelPosition({ ...area, y: 900 }, size, viewport), { x: 200, y: 592 });
+    assert.equal(selectionLabelPosition({ ...area, y: 0, height: 900 }, size, viewport), null);
+    assert.equal(selectionLabelPosition(area, size, { ...viewport, width: 200 }), null);
+  });
+  await test('selection labels never overlap detached request text, menus or handles', () => {
+    const viewport = { x: 0, y: 0, width: 800, height: 600 }, size = { x: 280, y: 30 };
+    const area = { x: 200, y: 180, width: 100, height: 100 };
+    const menu = { x: 200, y: 130, width: 300, height: 42 };
+    const prompt = { x: 200, y: 290, width: 320, height: 200 };
+    assert.deepEqual(selectionLabelPosition(area, size, viewport, [menu]), { x: 200, y: 308 });
+    assert.equal(selectionLabelPosition(area, size, viewport, [menu, prompt]), null);
+    const handles = [{ x: 300, y: 156, width: 24, height: 24 }, { x: 300, y: 280, width: 24, height: 24 }];
+    assert.deepEqual(selectionLabelPosition(area, size, viewport, handles), { x: 200, y: 122 });
+    // A short area must not allow a clamped label back inside its text box.
+    assert.equal(selectionLabelPosition({ x: 0, y: 0, width: 336, height: 600 }, size, viewport), null);
   });
   await test('request text boxes stay readable at every zoom without being constrained to mobile screen width', () => {
     for (const zoom of [0.25, 0.5, 0.75, 1, 1.5, 2]) {

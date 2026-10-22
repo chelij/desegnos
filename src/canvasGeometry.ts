@@ -212,6 +212,21 @@ export function pixelTicks(start: number, screenLength: number, zoom: number): {
 
 // Search above and below first, then beside the selection, and finally along
 // the viewport edges. Score actual nearby content as well as viewport clipping.
+// Labels may clamp to the visible viewport, but must stay above or below the area.
+// If neither side is clear, hiding is safer than covering text or controls.
+export function selectionLabelPosition(rect: Rect, size: Point, viewport: Rect, occupied: Rect[] = []): Point | null {
+  const margin = 8, gap = 28; // Leave room for the 24px corner handles outside the area.
+  if (size.x + margin * 2 > viewport.width || size.y + margin * 2 > viewport.height) return null;
+  const x = clamp(rect.x, viewport.x + margin, viewport.x + viewport.width - size.x - margin);
+  for (const preferredY of [rect.y - size.y - gap, rect.y + rect.height + gap]) {
+    const y = clamp(preferredY, viewport.y + margin, viewport.y + viewport.height - size.y - margin);
+    if (y + size.y > rect.y - gap && y < rect.y + rect.height + gap) continue;
+    if (occupied.some(other => x < other.x + other.width && x + size.x > other.x && y < other.y + other.height && y + size.y > other.y)) continue;
+    return { x, y };
+  }
+  return null;
+}
+
 export function elementToolbarPosition(rect: Rect, size: Point, viewport: Rect, occupied: Rect[] = []): Point {
   const gap = 8;
   const at = (x: number, y: number) => ({ x: clamp(x, viewport.x + gap, Math.max(viewport.x + gap, viewport.x + viewport.width - size.x - gap)),

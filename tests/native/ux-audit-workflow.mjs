@@ -355,7 +355,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
     await driver.ready('.element-toolbar .style-bar [aria-label="Larger text"]');
     await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
-    assert.match(await driver.execute(() => document.querySelector('.workspace-measurement').textContent), /px/);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-measurement')), false, 'An idle selection must not show a size label');
     const overlap = await driver.execute(() => { const a = document.querySelector('.element-toolbar').getBoundingClientRect(), b = document.querySelector('.element-selection').getBoundingClientRect(); return Math.max(0, Math.min(a.right,b.right)-Math.max(a.left,b.left))*Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)); });
     assert.equal(overlap, 0, 'The restored element toolbar hides the selected heading');
     await physical.captureWindow(join(output, '10-inline-edit-selection-window.png'));

@@ -14,7 +14,7 @@ import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, type MenuItem } from './Menus';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type InlineText } from './Preview';
-import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
+import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
 import type { RequestShapeKind } from './CanvasTools';
@@ -61,6 +61,8 @@ type CanvasProps = {
 export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
 export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ archiveReports = {}, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
+  const measurement = useRef<HTMLDivElement>(null);
+  const [measurementPosition, setMeasurementPosition] = useState<Point | null>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
   const [context, setContext] = useState<CanvasContext | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
@@ -954,7 +956,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
     const direction = { x: event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0, y: event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0 };
     if (!region) { scroll.current!.scrollBy(direction.x * 80, direction.y * 80); return; }
     const resizing = event.shiftKey || resize;
-    void change(region.id, { rect: keyboardRectChange(direction, page.viewport, gridSettings, resizing, event.altKey, region.shape && region.shape.kind !== 'rect' ? { x: 1, y: 1 } : minimum) }).then(updated => reveal(updated.rect, resizing)).catch(() => {});
+    setNudging(true);
+    void change(region.id, { rect: keyboardRectChange(direction, page.viewport, gridSettings, resizing, event.altKey, region.shape && region.shape.kind !== 'rect' ? { x: 1, y: 1 } : minimum) }).then(updated => reveal(updated.rect, resizing)).catch(() => {}).finally(() => setNudging(false));
   }
 
   useLayoutEffect(() => {
@@ -979,16 +982,25 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
   const toolbarRect = element ? unionRect([element.rect, ...extras.map(item => item.rect)]) : selectedRequest?.rect;
   const toolbarPoint = toolbarRect ? elementToolbarPosition(inViewport(toolbarRect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupiedInViewport) : null;
   const toolbarPosition = toolbarPoint ? { left: toolbarPoint.x, top: toolbarPoint.y } : {};
-  const measurementRect = coordinate ? inViewport(selectedRect ?? { ...coordinate, width: 0, height: 0 }) : null;
-  // The size label sits beside the selection. Near the view's edges it would cover the box (and
-  // the request text being typed), so it is left out until there is room again.
-  const measurementPosition = (() => {
-    if (!measurementRect) return null;
-    const size = { x: 245, y: 28 };
-    const position = elementToolbarPosition(measurementRect, size, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupiedInViewport, ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]);
-    const covers = [measurementRect, ...(shapedPrompt ? [shapedPrompt] : [])].some(rect => position.x < rect.x + rect.width && position.x + size.x > rect.x && position.y < rect.y + rect.height && position.y + size.y > rect.y);
-    return covers ? null : position;
-  })();
+  const measuring = !!gesture.current?.active || !!elementDrag.current?.active || nudging;
+  // Read actual text-box, handle, menu and label bounds after layout, including detached
+  // prompts and expanded text. Toolbar placement permits collisions; labels never do.
+  useLayoutEffect(() => {
+    let position: Point | null = null;
+    if (measuring && selectedRect && measurement.current && scroll.current) {
+      const root = scroll.current.getBoundingClientRect();
+      const local = (node: Element): Rect => {
+        const rect = node.getBoundingClientRect();
+        return { x: rect.left - root.left + inset.x, y: rect.top - root.top + inset.y, width: rect.width, height: rect.height };
+      };
+      const label = local(measurement.current);
+      const obstacles = [...scroll.current.querySelectorAll('.annotation, .annotation-grip, .element-resize-corner'), ...(toolbar.current ? [toolbar.current] : [])]
+        .filter(node => node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden').map(local);
+      position = selectionLabelPosition(inViewport(selectedRect), { x: label.width, y: label.height },
+        { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, obstacles);
+    }
+    setMeasurementPosition(previous => previous?.x === position?.x && previous?.y === position?.y ? previous : position);
+  });
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
 
   const editBusy = layerBusy || editingElement || nudging;
@@ -1157,8 +1169,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       <div className="form-actions"><button type="button" onClick={() => setConfirmMany(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void (confirmMany.pageId === page.id ? deleteSelected(true, confirmMany.targets) : Promise.resolve()).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete {confirmMany.count} items</button></div></div></WorkspaceSurface>}
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
-    {selectedRect && coordinate && measurementPosition && gridSettings.rulers && !liveView && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
-      style={{ left: measurementPosition.x, top: measurementPosition.y }}>
+    {measuring && selectedRect && coordinate && gridSettings.rulers && !liveView && <div ref={measurement} className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
+      style={{ left: measurementPosition?.x ?? 0, top: measurementPosition?.y ?? 0, visibility: measurementPosition ? undefined : 'hidden' }}>
       {px(coordinate.x)}, {px(coordinate.y)} px{selectedRect && <span>{px(selectedRect.width)} × {px(selectedRect.height)} px</span>}</div>}
   </div>;
 });
