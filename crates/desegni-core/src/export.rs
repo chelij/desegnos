@@ -35,7 +35,9 @@ pub fn compile_website(project: &Project) -> Result<WebsiteExport> {
             if let Some(bytes) = files.get_mut(&path) {
                 let source = String::from_utf8(bytes.clone())
                     .map_err(|_| Error("Invalid website HTML.".into()))?;
-                *bytes = crate::source::strip_editor_ids(&source).into_bytes();
+                if crate::region_script_runtime(&source)?.is_empty() {
+                    *bytes = crate::source::strip_editor_ids(&source).into_bytes();
+                }
             }
         }
         return Ok(WebsiteExport {
@@ -70,6 +72,11 @@ pub fn compile_website(project: &Project) -> Result<WebsiteExport> {
             .as_ref()
             .map(|content| project.resolve_site_content(content))
             .transpose()?;
+        let region_javascript = content
+            .as_ref()
+            .map(|c| crate::region_script_runtime(&c.html))
+            .transpose()?
+            .unwrap_or_default();
         let path = output_path(&page.path);
         let doc = Document::from(content.as_ref().map(|c| c.html.as_str()).unwrap_or(""));
         let mut pending = vec![(doc.root(), 0)];
@@ -111,7 +118,9 @@ pub fn compile_website(project: &Project) -> Result<WebsiteExport> {
             for attribute in node.attrs() {
                 let name = attribute.name.local.to_string();
                 let value = attribute.value.to_string();
-                if name == crate::FOUND_CONTENT_ATTRIBUTE || name == crate::ELEMENT_ID_ATTRIBUTE {
+                if name == crate::FOUND_CONTENT_ATTRIBUTE
+                    || name == crate::ELEMENT_ID_ATTRIBUTE && region_javascript.is_empty()
+                {
                     node.remove_attr(&name);
                 } else if name == "style" {
                     node.set_attr(&name, &compiler.css(&value, &path, &page.path)?);
@@ -216,6 +225,14 @@ pub fn compile_website(project: &Project) -> Result<WebsiteExport> {
             }
         } else {
             compiler.warn(&page.path, "This included page is blank.");
+        }
+        if !region_javascript.is_empty() {
+            let script = format!("assets/regions-{}.js", digest(region_javascript.as_bytes()));
+            compiler.insert(script.clone(), region_javascript.into_bytes())?;
+            body.append_html(format!(
+                "<script defer src=\"{}\"></script>",
+                relative(&path, &script)
+            ));
         }
         compiler.insert(
             path,

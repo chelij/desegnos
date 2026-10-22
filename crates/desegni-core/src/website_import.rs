@@ -563,7 +563,7 @@ impl Project {
                     .cloned()
                     .unwrap_or_else(|| crate::export::output_path(&page.path));
                 let resolved = self.resolve_site_content(content)?;
-                let mut html = resolved.html;
+                let mut html = resolved.html.clone();
                 if !resolved.css.is_empty() {
                     let style = format!(
                         "<style>{}</style>",
@@ -580,6 +580,16 @@ impl Project {
                         "<script>{}</script>",
                         resolved.javascript.replace("</script", "<\\/script")
                     ));
+                }
+                let runtime = crate::region_script_runtime(&resolved.html)?;
+                if !runtime.is_empty() {
+                    let name = format!("desegnos-regions-{}.js", crate::digest(runtime.as_bytes()));
+                    // Resolve the resource beside the page, including nested imported routes.
+                    let resource = path
+                        .rsplit_once('/')
+                        .map_or(name.clone(), |(directory, _)| format!("{directory}/{name}"));
+                    files.insert(resource, runtime.into_bytes());
+                    html.push_str(&format!("<script defer src=\"{name}\"></script>"));
                 }
                 files.insert(path, html.into_bytes());
             }

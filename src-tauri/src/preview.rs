@@ -160,8 +160,15 @@ impl PreviewRegistry {
             } else {
                 ""
             };
+            let region_javascript =
+                desegni_core::region_script_runtime(html).map_err(|error| error.to_string())?;
+            let region_script = if run_scripts && !region_javascript.is_empty() {
+                "<script src=\"./regions.js\" crossorigin=\"anonymous\"></script>"
+            } else {
+                ""
+            };
             let document = format!(
-                "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"./site.css\" crossorigin=\"anonymous\"></head><body>{html}{bridge_script}{user_script}</body></html>",
+                "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"./site.css\" crossorigin=\"anonymous\"></head><body>{html}{bridge_script}{user_script}{region_script}</body></html>",
                 attribute(&page.name)
             );
             let mut files = vec![
@@ -181,6 +188,11 @@ impl PreviewRegistry {
                     "bridge.js",
                     "text/javascript; charset=utf-8",
                     include_bytes!("preview_bridge.js").to_vec(),
+                ));
+                files.push((
+                    "regions.js",
+                    "text/javascript; charset=utf-8",
+                    region_javascript.into_bytes(),
                 ));
                 files.push((
                     "site.js",
@@ -701,6 +713,46 @@ mod tests {
             javascript: "document.querySelector('button').textContent='Working';".into(),
         });
         project
+    }
+
+    #[test]
+    fn region_scripts_are_separate_resources_after_page_js_and_absent_when_paused() {
+        let mut project = project();
+        let content = project.pages[0].content.as_mut().unwrap();
+        content.html = format!(
+            "<section><button>Sort</button><script type=\"application/x-desegnos-region\" data-desegnos-script=\"{}\">root.querySelector('button').textContent='Sorted';</script></section>",
+            Uuid::new_v4()
+        );
+        let original_js = content.javascript.clone();
+        let mut registry = PreviewRegistry::default();
+        let live = registry
+            .register(&project, None, project.home_page_id, true)
+            .unwrap();
+        let document = registry.serve(&Request::get(&live.url).body(vec![]).unwrap());
+        let html = std::str::from_utf8(document.body()).unwrap();
+        assert!(html.find("./site.js").unwrap() < html.find("./regions.js").unwrap());
+        let script = registry.serve(
+            &Request::get(live.url.replace("index.html", "regions.js"))
+                .body(vec![])
+                .unwrap(),
+        );
+        let runtime = std::str::from_utf8(script.body()).unwrap();
+        assert!(runtime.contains("function(root, window)") && runtime.contains("catch (error)"));
+        let script = registry.serve(
+            &Request::get(live.url.replace("index.html", "site.js"))
+                .body(vec![])
+                .unwrap(),
+        );
+        assert_eq!(script.body(), original_js.as_bytes());
+        let paused = registry
+            .register(&project, None, project.home_page_id, false)
+            .unwrap();
+        let script = registry.serve(
+            &Request::get(paused.url.replace("index.html", "regions.js"))
+                .body(vec![])
+                .unwrap(),
+        );
+        assert_eq!(script.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

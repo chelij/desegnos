@@ -297,7 +297,19 @@ impl GenerationCandidate {
         for page in &mut candidate.pages {
             page.content = crate::compact_site_content(&page.content);
         }
-        candidate.validate_scope_exact(snapshot, &project.compact_pages())
+        let mut project = project.compact_pages();
+        if snapshot.format_version()? >= 18 {
+            crate::region_scripts::validate(&candidate, snapshot, &project)?;
+            for page in &mut candidate.pages {
+                page.content.html = crate::region_scripts::strip(&page.content.html)?;
+            }
+            for page in &mut project.pages {
+                if let Some(content) = &mut page.content {
+                    content.html = crate::region_scripts::strip(&content.html)?;
+                }
+            }
+        }
+        candidate.validate_scope_exact(snapshot, &project)
     }
 
     fn validate_scope_exact(
