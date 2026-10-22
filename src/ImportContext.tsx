@@ -247,12 +247,13 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
         <small>{font.role}</small><span className="identity-font-specimen" style={{ fontFamily: /^(?:serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-[a-z-]+)$/i.test(font.family) ? font.family : `${JSON.stringify(font.family)}, system-ui, sans-serif` }}><strong>Aa {font.family}</strong><span>The quick brown fox.</span></span>
       </ReviewCard>);
       return [<ReviewCard key={index} {...shared} name={finding.topic} className="identity-pill-card">
-        <span className="identity-pills">{(section === 'Style & tone' ? parseTone(finding.value) : [finding.value.length > 60 ? finding.value.slice(0, 57) + '…' : finding.value]).map((text, part) => <span className="identity-pill" key={part}>{text}</span>)}</span>
+        <span className="identity-pills">{(section === 'Style & tone' ? parseTone(finding.value) : [finding.value]).map((text, part) => <span className="identity-pill" key={part}>{text}</span>)}</span>
       </ReviewCard>];
     });
   }
   const aiNeedsFixing = !connected || selection?.needsSettings || (analysis?.status === 'failed' && /settings|sign in|connect|account|spending|key|model access|permission/i.test(analysis.error ?? ''));
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
+      {!folder?.website && <section className="website-choice" aria-label="Website import"><div className="segmented" role="group" aria-label="Use this folder"><button type="button" disabled>Edit this website</button><button type="button" disabled>Use it for my brand only</button></div></section>}
       {folder?.website && <WebsiteChoice folder={folder} brand={brand} disabled={!!locked} update={setFolder}
         chooseBrand={() => { void readBrand(folder); }} edit={async () => { setBrand(false); if (folder.website && (folder.website.fresh || (folder.website.output && folder.website.buildUnavailable))) await run(async () => { await editWebsite(folder.id); close(); }); }} /> }
       <section className="identity-import" aria-label="Use my existing brand">

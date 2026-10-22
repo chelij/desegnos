@@ -73,7 +73,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
         {candidate && <>
           <p className="log-text">{job.status === 'applied' && candidate.regions.some(region => region.status === 'conflict') ? `Applied ${candidate.regions.filter(region => region.status === 'implemented').length} of ${candidate.regions.length} areas` : candidate.summary}</p>
           <ul className="log-outcomes">{candidate.regions.map(outcome => { const item = requests.find(request => request.key === outcome.regionId); return <li key={outcome.regionId} className={outcome.status}>
-            <span className="log-meta">{item ? `${item.page} · Box ${item.box}` : 'Request'} · {outcome.status === 'implemented' ? 'Done' : 'Needs a decision'}</span>
+            <span className="log-meta"><span className="log-outcome-status">{outcome.status === 'implemented' ? 'Done' : 'Needs a decision'}</span> · {item ? `${item.page} · Box ${item.box}` : 'Request'}</span>
             <p className="log-text">{outcome.explanation}</p>
           </li>; })}</ul>
           {candidate.criticism.length > 0 && <details><summary>Suggestions ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{item.message}</p><p className="log-meta">{item.suggestion}</p></li>)}</ul></details>}
