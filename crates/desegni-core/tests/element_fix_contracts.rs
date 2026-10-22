@@ -415,6 +415,71 @@ fn local_sorting_is_accepted_and_undo_removes_its_owned_source() {
     assert_eq!(session.project().pages[0].content, original);
 }
 
+const CURSOR_PORTRAIT: &str = r#"
+    const portrait = root.querySelector('img');
+    document.addEventListener('pointermove', event => {
+        const box = root.getBoundingClientRect();
+        const direction = event.clientX < box.left + box.width / 2 ? 'left' : 'right';
+        portrait.src = direction + '.png';
+        portrait.style.transform = 'translateY(' + event.clientY / window.innerHeight + 'px)';
+    });
+"#;
+
+#[test]
+fn cursor_portrait_can_listen_across_the_page_and_write_only_its_root() {
+    let (p, s, text) = behavior_fixture(CURSOR_PORTRAIT);
+    let (candidate, events) = recover_generation_reply(&text, &s, &p).unwrap();
+    assert_eq!(
+        candidate.regions[0].status,
+        RegionStatus::Implemented,
+        "{events:?}"
+    );
+    candidate.validate(&s, &p).unwrap();
+    let applied = p.apply_generation(&s, &candidate, &[]).unwrap();
+    assert!(
+        applied.pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .contains(CURSOR_PORTRAIT)
+    );
+}
+
+#[test]
+fn outside_writes_and_global_event_cancellation_become_drafts() {
+    for action in [
+        "document.body.style.background = 'red';",
+        "const body = document.body; body.classList.add('changed');",
+        "document.documentElement.setAttribute('data-changed', 'yes');",
+        "document.body.appendChild(root.querySelector('img'));",
+        "document.querySelector('p').textContent = 'changed';",
+        "document.querySelectorAll('p').forEach(node => node.remove());",
+        "const nodes = Array.from(document.querySelectorAll('p')); nodes.forEach(node => node.remove());",
+        "function change(node) { node.textContent = 'changed'; } change(document.body);",
+        "function outsideNode() { return document.body; } outsideNode().style.color = 'red';",
+        "const change = node => node.remove(); document.querySelectorAll('p').forEach(change);",
+        "const holder = { node: document.body }; holder.node.style.color = 'red';",
+        "root.closest('main').classList.add('changed');",
+        "event.target.style.color = 'red';",
+        "event.preventDefault();",
+        "event.stopPropagation();",
+        "window.innerWidth = 0;",
+        "event.currentTarget.top;",
+    ] {
+        let code = CURSOR_PORTRAIT.replace("const box =", &format!("{action} const box ="));
+        let (p, s, text) = behavior_fixture(&code);
+        let (candidate, events) = recover_generation_reply(&text, &s, &p).unwrap();
+        assert!(candidate.pages.is_empty(), "applied: {action}");
+        let drafts = retain_generation_drafts(&text, &s, &p, Some(&candidate), &events);
+        assert_eq!(drafts.len(), 1, "{action}");
+        assert!(!drafts[0].applied, "{action}");
+        if action.contains("style.background") {
+            assert!(format!("{events:?}").contains("This script changes things outside its box"));
+        }
+    }
+}
+
 #[test]
 fn root_queries_without_matching_descendants_are_allowed() {
     // The page has an outside paragraph, but a root query cannot return it.

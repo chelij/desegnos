@@ -152,10 +152,480 @@ fn validate_code(code: &str, root: NodeRef<'_>) -> Result<()> {
     .map_err(|_| crate::Error("Region script cannot be parsed.".into()))?;
     let tree = serde_json::to_value(ast).map_err(|e| crate::Error(e.to_string()))?;
     ensure(errors.is_empty(), "This script could not be read.")?;
+    validate_write_boundary(&tree)?;
     validate_script_tree(&tree)?;
     let _ = root; // Ownership and nested-region boundaries are checked by validate above.
 
     Ok(())
+}
+
+const GLOBAL_READ_EVENTS: &[&str] = &[
+    "pointermove",
+    "pointerdown",
+    "pointerup",
+    "pointercancel",
+    "mousemove",
+    "mousedown",
+    "mouseup",
+    "click",
+    "touchstart",
+    "touchmove",
+    "touchend",
+    "wheel",
+    "scroll",
+    "resize",
+    "keydown",
+    "keyup",
+    "keypress",
+    "visibilitychange",
+    "focus",
+    "blur",
+    "orientationchange",
+];
+
+fn member_name(value: &serde_json::Value) -> &str {
+    value["property"]["value"]
+        .as_str()
+        .or(value["property"]["expression"]["value"].as_str())
+        .unwrap_or("")
+}
+
+/// Track global-derived references separately from local DOM/data. The runtime also enforces
+/// this boundary, including aliases passed through callbacks and dynamically selected nodes.
+fn validate_write_boundary(tree: &serde_json::Value) -> Result<()> {
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+    fn outside(v: &Value, aliases: &BTreeSet<String>, guarded: &BTreeSet<String>) -> bool {
+        match v["type"].as_str().unwrap_or("") {
+            "Identifier" => v["value"].as_str().is_some_and(|n| aliases.contains(n)),
+            "MemberExpression" => {
+                if member_name(v) == "currentTarget" {
+                    return true;
+                }
+                if member_name(v) == "target" {
+                    return !v["object"]["value"]
+                        .as_str()
+                        .is_some_and(|n| guarded.contains(n));
+                }
+                if [
+                    "clientX",
+                    "clientY",
+                    "pageX",
+                    "pageY",
+                    "innerWidth",
+                    "innerHeight",
+                    "scrollX",
+                    "scrollY",
+                    "visibilityState",
+                    "hidden",
+                    "matches",
+                    "media",
+                ]
+                .contains(&member_name(v))
+                {
+                    return false;
+                }
+                outside(&v["object"], aliases, guarded)
+            }
+            "CallExpression" => {
+                let callee = &v["callee"];
+                if ["createElement", "createTextNode"].contains(&member_name(callee))
+                    && callee["object"]["value"] == "document"
+                {
+                    return false;
+                }
+                if [
+                    "getBoundingClientRect",
+                    "getClientRects",
+                    "getAttribute",
+                    "hasAttribute",
+                    "matches",
+                    "contains",
+                    "getPropertyValue",
+                    "getPropertyPriority",
+                ]
+                .contains(&member_name(callee))
+                {
+                    return false;
+                }
+                if callee["object"]["value"] == "Array" && member_name(callee) == "from" {
+                    return outside(&v["arguments"][0]["expression"], aliases, guarded);
+                }
+                member_name(callee) == "closest" || outside(callee, aliases, guarded)
+            }
+            "ParenthesisExpression" | "OptionalChainingExpression" => {
+                outside(&v["expression"], aliases, guarded) || outside(&v["base"], aliases, guarded)
+            }
+            "ConditionalExpression" => {
+                outside(&v["consequent"], aliases, guarded)
+                    || outside(&v["alternate"], aliases, guarded)
+            }
+            "ObjectExpression" => v["properties"].as_array().into_iter().flatten().any(|p| {
+                outside(&p["value"], aliases, guarded)
+                    || outside(&p["expression"], aliases, guarded)
+            }),
+            "ArrayExpression" => v["elements"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|p| outside(&p["expression"], aliases, guarded)),
+            _ => false,
+        }
+    }
+    fn target_guard(v: &Value) -> Option<&str> {
+        if v["type"] == "ParenthesisExpression" {
+            return target_guard(&v["expression"]);
+        }
+        let callee = &v["callee"];
+        let target = &v["arguments"][0]["expression"];
+        (v["type"] == "CallExpression"
+            && callee["object"]["value"] == "root"
+            && member_name(callee) == "contains"
+            && member_name(target) == "target")
+            .then(|| target["object"]["value"].as_str())
+            .flatten()
+    }
+    fn exits(v: &Value) -> bool {
+        v["type"] == "ReturnStatement"
+            || v["type"] == "ThrowStatement"
+            || v["stmts"].is_array()
+                && v["stmts"]
+                    .as_array()
+                    .is_some_and(|s| s.len() == 1 && exits(&s[0]))
+    }
+    fn taint_binding(v: &Value, aliases: &mut BTreeSet<String>) {
+        if v["type"] == "Identifier" {
+            if let Some(name) = v["value"].as_str() {
+                aliases.insert(name.into());
+            }
+        } else if let Some(o) = v.as_object() {
+            for (key, child) in o {
+                if key != "key" {
+                    taint_binding(child, aliases);
+                }
+            }
+        } else if let Some(a) = v.as_array() {
+            for child in a {
+                taint_binding(child, aliases);
+            }
+        }
+    }
+    let mut functions = BTreeMap::new();
+    let mut pending = vec![tree];
+    while let Some(v) = pending.pop() {
+        if v["type"] == "FunctionDeclaration"
+            && let Some(name) = v["identifier"]["value"].as_str()
+        {
+            functions.insert(name, v);
+        }
+        if v["type"] == "VariableDeclarator"
+            && matches!(
+                v["init"]["type"].as_str(),
+                Some("ArrowFunctionExpression" | "FunctionExpression")
+            )
+            && let Some(name) = v["id"]["value"].as_str()
+        {
+            functions.insert(name, &v["init"]);
+        }
+        if let Some(o) = v.as_object() {
+            pending.extend(o.values());
+        }
+        if let Some(a) = v.as_array() {
+            pending.extend(a);
+        }
+    }
+    let mut aliases = BTreeSet::from(["window".into(), "document".into()]);
+    let empty = BTreeSet::new();
+    loop {
+        let before = aliases.len();
+        for (name, function) in &functions {
+            if outside(&function["body"], &aliases, &empty) {
+                aliases.insert((*name).into());
+            }
+            let mut returns = vec![&function["body"]];
+            while let Some(v) = returns.pop() {
+                if v["type"] == "ReturnStatement" && outside(&v["argument"], &aliases, &empty) {
+                    aliases.insert((*name).into());
+                }
+                if let Some(o) = v.as_object() {
+                    returns.extend(o.values());
+                }
+                if let Some(a) = v.as_array() {
+                    returns.extend(a);
+                }
+            }
+        }
+        let mut pending = vec![tree];
+        while let Some(v) = pending.pop() {
+            let (id, init) = if v["type"] == "VariableDeclarator" {
+                (&v["id"], &v["init"])
+            } else if v["type"] == "AssignmentExpression" {
+                (&v["left"], &v["right"])
+            } else {
+                (&Value::Null, &Value::Null)
+            };
+            if outside(init, &aliases, &empty) {
+                taint_binding(id, &mut aliases);
+            }
+            if v["type"] == "CallExpression"
+                && let Some(function) = v["callee"]["value"]
+                    .as_str()
+                    .and_then(|name| functions.get(name))
+            {
+                for (index, arg) in v["arguments"].as_array().into_iter().flatten().enumerate() {
+                    if outside(&arg["expression"], &aliases, &empty) {
+                        taint_binding(&function["params"][index], &mut aliases);
+                    }
+                }
+            }
+            if v["type"] == "CallExpression"
+                && outside(&v["callee"]["object"], &aliases, &empty)
+                && ["forEach", "map", "filter", "find", "some", "every"]
+                    .contains(&member_name(&v["callee"]))
+            {
+                let callback = &v["arguments"][0]["expression"];
+                let callback = callback["value"]
+                    .as_str()
+                    .and_then(|name| functions.get(name))
+                    .copied()
+                    .unwrap_or(callback);
+                taint_binding(&callback["params"][0], &mut aliases);
+            }
+            if v["type"] == "ForOfStatement"
+                && outside(&v["right"], &aliases, &empty)
+                && let Some(name) = v["left"]["declarations"][0]["id"]["value"].as_str()
+            {
+                aliases.insert(name.into());
+            }
+            if let Some(o) = v.as_object() {
+                pending.extend(o.values());
+            }
+            if let Some(a) = v.as_array() {
+                pending.extend(a);
+            }
+        }
+        if aliases.len() == before {
+            break;
+        }
+    }
+    fn visit(v: &Value, aliases: &BTreeSet<String>, guarded: &BTreeSet<String>) -> Result<()> {
+        let kind = v["type"].as_str().unwrap_or("");
+        if kind == "MemberExpression"
+            && member_name(v) == "top"
+            && outside(&v["object"], aliases, guarded)
+        {
+            return Err(crate::Error("This script reaches outside its box.".into()));
+        }
+        if [
+            "AssignmentExpression",
+            "UpdateExpression",
+            "UnaryExpression",
+        ]
+        .contains(&kind)
+        {
+            let target = if kind == "AssignmentExpression" {
+                &v["left"]
+            } else {
+                &v["argument"]
+            };
+            if kind != "UnaryExpression" || v["operator"] == "delete" {
+                ensure(
+                    !outside(target, aliases, guarded)
+                        && !(target["type"] == "MemberExpression"
+                            && outside(&target["object"], aliases, guarded)),
+                    "This script changes things outside its box.",
+                )?;
+            }
+        }
+        if kind == "CallExpression" {
+            let callee = &v["callee"];
+            let name = member_name(callee);
+            if [
+                "preventDefault",
+                "stopPropagation",
+                "stopImmediatePropagation",
+            ]
+            .contains(&name)
+            {
+                ensure(
+                    callee["object"]["value"]
+                        .as_str()
+                        .is_some_and(|n| guarded.contains(n)),
+                    "This script blocks events outside its box.",
+                )?;
+            } else if outside(&callee["object"], aliases, guarded) {
+                ensure(
+                    [
+                        "querySelector",
+                        "querySelectorAll",
+                        "getElementById",
+                        "getElementsByTagName",
+                        "getElementsByClassName",
+                        "getBoundingClientRect",
+                        "getClientRects",
+                        "closest",
+                        "matches",
+                        "contains",
+                        "getAttribute",
+                        "hasAttribute",
+                        "item",
+                        "entries",
+                        "keys",
+                        "values",
+                        "forEach",
+                        "map",
+                        "filter",
+                        "find",
+                        "some",
+                        "every",
+                        "slice",
+                        "includes",
+                        "indexOf",
+                        "toString",
+                        "getPropertyValue",
+                        "getPropertyPriority",
+                        "addEventListener",
+                        "removeEventListener",
+                        "matchMedia",
+                        "createElement",
+                        "createTextNode",
+                        "setTimeout",
+                        "clearTimeout",
+                        "requestAnimationFrame",
+                        "cancelAnimationFrame",
+                    ]
+                    .contains(&name),
+                    if [
+                        "setAttribute",
+                        "removeAttribute",
+                        "toggleAttribute",
+                        "append",
+                        "appendChild",
+                        "prepend",
+                        "insertBefore",
+                        "replaceChild",
+                        "replaceChildren",
+                        "remove",
+                        "replaceWith",
+                        "add",
+                        "toggle",
+                        "replace",
+                        "setProperty",
+                        "removeProperty",
+                        "focus",
+                        "blur",
+                        "click",
+                        "dispatchEvent",
+                        "scroll",
+                        "scrollTo",
+                        "scrollBy",
+                    ]
+                    .contains(&name)
+                    {
+                        "This script changes things outside its box."
+                    } else {
+                        "This script uses an unsupported action."
+                    },
+                )?;
+            }
+            if ["addEventListener", "removeEventListener"].contains(&name)
+                && outside(&callee["object"], aliases, guarded)
+            {
+                ensure(
+                    v["arguments"][0]["expression"]["value"]
+                        .as_str()
+                        .is_some_and(|event| {
+                            GLOBAL_READ_EVENTS.contains(&event) || event == "change"
+                        }),
+                    "This script uses an unsupported global event.",
+                )?;
+            }
+            // Moving a node out of the rest of the page is an outside write too.
+            if [
+                "append",
+                "appendChild",
+                "prepend",
+                "insertBefore",
+                "replaceChild",
+                "replaceChildren",
+            ]
+            .contains(&name)
+            {
+                for arg in v["arguments"].as_array().into_iter().flatten() {
+                    ensure(
+                        !outside(&arg["expression"], aliases, guarded),
+                        "This script changes things outside its box.",
+                    )?;
+                }
+            }
+            if name == "addEventListener" && !outside(&callee["object"], aliases, guarded) {
+                let callback = &v["arguments"][1]["expression"];
+                let param = &callback["params"][0];
+                let mut local = guarded.clone();
+                if let Some(n) = param["value"].as_str().or(param["pat"]["value"].as_str()) {
+                    local.insert(n.into());
+                }
+                visit(&callback["body"], aliases, &local)?;
+                // Other call children still require normal validation.
+                for (key, child) in v.as_object().unwrap() {
+                    if key != "arguments" {
+                        visit(child, aliases, guarded)?;
+                    }
+                }
+                for (index, arg) in v["arguments"].as_array().into_iter().flatten().enumerate() {
+                    if index != 1 {
+                        visit(arg, aliases, guarded)?;
+                    }
+                }
+                return Ok(());
+            }
+        }
+        if kind == "IfStatement" {
+            visit(&v["test"], aliases, guarded)?;
+            let mut inside = guarded.clone();
+            if let Some(n) = target_guard(&v["test"]) {
+                inside.insert(n.into());
+            }
+            visit(&v["consequent"], aliases, &inside)?;
+            visit(&v["alternate"], aliases, guarded)?;
+            return Ok(());
+        }
+        if kind == "BinaryExpression" && v["operator"] == "&&" {
+            visit(&v["left"], aliases, guarded)?;
+            let mut inside = guarded.clone();
+            if let Some(n) = target_guard(&v["left"]) {
+                inside.insert(n.into());
+            }
+            return visit(&v["right"], aliases, &inside);
+        }
+        if v["stmts"].is_array() {
+            let mut inside = guarded.clone();
+            for stmt in v["stmts"].as_array().into_iter().flatten() {
+                visit(stmt, aliases, &inside)?;
+                if stmt["type"] == "IfStatement"
+                    && stmt["test"]["operator"] == "!"
+                    && exits(&stmt["consequent"])
+                    && stmt["alternate"].is_null()
+                    && let Some(n) = target_guard(&stmt["test"]["argument"])
+                {
+                    inside.insert(n.into());
+                }
+            }
+            return Ok(());
+        }
+        if let Some(o) = v.as_object() {
+            for child in o.values() {
+                visit(child, aliases, guarded)?;
+            }
+        }
+        if let Some(a) = v.as_array() {
+            for child in a {
+                visit(child, aliases, guarded)?;
+            }
+        }
+        Ok(())
+    }
+    visit(tree, &aliases, &empty)
 }
 
 // This is a capability check, not a property allowlist: array/data operations and selectors
@@ -217,25 +687,24 @@ fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
                 }
                 _ => (),
             }
-            if value["type"] == "FunctionDeclaration" {
-                if let Some(name) = value["identifier"]["value"].as_str() {
-                    functions.insert(name.to_owned());
-                }
+            if value["type"] == "FunctionDeclaration"
+                && let Some(name) = value["identifier"]["value"].as_str()
+            {
+                functions.insert(name.to_owned());
             }
             if value["type"] == "VariableDeclarator"
                 && matches!(
                     value["init"]["type"].as_str(),
                     Some("ArrowFunctionExpression" | "FunctionExpression")
                 )
+                && let Some(name) = value["id"]["value"].as_str()
             {
-                if let Some(name) = value["id"]["value"].as_str() {
-                    functions.insert(name.to_owned());
-                }
+                functions.insert(name.to_owned());
             }
             if value["type"] == "VariableDeclarator" {
                 let init = &value["init"];
                 let method = init["callee"]["property"]["value"].as_str().unwrap_or("");
-                if matches!(
+                if (matches!(
                     init["type"].as_str(),
                     Some("ArrayExpression" | "ObjectExpression")
                 ) || init["type"] == "CallExpression"
@@ -247,11 +716,10 @@ fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
                         "split",
                         "slice",
                     ]
-                    .contains(&method)
+                    .contains(&method))
+                    && let Some(name) = value["id"]["value"].as_str()
                 {
-                    if let Some(name) = value["id"]["value"].as_str() {
-                        data_variables.insert(name.to_owned());
-                    }
+                    data_variables.insert(name.to_owned());
                 }
             }
             if let Some(params) = value["params"].as_array() {
@@ -294,7 +762,6 @@ fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
         "parentNode",
         "parentElement",
         "getRootNode",
-        "closest",
         "cookie",
         "write",
         "writeln",
@@ -311,11 +778,6 @@ fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
         "composedPath",
         "createElementNS",
         "setAttributeNS",
-        "getElementById",
-        "getElementsByTagName",
-        "getElementsByClassName",
-        "body",
-        "documentElement",
     ];
     let mut pending = vec![(tree, false)];
     while let Some((value, called)) = pending.pop() {
@@ -407,7 +869,18 @@ fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
                             && [
                                 "addEventListener",
                                 "removeEventListener",
+                                "scrollX",
                                 "scrollY",
+                                "matchMedia",
+                                "body",
+                                "documentElement",
+                                "visibilityState",
+                                "hidden",
+                                "querySelector",
+                                "querySelectorAll",
+                                "getElementById",
+                                "getElementsByTagName",
+                                "getElementsByClassName",
                                 "innerWidth",
                                 "innerHeight",
                             ]
@@ -511,21 +984,8 @@ fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
                         ensure(
                             value["arguments"][0]["expression"]["value"]
                                 .as_str()
-                                .is_some_and(|event| {
-                                    [
-                                        "scroll",
-                                        "resize",
-                                        "pointermove",
-                                        "pointerdown",
-                                        "pointerup",
-                                        "pointercancel",
-                                        "keydown",
-                                        "keyup",
-                                        "keypress",
-                                    ]
-                                    .contains(&event)
-                                }),
-                            "This script listens outside its box.",
+                                .is_some_and(|event| GLOBAL_READ_EVENTS.contains(&event)),
+                            "This script uses an unsupported global event.",
                         )?;
                     }
                 }
@@ -572,48 +1032,15 @@ pub fn region_script_runtime(html: &str) -> Result<String> {
         let selector = serde_json::to_string(&format!("script[data-desegnos-script=\"{id}\"]"))
             .map_err(|e| crate::Error(e.to_string()))?;
         let code = script.text();
-        output.push_str(&format!(r#"
-;(() => {{
-  const block = document.querySelector({selector});
-  const root = block && block.parentElement;
-  if (!root) return;
-  const listeners = new Map();
-  const scopedWindow = Object.freeze({{
-    get scrollY() {{ return window.scrollY; }},
-    get innerWidth() {{ return window.innerWidth; }},
-    get innerHeight() {{ return window.innerHeight; }},
-    setTimeout(callback, delay) {{ return typeof callback === 'function' ? setTimeout(callback, delay) : undefined; }},
-    clearTimeout(id) {{ clearTimeout(id); }},
-    requestAnimationFrame(callback) {{ return requestAnimationFrame(callback); }},
-    cancelAnimationFrame(id) {{ cancelAnimationFrame(id); }},
-    addEventListener(type, callback) {{
-      if (!['scroll', 'resize', 'pointermove', 'pointerdown', 'pointerup', 'pointercancel', 'keydown', 'keyup', 'keypress'].includes(type)) return;
-      const handler = event => {{ try {{ callback(Object.freeze({{type, clientX:event.clientX, clientY:event.clientY, key:event.key, code:event.code, preventDefault:() => event.preventDefault(), target:root, currentTarget:root}})); }} catch (error) {{ console.error('Region script event failed', error); }} }};
-      let types = listeners.get(callback);
-      if (!types) listeners.set(callback, types = new Map());
-      if (types.has(type)) return;
-      types.set(type, handler);
-      window.addEventListener(type, handler);
-    }},
-    removeEventListener(type, callback) {{
-      const types = listeners.get(callback);
-      if (types) {{ window.removeEventListener(type, types.get(type)); types.delete(type); }}
-    }}
-  }});
-  const scopedDocument = Object.freeze({{
-    addEventListener: scopedWindow.addEventListener,
-    removeEventListener: scopedWindow.removeEventListener,
-    createTextNode(text) {{ return document.createTextNode(text); }},
-    createElement(tag) {{
-      if (typeof tag !== 'string' || ['script', 'iframe', 'object', 'embed', 'link', 'base', 'style', 'meta'].includes(tag.toLowerCase())) throw new Error('Unsafe region element');
-      return document.createElement(tag);
-    }}
-  }});
-  try {{ (function(root, window, document, setTimeout, requestAnimationFrame) {{ 'use strict';
-{code}
-  }})(root, scopedWindow, scopedDocument, scopedWindow.setTimeout, scopedWindow.requestAnimationFrame); }} catch (error) {{ console.error('Region script failed', error); }}
-}})();
-"#));
+        output.push_str(
+            &include_str!("region_script_runtime.js")
+                .replace("__REGION_SELECTOR__", &selector)
+                .replace(
+                    "__GLOBAL_READ_EVENTS__",
+                    &serde_json::to_string(GLOBAL_READ_EVENTS).unwrap(),
+                )
+                .replace("__REGION_CODE__", &code),
+        );
     }
     Ok(output)
 }
@@ -658,6 +1085,36 @@ mod tests {
     }
 
     #[test]
+    fn global_reads_and_guarded_events_are_allowed() {
+        for receiver in [
+            "window",
+            "document",
+            "document.documentElement",
+            "document.body",
+        ] {
+            for event in super::GLOBAL_READ_EVENTS {
+                check(&format!("{receiver}.addEventListener('{event}', e => {{ root.dataset.x = e.pageX; root.dataset.y = e.pageY; }});" )).unwrap();
+            }
+        }
+        for code in [
+            "const box = document.querySelector('p').getBoundingClientRect(); root.style.left = box.left + 'px';",
+            "const outside = root.closest('main'); const matches = outside.matches('main'); root.dataset.matches = matches;",
+            "root.dataset.dark = window.matchMedia('(prefers-color-scheme: dark)').matches;",
+            "root.style.left = window.scrollX + window.scrollY + 'px';",
+            "document.addEventListener('click', e => { if (root.contains(e.target)) { e.preventDefault(); e.stopPropagation(); } });",
+            "document.body.addEventListener('touchmove', e => { if (!root.contains(e.target)) return; e.preventDefault(); });",
+            "window.addEventListener('wheel', e => root.contains(e.target) && e.preventDefault());",
+            "root.addEventListener('click', e => e.preventDefault());",
+            "root.querySelector('button').addEventListener('click', e => e.preventDefault());",
+            "const width = window.innerWidth.toString(); root.dataset.width = width;",
+            "const color = document.body.style.getPropertyValue('color'); root.style.color = color;",
+            "document.addEventListener('click', e => { root.dataset.hit = e.target.closest('button')?.matches('.active'); });",
+        ] {
+            check(code).unwrap_or_else(|err| panic!("{code}: {err}"));
+        }
+    }
+
+    #[test]
     fn region_scripts_blocks_unsafe_capabilities() {
         for code in [
             "eval('1')",
@@ -684,7 +1141,6 @@ mod tests {
             "document.createElement('iframe')",
             "root.constructor.constructor('return window')()",
             "window['fetch']('/local')",
-            "document.querySelector('body')",
             "const alias = root; const key = 'parentElement'; alias[key]",
             "root.setAttribute('onclick', 'eval(1)')",
             "Math.random = () => 0",
