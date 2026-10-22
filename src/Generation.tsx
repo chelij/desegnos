@@ -142,8 +142,10 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   });
   const source = candidate?.pages.find(page => page.pageId === pageId) ?? candidate?.pages[0];
   const page = project.pages.find(page => page.id === source?.pageId);
-  const newRequest = generationNeedsNewRequest(error, job);
-  const canRetry = !!job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status);
+  const newRequest = !job || job.status === 'applied' || job.status === 'blocked' || generationNeedsNewRequest(error, job);
+  const canRetry = !!job && (['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status) || (job.status === 'applied' && conflicts.length > 0));
+  const retryDisabled = !!operation || (newRequest && !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim())));
+  const retryLabel = conflicts.length > 0 ? 'Build remaining draft' : job?.status === 'blocked' ? 'Build draft' : newRequest ? 'Generate again' : 'Try again';
   const canDiscard = !!job && ['prepared', 'ready', 'blocked', 'failed', 'unknown', 'cancelled'].includes(job.status);
   const alreadyApplied = !!job && project.appliedJobIds.includes(job.jobId);
   const title = job?.status === 'prepared' ? 'Generation details' : job?.status === 'ready' ? 'Generation details' : 'Generation';
@@ -170,7 +172,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
       { id: 'source', label: showSource ? 'Hide source code' : 'Source code', disabled: !candidate?.pages.length, action: () => { setTab('review'); setShowSource(value => !value); } },
       { id: 'attempts', label: 'Attempts', action: () => setTab('attempts') },
       { id: 'refresh', label: 'Refresh job', disabled: !!operation, action: () => { void controller.refresh(); } },
-      ...(canRetry ? [{ id: 'retry-snapshot', label: 'Retry original request', disabled: !!operation, action: () => setConfirmRetry(true) }] : []),
+      ...(canRetry ? [{ id: 'retry-snapshot', label: newRequest ? retryLabel : 'Retry original request', disabled: retryDisabled, action: () => setConfirmRetry(true) }] : []),
     ] },
     { id: 'settings', label: 'AI settings', action: openSettings },
     ...(canDiscard ? [{ id: 'discard', label: job?.status === 'prepared' ? 'Discard request' : 'Discard result', disabled: !!operation, action: () => { void controller.discard().catch(() => {}); } }] : []),
@@ -178,12 +180,13 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   return <>
     <Modal title={title} wide close={close} headerContent={<GenerationFeedback controller={controller}>
         {job?.status === 'prepared' && <button className="primary" disabled={!!operation} onClick={() => { void controller.start().catch(() => {}); }}>Send and generate</button>}
+        {controller.canStop && <button onClick={() => { void controller.cancel().catch(() => {}); }}>Cancel generation</button>}
       </GenerationFeedback>}><div className="generation-dialog">
       {error && <details><summary>Show details</summary><p className="preserve-text">{error}</p></details>}
       {usageError && <p className="message error" role="alert">{usageError}</p>}
       {job?.dossierError && <p className="message warning" role="alert">Your result is saved, but the project brief needs attention: {job.dossierError}</p>}
       {!job ? <><p>{operation ? 'Preparing…' : 'No generation request is prepared.'}</p><div className="form-actions">
-        <button onClick={openSettings}>AI settings</button>
+        <button onClick={openSettings}>AI settings</button>{!operation && <button disabled={retryDisabled} onClick={() => setConfirmRetry(true)}>Prepare request again</button>}
       </div></> : <>
         {job.status === 'unknown' && <p className="message warning">The AI may have finished this request, but the result didn’t arrive. Trying again {usesChatgpt ? 'uses your plan again' : 'may cost again'}.</p>}
         {job.status === 'cancelled' && <p className="small muted">{usesChatgpt ? 'Submitted work may still count toward your plan.' : 'Submitted work may still be charged.'}</p>}
@@ -247,11 +250,11 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
           {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply completed changes' : 'Apply changes'}</button>}
-          {canRetry && <button className="primary" disabled={!!operation} onClick={() => setConfirmRetry(true)}>{newRequest ? 'Generate again' : 'Try again'}</button>}
+          {canRetry && <button className="primary" disabled={retryDisabled} onClick={() => setConfirmRetry(true)}>{retryLabel}</button>}
         </div>
       </>}
     </div></Modal>
-    {confirmRetry && job && <RetryConfirmation job={job} settings={settings} fresh={newRequest} busy={!!operation} close={() => setConfirmRetry(false)} send={() => { setConfirmRetry(false); void (newRequest ? controller.prepare() : controller.retry()).catch(() => {}); }} />}
+    {confirmRetry && <RetryConfirmation job={job} settings={settings} fresh={newRequest} busy={retryDisabled} close={() => setConfirmRetry(false)} send={() => { setConfirmRetry(false); void (newRequest ? controller.prepare() : controller.retry()).catch(() => {}); }} />}
   </>;
 }
 
