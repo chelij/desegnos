@@ -162,7 +162,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
   return { draftAction, job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
     start: () => launch('start_generation', 'Starting generation…'),
     cancel,
-    discard: () => perform('discard_generation', 'Discarding result…', args()),
+    discard: () => perform('discard_generation', 'Discarding candidate…', args()),
     retry: () => launch('retry_generation', 'Sending approved retry…'),
   };
 }
