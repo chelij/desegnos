@@ -62,14 +62,17 @@ pub(crate) fn image_models_offered(value: &Value, auth: AuthenticationMethod) ->
         })
 }
 
-/// Only explicit tool/parameter/permission rejections disable images. Auth failures need reconnect.
+/// Only explicit tool or plan rejections disable images. Other parameter failures are probe bugs.
 pub(crate) fn image_tool_rejected(status: u16, body: &Value) -> bool {
     if !(400..500).contains(&status) || matches!(status, 401 | 408 | 409 | 425 | 429) {
         return false;
     }
     let error = body.get("error").unwrap_or(body);
     // SSE errors carry a code without an HTTP status. Transient codes must still win.
-    let code = error["code"].as_str().unwrap_or_default();
+    let code = error["code"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     if [
         "rate_limit",
         "quota",
@@ -93,28 +96,47 @@ pub(crate) fn image_tool_rejected(status: u16, body: &Value) -> bool {
         .to_ascii_lowercase();
     description.contains("image_generation")
         || description.contains("image generation")
-        || description.contains("unsupported_parameter")
-        || description.contains("unsupported parameter")
-        || description.contains("permission")
-        || description.contains("not authorized")
+        || description.contains("tools")
         || description.contains("unsupported_tool")
-        || description.contains("access_denied")
+        || description.contains("unsupported tool type")
+        || description.contains("not available for your plan")
 }
 
-pub(crate) fn image_access_error(status: u16, body: &Value) -> ImageAccess {
-    if image_tool_rejected(status, body) {
-        ImageAccess::new(ImageAvailability::No, "image_tool_rejected")
+pub(crate) fn image_access_error(status: u16, body: &Value, key: &ApiKey) -> ImageAccess {
+    let available = if image_tool_rejected(status, body) {
+        ImageAvailability::No
     } else {
-        ImageAccess::new(
-            ImageAvailability::Unknown,
-            match status {
-                401 => "authentication_required",
-                429 => "rate_limited",
-                500..=599 => "server_error",
-                _ => "unconfirmed_error",
-            },
-        )
-    }
+        ImageAvailability::Unknown
+    };
+    let error = body.get("error").unwrap_or(body);
+    let detail = [
+        error["code"].as_str().or_else(|| error["type"].as_str()),
+        error["message"].as_str(),
+        error["param"].as_str(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(":");
+    // Scrub the full value before bounding it, including the exact active credential.
+    let scrubbed = crate::scrub_diagnostic_reply(&detail, Some(key));
+    let scrubbed = scrubbed
+        .split_inclusive(|c: char| !(c.is_ascii_alphanumeric() || "_-.+/~=".contains(c)))
+        .map(|word| {
+            // Also hide opaque credentials with no recognizable prefix or JWT shape.
+            if word.chars().filter(|c| c.is_ascii_alphanumeric()).count() >= 32 {
+                "[redacted]".to_owned()
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<String>();
+    let detail = scrubbed.split_whitespace().collect::<Vec<_>>().join(" ");
+    let reason = format!("http_{status}:{detail}")
+        .chars()
+        .take(200)
+        .collect::<String>();
+    ImageAccess::new(available, &reason)
 }
 
 pub(crate) async fn bounded_json(response: &mut reqwest::Response, limit: usize) -> Option<Value> {
@@ -135,12 +157,17 @@ impl OpenAiClient {
         settings: &ProviderSettings,
         key: &ApiKey,
     ) -> ImageAccess {
-        tokio::time::timeout(
+        let access = tokio::time::timeout(
             Duration::from_secs(25),
             self.probe_images(auth, settings, key),
         )
         .await
-        .unwrap_or_else(|_| ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout"))
+        .unwrap_or_else(|_| ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout"));
+        eprintln!(
+            "Image access probe ({auth:?}): {:?}: {}",
+            access.available, access.reason
+        );
+        access
     }
     async fn probe_images(
         &self,
@@ -163,25 +190,39 @@ impl OpenAiClient {
             }
             _ => None,
         };
-        let mut access = self.probe_image_tool(settings, key).await;
-        access.reason.push_str(match offered {
+        let mut access = self.probe_image_tool(auth, settings, key).await;
+        let evidence = match offered {
             Some(true) => ";image_model_listed",
             Some(false) => ";image_model_not_listed",
             None => ";models_unknown",
-        });
+        };
+        access.reason = access.reason.chars().take(200 - evidence.len()).collect();
+        access.reason.push_str(evidence);
         access
     }
-    async fn probe_image_tool(&self, settings: &ProviderSettings, key: &ApiKey) -> ImageAccess {
-        let body = json!({"model":settings.model,"input":"ok","tools":[{"type":"image_generation"}],
-            "tool_choice":"none","store":false,"stream":true,"max_output_tokens":16});
-        let Ok(mut response) = self
-            .client
-            .post(format!("{}/responses", self.endpoint))
-            .bearer_auth(key.expose())
-            .json(&body)
-            .send()
-            .await
-        else {
+    async fn probe_image_tool(
+        &self,
+        auth: AuthenticationMethod,
+        settings: &ProviderSettings,
+        key: &ApiKey,
+    ) -> ImageAccess {
+        let mut body = json!({
+            "instructions":"Reply only with ok. Do not generate images or call tools.",
+            "input":[{"role":"user","content":[{"type":"input_text","text":"ok"}]}],
+            "tools":[{"type":"image_generation"}], "tool_choice":"none"
+        });
+        let probe_settings = ProviderSettings {
+            max_output_tokens: 16,
+            ..settings.clone()
+        };
+        crate::settings::configure_response_body(&mut body, auth, &probe_settings);
+        let request = serde_json::to_vec(&body)
+            .ok()
+            .and_then(|body| self.responses_request(key, body).ok());
+        let Some(request) = request else {
+            return ImageAccess::new(ImageAvailability::Unknown, "invalid_probe_request");
+        };
+        let Ok(mut response) = request.send().await else {
             return ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout");
         };
         if !response.status().is_success() {
@@ -191,6 +232,7 @@ impl OpenAiClient {
                 &bounded_json(&mut response, 65_536)
                     .await
                     .unwrap_or(Value::Null),
+                key,
             );
         }
         if response
@@ -205,7 +247,7 @@ impl OpenAiClient {
             return if value["status"] == "completed" && value["error"].is_null() {
                 ImageAccess::new(ImageAvailability::Yes, "tool_accepted")
             } else {
-                image_access_error(400, &value)
+                image_access_error(400, &value, key)
             };
         }
         let mut decoder = SseDecoder::default();
@@ -225,7 +267,7 @@ impl OpenAiClient {
                 match value["type"].as_str() {
                     Some("error" | "response.failed") => {
                         let error = value.get("response").unwrap_or(&value);
-                        return image_access_error(400, error);
+                        return image_access_error(400, error, key);
                     }
                     Some(
                         "response.created"

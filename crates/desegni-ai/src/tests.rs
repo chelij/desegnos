@@ -3067,7 +3067,7 @@ async fn image_probe_classifies_acceptance_rejection_auth_and_transient_failures
         (Reply::sse(b"data: {\"type\":\"response.created\"}\n\n".to_vec()), Yes),
         (Reply::json(200, json!({"status":"completed","output":[]})), Yes),
         (Reply::json(400, json!({"error":{"code":"unsupported_tool","message":"image_generation unavailable"}})), No),
-        (Reply::json(400, json!({"error":{"code":"unsupported_parameter","param":"max_output_tokens"}})), No),
+        (Reply::json(400, json!({"error":{"code":"unsupported_parameter","param":"max_output_tokens"}})), Unknown),
         (Reply::json(403, json!({"error":{"message":"Permission denied for image_generation"}})), No),
         (Reply::json(401, json!({"error":{"message":"image_generation requires authentication"}})), Unknown),
         (Reply::json(429, json!({"error":{"message":"image_generation rate limit"}})), Unknown),
@@ -3110,12 +3110,27 @@ async fn image_probe_classifies_acceptance_rejection_auth_and_transient_failures
             );
             let body: Value = serde_json::from_slice(&request.body).unwrap();
             assert_eq!(body["model"], MODEL_ID);
-            assert_eq!(body["input"], "ok");
+            assert_eq!(
+                body["input"][0]["content"][0],
+                json!({"type":"input_text","text":"ok"})
+            );
+            assert!(
+                body["instructions"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Do not generate images")
+            );
             assert_eq!(body["tool_choice"], "none");
             assert_eq!(body["tools"], json!([{"type":"image_generation"}]));
             assert_eq!(body["store"], false);
             assert_eq!(body["stream"], true);
-            assert_eq!(body["max_output_tokens"], 16);
+            if auth == AuthenticationMethod::ApiKey {
+                assert_eq!(body["max_output_tokens"], 16);
+                assert_eq!(body["service_tier"], "default");
+            } else {
+                assert!(body.get("max_output_tokens").is_none());
+                assert!(body.get("service_tier").is_none());
+            }
         }
     }
     let mut network = Reply::json(200, json!({}));
@@ -3130,6 +3145,168 @@ async fn image_probe_classifies_acceptance_rejection_auth_and_transient_failures
         )
         .await;
     assert_eq!(access.available, Unknown);
+}
+
+#[tokio::test]
+async fn image_probe_shares_generation_headers_and_auth_parameter_conventions() {
+    for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+        let frozen = snapshot(GenerationMode::Strict);
+        let settings = ProviderSettings::default();
+        let key = match auth {
+            AuthenticationMethod::ApiKey => ApiKey::new(KEY.into()),
+            AuthenticationMethod::Chatgpt => ApiKey::from_chatgpt_token(KEY.into()),
+        }
+        .unwrap();
+        let server = Server::start_sequence(vec![
+            Reply::sse(stream(&frozen)),
+            Reply::json(200, json!({"data":[]})),
+            Reply::sse(b"data: {\"type\":\"response.created\"}\n\n".to_vec()),
+        ])
+        .await;
+        let client = server.client();
+        client
+            .generate_for_auth(
+                auth,
+                &frozen,
+                GenerationMode::Strict,
+                &schema(),
+                &settings,
+                &key,
+                &CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let access = client.probe_image_access(auth, &settings, &key).await;
+        assert_eq!(access.available, ImageAvailability::Yes);
+        let captured = server.captured.lock().unwrap();
+        let generation = &captured[0];
+        let probe = &captured[2];
+        assert_eq!(generation.method, probe.method);
+        assert_eq!(generation.path, probe.path);
+        for name in ["authorization", "content-type", "accept", "user-agent"] {
+            let header = |request: &Captured| {
+                request
+                    .headers
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with(&format!("{name}:")))
+                    .unwrap()
+                    .to_owned()
+            };
+            assert_eq!(header(generation), header(probe), "{auth:?}: {name}");
+        }
+        assert!(
+            probe
+                .headers
+                .to_ascii_lowercase()
+                .contains("accept: text/event-stream")
+        );
+        let generation: Value = serde_json::from_slice(&generation.body).unwrap();
+        let probe: Value = serde_json::from_slice(&probe.body).unwrap();
+        for name in [
+            "model",
+            "stream",
+            "store",
+            "reasoning",
+            "tool_choice",
+            "service_tier",
+        ] {
+            assert_eq!(generation.get(name), probe.get(name), "{auth:?}: {name}");
+        }
+        assert_eq!(
+            generation.get("max_output_tokens").is_some(),
+            probe.get("max_output_tokens").is_some()
+        );
+        assert_eq!(probe["input"][0]["role"], "user");
+        assert_eq!(probe["tools"], json!([{"type":"image_generation"}]));
+    }
+}
+
+#[tokio::test]
+async fn image_probe_preserves_parameter_error_detail_without_disabling_images() {
+    let server = Server::start_sequence(vec![
+        Reply::json(200, json!({"data":[]})),
+        Reply::json(
+            400,
+            json!({"error":{"type":"invalid_request_error",
+            "message":"Unsupported parameter: max_output_tokens"}}),
+        ),
+    ])
+    .await;
+    let access = server
+        .client()
+        .probe_image_access(
+            AuthenticationMethod::Chatgpt,
+            &ProviderSettings::default(),
+            &ApiKey::from_chatgpt_token(KEY.into()).unwrap(),
+        )
+        .await;
+    assert_eq!(access.available, ImageAvailability::Unknown);
+    assert_eq!(
+        access.reason,
+        "http_400:invalid_request_error:Unsupported parameter: max_output_tokens;image_model_not_listed"
+    );
+}
+
+#[test]
+fn image_probe_only_tool_or_plan_errors_disable_images() {
+    let key = ApiKey::new(KEY.into()).unwrap();
+    for message in [
+        "Unsupported tool type",
+        "tools are unavailable",
+        "Not available for your plan",
+        "image_generation is unsupported",
+    ] {
+        let access = crate::image_access::image_access_error(
+            400,
+            &json!({"error":{"message":message}}),
+            &key,
+        );
+        assert_eq!(access.available, ImageAvailability::No, "{message}");
+        assert_eq!(access.reason, format!("http_400:{message}"));
+    }
+    for message in [
+        "Unsupported parameter: max_output_tokens",
+        "Permission denied for model",
+        "Not authorized for service_tier",
+    ] {
+        let access = crate::image_access::image_access_error(
+            400,
+            &json!({"error":{"message":message}}),
+            &key,
+        );
+        assert_eq!(access.available, ImageAvailability::Unknown, "{message}");
+    }
+}
+
+#[test]
+fn image_probe_error_detail_scrubs_secrets_before_unicode_safe_truncation() {
+    let key = ApiKey::from_chatgpt_token("opaque-active-secret".into()).unwrap();
+    let secrets = [
+        "opaque-active-secret",
+        "sk-secret",
+        "eyJheader.eyJpayload.signature",
+        "refresh-private",
+        "abcdefghijklmnopqrstuvwxyz0123456789",
+    ];
+    let message = format!(
+        "{} sk-secret eyJheader.eyJpayload.signature refresh_token: refresh-private abcdefghijklmnopqrstuvwxyz0123456789",
+        key.expose()
+    );
+    let access = crate::image_access::image_access_error(
+        400,
+        &json!({"error":{"code":"invalid_request_error","message":message}}),
+        &key,
+    );
+    for secret in secrets {
+        assert!(!access.reason.contains(secret), "leaked {secret}");
+    }
+    assert!(access.reason.contains("[redacted]"));
+    let message = format!("{} {}", "界".repeat(190), "sk-crosses-truncation-boundary");
+    let access =
+        crate::image_access::image_access_error(400, &json!({"error":{"message":message}}), &key);
+    assert_eq!(access.reason.chars().count(), 200);
+    assert!(!access.reason.contains("sk-"));
 }
 
 #[tokio::test]
