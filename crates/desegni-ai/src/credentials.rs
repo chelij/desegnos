@@ -29,6 +29,11 @@ impl ApiKey {
         Ok(Self(Arc::new(value)))
     }
 
+    /// Non-secret cache identity; never persist the credential itself.
+    pub fn image_access_cache_key(&self) -> String {
+        format!("apiKey:{}", desegni_core::digest(self.expose().as_bytes()))
+    }
+
     pub(crate) fn expose(&self) -> &str {
         self.0.as_str()
     }

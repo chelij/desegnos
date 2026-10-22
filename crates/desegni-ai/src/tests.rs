@@ -72,6 +72,9 @@ struct Server {
 
 impl Server {
     async fn start(reply: Reply) -> Self {
+        Self::start_sequence(vec![reply]).await
+    }
+    async fn start_sequence(replies: Vec<Reply>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let captured = Arc::new(Mutex::new(vec![]));
@@ -80,7 +83,11 @@ impl Server {
         let observed_count = count.clone();
         let task = tokio::spawn(async move {
             while let Ok((mut socket, _)) = listener.accept().await {
-                observed_count.fetch_add(1, Ordering::SeqCst);
+                let ordinal = observed_count.fetch_add(1, Ordering::SeqCst);
+                let reply = replies
+                    .get(ordinal)
+                    .unwrap_or_else(|| replies.last().unwrap())
+                    .clone();
                 let request = read_request(&mut socket).await;
                 observed.lock().unwrap().push(request);
                 if reply.drop_before_headers {
@@ -3051,4 +3058,256 @@ fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
         desegni_core::AI_PREVIEW_TOKEN_RESERVE,
         "a preview costs a fixed reserve, not one token per Base64 byte"
     );
+}
+
+#[tokio::test]
+async fn image_probe_classifies_acceptance_rejection_auth_and_transient_failures() {
+    use ImageAvailability::{No, Unknown, Yes};
+    let cases = [
+        (Reply::sse(b"data: {\"type\":\"response.created\"}\n\n".to_vec()), Yes),
+        (Reply::json(200, json!({"status":"completed","output":[]})), Yes),
+        (Reply::json(400, json!({"error":{"code":"unsupported_tool","message":"image_generation unavailable"}})), No),
+        (Reply::json(400, json!({"error":{"code":"unsupported_parameter","param":"max_output_tokens"}})), No),
+        (Reply::json(403, json!({"error":{"message":"Permission denied for image_generation"}})), No),
+        (Reply::json(401, json!({"error":{"message":"image_generation requires authentication"}})), Unknown),
+        (Reply::json(429, json!({"error":{"message":"image_generation rate limit"}})), Unknown),
+        (Reply::json(503, json!({"error":{"message":"image_generation unavailable"}})), Unknown),
+        (Reply::json(400, json!({"error":{"message":"Invalid model"}})), Unknown),
+        (Reply::sse(b"data: {\"type\":\"error\",\"code\":\"rate_limit_exceeded\",\"message\":\"image_generation rate limit\"}\n\n".to_vec()), Unknown),
+        (Reply::sse(b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"unsupported_tool\",\"message\":\"image_generation unavailable\"}}}\n\n".to_vec()), No),
+        (Reply::sse(b": heartbeat\n\n".to_vec()), Unknown),
+    ];
+    for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+        for (reply, expected) in &cases {
+            let server = Server::start_sequence(vec![
+                Reply::json(
+                    200,
+                    json!({"data":[{"id":"gpt-image-1.5","visibility":"list"}]}),
+                ),
+                reply.clone(),
+            ])
+            .await;
+            let access = server
+                .client()
+                .probe_image_access(
+                    auth,
+                    &ProviderSettings::default(),
+                    &ApiKey::new(KEY.into()).unwrap(),
+                )
+                .await;
+            assert_eq!(access.available, *expected, "{auth:?}: {}", reply.status);
+            assert!(access.reason.ends_with(";image_model_listed"));
+            let captured = server.captured.lock().unwrap();
+            assert_eq!(captured[0].method, "GET");
+            assert_eq!(captured[0].path, "/v1/models");
+            let request = &captured[1];
+            assert_eq!(request.path, "/v1/responses");
+            assert!(
+                request
+                    .headers
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer ")
+            );
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["model"], MODEL_ID);
+            assert_eq!(body["input"], "ok");
+            assert_eq!(body["tool_choice"], "none");
+            assert_eq!(body["tools"], json!([{"type":"image_generation"}]));
+            assert_eq!(body["store"], false);
+            assert_eq!(body["stream"], true);
+            assert_eq!(body["max_output_tokens"], 16);
+        }
+    }
+    let mut network = Reply::json(200, json!({}));
+    network.drop_before_headers = true;
+    let server = Server::start(network).await;
+    let access = server
+        .client()
+        .probe_image_access(
+            AuthenticationMethod::ApiKey,
+            &ProviderSettings::default(),
+            &ApiKey::new(KEY.into()).unwrap(),
+        )
+        .await;
+    assert_eq!(access.available, Unknown);
+}
+
+#[tokio::test]
+async fn image_probe_drops_stream_on_first_acceptance_without_waiting_for_completion() {
+    let mut reply = Reply::sse(Vec::new());
+    reply.chunks = vec![b"data: {\"type\":\"response.created\"}\n\n".to_vec()];
+    reply
+        .chunks
+        .extend((0..100).map(|_| b": still streaming\n\n".to_vec()));
+    reply.delay = Duration::from_millis(50);
+    let server = Server::start_sequence(vec![Reply::json(200, json!({"data":[]})), reply]).await;
+    let access = tokio::time::timeout(
+        Duration::from_secs(2),
+        server.client().probe_image_access(
+            AuthenticationMethod::Chatgpt,
+            &ProviderSettings::default(),
+            &ApiKey::new(KEY.into()).unwrap(),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(access.available, ImageAvailability::Yes);
+    assert!(access.reason.ends_with(";image_model_not_listed"));
+}
+
+#[test]
+fn image_models_parser_obeys_chatgpt_visibility_and_api_presence() {
+    use crate::image_access::image_models_offered;
+    for key in ["data", "models"] {
+        for id_key in ["id", "slug"] {
+            for visibility in [None, Some("list"), Some("hidden")] {
+                let mut model = json!({(id_key):"gpt-image-1.5"});
+                if let Some(visibility) = visibility {
+                    model["visibility"] = json!(visibility);
+                }
+                let value = json!({(key):[model]});
+                assert!(image_models_offered(&value, AuthenticationMethod::ApiKey));
+                assert_eq!(
+                    image_models_offered(&value, AuthenticationMethod::Chatgpt),
+                    visibility == Some("list")
+                );
+            }
+        }
+    }
+    for value in [
+        Value::Null,
+        json!({"data":{}}),
+        json!({"models":[]}),
+        json!({"models":[{"slug":MODEL_ID,"visibility":"list"}]}),
+    ] {
+        assert!(!image_models_offered(&value, AuthenticationMethod::Chatgpt));
+        assert!(!image_models_offered(&value, AuthenticationMethod::ApiKey));
+    }
+}
+
+#[test]
+fn image_cache_expiry_and_capabilities_apply_equally_to_both_authentication_methods() {
+    for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+        for available in [
+            ImageAvailability::Yes,
+            ImageAvailability::No,
+            ImageAvailability::Unknown,
+        ] {
+            let mut access = ImageAccess::new(available, "test");
+            let ttl = if available == ImageAvailability::Unknown {
+                300
+            } else {
+                7 * 86400
+            };
+            assert!(!access.expired(access.checked_at + ttl - 1));
+            assert!(access.expired(access.checked_at + ttl));
+            assert!(access.expired(access.checked_at - 1));
+            for enabled in [true, false] {
+                let settings = ProviderSettings {
+                    image_generation: enabled,
+                    ..Default::default()
+                };
+                assert_eq!(
+                    ProviderId::Openai
+                        .capabilities_for(auth, &settings, Some(&access))
+                        .image_generation
+                        .is_some(),
+                    enabled && available == ImageAvailability::Yes
+                );
+                assert!(
+                    ProviderId::Openai
+                        .capabilities_for(auth, &settings, None)
+                        .image_generation
+                        .is_none()
+                );
+                assert!(
+                    ProviderId::Google
+                        .capabilities_for(auth, &settings, Some(&access))
+                        .image_generation
+                        .is_none()
+                );
+            }
+            access.checked_at -= 7 * 86400;
+            assert!(
+                ProviderId::Openai
+                    .capabilities_for(auth, &ProviderSettings::default(), Some(&access))
+                    .image_generation
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn runtime_image_tool_rejection_signals_unavailability_and_finishes_with_placeholders() {
+    for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+        let server = Server::start(Reply::json(400, json!({"error":{"code":"unsupported_tool","message":"image_generation is unavailable"}}))).await;
+        let (project, frozen, response) = crate::image_generation::adapter_tests::fixture();
+        let (response, unavailable) = server
+            .client()
+            .generate_images_with_status(
+                response,
+                auth,
+                &ProviderSettings {
+                    spending_limit_usd: 10000.,
+                    ..Default::default()
+                },
+                &frozen,
+                &project,
+                &ApiKey::new(KEY.into()).unwrap(),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(unavailable);
+        assert_eq!(
+            server.count.load(Ordering::SeqCst),
+            1,
+            "Rejection stops subsequent image calls"
+        );
+        let candidate = desegni_core::GenerationCandidate::from_json(&response.text).unwrap();
+        candidate.validate(&frozen, &project).unwrap();
+        assert!(candidate.image_generation_requests().unwrap().is_empty());
+        assert!(!candidate.pages[0].content.html.contains("data:image/png"));
+        assert!(candidate.pages[0].content.html.contains("Keep this copy"));
+    }
+}
+
+#[tokio::test]
+async fn runtime_image_streams_use_the_selected_model_for_api_keys_and_chatgpt() {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(1024, 1024)
+        .write_to(&mut png, image::ImageFormat::Png)
+        .unwrap();
+    let event = json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"image_generation_call","status":"completed","result":STANDARD.encode(png.get_ref())}]}});
+    for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+        let server = Server::start(Reply::sse(format!("data: {event}\n\n").into_bytes())).await;
+        let (project, frozen, response) = crate::image_generation::adapter_tests::fixture();
+        let (response, unavailable) = server
+            .client()
+            .generate_images_with_status(
+                response,
+                auth,
+                &ProviderSettings {
+                    spending_limit_usd: 10000.,
+                    ..Default::default()
+                },
+                &frozen,
+                &project,
+                &ApiKey::new(KEY.into()).unwrap(),
+                &CancellationToken::new(),
+            )
+            .await;
+        assert!(!unavailable);
+        let candidate = desegni_core::GenerationCandidate::from_json(&response.text).unwrap();
+        candidate.validate(&frozen, &project).unwrap();
+        assert!(candidate.image_generation_requests().unwrap().is_empty());
+        assert!(candidate.pages[0].content.html.contains("data:image/png"));
+        let request: Value = serde_json::from_slice(&server.request().body).unwrap();
+        assert_eq!(request["model"], MODEL_ID);
+        assert_eq!(request["stream"], true);
+        assert_eq!(
+            request["max_output_tokens"].is_null(),
+            auth == AuthenticationMethod::Chatgpt
+        );
+    }
 }

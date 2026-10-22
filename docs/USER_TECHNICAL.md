@@ -156,3 +156,5 @@ Normal Linux launch paths are the actual executables `target/debug/desegnos` and
 The editor is GPL-3.0-only; see [LICENSE](../LICENSE). Export templates and runtime helpers require the separate licensing described in the release plan when implemented. This build contains no export templates.
 
 Generated drafts can use clearly labelled placeholders for missing content, and download known direct PNG/JPEG image URLs into the project. For a blocked attempt, use **Finish draft → Generate draft**, or **Change request** to edit it on the canvas. See [draft and image behavior](DRAFT_IMAGES.md) for bounds and export details.
+
+OpenAI image availability is checked per API credential or ChatGPT account on connection, account switching, Test access, and after seven days; Check again retries without generating an image.

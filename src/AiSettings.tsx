@@ -18,6 +18,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const [chatgptStorage, setChatgptStorage] = useState<'system' | 'session'>('system');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [checkingImages, setCheckingImages] = useState(false);
   const [error, setError] = useState('');
   const [status, setStatus] = useState('');
   const [advanced, setAdvanced] = useState(false);
@@ -39,6 +40,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   useEffect(() => { void load(); }, [load]);
   async function action(command: string, args?: Record<string, unknown>) {
     setBusy(true); setError(''); setStatus('');
+    const probesImages = ['set_ai_key', 'select_chatgpt_account', 'set_ai_authentication', 'set_ai_provider'].includes(command);
+    if (probesImages) setCheckingImages(true);
     try {
       const value = await update(command, args); receive(value);
       return value;
@@ -46,7 +49,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
       try { receive(await refresh()); } catch { /* Preserve the original operation error. */ }
       setError(message(error)); return null;
     }
-    finally { setBusy(false); }
+    finally { setBusy(false); if (probesImages) setCheckingImages(false); }
   }
   async function saveSettings(event: FormEvent) {
     event.preventDefault(); if (!settings) return;
@@ -77,6 +80,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     }
   }
   async function testAccess() {
+    setCheckingImages(true);
     setBusy(true); setError(''); setStatus('');
     try {
       const result = await native<{ message: string }>('test_ai_access');
@@ -86,7 +90,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
       try { receive(await refresh()); } catch {}
       setError(original);
     }
-    finally { setBusy(false); }
+    finally { setBusy(false); setCheckingImages(false); }
   }
   async function usage() {
     setBusy(true); setError('');
@@ -120,8 +124,10 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         ] : [<option key={item.id} value={item.id} disabled={!item.available}>{item.available ? `${item.name} (API key)` : `${item.name} — coming soon`}</option>])}
       </select></label>
       {provider && !provider.capabilities.webSearch && <p className="field-help">Web search unavailable.</p>}
-      <label><input type="checkbox" disabled={busy || pending || usesChatgpt || !provider?.capabilities.imageGeneration} checked={!usesChatgpt && !!provider?.capabilities.imageGeneration && settings.imageGeneration} onChange={event => setSettings({ ...settings, imageGeneration: event.target.checked })} /> Image generation</label>
-      <p className="field-help">{usesChatgpt ? 'Image generation is unavailable with ChatGPT sign-in; support for this connection is unconfirmed.' : provider?.capabilities.imageGeneration ? 'Create or edit up to two images per job. A USD 1 image allowance is included in the estimate; final charges may vary.' : 'Image generation is unavailable with this provider.'}</p>
+      <div className="image-generation-access"><label><input type="checkbox" disabled={busy || pending || view.imageAccessChecking || view.imageAccess?.available !== 'yes' || (usesChatgpt ? !account?.connected || !account.planEnabled : !view.credential.configured) || !provider?.capabilities.imageGeneration} checked={settings.imageGeneration} onChange={event => setSettings({ ...settings, imageGeneration: event.target.checked })} /> Image generation</label>
+        <span role="status">{view.imageAccessChecking || checkingImages || pending ? 'Checking…' : view.imageAccess?.available === 'yes' ? 'Available' : view.imageAccess?.available === 'no' || !provider?.capabilities.imageGeneration ? 'Not available for this account' : "Couldn't check"}</span>
+        <button type="button" disabled={busy || !canTest || view.imageAccessChecking} onClick={() => { void testAccess(); }}>Check again</button>
+      </div>
       {dirty && <p className="field-help">Save or reset your changes below before changing the generation method.</p>}
       {view.configurationError && <p className="message error" role="alert">{view.configurationError} Review and save your generation settings before sending a request.</p>}
       {usesChatgpt && <section className="chatgpt-accounts" aria-label="ChatGPT account settings">
