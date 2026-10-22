@@ -411,6 +411,7 @@ mod web_search_tests {
             page_count: 1,
             dependencies: Default::default(),
             dossier_context: None,
+            request_history: String::new(),
             capabilities: None,
             images: vec![],
         }

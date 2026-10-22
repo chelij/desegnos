@@ -2074,7 +2074,10 @@ pub async fn resolve_save_conflict(
 }
 
 #[tauri::command]
-pub fn prepare_requirements(state: WorkspaceState<'_>) -> NativeResult<RequirementsSnapshot> {
+pub fn prepare_requirements(
+    state: WorkspaceState<'_>,
+    generation: State<'_, Mutex<crate::generation::GenerationService>>,
+) -> NativeResult<RequirementsSnapshot> {
     let mut state = state.lock().map_err(message)?;
     let prepared = state
         .session
@@ -2082,6 +2085,17 @@ pub fn prepare_requirements(state: WorkspaceState<'_>) -> NativeResult<Requireme
         .ok_or("Create or open a project first.")?
         .project()
         .prepare_requirements()
+        .map_err(message)?;
+    let history = generation
+        .lock()
+        .map_err(message)?
+        .request_history(state.project()?)?;
+    let prepared = prepared
+        .with_earlier_requests(
+            state.project()?,
+            &history,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        )
         .map_err(message)?;
     state.prepared = Some(prepared.clone());
     Ok(prepared)

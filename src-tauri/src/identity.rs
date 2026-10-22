@@ -558,6 +558,7 @@ fn freeze(
         page_count: 0,
         dependencies: BTreeMap::new(),
         dossier_context: None,
+        request_history: String::new(),
         capabilities: None,
         images: vec![],
     };

@@ -685,6 +685,17 @@ impl GenerationService {
             write_markdown(&directory.join("REPLY.txt"), reply).map_err(message)?;
         }
         write_json(&directory.join("job.json"), &record)?;
+        let history_path = self.history_path(record.view.project_id);
+        if history_path.exists() {
+            let mut entries: Vec<desegni_core::EarlierRequest> =
+                read_json(&history_path, MAX_JOB_BYTES)?;
+            entries.retain(|r| {
+                r.project_id == record.view.project_id && r.job_id != record.view.job_id
+            });
+            entries.extend(self.history_entries(&record.view));
+            desegni_core::compact_request_history(&mut entries);
+            write_json(&history_path, &entries)?;
+        }
         let view = record.view.clone();
         self.unsaved_jobs.remove(&view.job_id);
         self.jobs.insert(view.job_id, record);
@@ -712,6 +723,139 @@ impl GenerationService {
             return Err("The saved generation record is invalid.".into());
         }
         Ok(view)
+    }
+
+    // Compact text-only index. Full historical packets are read only for one-time backfill.
+    fn history_path(&self, project_id: Uuid) -> PathBuf {
+        self.directory
+            .join(project_id.to_string())
+            .join("request-history.json")
+    }
+
+    fn history_entries(&self, view: &GenerationJobView) -> Vec<desegni_core::EarlierRequest> {
+        let created = view
+            .created_at
+            .as_deref()
+            .or_else(|| view.attempts.first().map(|a| a.started_at.as_str()))
+            .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
+            .map(|t| t.unix_timestamp())
+            .or_else(|| {
+                fs::metadata(
+                    self.job_directory(view.project_id, view.job_id)
+                        .join("job.json"),
+                )
+                .ok()?
+                .modified()
+                .ok()
+                .map(|t| OffsetDateTime::from(t).unix_timestamp())
+            })
+            .unwrap_or(0);
+        let outcome = match view.status {
+            JobStatus::Applied => "applied",
+            JobStatus::Discarded => "rejected by user",
+            JobStatus::Failed | JobStatus::Unknown | JobStatus::Cancelled => "failed",
+            _ => "drafted",
+        };
+        desegni_core::earlier_requests(
+            &view.requirements,
+            created,
+            outcome,
+            view.candidate
+                .as_ref()
+                .map(|c| c.summary.as_str())
+                .or_else(|| view.first_exchange.as_ref().map(|e| e.summary.as_str()))
+                .filter(|summary| !summary.trim().is_empty())
+                .unwrap_or("No AI summary recorded."),
+            view.candidate
+                .as_ref()
+                .map_or(&[], |c| c.regions.as_slice()),
+        )
+    }
+
+    pub(crate) fn request_history(
+        &self,
+        project: &Project,
+    ) -> NativeResult<Vec<desegni_core::EarlierRequest>> {
+        let path = self.history_path(project.id);
+        let mut entries: Vec<desegni_core::EarlierRequest> = if path.exists() {
+            read_json(&path, MAX_JOB_BYTES)?
+        } else {
+            let directory = self.directory.join(project.id.to_string());
+            let mut entries = Vec::new();
+            let mut observations = Vec::new();
+            if directory.exists() {
+                regular_directory(&directory)?;
+                for entry in fs::read_dir(directory).map_err(message)? {
+                    let entry = entry.map_err(message)?;
+                    let Some(id) = entry
+                        .file_name()
+                        .to_str()
+                        .and_then(|s| Uuid::parse_str(s).ok())
+                    else {
+                        continue;
+                    };
+                    if let Ok(view) = self.saved_job(project.id, id) {
+                        entries.extend(self.history_entries(&view));
+                        if let Some(context) = &view.requirements.dossier_context {
+                            observations.push((
+                                view.requirements.base_revision,
+                                context.job_id,
+                                context.application_status,
+                            ));
+                        }
+                    }
+                }
+            }
+            // Later frozen dossiers can preserve an undo after the project's latest dossier moved on.
+            observations.sort_by_key(|(revision, _, _)| *revision);
+            for (_, job_id, status) in observations {
+                for entry in entries.iter_mut().filter(|r| r.job_id == job_id) {
+                    match status {
+                        desegni_core::GenerationApplicationStatus::Undone => {
+                            entry.outcome = "undone (do not repeat)".into()
+                        }
+                        desegni_core::GenerationApplicationStatus::Applied
+                            if entry.outcome.starts_with("undone") =>
+                        {
+                            entry.outcome = "applied".into()
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            entries
+        };
+        entries.retain(|r| r.project_id == project.id);
+        // Undo/redo lives in the durable project dossier. Capture it before a newer job replaces it.
+        if let Some(dossier) = &project.latest_generation {
+            for entry in entries.iter_mut().filter(|r| r.job_id == dossier.job_id) {
+                if entry.summary == "No AI summary recorded." {
+                    entry.summary = dossier
+                        .summary
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                        .chars()
+                        .take(200)
+                        .collect();
+                }
+                match dossier.application_status {
+                    desegni_core::GenerationApplicationStatus::Undone => {
+                        entry.outcome = "undone (do not repeat)".into()
+                    }
+                    desegni_core::GenerationApplicationStatus::Applied
+                        if !entry.outcome.starts_with("needs details") =>
+                    {
+                        entry.outcome = "applied".into()
+                    }
+                    _ => {}
+                }
+            }
+        }
+        private_directory(path.parent().ok_or("Missing history directory.")?)?;
+        desegni_core::compact_request_history(&mut entries);
+        write_json(&path, &entries)?;
+        Ok(entries)
     }
 
     fn past_jobs(&self, project_id: Uuid) -> NativeResult<GenerationHistory> {
@@ -1063,11 +1207,19 @@ impl GenerationService {
                 .as_ref()
                 .and_then(|id| self.image_access.get(id)),
         );
+        let history = self.request_history(project)?;
         let requirements = if let Some(draft) = &draft {
             project.prepare_targeted_requirements(capabilities, &draft.region_ids)
         } else {
             project.prepare_requirements_with_capabilities(capabilities)
         }
+        .and_then(|snapshot| {
+            snapshot.with_earlier_requests(
+                project,
+                &history,
+                OffsetDateTime::now_utc().unix_timestamp(),
+            )
+        })
         .map_err(message)?;
         let requirements_targets: BTreeSet<_> = project
             .pages

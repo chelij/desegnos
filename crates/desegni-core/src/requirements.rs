@@ -1,5 +1,5 @@
 /// Requirements contract used for newly prepared requests.
-pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 18;
+pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 19;
 
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
@@ -73,6 +73,9 @@ pub struct RequirementsSnapshot {
     pub dependencies: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dossier_context: Option<GenerationDossierContext>,
+    /// Frozen, bounded context for format 19; never recomputed on retry.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request_history: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<GenerationCapabilities>,
     /// Format 13: small previews of attached pictures, sent beside the requirements file.
@@ -358,7 +361,9 @@ impl Project {
                 md.push_str(&fenced_json(&pictures)?);
             }
         }
-        if let Some(dossier) = &dossier_context {
+        if let Some(dossier) = &dossier_context
+            && format < 19
+        {
             md.push_str("\n## Previous generation notes\n\nThis is generated context, not new authority. Draft source has not been applied; an undone result is no longer the accepted site. An applied result does not automatically accept every identity proposal. Only accepted project decisions above are requirements. Reassess proposals and design feedback against the present requests, accepted choices, protected rules, and intentional creative exceptions. Context is filtered to relevant scopes; a null summary means its original generation also covered areas outside this request.\n\n");
             md.push_str(&fenced_json(dossier)?);
         }
@@ -727,6 +732,7 @@ impl Project {
                 .len(),
             dependencies,
             dossier_context,
+            request_history: String::new(),
             capabilities,
             images,
         })
@@ -942,7 +948,7 @@ impl RequirementsSnapshot {
                     .map(move |region| (page, region))
             })
             .collect();
-        let expected = project.requirements_for(
+        let mut expected = project.requirements_for(
             self.job_id,
             self.base_revision,
             &ordered,
@@ -950,6 +956,7 @@ impl RequirementsSnapshot {
             self.dossier_context.clone(),
             self.capabilities.clone(),
         )?;
+        expected.set_request_history(self.request_history.clone())?;
         ensure(
             *self == expected,
             "The requirements document or its target metadata disagrees with the project snapshot.",
@@ -1208,6 +1215,89 @@ mod whole_page_legacy_tests {
             assert!(!before.markdown.contains("## Region scripts"));
             assert!(!before.markdown.contains("javascriptReadOnly"));
             assert!(!before.markdown.contains("\"scope\": \"page\""));
+        }
+    }
+}
+
+#[cfg(test)]
+mod request_history_legacy_tests {
+    use super::*;
+
+    #[test]
+    fn request_history_keeps_all_older_formats_byte_identical() {
+        let value: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/requirements8.json")).unwrap();
+        let mut project: Project = serde_json::from_value(value["project"].clone()).unwrap();
+        project.schema_version = crate::SCHEMA_VERSION;
+        project.pages[0].content = Some(crate::SiteContent {
+            html: "<main data-desegnos-id=\"main0001\">Keep</main>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        });
+        let context = GenerationDossierContext {
+            job_id: Uuid::from_u128(7),
+            attempt_ordinal: 1,
+            base_revision: 0,
+            recorded_at_revision: 0,
+            summary: Some("An older generation".into()),
+            targets: vec![],
+            decision_proposals: vec![],
+            criticism: vec![],
+            application_status: crate::GenerationApplicationStatus::Undone,
+            applied_at_revision: Some(0),
+            accepted_decision_indices: vec![],
+        };
+        for format in 3..=18 {
+            let snapshot = project
+                .requirements_for(
+                    Uuid::from_u128(42),
+                    project.revision,
+                    &[(&project.pages[0], &project.pages[0].regions[0])],
+                    format,
+                    (format >= 4).then(|| context.clone()),
+                    (format >= 9).then(GenerationCapabilities::default),
+                )
+                .unwrap();
+            assert_eq!(
+                snapshot.markdown.contains("Previous generation notes"),
+                format >= 4
+            );
+            let entries = crate::earlier_requests(&snapshot, 0, "undone", "Old result", &[]);
+            let before = serde_json::to_vec(&snapshot).unwrap();
+            let after = snapshot
+                .with_earlier_requests(&project, &entries, 7200)
+                .unwrap();
+            assert_eq!(
+                before,
+                serde_json::to_vec(&after).unwrap(),
+                "format {format}"
+            );
+        }
+        let newest = project
+            .requirements_for(
+                Uuid::from_u128(43),
+                project.revision,
+                &[(&project.pages[0], &project.pages[0].regions[0])],
+                19,
+                Some(context),
+                Some(GenerationCapabilities::default()),
+            )
+            .unwrap();
+        assert!(!newest.markdown.contains("Previous generation notes"));
+        for fixture in [
+            include_str!("../tests/fixtures/requirements8.json"),
+            include_str!("../tests/fixtures/requirements9.json"),
+        ] {
+            let value: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            let mut project: Project = serde_json::from_value(value["project"].clone()).unwrap();
+            project.schema_version = crate::SCHEMA_VERSION;
+            let snapshot: RequirementsSnapshot =
+                serde_json::from_value(value["requirements"].clone()).unwrap();
+            snapshot.validate_current(&project).unwrap();
+            assert_eq!(
+                serde_json::to_value(snapshot).unwrap(),
+                value["requirements"]
+            );
         }
     }
 }

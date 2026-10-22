@@ -396,7 +396,7 @@ fn current_conflicts_keep_other_pages_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 18"));
+    assert!(snapshot.markdown.contains("Requirements format: 19"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -732,7 +732,8 @@ fn source_candidate_and_requirements_limits_fail_without_truncation() {
 }
 
 #[test]
-fn successful_generation_builds_durable_draft_notes_without_applying_source_or_choices() {
+fn successful_generation_builds_durable_draft_notes_and_request_history_without_applying_source_or_choices()
+ {
     let (project, snapshot, candidate) = fixture();
     let mut session = Session::new(project.clone()).unwrap();
     session
@@ -769,17 +770,30 @@ fn successful_generation_builds_durable_draft_notes_without_applying_source_or_c
             .contains("only the accepted decisions above are requirements")
     );
     candidate.validate(&snapshot, session.project()).unwrap();
-    let next_request = session.project().prepare_requirements().unwrap();
+    let history = earlier_requests(
+        &snapshot,
+        0,
+        "drafted",
+        &candidate.summary,
+        &candidate.regions,
+    );
+    let next_request = session
+        .project()
+        .prepare_requirements()
+        .unwrap()
+        .with_earlier_requests(session.project(), &history, 7200)
+        .unwrap();
     assert!(
         next_request
+            .markdown
+            .contains("## Earlier requests for these areas")
+    );
+    assert!(
+        !next_request
             .markdown
             .contains("## Previous generation notes")
     );
-    assert!(
-        next_request
-            .markdown
-            .contains("\"applicationStatus\": \"draft\"")
-    );
+    assert!(next_request.markdown.contains("\"outcome\":\"drafted\""));
     assert!(next_request.dossier_context.is_some());
     next_request.validate_current(session.project()).unwrap();
     let before = session.project().clone();

@@ -45,7 +45,7 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
 #[test]
 fn new_capabilities_and_contract_are_explicit_and_legacy_serialization_is_identical() {
     let (project, snapshot, _) = fixture();
-    assert_eq!(snapshot.format_version().unwrap(), 18);
+    assert_eq!(snapshot.format_version().unwrap(), 19);
     assert!(snapshot.markdown.contains("data-desegnos-generate"));
     assert!(
         snapshot
