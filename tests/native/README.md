@@ -84,3 +84,16 @@ It also checks the three-step Import context flow, closed file details, Astro pa
 support and ranking, automatic file picking, a disabled Read my brand button when
 manual choices are too large, repeated Pick for me resets, and website-address import.
 The cleanup editor check waits for the observable Undo/Redo result after native keys.
+
+## Workspace screenshot tour
+
+`node scripts/native-test.mjs --ui-tour-only` builds and captures the workspace panels,
+inline confirmations, canvas previews and start/recovery screens. Add `--skip-build`
+when the explicit native-test binary is current. Each surface runs independently;
+unreachable steps are listed in `index.md`. Captures use `PhysicalInput.captureWindow`
+on guarded Xvfb at the default 1380 × 900 window and 900 px width, in both themes.
+`DESEGNI_UI_TOUR_OUTPUT` overrides the tour's default scratchpad destination. The tour
+uses disposable project files, the six-picture fixture and the synthetic provider;
+it never sends paid AI requests or changes application source.
+For a focused recapture, set `DESEGNI_UI_TOUR_SURFACES=2` (or comma-separated
+surface numbers from the index); existing index entries for other surfaces remain.

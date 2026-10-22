@@ -26,6 +26,7 @@ import { sourceEditWorkflow } from '../tests/native/source-edit-workflow.mjs';
 import { realUseWorkflow } from '../tests/native/real-use-workflow.mjs';
 import { seedRealUse } from '../tests/native/real-use-fixtures.mjs';
 import { websiteImportWorkflow } from '../tests/native/website-import-workflow.mjs';
+import { uiTour } from '../tests/native/ui-tour.mjs';
 import { projectFoldersWorkflow } from '../tests/native/project-folders-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -194,7 +195,16 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'code-meta') {
+    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'ui-tour') {
+      report.scope = 'Screenshot tour of workspace surfaces in both themes and widths.';
+      report.tour = await uiTour(driver, physical, step, evidence, provider, async () => {
+        await stop('SIGKILL');
+        await start();
+        return { driver, physical: new PhysicalInput(driver, app.pid) };
+      });
+      report.passed = report.tour.failures.length === 0;
+      return;
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'code-meta') {
       report.scope = 'Focused mounted HTML metadata toggle with six stored pictures.';
       project = await codeMetaWorkflow(driver, physical, step, evidence);
       const errors = await driver.execute(() => window.__desegniTestErrors);
@@ -330,15 +340,16 @@ async function runIsolated() {
 
 async function main() {
   if (args.includes('--help')) {
-    console.log('node scripts/native-test.mjs [--skip-build] [--code-meta-only|--project-folders-only|--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only|--real-use-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
+    console.log('node scripts/native-test.mjs [--skip-build] [--ui-tour-only|--code-meta-only|--project-folders-only|--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only|--real-use-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
     return;
   }
   if (process.platform !== 'linux') throw new Error('This runner requires the guarded Linux Xvfb route. Native Windows/macOS isolation must be configured on those runners.');
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--code-meta-only', '--website-import-only', '--project-folders-only', '--image-resize-only', '--real-use-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--ui-tour-only', '--code-meta-only', '--website-import-only', '--project-folders-only', '--image-resize-only', '--real-use-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
+  if (args.includes('--ui-tour-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'ui-tour';
   if (args.includes('--code-meta-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'code-meta';
   if (args.includes('--website-import-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'website-import';
   if (args.includes('--project-folders-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'project-folders';
