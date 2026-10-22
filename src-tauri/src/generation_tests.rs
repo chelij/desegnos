@@ -1232,6 +1232,8 @@ fn session_credentials_do_not_enter_disclosure_job_files_or_returned_settings() 
     let project = project();
     let prepared = service.prepare(&project).unwrap();
     let view = AiSettingsView {
+        image_access: None,
+        image_access_checking: false,
         provider: ProviderId::Openai,
         providers: provider_catalogue(),
         settings: service.settings.clone(),
