@@ -1,7 +1,36 @@
 # OpenAI generation contract
 
-New requests use **format 17**, including rectangle, element, shaped and imported-page requests.
-Formats 3–16 retain their frozen Markdown, schemas and application behavior.
+New requests use **format 18**, including rectangle, element, shaped and imported-page requests.
+Formats 3–17 retain their frozen Markdown, schemas and application behavior.
+
+Format 18 detects rectangular requests covering at least 95% of measured page width
+(viewport fallback) and either 90% of the reference viewport near the top (within
+10% of viewport height), or 90% of measured content height (viewport fallback).
+Coverage uses intersection, so a displaced box does not gain authority merely by
+being large. Element selections, shaped areas and phone fixes do not auto-expand.
+The request's **Whole page** control forces page scope; turning it off persists
+`wholePageDisabled`, preventing auto-detection from turning it back on. Both fields
+default false and are omitted when false. Rectangular requests now receive the same
+validated element measurements as shaped requests before generation.
+
+Page requests receive complete source and may restructure HTML and change shared
+CSS/JavaScript. Existing IDs remain unless selected-root `allowTargetRemoval`
+authorizes removal of that subtree, or a removal prompt explicitly names the ID.
+Broad layout prompts such as “one screen only” do not authorize guessing which
+content to delete. Protected region content and protected literal decision values
+already present in the source remain protected; semantic design decisions remain
+model instructions. Source syntax, IDs, assets, remote-code and page ownership checks
+still apply. Failed whole-page validation rejects the result instead of attempting
+to reconstruct it as independent area roots.
+
+When a page request and ordinary areas share a page, the implemented page request
+owns shared CSS/JavaScript and surrounding structure. Apply the local requests
+inside that result, retaining their selected roots/IDs or region roots. Global changes
+come from the page request, never from an area. A conflicted page request grants no
+page authority; conflicted local targets/roots remain unchanged. Other pages keep
+their own scope rules. A single combined page reply cannot attribute each HTML change
+to an individual prompt; validation checks the combined authorized page scope and
+local root/ID requirements, while requirements instruct the model on precedence.
 
 Format 17 delivers regions independently: return pages containing implemented regions even
 when another region conflicts. Apply completes only implemented requests, leaves conflicts

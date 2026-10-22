@@ -1,3 +1,4 @@
+import { isWholePage } from './wholePageScope';
 import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '@tauri-apps/api/core';
@@ -20,7 +21,7 @@ import type { RequestShapeKind } from './CanvasTools';
 import './canvas.css';
 
 // A prompt function is read when the save runs, so queued keystrokes save the newest text once.
-export type RequestPatch = { prompt?: string | (() => string); rect?: RectChange | Partial<Rect> };
+export type RequestPatch = { wholePage?: boolean; prompt?: string | (() => string); rect?: RectChange | Partial<Rect> };
 export type CanvasViewAction = { serial: number; kind: 'guide' | 'selection' | 'fit' };
 type Gesture = GeometryGesture & { pointerId: number; region?: Region; active: boolean; shapeKind: RequestShapeKind; points: Point[]; freehand?: RegionShape };
 type CanvasContext = { point: Point } & ({ kind: 'element'; selection: ElementSelection } | { kind: 'request'; regionId: string } | { kind: 'canvas'; at: Point });
@@ -563,10 +564,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
     if (syncing.current) return syncing.current;
     const work = async () => {
       const current = pageRef.current;
-      if (!current.content || !current.regions.some(region => !region.completed && (regionTargets(region).length || region.shape && region.shape.kind !== 'rect'))) { setStale(new Set()); return; }
+      if (!current.content || !current.regions.some(region => !region.completed)) { setStale(new Set()); return; }
       await waitForSite(current.id);
       if (JSON.stringify(pageRef.current.content) !== JSON.stringify(current.content) || pageRef.current.id !== current.id) throw new Error('The page changed while measuring its items. Try again.');
-      const regions = pageRef.current.regions.filter(region => !region.completed && (regionTargets(region).length || region.shape && region.shape.kind !== 'rect'));
+      const regions = pageRef.current.regions.filter(region => !region.completed);
       const bounds: ElementBounds[] = []; const missing = new Set<string>();
       const areaBounds = regions.some(region => !regionTargets(region).length) ? site.current!.measuredElements().map(item => ({ target: item.element, rect: item.rect })) : [];
       for (const region of regions) {
@@ -1037,6 +1038,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       { id: 'replace', label: 'Replace', disabled: editBusy, action: () => setElementDialog('replace') },
       ...(undoElement && elementRef.current && elementRef.current.element.selector !== 'body' ? [{ id: 'undo-element', label: 'Undo changes to this element', shortcut: 'Alt+Z', disabled: editBusy, action: () => { void stepBackElement(); } }] : []),
     ] : context.kind === 'request' ? [{ id: 'edit', label: 'Edit request', disabled: editBusy, action: () => focusRegion(context.regionId) }] : [{ id: 'add', label: 'Add request here', action: () => { deselectElement(); add(requestAt(context.at, zoom)); } }]),
+    ...(context.kind === 'request' ? [{ id: 'whole-page', label: 'Whole page', checked: page.regions.some(item => item.id === context.regionId && isWholePage(item, page)), action: () => { const region = page.regions.find(item => item.id === context.regionId); if (region) void change(region.id, { wholePage: !isWholePage(region, page) }).catch(() => {}); } }] : []),
     ...(context.kind === 'request' && regionTargets(page.regions.find(item => item.id === context.regionId)).length ? [{ id: 'allow-target-removal', label: 'Allow AI to remove selected items', checked: !!page.regions.find(item => item.id === context.regionId)?.allowTargetRemoval, action: () => setTargetRemoval(context.regionId, !page.regions.find(item => item.id === context.regionId)?.allowTargetRemoval) }] : []),
     ...(context.kind !== 'canvas' ? [
       { id: 'copy', label: 'Copy', disabled: editBusy, shortcut: 'Ctrl/Cmd+C', action: () => { void copyLayer(); } },
@@ -1106,7 +1108,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
           {liveRequests && page.regions.map((region, index) => {
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
-            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0} shownChanged={setRequestBounds}
+            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} wholePage={isWholePage(region, page)} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0} shownChanged={setRequestBounds}
               layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => change(region.id, patch)} />;
           })}
           {element && !liveView && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
@@ -1127,6 +1129,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       </div>
     </div>
     {toolbarRect && !inlineText && !(liveView && element) && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
+      {!element && selectedRequest && <button className="ask-ai" aria-pressed={isWholePage(selectedRequest, page)} disabled={editBusy} title="Allow this request to change the page layout, CSS and JavaScript" onClick={() => { void change(selectedRequest.id, { wholePage: !isWholePage(selectedRequest, page) }).catch(() => {}); }}>Whole page</button>}
       {element && <span className="element-type-tag">{elementName(element.element.tag)}{foundUrl && !openSource && <span title={foundUrl}> · Found online{foundHost ? ` · ${foundHost}` : ''}</span>}</span>}
       {extras.length > 0 ? <>
         <span className="multi-count">{extras.length + 1} selected</span>
@@ -1176,8 +1179,8 @@ function Ruler({ axis, unit, start, length, reference, zoom, cursor, selection }
   </div>;
 }
 
-function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, shownChanged, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
-  reports: import('./types').ArchiveReport[];
+function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, shownChanged, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
+  reports: import('./types').ArchiveReport[]; wholePage: boolean;
   stale?: boolean; repickNow?: () => void; removeNow?: () => void; attach?: (files: File[], links: string[]) => void; detach?: (attachmentId: string) => void;
   region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; controlsLayer: number; select: () => void; shownChanged: (value: { id: string; rect: Rect }) => void;
   begin: (event: PointerEvent, kind: Gesture['kind'], region?: Region) => void;
@@ -1254,6 +1257,7 @@ function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, se
     </>}
     {stale && <div className="request-stale" role="alert" onPointerDown={event => event.stopPropagation()}><span>This element was removed.</span><button type="button" onClick={repickNow}>Pick again</button><button type="button" onClick={removeNow}>Remove request</button></div>}
     {!target && <span className="request-number" aria-hidden="true">{number}</span>}
+    {wholePage && <span className="request-phone-tag" title={region.wholePage ? "Whole page" : "Whole page (automatically detected). Turn off in request controls."}>Whole page</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture…' : target ? 'Describe the change…' : 'Describe what goes here…'}
       style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, outline: 'none' }} onChange={event => changeDraft(event.target.value)} onPointerDown={event => event.stopPropagation()}

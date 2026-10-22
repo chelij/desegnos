@@ -777,6 +777,7 @@ export default function App() {
     return mutate(project => {
       const area = project.pages.find(page => page.id === targetPageId)?.regions.find(region => region.id === regionId);
       if (!area) throw new Error('This area is no longer in the project.');
+      if (patch.wholePage !== undefined) return { type: 'set_region_whole_page', page_id: targetPageId, region_id: regionId, whole_page: patch.wholePage };
       const rect = typeof patch.rect === 'function' ? patch.rect(area.rect) : { ...area.rect, ...patch.rect };
       const prompt = (typeof patch.prompt === 'function' ? patch.prompt() : patch.prompt) ?? area.prompt;
       if (rect.x === area.rect.x && rect.y === area.rect.y && rect.width === area.rect.width && rect.height === area.rect.height && prompt === area.prompt) return null;

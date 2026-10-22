@@ -1802,7 +1802,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_but_cannot_submit_after_sour
     service.cancel(&project, job_id).unwrap();
     let fresh = service.prepare(&project).unwrap();
     assert_ne!(fresh.job_id, job_id);
-    assert_eq!(fresh.requirements.format_version().unwrap(), 17);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 18);
     assert!(
         fresh
             .requirements

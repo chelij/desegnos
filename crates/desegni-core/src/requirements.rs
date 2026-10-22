@@ -210,7 +210,7 @@ impl Project {
             Uuid::new_v4(),
             self.revision,
             &targets,
-            17,
+            18,
             dossier_context,
             Some(capabilities),
         )
@@ -234,7 +234,9 @@ impl Project {
             "Imported identity requires new generation requirements.",
         )?;
         let element_fix = format == crate::ELEMENT_FIX_FORMAT
-            || (format >= 12 && crate::element_fix::eligible(targets));
+            || (format >= 12
+                && crate::element_fix::eligible(targets)
+                && (format < 18 || !targets.iter().any(|(p, r)| r.is_whole_page(p))));
         // From format 14 page sources are sent without the layout whitespace added after a
         // generation; hashes and dependencies still describe the stored source.
         let compacted = (format >= 14).then(|| self.compact_pages());
@@ -473,6 +475,13 @@ impl Project {
                     value
                 }).collect());
             }
+            if format >= 18 {
+                area["scope"] = serde_json::json!(if region.is_whole_page(page) {
+                    "page"
+                } else {
+                    "area"
+                });
+            }
             md.push_str(&fenced_json(&area)?);
             md.push('\n');
         }
@@ -548,12 +557,15 @@ impl Project {
             }
         }
         md.push('\n');
+        if format >= 18 {
+            md.push_str("## Whole-page requests and precedence\n\nFor each request with scope=page, change the whole page to satisfy this request; keep content and IDs unless asked. Its complete page source is listed above. The rectangle describes page intent, not a region root or fixed output size. You may restructure that page's HTML and change its shared CSS and JavaScript. Preserve existing data-desegnos-id elements and their IDs; leave new elements without IDs. Removal needs allowTargetRemoval for selected roots (and their descendants), or an explicit removal request naming the editor ID. Protected content and accepted project decisions remain authoritative; other pages cannot change. No remote code.\n\nThese page-scope rules override the area-only restrictions above only for page-scoped requests. When page and area requests share a page, the page-scoped request owns shared CSS/JavaScript and the surrounding layout; apply the other requests inside that result using their existing local target/shape/region rules. Area requests do not independently authorize global changes. Page-scoped requests need no data-desegnos-region wrapper. Conflicted page requests grant no page-wide authority; preserve conflicted local targets/roots even when a page request is implemented.\n\n");
+        }
         md.push_str("## Acceptance and review\n\nAccount for every target. Preserve scope, accepted identity, protected content, deliberate exceptions, and the selected generation setting. Coordinate the requested content and placement intent into a complete responsive layout. Implement actual browser behavior; disclose missing configuration. Preview and exported behavior must agree. Describe component choices, proposed identity/decision changes, and concrete design criticism. Never silently apply a new project-wide rule or replace an intentional style solely to follow a convention.\n");
         let mut dependencies = BTreeMap::new();
         for (page, region) in targets {
             dependencies.insert(
                 format!("region:{}:{}", page.id, region.id),
-                digest(json(&(page.id, page.viewport, page.appearance, region))?.as_bytes()),
+                region_digest(page, region, format)?,
             );
             dependencies.insert(format!("source:{}", page.id), page_source_digest(page)?);
         }
@@ -689,7 +701,7 @@ impl Project {
 
 impl RequirementsSnapshot {
     pub fn format_version(&self) -> Result<u8> {
-        (3..=17)
+        (3..=18)
             .find(|format| {
                 self.markdown.starts_with(&format!(
                     "# Generation requirements\n\nRequirements format: {format}\n\n"
@@ -780,8 +792,7 @@ impl RequirementsSnapshot {
                 "A requested area no longer has a description. Generate new requirements.",
             )?;
             ensure(
-                *expected
-                    == digest(json(&(page.id, page.viewport, page.appearance, region))?.as_bytes()),
+                *expected == region_digest(page, region, format)?,
                 "A requested area changed. Generate new requirements.",
             )?;
             targets.push((page_id, region_id));
@@ -829,6 +840,17 @@ impl RequirementsSnapshot {
             "The requirements document or its target metadata disagrees with the project snapshot.",
         )
     }
+}
+
+fn region_digest(page: &Page, region: &Region, format: u8) -> Result<String> {
+    let mut frozen = region.clone();
+    if format < 18 {
+        frozen.whole_page = false;
+        frozen.whole_page_disabled = false;
+    }
+    Ok(digest(
+        json(&(page.id, page.viewport, page.appearance, &frozen))?.as_bytes(),
+    ))
 }
 
 fn page_source_digest(page: &Page) -> Result<String> {
@@ -1008,6 +1030,67 @@ mod transparency_tests {
                 serde_json::to_value(snapshot).unwrap(),
                 value["requirements"]
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod whole_page_legacy_tests {
+    use super::*;
+
+    #[test]
+    fn formats_3_through_17_ignore_whole_page_fields_byte_for_byte() {
+        let mut project = Project::new(
+            "Legacy scope".into(),
+            crate::Viewport {
+                width: 1440,
+                height: 900,
+            },
+            crate::Appearance::Light,
+        )
+        .unwrap();
+        project = project
+            .apply(
+                project.revision,
+                crate::Command::AddRegion {
+                    page_id: project.home_page_id,
+                    rect: crate::Rect {
+                        x: 0.,
+                        y: -8.,
+                        width: 1440.,
+                        height: 912.,
+                    },
+                },
+            )
+            .unwrap();
+        project.pages[0].regions[0].prompt = "make it grayscale, no green".into();
+        project.pages[0].content = Some(crate::SiteContent {
+            html: "<main data-desegnos-id=\"main0001\">Keep</main>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        });
+        for format in 3..=17 {
+            let render = |p: &Project| {
+                p.requirements_for(
+                    Uuid::from_u128(42),
+                    p.revision,
+                    &[(&p.pages[0], &p.pages[0].regions[0])],
+                    format,
+                    None,
+                    (format >= 9).then(GenerationCapabilities::default),
+                )
+                .unwrap()
+            };
+            let before = render(&project);
+            let mut overridden = project.clone();
+            overridden.pages[0].regions[0].whole_page = true;
+            assert_eq!(before, render(&overridden), "format {format}");
+            overridden.pages[0].regions[0].whole_page = false;
+            overridden.pages[0].regions[0].whole_page_disabled = true;
+            assert_eq!(before, render(&overridden), "format {format}");
+            before.validate_current(&project).unwrap();
+            assert!(!before.markdown.contains("Whole-page requests"));
+            assert!(!before.markdown.contains("\"scope\": \"page\""));
         }
     }
 }
