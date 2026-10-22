@@ -2743,6 +2743,7 @@ pub fn apply_generation(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn create_preview(
     window: WebviewWindow,
     workspace: WorkspaceState<'_>,

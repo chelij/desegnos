@@ -573,10 +573,10 @@ pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
     .map(String::from)
     .collect();
     fn binding(value: &Value, locals: &mut BTreeSet<String>) {
-        if value["type"] == "Identifier" {
-            if let Some(name) = value["value"].as_str() {
-                locals.insert(name.into());
-            }
+        if value["type"] == "Identifier"
+            && let Some(name) = value["value"].as_str()
+        {
+            locals.insert(name.into());
         }
         // Complex binding patterns stay outside this small override capability set.
     }
