@@ -16,7 +16,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
   const recentFixtures = [];
   await step('Start screen removes a recent project with the keyboard without opening or changing its files', async () => {
     for (const name of ['Remove this recent', 'Missing recent file', 'Missing recent folder']) {
-      await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name', name); await driver.button('Create project');
+      await driver.button('Blank website'); await driver.fill('Project name', name); await driver.button('Create project');
       const state = await waitFor(async () => { const state = await workspace(); return state.project?.name === name && state; }, 'The recent fixture was not created');
       recentFixtures.push({ name, path: state.path });
       await driver.menu(['Close project']);
@@ -72,7 +72,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
     const location = await driver.invoke('get_project_location');
     assert.match(location.path, /\/dsgn-native-[^/]+\/Documents\/Desegnos$/);
     assert.equal(location.customized, false);
-    await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name', 'Studio: draft');
+    await driver.button('Blank website'); await driver.fill('Project name', 'Studio: draft');
     assert.ok(await driver.execute(value => document.querySelector('.new-project').textContent.includes(value), location.path));
     await chooseFolder(physical, () => driver.button('Choose folder…'), parent, output, 'choose-parent');
     assert.equal((await driver.invoke('get_project_location')).path, location.path);
@@ -151,7 +151,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
     await physical.captureWindow(join(output, 'default-setting.png'));
     await driver.button('Close Project location');
     for (const number of [1, 2]) {
-      await driver.menu(['New project']); await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name', 'Repeated');
+      await driver.menu(['New project']); await driver.button('Blank website'); await driver.fill('Project name', 'Repeated');
       await driver.button('Create project');
       const name = number === 1 ? 'Repeated' : 'Repeated 2';
       const state = await savedState(driver, join(preference, name, `${name}.desegnos`));

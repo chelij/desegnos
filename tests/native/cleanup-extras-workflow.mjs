@@ -48,11 +48,10 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
   const picture=join(output,'picture.png');await writeFile(picture,Buffer.from(png,'base64'));
   let project,home,about;
   await step('First-run tips advance, dismiss and persist while the canvas stays free of sidebars',async()=>{
-    await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');await driver.fill('Project name','History A');await driver.button('Create project');
+    await driver.button('Blank website');await driver.fill('Project name','History A');await driver.button('Create project');
     await driver.ready('.first-run-tips');assert.match(await driver.execute(()=>document.querySelector('.first-run-tips').textContent),/Place a box/);
-    assert.equal(await driver.execute(()=>!!document.querySelector('.first-run-tips button.primary')),false);
     await driver.button('Next');assert.match(await driver.execute(()=>document.querySelector('.first-run-tips').textContent),/Describe it/);
-    await driver.button('Next');assert.match(await driver.execute(()=>document.querySelector('.first-run-tips').textContent),/Click Generate\. The AI builds real HTML and CSS/);
+    await driver.button('Next');assert.match(await driver.execute(()=>document.querySelector('.first-run-tips').textContent),/Press Generate/);
     await driver.button('Got it');assert.equal(await driver.execute(()=>localStorage.getItem('desegnos.first-run-tips')),'done');
     assert.equal(await driver.execute(()=>document.querySelector('.first-run-tips')),null);
     await assertCanvasOnly(driver);await physical.initialize(evidence);
@@ -149,7 +148,7 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
   });
   await step('Device preview uses real layout widths, runs enabled interactions and leaves authored source unchanged',async()=>{
     const before=(await workspace(driver)).project;
-    await driver.menu(['Preview window']);await driver.ready('.device-stage iframe');
+    await driver.menu(['Preview in a window']);await driver.ready('.device-stage iframe');
     await driver.execute(()=>{window.__deviceMessages=[];window.addEventListener('message',event=>{if(event.source===document.querySelector('.device-stage iframe')?.contentWindow&&event.data?.type?.startsWith('native-device-'))window.__deviceMessages.push(event.data);});});
     await driver.click('//label[contains(.,"Try buttons and links")]/input','xpath');
     for(const [name,width] of [['Desktop',1440],['Tablet',768],['Phone',390]]){

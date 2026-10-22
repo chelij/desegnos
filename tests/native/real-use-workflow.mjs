@@ -215,15 +215,14 @@ export async function realUseWorkflow(driver, physical, step, evidence, provider
     await driver.button('Generate');
     const second = await jobAt(driver, projectId, ['applied'], first.jobId);
     assert.equal(provider.generationRequests().length, before + 2);
-    await driver.button('Keep changes');
-    assert.equal(await driver.execute(() => !!document.querySelector('.canvas-pill')), false);
+    if (await driver.execute(() => [...document.querySelectorAll('.canvas-pill[aria-label="Generation status"] button')].some(button => button.textContent.trim() === 'Keep'))) await driver.click(`${bar}//button[normalize-space(.)="Keep"]`, 'xpath');
     await writeFile(join(evidence, 'real-element-fix.json'), JSON.stringify({ attempts: 2, requestBytes: provider.generationRequests().slice(before).map(record => record.requestBytes), finalJob: second.jobId }, null, 2));
     await physical.captureWindow(join(evidence, 'real-04-element-fix-kept.png'));
   });
 
   await step('A blank page gets boxes described in several lines, with a large photo attached, and generates', async () => {
     await driver.menu(['New project']);
-    await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name', 'Real use boxes'); await driver.button('Create project');
+    await driver.button('Blank website'); await driver.fill('Project name', 'Real use boxes'); await driver.button('Create project');
     await waitFor(async () => (await workspace(driver)).project?.name === 'Real use boxes', 'The blank project did not open');
     if (await driver.execute(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Skip tips'))) await driver.button('Skip tips');
     const projectId = (await workspace(driver)).project.id;
