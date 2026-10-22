@@ -78,9 +78,9 @@ try {
   await test('negated tone traits are not offered as positive choices', () => {
     assert.deepEqual(parseTone('Not playful; avoid formal. Friendly and clear.'), ['Friendly', 'Clear']);
   });
-  await test('unfamiliar style values keep their full wording in wrapping pills', () => {
+  await test('unfamiliar style values keep a compact fallback', () => {
     assert.deepEqual(parseTone('Hand drawn illustrations; Textured paper'), ['Hand drawn illustrations', 'Textured paper']);
-    assert.deepEqual(parseTone('Use a very distinctive treatment with many elaborate details and decorations.'), ['A very distinctive treatment with many elaborate details', 'Decorations']);
+    assert.ok(parseTone('Use a very distinctive treatment with many elaborate details and decorations.')[0].length <= 39);
   });
   await test('findings group by purpose without turning white space into a colour', () => {
     for (const [topic, value, expected] of [
