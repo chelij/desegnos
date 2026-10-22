@@ -136,7 +136,6 @@ pub(crate) fn validate(
 
 fn validate_code(code: &str, root: NodeRef<'_>) -> Result<()> {
     let wrapped = format!("(function(root, window){{ 'use strict';\n{code}\n}})");
-    crate::source::validate_behavior_javascript(&wrapped, true)?;
     let map = swc_common::SourceMap::default();
     let file = map.new_source_file(
         swc_common::FileName::Custom("region.js".into()).into(),
@@ -152,125 +151,372 @@ fn validate_code(code: &str, root: NodeRef<'_>) -> Result<()> {
     )
     .map_err(|_| crate::Error("Region script cannot be parsed.".into()))?;
     let tree = serde_json::to_value(ast).map_err(|e| crate::Error(e.to_string()))?;
-    let region_doc = crate::editing::parse(root.html().as_ref())?;
-    let region_root = crate::editing::body(&region_doc)?
-        .element_children()
-        .first()
-        .copied()
-        .ok_or_else(|| crate::Error("Region script needs an element root.".into()))?;
-    let mut pending = vec![(&tree, false)];
-    while let Some((value, called)) = pending.pop() {
+    ensure(errors.is_empty(), "This script could not be read.")?;
+    validate_script_tree(&tree)?;
+    let _ = root; // Ownership and nested-region boundaries are checked by validate above.
+
+    Ok(())
+}
+
+// This is a capability check, not a property allowlist: array/data operations and selectors
+// built from request data are ordinary DOM code. Global document/window are limited facades.
+fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+    fn binding(value: &Value, locals: &mut BTreeSet<String>) {
+        if value["type"] == "Identifier" {
+            if let Some(name) = value["value"].as_str() {
+                locals.insert(name.into());
+            }
+        } else if let Some(object) = value.as_object() {
+            for child in object.values() {
+                binding(child, locals);
+            }
+        } else if let Some(array) = value.as_array() {
+            for child in array {
+                binding(child, locals);
+            }
+        }
+    }
+    let mut locals: BTreeSet<String> = [
+        "root",
+        "window",
+        "document",
+        "Math",
+        "JSON",
+        "Number",
+        "String",
+        "Boolean",
+        "Array",
+        "Date",
+        "console",
+        "parseInt",
+        "parseFloat",
+        "isNaN",
+        "undefined",
+        "NaN",
+        "Infinity",
+        "setTimeout",
+        "clearTimeout",
+        "requestAnimationFrame",
+        "cancelAnimationFrame",
+        "localStorage",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    let mut functions = BTreeSet::new();
+    let mut data_variables = BTreeSet::new();
+    let mut pending = vec![tree];
+    while let Some(value) = pending.pop() {
         if let Some(object) = value.as_object() {
-            if value["type"] == "CallExpression" {
-                let callee = &value["callee"];
-                let method = callee["property"]["value"].as_str().unwrap_or("");
-                if matches!(method, "querySelector" | "querySelectorAll") {
-                    // Unknown/dynamic selectors require review. All accepted queries start at root;
-                    // callbacks can use the resulting descendants without a document capability.
-                    ensure(
-                        callee["object"]["type"] == "Identifier"
-                            && callee["object"]["value"] == "root",
-                        "Region script selectors must be rooted at root.",
-                    )?;
-                    let selector = value["arguments"][0]["expression"]["value"]
-                        .as_str()
-                        .ok_or_else(|| {
-                            crate::Error("Region script dynamic selector requires review.".into())
-                        })?;
-                    ensure(
-                        !selector.contains(":has(")
-                            && !region_doc.select(selector).nodes().is_empty(),
-                        "Region script selector does not resolve inside its root.",
-                    )?;
-                    for node in region_doc.select(selector).nodes() {
-                        let mut ancestor = node.parent();
-                        let mut inside = false;
-                        while let Some(node) = ancestor {
-                            if node.id == region_root.id {
-                                inside = true;
-                                break;
-                            }
-                            ancestor = node.parent();
-                        }
-                        ensure(
-                            inside,
-                            "Region script selector does not resolve to a descendant of root.",
-                        )?;
-                        let mut parent = Some(*node);
-                        while let Some(node) = parent {
-                            ensure(
-                                node.attr("data-desegnos-region").is_none_or(|id| {
-                                    root.attr("data-desegnos-region").as_deref()
-                                        == Some(id.as_ref())
-                                }),
-                                "Region script selector touches another region.",
-                            )?;
-                            parent = node.parent();
-                        }
+            match value["type"].as_str().unwrap_or("") {
+                "VariableDeclarator" => binding(&value["id"], &mut locals),
+                "FunctionDeclaration" | "FunctionExpression" => {
+                    binding(&value["identifier"], &mut locals)
+                }
+                _ => (),
+            }
+            if value["type"] == "FunctionDeclaration" {
+                if let Some(name) = value["identifier"]["value"].as_str() {
+                    functions.insert(name.to_owned());
+                }
+            }
+            if value["type"] == "VariableDeclarator"
+                && matches!(
+                    value["init"]["type"].as_str(),
+                    Some("ArrowFunctionExpression" | "FunctionExpression")
+                )
+            {
+                if let Some(name) = value["id"]["value"].as_str() {
+                    functions.insert(name.to_owned());
+                }
+            }
+            if value["type"] == "VariableDeclarator" {
+                let init = &value["init"];
+                let method = init["callee"]["property"]["value"].as_str().unwrap_or("");
+                if matches!(
+                    init["type"].as_str(),
+                    Some("ArrayExpression" | "ObjectExpression")
+                ) || init["type"] == "CallExpression"
+                    && [
+                        "querySelectorAll",
+                        "from",
+                        "map",
+                        "filter",
+                        "split",
+                        "slice",
+                    ]
+                    .contains(&method)
+                {
+                    if let Some(name) = value["id"]["value"].as_str() {
+                        data_variables.insert(name.to_owned());
                     }
                 }
             }
+            if let Some(params) = value["params"].as_array() {
+                for param in params {
+                    binding(param.get("pat").unwrap_or(param), &mut locals);
+                }
+            }
+            pending.extend(object.values());
+        } else if let Some(array) = value.as_array() {
+            pending.extend(array);
+        }
+    }
+    let forbidden = [
+        "constructor",
+        "prototype",
+        "__proto__",
+        "eval",
+        "Function",
+        "AsyncFunction",
+        "GeneratorFunction",
+        "fetch",
+        "XMLHttpRequest",
+        "WebSocket",
+        "sendBeacon",
+        "navigator",
+        "parent",
+        "opener",
+        "frames",
+        "globalThis",
+        "self",
+        "ownerDocument",
+        "defaultView",
+        "nextSibling",
+        "previousSibling",
+        "nextElementSibling",
+        "previousElementSibling",
+        "before",
+        "after",
+        "insertAdjacentElement",
+        "parentNode",
+        "parentElement",
+        "getRootNode",
+        "closest",
+        "cookie",
+        "write",
+        "writeln",
+        "innerHTML",
+        "outerHTML",
+        "insertAdjacentHTML",
+        "createContextualFragment",
+        "srcdoc",
+        "contentWindow",
+        "contentDocument",
+        "location",
+        "view",
+        "path",
+        "composedPath",
+        "createElementNS",
+        "setAttributeNS",
+        "getElementById",
+        "getElementsByTagName",
+        "getElementsByClassName",
+        "body",
+        "documentElement",
+    ];
+    let mut pending = vec![(tree, false)];
+    while let Some((value, called)) = pending.pop() {
+        if let Some(object) = value.as_object() {
             let kind = value["type"].as_str().unwrap_or("");
-            if kind == "Identifier"
-                && [
+            ensure(
+                !matches!(
+                    kind,
+                    "Import"
+                        | "ImportDeclaration"
+                        | "ThisExpression"
+                        | "WithStatement"
+                        | "Super"
+                        | "MetaProperty"
+                        | "TaggedTemplateExpression"
+                ) && (kind != "NewExpression" || value["callee"]["value"] == "Date"),
+                "This script tries to load or run unsafe code.",
+            )?;
+            if kind == "Identifier" {
+                let name = value["value"].as_str().unwrap_or("");
+                ensure(
+                    locals.contains(name) && !forbidden.contains(&name),
+                    "This script reaches outside its box.",
+                )?;
+                if [
+                    "window",
+                    "document",
+                    "localStorage",
                     "Math",
                     "JSON",
-                    "Number",
-                    "String",
-                    "Boolean",
                     "Array",
                     "Date",
                     "console",
-                    "parseInt",
-                    "parseFloat",
-                    "isNaN",
+                    "setTimeout",
                 ]
-                .contains(&value["value"].as_str().unwrap_or(""))
-            {
-                ensure(
-                    called,
-                    "Region script cannot alias or change shared native objects.",
-                )?;
+                .contains(&name)
+                {
+                    ensure(called, "This script cannot share access outside its box.")?;
+                }
             }
             if kind == "MemberExpression" {
-                let name = value["property"]["value"].as_str().unwrap_or("");
-                let native = [
-                    "Math", "JSON", "Number", "String", "Boolean", "Array", "Date", "console",
-                ]
-                .contains(&value["object"]["value"].as_str().unwrap_or(""));
-                let method = [
-                    "querySelector",
-                    "querySelectorAll",
-                    "getAttribute",
-                    "addEventListener",
-                    "removeEventListener",
-                    "appendChild",
-                    "append",
-                    "remove",
-                    "sort",
-                    "map",
-                    "forEach",
-                    "filter",
-                    "reduce",
-                    "find",
-                    "matches",
-                    "contains",
-                    "getBoundingClientRect",
-                ]
-                .contains(&name);
+                let property = &value["property"];
+                let computed = property["type"] == "Computed";
+                let name = if computed && property["expression"]["type"] == "StringLiteral" {
+                    property["expression"]["value"].as_str()
+                } else if computed {
+                    None
+                } else {
+                    property["value"].as_str()
+                }
+                .unwrap_or("");
+                let receiver = value["object"]["value"].as_str().unwrap_or("");
                 ensure(
-                    !(native || method) || called,
-                    "Region script methods must be called directly, without aliasing shared capabilities.",
+                    !forbidden.contains(&name),
+                    "This script reaches outside its box.",
                 )?;
-                pending.push((&value["object"], native && called));
-                // Member property names are not variable references.
+                if ["window", "document"].contains(&receiver) {
+                    ensure(
+                        !computed
+                            && [
+                                "addEventListener",
+                                "removeEventListener",
+                                "scrollY",
+                                "innerWidth",
+                                "innerHeight",
+                            ]
+                            .contains(&name)
+                            || !computed
+                                && receiver == "window"
+                                && [
+                                    "setTimeout",
+                                    "clearTimeout",
+                                    "requestAnimationFrame",
+                                    "cancelAnimationFrame",
+                                ]
+                                .contains(&name)
+                            || !computed
+                                && receiver == "document"
+                                && ["createElement", "createTextNode"].contains(&name),
+                        "This script reaches outside its box.",
+                    )?;
+                }
+                if receiver == "localStorage" {
+                    ensure(
+                        !computed && called && ["getItem", "setItem", "removeItem"].contains(&name),
+                        "This script tries to use storage outside its box.",
+                    )?;
+                }
+                if computed {
+                    let expr = &property["expression"];
+                    let data = value["object"]["property"]["value"]
+                        .as_str()
+                        .is_some_and(|p| ["dataset", "style"].contains(&p));
+                    // Numeric indexing and data keys are safe; unknown DOM method names are not.
+                    ensure(
+                        data || !name.is_empty()
+                            || expr["type"] == "NumericLiteral"
+                            || !called
+                                && expr["type"] == "Identifier"
+                                && data_variables.contains(receiver),
+                        "This script uses an unknown action outside its box.",
+                    )?;
+                    pending.push((expr, false));
+                }
+                pending.push((&value["object"], true));
             } else {
-                pending.extend(object.iter().map(|(key, value)| {
-                    (
-                        value,
-                        key == "callee" && matches!(kind, "CallExpression" | "NewExpression"),
-                    )
-                }));
+                if kind == "CallExpression" {
+                    let callee = &value["callee"];
+                    let name = callee["property"]["value"]
+                        .as_str()
+                        .or(callee["property"]["expression"]["value"].as_str())
+                        .or(callee["value"].as_str())
+                        .unwrap_or("");
+                    if name == "setTimeout" {
+                        ensure(
+                            matches!(
+                                value["arguments"][0]["expression"]["type"].as_str(),
+                                Some("ArrowFunctionExpression" | "FunctionExpression")
+                            ) || value["arguments"][0]["expression"]["value"]
+                                .as_str()
+                                .is_some_and(|name| functions.contains(name)),
+                            "This script tries to run text as code.",
+                        )?;
+                    }
+                    if ["getItem", "setItem", "removeItem"].contains(&name) {
+                        ensure(
+                            value["arguments"][0]["expression"]["value"]
+                                .as_str()
+                                .is_some_and(|key| key.starts_with("desegnos:") && key.len() > 9),
+                            "This script tries to use storage outside its box.",
+                        )?;
+                    }
+                    if name == "setAttribute" {
+                        ensure(
+                            value["arguments"][0]["expression"]["value"]
+                                .as_str()
+                                .is_some_and(|attribute| {
+                                    let attribute = attribute.to_ascii_lowercase();
+                                    !attribute.starts_with("on")
+                                        && !["srcdoc", "src", "href", "type", "is", "formaction"]
+                                            .contains(&attribute.as_str())
+                                }),
+                            "This script tries to add unsafe content.",
+                        )?;
+                    }
+                    if name == "createElement" {
+                        ensure(
+                            value["arguments"][0]["expression"]["value"]
+                                .as_str()
+                                .is_some_and(|tag| {
+                                    ![
+                                        "script", "iframe", "object", "embed", "link", "base",
+                                        "style", "meta",
+                                    ]
+                                    .contains(&tag.to_ascii_lowercase().as_str())
+                                }),
+                            "This script tries to add unsafe content.",
+                        )?;
+                    }
+                    if ["addEventListener", "removeEventListener"].contains(&name)
+                        && ["window", "document"]
+                            .contains(&callee["object"]["value"].as_str().unwrap_or(""))
+                    {
+                        ensure(
+                            value["arguments"][0]["expression"]["value"]
+                                .as_str()
+                                .is_some_and(|event| {
+                                    [
+                                        "scroll",
+                                        "resize",
+                                        "pointermove",
+                                        "pointerdown",
+                                        "pointerup",
+                                        "pointercancel",
+                                        "keydown",
+                                        "keyup",
+                                        "keypress",
+                                    ]
+                                    .contains(&event)
+                                }),
+                            "This script listens outside its box.",
+                        )?;
+                    }
+                }
+                pending.extend(
+                    object
+                        .iter()
+                        .filter(|(key, child)| {
+                            !["params", "id", "identifier"].contains(&key.as_str())
+                                && !(key.as_str() == "key"
+                                    && matches!(
+                                        kind,
+                                        "KeyValueProperty"
+                                            | "MethodProperty"
+                                            | "GetterProperty"
+                                            | "SetterProperty"
+                                    )
+                                    && child["type"] != "Computed")
+                        })
+                        .map(|(key, child)| (child, key == "callee")),
+                );
             }
         } else if let Some(array) = value.as_array() {
             pending.extend(array.iter().map(|v| (v, false)));
@@ -307,9 +553,13 @@ pub fn region_script_runtime(html: &str) -> Result<String> {
     get scrollY() {{ return window.scrollY; }},
     get innerWidth() {{ return window.innerWidth; }},
     get innerHeight() {{ return window.innerHeight; }},
+    setTimeout(callback, delay) {{ return typeof callback === 'function' ? setTimeout(callback, delay) : undefined; }},
+    clearTimeout(id) {{ clearTimeout(id); }},
+    requestAnimationFrame(callback) {{ return requestAnimationFrame(callback); }},
+    cancelAnimationFrame(id) {{ cancelAnimationFrame(id); }},
     addEventListener(type, callback) {{
-      if (!['scroll', 'resize', 'pointermove', 'pointerdown', 'pointerup'].includes(type)) return;
-      const handler = event => {{ try {{ callback(Object.freeze({{type, clientX:event.clientX, clientY:event.clientY, target:root, currentTarget:root}})); }} catch (error) {{ console.error('Region script event failed', error); }} }};
+      if (!['scroll', 'resize', 'pointermove', 'pointerdown', 'pointerup', 'pointercancel', 'keydown', 'keyup', 'keypress'].includes(type)) return;
+      const handler = event => {{ try {{ callback(Object.freeze({{type, clientX:event.clientX, clientY:event.clientY, key:event.key, code:event.code, preventDefault:() => event.preventDefault(), target:root, currentTarget:root}})); }} catch (error) {{ console.error('Region script event failed', error); }} }};
       let types = listeners.get(callback);
       if (!types) listeners.set(callback, types = new Map());
       if (types.has(type)) return;
@@ -321,11 +571,95 @@ pub fn region_script_runtime(html: &str) -> Result<String> {
       if (types) {{ window.removeEventListener(type, types.get(type)); types.delete(type); }}
     }}
   }});
-  try {{ (function(root, window) {{ 'use strict';
+  const scopedDocument = Object.freeze({{
+    addEventListener: scopedWindow.addEventListener,
+    removeEventListener: scopedWindow.removeEventListener,
+    createTextNode(text) {{ return document.createTextNode(text); }},
+    createElement(tag) {{
+      if (typeof tag !== 'string' || ['script', 'iframe', 'object', 'embed', 'link', 'base', 'style', 'meta'].includes(tag.toLowerCase())) throw new Error('Unsafe region element');
+      return document.createElement(tag);
+    }}
+  }});
+  try {{ (function(root, window, document, setTimeout, requestAnimationFrame) {{ 'use strict';
 {code}
-  }})(root, scopedWindow); }} catch (error) {{ console.error('Region script failed', error); }}
+  }})(root, scopedWindow, scopedDocument, scopedWindow.setTimeout, scopedWindow.requestAnimationFrame); }} catch (error) {{ console.error('Region script failed', error); }}
 }})();
 "#));
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    fn check(code: &str) -> crate::Result<()> {
+        let doc = crate::editing::parse(
+            "<section><div class='shelf'><article data-date='2026-10-22'></article></div></section>",
+        )?;
+        let root = doc.select("section").nodes()[0];
+        super::validate_code(code, root)
+    }
+
+    #[test]
+    fn region_scripts_autosort_by_date() {
+        check(r#"
+            const field = 'date';
+            const directions = { date: 1, name: -1 };
+            const direction = directions[field];
+            const selector = '.' + 'shelf';
+            const shelf = root.querySelector(selector);
+            const cards = Array.from(root.querySelectorAll('article'));
+            cards.sort((a, b) => Date.parse(b.dataset[field]) - new Date(a.getAttribute('data-date')).getTime());
+            cards.forEach(card => shelf.appendChild(card));
+            shelf.insertBefore(cards[0], cards[1]);
+            setTimeout(() => root.classList.add('sorted'), 20);
+            requestAnimationFrame(() => root.classList.remove('sorting'));
+            root.addEventListener('click', () => root.classList.toggle('active'));
+            window.addEventListener('resize', () => root.classList.add('resized'));
+            document.addEventListener('keydown', event => root.dataset.key = event.key);
+            localStorage.setItem('desegnos:shelf-order', 'date');
+            const label = document.createElement('span');
+            label.textContent = 'Sorted';
+            root.appendChild(label);
+            function finish() { root.classList.add('finished'); }
+            window.setTimeout(finish, 5);
+            window.requestAnimationFrame(finish);
+            root.style.top = root.getBoundingClientRect().top + 'px';
+            root.setAttribute('data-sorted', 'true');
+        "#).unwrap();
+    }
+
+    #[test]
+    fn region_scripts_blocks_unsafe_capabilities() {
+        for code in [
+            "eval('1')",
+            "new Function('return 1')",
+            "setTimeout('alert(1)', 1)",
+            "import('remote')",
+            "import x from 'remote'",
+            "fetch('/local')",
+            "fetch('https://remote')",
+            "new XMLHttpRequest()",
+            "new WebSocket('wss://remote')",
+            "navigator.sendBeacon('/local', 'x')",
+            "document.write('x')",
+            "document.cookie",
+            "localStorage.getItem('other')",
+            "localStorage.clear()",
+            "top.location",
+            "parent.location",
+            "opener.location",
+            "root.ownerDocument",
+            "root.parentElement",
+            "root.innerHTML = '<script>bad()</script>'",
+            "document.createElement('script')",
+            "document.createElement('iframe')",
+            "root.constructor.constructor('return window')()",
+            "window['fetch']('/local')",
+            "document.querySelector('body')",
+            "const alias = root; const key = 'parentElement'; alias[key]",
+            "root.setAttribute('onclick', 'eval(1)')",
+        ] {
+            assert!(check(code).is_err(), "accepted: {code}");
+        }
+    }
 }

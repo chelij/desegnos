@@ -12,10 +12,11 @@ export type MenuItem = {
   separator?: boolean;
 };
 
-export function MenuButton({ label, items, ariaLabel, title, className = '', showChevron = true }: {
-  label: ReactNode; items: MenuItem[]; ariaLabel?: string; title?: string; className?: string; showChevron?: boolean;
+export function MenuButton({ label, items, ariaLabel, title, className = '', showChevron = true, align = 'start', reserveSpace = false }: {
+  label: ReactNode; items: MenuItem[]; ariaLabel?: string; title?: string; className?: string; showChevron?: boolean; align?: 'start' | 'end'; reserveSpace?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [menuHeight, setMenuHeight] = useState(0);
   const [startAtEnd, setStartAtEnd] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const container = useRef<HTMLDivElement>(null);
@@ -39,7 +40,7 @@ export function MenuButton({ label, items, ariaLabel, title, className = '', sho
       window.removeEventListener('resize', resize);
     };
   }, [open]);
-  return <div className={`menu-anchor ${className}`} ref={container}>
+  return <div className={`menu-anchor ${className}`} ref={container} style={reserveSpace && open ? { marginBottom: menuHeight + 4 } : undefined}>
     <button ref={trigger} type="button" aria-label={ariaLabel} title={title} aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
       onClick={() => { setStartAtEnd(false); setOpen(value => !value); }}
       onKeyDown={event => {
@@ -47,12 +48,12 @@ export function MenuButton({ label, items, ariaLabel, title, className = '', sho
           event.preventDefault(); setStartAtEnd(event.key === 'ArrowUp'); setOpen(true);
         } else if (event.key === 'Escape' && open) { event.preventDefault(); close(); }
       }}>{label}{showChevron && <span className="menu-chevron" aria-hidden="true">⌄</span>}</button>
-    {open && <MenuLevel id={id} label={ariaLabel ?? (typeof label === 'string' ? label : 'Menu')} items={items} anchor={trigger.current} last={startAtEnd} rootClose={close} />}
+    {open && <MenuLevel id={id} label={ariaLabel ?? (typeof label === 'string' ? label : 'Menu')} items={items} anchor={trigger.current} align={align} measured={reserveSpace ? setMenuHeight : undefined} last={startAtEnd} rootClose={close} />}
   </div>;
 }
 
-function MenuLevel({ id, label, items, anchor, last = false, nested = false, back, rootClose }: {
-  id: string; label: string; items: MenuItem[]; anchor: Pick<HTMLElement, 'getBoundingClientRect'> | null; last?: boolean; nested?: boolean;
+function MenuLevel({ id, label, items, anchor, last = false, nested = false, back, rootClose, align = 'start', measured }: {
+  id: string; label: string; items: MenuItem[]; anchor: Pick<HTMLElement, 'getBoundingClientRect'> | null; last?: boolean; nested?: boolean; align?: 'start' | 'end'; measured?: (height: number) => void;
   back?: () => void; rootClose: (restore?: boolean) => void;
 }) {
   const panel = useRef<HTMLUListElement>(null);
@@ -67,8 +68,9 @@ function MenuLevel({ id, label, items, anchor, last = false, nested = false, bac
     menu.showPopover();
     const rect = anchor.getBoundingClientRect();
     const bounds = panel.current.getBoundingClientRect();
+    measured?.(bounds.height);
     const margin = 8;
-    const preferredLeft = nested ? rect.right + 2 : rect.left;
+    const preferredLeft = nested ? rect.right + 2 : align === 'end' ? rect.right - bounds.width : rect.left;
     const left = nested && preferredLeft + bounds.width > window.innerWidth - margin ? rect.left - bounds.width - 2 : preferredLeft;
     const preferredTop = nested ? rect.top : rect.bottom + 4;
     setPosition({

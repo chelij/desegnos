@@ -81,6 +81,9 @@ function candidateFor(record, endpoint, options) {
       let content = sourceFor(record, endpoint, options);
       const areas = requests.filter(value => value.pageId === pageId);
       const existing=jsonBlocks(record.markdown).find(value=>value?.pageId===pageId && value.content)?.content;
+      if (existing && (options.tourSuccess || options.tourDraft)) content = structuredClone(existing);
+      if (existing && (options.tourSuccess || options.tourDraft)) content.html = content.html.replace(/\sdata-desegnos-region="[^"]*"/g, '');
+      if (existing && options.tourDraft) content.css += '\n.copy{color:#225577}';
       if (existing && areas.every(area => area.elements?.length)) return {pageId, content: structuredClone(existing)};
       if(existing && areas.every(area=>area.elementTarget && ['h1','button'].includes(area.elementTarget.tag))) {
         content=structuredClone(existing);
@@ -91,7 +94,7 @@ function candidateFor(record, endpoint, options) {
         }
         return {pageId,content};
       }
-      if (/^Requirements format: (?:8|9|10|11|12|13|14|15|16|17)$/m.test(record.markdown)) {
+      if (/^Requirements format: (?:8|9|10|11|12|13|14|15|16|17|18)$/m.test(record.markdown)) {
         // placeAttachments: put each attached picture in its request, as the AI is asked to.
         const pictures = area => options.placeAttachments ? (area.attachments ?? []).filter(item => item.kind === 'image').map(item => `<img data-desegnos-attachment="${item.id}" src="#" width="320" height="200" alt="Attached picture">`).join('') : '';
         content.html = content.html.replace('<main', `<main data-desegnos-region="${areas[0].regionId}"`).replace('</main>', `${pictures(areas[0])}</main>`);
@@ -160,7 +163,7 @@ function readRequest(bytes, ordinal, mode, authentication) {
   const decoded = Buffer.from(encoded[1], 'base64');
   assert.equal(decoded.toString('base64'), encoded[1], 'Non-canonical Base64 file');
   const markdown = decoded.toString('utf8');
-  const webSearch = purpose === 'generation' && /^Requirements format: (?:8|9|10|11|12|13|14|15|16|17)$/m.test(markdown);
+  const webSearch = purpose === 'generation' && /^Requirements format: (?:8|9|10|11|12|13|14|15|16|17|18)$/m.test(markdown);
   assert.deepEqual(body.tools, webSearch ? [{type:'web_search'}] : []); assert.equal(body.tool_choice, webSearch ? 'auto' : 'none');
   assert.deepEqual(Buffer.from(markdown, 'utf8'), decoded, 'Requirements are not exact valid UTF-8');
   assert.deepEqual(body.text.format.schema.properties.jobId.enum, [metadata.jobId]);
@@ -299,6 +302,12 @@ export async function startProviderServer() {
         const selectedIds = new Set(source.elements.map(value => value.id));
         const id = source.outline.map(line => line.split(' ')[0]).find(id => !selectedIds.has(id));
         assert.ok(id); record.candidate.pages = []; record.candidate.needs = [id];
+      }
+      // Tour fixture: retain a real previewable result that cannot replace a scoped area.
+      if (selected.options.tourDraft && record.purpose === 'generation') {
+        record.candidate.regions[0].status = 'conflict';
+        record.candidate.regions[0].explanation = 'Which booking service should the contact form use?';
+        record.candidate.summary = 'The layout draft is ready. Please provide your booking service address.';
       }
       records.push(record);
       response.on('close', () => { record.closed = true; pending.delete(record.metadata.jobId); });

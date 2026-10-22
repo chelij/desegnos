@@ -1,6 +1,5 @@
-import { useEffect, useId, useState, type FormEvent } from 'react';
+import { useId, useState, type FormEvent } from 'react';
 import { DraftText } from './DraftText';
-import { MenuButton } from './Menus';
 import type { Brief, Command, Decision, Project, Scope } from './types';
 
 export function scopeLabel(project: Project, scope: Scope) {
@@ -29,18 +28,15 @@ function ScopeSelect({ project, value, change, disabled = false }: { project: Pr
   </select></label>;
 }
 
-export type DossierSection = 'overview' | 'brief' | 'decisions' | 'exceptions' | 'markdown';
+export type DossierSection = 'overview' | 'brief' | 'decisions' | 'exceptions';
 
-export function Notes({ project, initialSection = 'overview', apply, changeBrief, markdown, reviewGeneration }: {
-  project: Project; initialSection?: DossierSection; reviewGeneration?: () => void; apply: (command: Command) => Promise<void>; changeBrief: (patch: Partial<Brief>) => Promise<Brief>; markdown: () => Promise<string>;
+export function Notes({ project, initialSection = 'overview', apply, changeBrief, reviewGeneration }: {
+  project: Project; initialSection?: DossierSection; reviewGeneration?: () => void; apply: (command: Command) => Promise<void>; changeBrief: (patch: Partial<Brief>) => Promise<Brief>;
 }) {
   const [tab, setTab] = useState<DossierSection>(initialSection);
   const tabId = useId();
   const sections = [{ id: 'overview', label: 'Overview' }, { id: 'brief', label: 'Brief' }, { id: 'decisions', label: 'Rules' }, { id: 'exceptions', label: 'Exceptions' }] as const;
   const latest = project.latestGeneration;
-  const [source, setSource] = useState('');
-  const [sourceError, setSourceError] = useState('');
-  const [sourceLoading, setSourceLoading] = useState(false);
   const [editing, setEditing] = useState<Decision | null>(null);
   const [topic, setTopic] = useState('');
   const [value, setValue] = useState('');
@@ -50,14 +46,6 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
   const [reason, setReason] = useState('');
   const [exceptionScope, setExceptionScope] = useState<Scope>({ kind: 'project' });
   const [busy, setBusy] = useState(false);
-  useEffect(() => {
-    if (tab !== 'markdown') return;
-    let active = true;
-    setSourceLoading(true); setSourceError('');
-    void markdown().then(text => { if (active) setSource(text); }, error => { if (active) setSourceError(String(error)); })
-      .finally(() => { if (active) setSourceLoading(false); });
-    return () => { active = false; };
-  }, [tab, project.revision, markdown]);
   function resetDecision() { setEditing(null); setTopic(''); setValue(''); setScope({ kind: 'project' }); setProtectedDecision(false); }
   function editDecision(decision: Decision) {
     setEditing(decision); setTopic(decision.topic); setValue(decision.value); setScope(decision.scope); setProtectedDecision(decision.protected);
@@ -76,32 +64,19 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
   }
   return <div className="notes">
     <div className="dossier-navigation"><div className="tabs" role="tablist" aria-label="Project brief sections">
-      {sections.map((item, index) => <button key={item.id} id={`${tabId}-${item.id}`} role="tab" aria-selected={tab === item.id} aria-controls={`${tabId}-panel`} tabIndex={tab === item.id || (tab === 'markdown' && index === 0) ? 0 : -1}
+      {sections.map((item, index) => <button key={item.id} id={`${tabId}-${item.id}`} role="tab" aria-selected={tab === item.id} aria-controls={`${tabId}-panel`} tabIndex={tab === item.id ? 0 : -1}
         onClick={() => setTab(item.id)} onKeyDown={event => {
           if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
           event.preventDefault();
           const next = event.key === 'Home' ? 0 : event.key === 'End' ? sections.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + sections.length) % sections.length;
           setTab(sections[next].id); document.getElementById(`${tabId}-${sections[next].id}`)?.focus();
         }}>{item.label}</button>)}
-    </div><MenuButton label="More" ariaLabel="Project brief options" items={[{ id: 'markdown', label: 'PROJECT.md', action: () => setTab('markdown') }]} /></div>
-    <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={tab === 'markdown' ? undefined : `${tabId}-${tab}`} aria-label={tab === 'markdown' ? 'PROJECT.md' : undefined}>
+    </div></div>
+    <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={`${tabId}-${tab}`}>
     {tab === 'overview' && <div className="notes-section dossier-overview">
       {project.importedIdentity && <section aria-label="Imported brand"><h3>Imported brand</h3><p className="preserve-text">{project.importedIdentity.summary}</p><p className="field-help">From {project.importedIdentity.sourceName}</p>{project.importedIdentity.assets.length > 0 && <div className="dossier-identity-logos">{project.importedIdentity.assets.map(asset => <figure key={asset.id}><img src={asset.dataUri} alt={asset.name} /><figcaption>{asset.name}</figcaption></figure>)}</div>}</section>}
-      {latest ? <>
-        <div className="record-heading"><h3>Latest generation</h3><span className="badge">{latest.applicationStatus === 'applied' ? 'On canvas' : latest.applicationStatus === 'undone' ? 'Undone' : 'Not applied'}</span></div>
-        <p className="preserve-text">{latest.summary}</p>
-        {reviewGeneration && <button onClick={reviewGeneration}>View generation details</button>}
-        {latest.decisionProposals.length > 0 && <section className="dossier-generated"><h3>{latest.applicationStatus === 'draft' ? 'Suggested choices' : 'Generated choices'}</h3>
-          <div className="record-list">{latest.decisionProposals.map((proposal, index) => <article className="note-record" key={`${proposal.topic}:${index}`}>
-            <div className="record-heading"><h4>{proposal.topic}</h4>{latest.applicationStatus === 'applied' && latest.acceptedDecisionIndices.includes(index) && <span className="badge">Accepted</span>}</div>
-            <p className="preserve-text">{proposal.value}</p><p className="small muted">{scopeLabel(project, proposal.scope)}</p>
-            {proposal.rationale && <p className="field-help preserve-text">{proposal.rationale}</p>}
-          </article>)}</div>
-        </section>}
-        {latest.criticism.length > 0 && <section className="dossier-generated"><h3>Design feedback</h3>
-          <div className="record-list">{latest.criticism.map((item, index) => <article className="note-record" key={index}><p className="preserve-text">{item.message}</p>{item.suggestion && <p className="preserve-text">{item.suggestion}</p>}</article>)}</div>
-        </section>}
-      </> : !project.importedIdentity && <p className="empty-message">No brief yet.</p>}
+      {latest && reviewGeneration && <button className="conversation-link" onClick={reviewGeneration}>Latest generation · AI conversation →</button>}
+      {!latest && !project.importedIdentity && <p className="empty-message">No brief yet.</p>}
     </div>}
     {tab === 'brief' && <div className="notes-section brief-form">
       <DraftText label="Purpose" value={project.brief.purpose} commit={value => changeBrief({ purpose: value }).then(brief => brief.purpose)} multiline />
@@ -134,9 +109,6 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
         <ScopeSelect project={project} value={exceptionScope} change={setExceptionScope} />
         <button className="primary" disabled={busy || !rule.trim() || !reason.trim()}>Add exception</button>
       </form>
-    </div>}
-    {tab === 'markdown' && <div className="notes-section">
-      {sourceLoading ? <p role="status">Loading project document…</p> : sourceError ? <p role="alert" className="error-text">{sourceError}</p> : <pre className="markdown-source" tabIndex={0} aria-label="PROJECT.md source">{source}</pre>}
     </div>}
     </div>
   </div>;

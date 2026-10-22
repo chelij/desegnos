@@ -35,6 +35,16 @@ try {
   }
   const prepared = { jobId: 'job', status: 'prepared', attempts: [] };
 
+  await test('draft repair prepares a targeted job and starts it without exposing retained code', async () => {
+    const calls = [];
+    const render = setup(async (command, args) => { calls.push({ command, args }); return prepared; });
+    await render().repairDraft('saved-job', 'blocked-draft');
+    assert.deepEqual(calls, [
+      { command: 'prepare_generation', args: { repairJobId: 'saved-job', repairDraftId: 'blocked-draft' } },
+      { command: 'start_generation', args: { jobId: 'job' } },
+    ]);
+  });
+
   await test('Stop before queued preparation dispatch makes no native/provider request', async () => {
     const gate = deferred(); const calls = [];
     const render = setup(async (command, args, signal) => { await gate.promise; signal.throwIfAborted(); calls.push(command); return prepared; });
