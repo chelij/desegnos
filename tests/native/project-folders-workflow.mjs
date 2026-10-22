@@ -45,7 +45,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
     assert.deepEqual(await readdir(dirname(fixture.path)), files);
     await driver.menu(['New project']);
     assert.equal(await driver.execute(query => !!document.querySelector(query), selector), false, 'The New project dialog kept a stale recent entry');
-    await driver.button('Close New project');
+    await physical.keys('Escape');
   });
 
   for (const [index, kind] of [[1, 'file'], [2, 'folder']]) {
@@ -64,7 +64,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
       await waitFor(() => driver.execute(query => !document.querySelector(query) && !document.querySelector('.new-project [role="alert"]'), selector), 'The error action did not remove the missing recent');
       assert.equal((await driver.invoke('get_recent_projects')).projects.some(item => item.path === fixture.path), false);
       await assert.rejects(readFile(fixture.path), { code: 'ENOENT' });
-      if (kind === 'folder') await driver.button('Close New project');
+      if (kind === 'folder') await physical.keys('Escape');
     });
   }
 

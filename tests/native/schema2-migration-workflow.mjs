@@ -90,7 +90,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
 
   await step('The earlier dirty canvas project remains recoverable after the schema2 upgrade and save', async () => {
     await driver.menu(['Recover unsaved projects']);
-    const action = `//section[contains(@class,"workspace-surface")]//section[@aria-label=${xpathString(`Recover ${original.project.name}`)}]//button[normalize-space(.)="Recover project"]`;
+    const action = `//section[contains(@class,"workspace-surface")]//section[@aria-label=${xpathString(`Recover ${original.project.name}`)}]//button[normalize-space(.)="Recover"]`;
     assert.equal((await driver.all(action, 'xpath')).length, 1);
     await driver.click(action, 'xpath');
     const state = await waitFor(async () => {

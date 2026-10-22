@@ -296,8 +296,12 @@
 .workspace-banner .dialog-body, .workspace-banner > .surface-content { padding: 8px 12px; }
 .workspace-banner .dialog-body { padding: 0; }
 .workspace-banner p { margin: 4px 0; }
-.workspace-start { width: 100%; max-width: 640px; border-bottom: 1px solid var(--border-soft); }
+.workspace-start { width: 100%; max-width: 600px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.workspace-start > .start-section-heading { margin: 0 0 10px; font-size: 15px; }
+.workspace-start .new-project, .workspace-start .dialog-body { max-width: none; padding: 0; }
+.workspace-start .recovery-list { padding: 0; }
 .surface-host-start { width: 100%; display: flex; justify-content: center; }
+.startup { gap: 18px; }
 .surface-host-canvas { position: absolute; inset: 0; z-index: 20; display: flex; }
 .workspace-canvas { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .workspace-canvas > .surface-content { flex: 1; position: relative; }

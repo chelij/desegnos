@@ -52,8 +52,8 @@ export function SurfaceHost({ place }: { place: Place }) {
   return <div ref={ref} className={`surface-host surface-host-${place}`} />;
 }
 
-export function WorkspaceSurface({ title, close, children, place = 'panel', headerActions }: {
-  title: string; close: () => void; children: ReactNode; place?: Place; headerActions?: ReactNode;
+export function WorkspaceSurface({ title, close, children, place = 'panel', headerActions, startHeading = true }: {
+  title: string; close: () => void; children: ReactNode; place?: Place; headerActions?: ReactNode; startHeading?: boolean;
 }) {
   const context = useContext(Surfaces)!;
   const opener = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null);
@@ -69,7 +69,7 @@ export function WorkspaceSurface({ title, close, children, place = 'panel', head
   }, [context.enter, target, place]);
   if (!target) return null;
   return createPortal(<section ref={ref} tabIndex={-1} className={`workspace-surface ${place === 'panel' ? 'generation-log' : `workspace-${place}`}`} aria-label={title} onKeyDown={event => event.stopPropagation()} onPointerDown={event => event.stopPropagation()}>
-    <header><strong>{title}</strong>{headerActions}<button type="button" aria-label={`Close ${title}`} title="Close" onClick={close}>×</button></header>
+    {place === 'start' ? startHeading && <h2 className="start-section-heading">{title}</h2> : <header><strong>{title}</strong>{headerActions}<button type="button" aria-label={`Close ${title}`} title="Close" onClick={close}>×</button></header>}
     <div className="surface-content">{children}</div>
   </section>, target);
 }

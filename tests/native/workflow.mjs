@@ -221,7 +221,7 @@ export async function authorProject(driver, step, evidence) {
 export async function recoverProject(driver, expected, step) {
   await step('A fresh process restores the exact canvas project and preserves other recoveries', async () => {
     // Recovery is offered from the menu only; the start screen stays clear.
-    const action = `//section[contains(@class,"workspace-surface")]//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]//button[normalize-space(.)="Recover project"]`;
+    const action = `//section[contains(@class,"workspace-surface")]//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]//button[normalize-space(.)="Recover"]`;
     await waitFor(async () => (await driver.invoke('get_workspace')).recoveries?.some(item => item.projectId === expected.id), 'The expected named recovery was not found');
     assert.equal(await driver.execute(() => !!document.querySelector('.recovery-notice')), false, 'The start screen still shows a recovery notice');
     await driver.menu(['Recover unsaved projects']);

@@ -1,4 +1,4 @@
-.project-start-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.project-start-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; }
 .project-start-choices button { display: grid; align-content: start; gap: 6px; min-height: 132px; text-align: left; padding: 18px; font-size: 15px; border-radius: 8px; }
 .project-start-choices button:hover:not(:disabled) { border-color: var(--accent); }
 .project-start-choices .start-icon { display: grid; place-items: center; width: 34px; height: 34px; margin-bottom: 6px; border-radius: 8px; background: var(--selected); color: var(--accent); font-size: 18px; line-height: 1; }
@@ -7,7 +7,7 @@
 .new-project-intro { color: var(--muted); line-height: 1.5; }
 .recent-projects { min-width: 0; padding-top: 8px; }
 .recent-projects h2 { margin-bottom: 10px; font-size: 15px; }
-.recent-projects ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; padding: 0; margin: 0; list-style: none; }
+.recent-projects ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); gap: 8px; padding: 0; margin: 0; list-style: none; }
 .recent-projects li { position: relative; min-width: 0; }
 .recent-projects .recent-open { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; padding: 10px 42px 10px 12px; border-radius: 8px; }
 .recent-projects .recent-remove { position: absolute; top: 50%; right: 6px; transform: translateY(-50%); display: grid; place-items: center; width: 28px; min-height: 28px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: 19px; opacity: 0; }
@@ -21,7 +21,7 @@
 .recent-projects .recent-text { display: grid; gap: 3px; min-width: 0; }
 .recent-projects .recent-text strong, .recent-projects .recent-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .recent-projects .recent-text span { color: var(--muted); font-weight: 400; font-size: 11px; }
-.start-open { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); }
+.start-open { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); }
 .start-ai-note { margin: 0; font-size: 13px; color: var(--muted); }
 .link-button { min-height: auto; padding: 0; border: 0; background: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font: inherit; cursor: pointer; }
 .simple-new-project > .form-actions { justify-content: flex-end; }
@@ -88,7 +88,7 @@
 .dossier-identity-logos { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 180px)); gap: 12px; }
 .dossier-identity-logos figure { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
 .dossier-identity-logos img { width: 100%; height: 96px; object-fit: contain; background: #b1b1b1; padding: 12px; margin-bottom: 6px; }
-.startup > .simple-new-project { max-width: 600px; }
+.startup > .simple-new-project { max-width: 600px; padding: 0; }
 .project-start-choices .start-icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 .identity-address { display: flex; align-items: flex-end; gap: 8px; }
 .identity-address label { flex: 1; min-width: 0; }
@@ -117,3 +117,13 @@
 .identity-page-details label > span:last-child { min-width: 0; }
 
 .identity-read-heading h2, .identity-read-heading p { margin: 0; }
+
+.workspace-surface .recovery-list { gap: 12px; }
+.recovery-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 16px; min-width: 0; }
+.recovery-details { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.recovery-details p { margin: 3px 0 0; font-size: 12px; }
+.recovery-list .form-actions { justify-content: flex-end; margin: 0; }
+.recovery-row > .form-actions { margin-left: auto; }
+.recovery-confirmation { flex: 1 1 100%; min-width: 0; }
+.recovery-confirmation p { margin: 0 0 8px; }
+.workspace-surface:not(.workspace-start) .recovery-list { padding: 12px; }
