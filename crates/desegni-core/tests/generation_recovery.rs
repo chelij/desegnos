@@ -411,3 +411,151 @@ fn invalid_remote_code_never_survives_region_salvage() {
         2
     );
 }
+
+fn retained_css_draft() -> (Project, RequirementsSnapshot, GenerationDraft) {
+    let (project, snapshot, mut candidate) = fixture(true);
+    candidate.pages[0].content.css = "body{color:red}".into();
+    let reply = serde_json::to_string(&candidate).unwrap();
+    let (safe, events) = recover_generation_reply(&reply, &snapshot, &project).unwrap();
+    let drafts = retain_generation_drafts(&reply, &snapshot, &project, Some(&safe), &events);
+    assert!(!drafts.is_empty());
+    (project, snapshot, drafts.into_iter().next().unwrap())
+}
+
+#[test]
+fn retained_draft_preserves_exact_source_and_reloads() {
+    let (project, _, draft) = retained_css_draft();
+    let bytes = serde_json::to_vec(&draft).unwrap();
+    let loaded: GenerationDraft = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(loaded.id, draft.id);
+    assert_eq!(loaded.content, draft.content);
+    assert_eq!(loaded.code, draft.code);
+    assert!(!loaded.reason.is_empty());
+    loaded.check(&project).unwrap();
+}
+
+#[test]
+fn retained_draft_apply_is_one_durable_undo_step_and_cannot_replay() {
+    let (project, snapshot, draft) = retained_css_draft();
+    let original = project.pages[0].content.clone();
+    let mut session = Session::new(project).unwrap();
+    let mut writes = 0;
+    session
+        .apply_generation_draft(&snapshot, &draft, |_| {
+            writes += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(writes, 1);
+    assert_eq!(
+        session.project().pages[0].content.as_ref().unwrap().css,
+        "body{color:red}"
+    );
+    assert!(session.project().applied_job_ids.contains(&draft.id));
+    assert_eq!(
+        session.project().latest_generation.as_ref().unwrap().job_id,
+        draft.id
+    );
+    session
+        .apply_generation_draft(&snapshot, &draft, |_| panic!("replayed"))
+        .unwrap();
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages[0].content, original);
+    assert!(!session.can_undo());
+    assert!(session.project().applied_job_ids.contains(&draft.id));
+}
+
+#[test]
+fn blocked_draft_source_remains_copyable_and_cannot_apply() {
+    let (project, snapshot, draft) = retained_css_draft();
+    for html in [
+        "<script src='https://example.com/code.js'></script>",
+        "<button onclick=\"import('https://example.com/code.js')\">Run</button>",
+        "<p data-desegnos-id='newidentity'>Invented ID</p>",
+        "<div><span></div>",
+    ] {
+        let mut unsafe_draft = draft.clone();
+        unsafe_draft.content.as_mut().unwrap().html = html.into();
+        unsafe_draft.code = html.into();
+        assert!(unsafe_draft.check(&project).is_err(), "{html}");
+        assert!(
+            project
+                .apply_generation_draft(&snapshot, &unsafe_draft)
+                .is_err()
+        );
+        let reloaded: GenerationDraft =
+            serde_json::from_slice(&serde_json::to_vec(&unsafe_draft).unwrap()).unwrap();
+        assert_eq!(reloaded.code, html);
+    }
+}
+
+#[test]
+fn stale_draft_revalidates_current_page_and_restored_source_fits_again() {
+    let (project, snapshot, draft) = retained_css_draft();
+    let mut changed = project.clone();
+    changed.revision += 1;
+    changed.pages[0]
+        .content
+        .as_mut()
+        .unwrap()
+        .html
+        .push_str("<p>Later edit</p>");
+    assert!(
+        draft
+            .check(&changed)
+            .unwrap_err()
+            .to_string()
+            .contains("no longer fits")
+    );
+    assert!(changed.apply_generation_draft(&snapshot, &draft).is_err());
+    changed.pages[0].content = project.pages[0].content.clone();
+    draft.check(&changed).unwrap();
+    // Revision-only changes elsewhere do not make this page stale.
+    changed.apply_generation_draft(&snapshot, &draft).unwrap();
+}
+
+#[test]
+fn dismissed_draft_is_retained_but_cannot_apply() {
+    let (project, snapshot, mut draft) = retained_css_draft();
+    let code = draft.code.clone();
+    draft.dismissed = true;
+    let loaded: GenerationDraft =
+        serde_json::from_slice(&serde_json::to_vec(&draft).unwrap()).unwrap();
+    assert!(loaded.dismissed);
+    assert_eq!(loaded.code, code);
+    assert!(project.apply_generation_draft(&snapshot, &loaded).is_err());
+}
+
+#[test]
+fn protected_items_are_named_in_draft_confirmation() {
+    let (mut project, _, draft) = retained_css_draft();
+    project.decisions.push(Decision {
+        id: Uuid::new_v4(),
+        topic: "Brand heading".into(),
+        value: "Keep the title".into(),
+        scope: Scope::Project,
+        protected: true,
+        accepted_at_revision: project.revision,
+    });
+    assert!(draft.confirmation(&project).contains("Brand heading"));
+}
+
+#[test]
+fn local_dom_javascript_is_overridable_but_code_loaders_are_copy_only() {
+    let (project, snapshot, draft) = retained_css_draft();
+    let mut local = draft.clone();
+    local.content.as_mut().unwrap().javascript = "document.querySelector('button').addEventListener('click', () => { document.body.classList.toggle('open'); });".into();
+    project.apply_generation_draft(&snapshot, &local).unwrap();
+    for javascript in [
+        "import('https://example.com/code.js')",
+        "eval('alert(1)')",
+        "document.createElement('script').src='https://example.com/code.js'",
+        "document['createElement']('script')",
+        "const run = document.querySelector.constructor; run('alert(1)')()",
+    ] {
+        let mut blocked = draft.clone();
+        blocked.content.as_mut().unwrap().javascript = javascript.into();
+        assert!(blocked.check(&project).is_err(), "{javascript}");
+        assert!(project.apply_generation_draft(&snapshot, &blocked).is_err());
+    }
+}

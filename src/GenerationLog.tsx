@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
+import { GenerationDrafts } from './GenerationDrafts';
+import type { GenerationController } from './useGeneration';
 import { native } from './api';
 import type { GenerationHistory, GenerationJobView, Project } from './types';
 
-// Read-only current and locally saved conversations use the same message layout.
+// Current and locally saved conversations share the same draft review actions.
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
-export function GenerationLog({ job: currentJob, operation, error, project, close }: {
-  job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; close: () => void;
+export function GenerationLog({ job: currentJob, operation, error, project, controller, close }: {
+  job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; controller: GenerationController; close: () => void;
 }) {
   const [history, setHistory] = useState<GenerationHistory | null>(null);
   const [past, setPast] = useState<GenerationJobView | null>(null);
@@ -42,7 +44,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
   const failed = job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status);
   const raw = candidate ? JSON.stringify({ ...candidate, pages: candidate.pages.map(page => ({ pageId: page.pageId, html: `${page.content.html.length} characters`, css: `${page.content.css.length} characters`, javascript: `${page.content.javascript.length} characters` })) }, null, 2) : '';
   return <aside className="generation-log" aria-label="AI conversation">
-    <header><div><strong>AI conversation</strong><span>Read only · {past ? 'past generation' : 'this generation'}</span></div><button type="button" aria-label="Hide AI conversation" title="Hide" onClick={close}>×</button></header>
+    <header><div><strong>AI conversation</strong><span>{past ? 'past generation' : 'this generation'}</span></div><button type="button" aria-label="Hide AI conversation" title="Hide" onClick={close}>×</button></header>
     <div className="log-messages">
       {past && <button type="button" onClick={() => { historyEpoch.current += 1; setLoadingPast(false); setPast(null); }}>Back to current generation</button>}
       {!job && !operation && !error && <p className="log-empty">No conversation yet.</p>}
@@ -82,6 +84,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
         {failed && <details><summary>Show details</summary><p className="log-text">{job.status === 'cancelled' ? 'Stopped.' : job.message || 'The AI could not finish this request.'}{job.providerError?.responseFormat?.providerMessage ? ` ${job.providerError.responseFormat.providerMessage}` : ''}</p></details>}
         {failed && job.rawReply && <details><summary>Raw reply</summary><pre tabIndex={0} aria-label="Failed raw reply">{job.rawReply}</pre></details>}
         {!!job.validationEvents?.length && <details><summary>Validation notes</summary><ul>{job.validationEvents.map((event, index) => <li key={index}>{event.message}</li>)}</ul></details>}
+        <GenerationDrafts job={job} project={project} controller={controller} changed={value => { if (past) setPast(value); }} />
         {job.usage && <p className="log-meta">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
       </section>}
       <details className="log-message" aria-label="Past generations"><summary>Past generations · {history?.jobs.length ?? 0}</summary>

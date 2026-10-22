@@ -26,9 +26,9 @@ export type CanvasPreviewHandle = { measuredElements: () => ElementSelection[]; 
 const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline' https: http: data:; img-src data: https: http:; connect-src 'none'; font-src data: https: http:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
-  pageId: string; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
+  pageId: string; draftId?: string | null; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
   content?: SiteContent; onReady?: () => void; referenceHeight?: number; onHeight?: (height: number) => void;
-}>(function PreviewFrame({ pageId, jobId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady }, ref) {
+}>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady }, ref) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [extent, setExtent] = useState(referenceHeight);
   const [descriptor, setDescriptor] = useState<PreviewDescriptor | null>(null);
@@ -266,7 +266,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     let registered: string | null = null;
     picked.current = null; mounted.current = null; invalidated.current = false; setExtent(referenceHeight);
     setDescriptor(null); setError(''); setLoading(true); setObservations([]);
-    void native<PreviewDescriptor>('create_preview', { pageId, jobId, runScripts }).then(async value => {
+    void native<PreviewDescriptor>('create_preview', { pageId, jobId, draftId, runScripts }).then(async value => {
       if (!active) { void native('release_preview', { sessionId: value.sessionId }).catch(() => {}); return; }
       registered = value.sessionId;
       if (!validLocation(value, pageId)) {
@@ -282,7 +282,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       if (active) { registeredVersion.current = { pageId, revision }; setPreviewSource(value.content ?? content ?? null); setDescriptor(value); }
     }).catch(error => { if (active) { setError(error instanceof Error ? error.message : String(error)); setLoading(false); } });
     return () => { active = false; if (registered) void native('release_preview', { sessionId: registered }).catch(() => {}); };
-  }, [pageId, jobId, runScripts, revision, retry]);
+  }, [pageId, jobId, draftId, runScripts, revision, retry]);
   useEffect(() => {
     if (!descriptor || staticView) return;
     function receive(event: MessageEvent) {
@@ -346,7 +346,7 @@ export function SourceView({ content, label = 'Site' }: { content: SiteContent; 
 
 const DEVICES = [{ id: 'desktop', label: 'Desktop', width: 1440, height: 900 }, { id: 'tablet', label: 'Tablet', width: 768, height: 1024 }, { id: 'phone', label: 'Phone', width: 390, height: 844 }] as const;
 
-export function PagePreview({ page, revision, jobId = null, initialDevice, fixOnPhones }: { page: Page; revision: number; jobId?: string | null; initialDevice?: 'desktop' | 'tablet' | 'phone'; fixOnPhones?: () => void }) {
+export function PagePreview({ page, revision, jobId = null, draftId = null, initialDevice, fixOnPhones }: { page: Page; revision: number; jobId?: string | null; draftId?: string | null; initialDevice?: 'desktop' | 'tablet' | 'phone'; fixOnPhones?: () => void }) {
   const [runScripts, setRunScripts] = useState(false);
   const [deviceId, setDeviceId] = useState<typeof DEVICES[number]['id']>(initialDevice ?? (page.viewport.width < 600 ? 'phone' : 'desktop'));
   const stage = useRef<HTMLDivElement>(null);
@@ -365,11 +365,11 @@ export function PagePreview({ page, revision, jobId = null, initialDevice, fixOn
       <div className="segmented device-switch" role="group" aria-label="Preview device">{DEVICES.map(item => <button key={item.id} type="button" aria-pressed={deviceId === item.id} onClick={() => setDeviceId(item.id)}>{item.label}</button>)}</div>
       <span className="field-help">{device.width} px wide{scale < 1 ? ` · shown at ${Math.round(scale * 100)}%` : ''}</span>
       {deviceId === 'phone' && fixOnPhones && <button type="button" className="primary" title="Fix on phones" onClick={fixOnPhones}>Fix on phones</button>}
-      <label className="check-label"><input type="checkbox" checked={runScripts} onChange={event => setRunScripts(event.target.checked)} />Try buttons and links</label>
+      {!draftId && <label className="check-label"><input type="checkbox" checked={runScripts} onChange={event => setRunScripts(event.target.checked)} />Try buttons and links</label>}
     </div>
     <div ref={stage} className="device-stage" style={{ height: height * scale }}>
       <div className={`device-frame device-${device.id}`} style={{ width: device.width, '--device-height': `${height}px`, transform: `scale(${scale})`, left: Math.max(0, (available - device.width * scale) / 2) } as CSSProperties}>
-        <PreviewFrame pageId={page.id} jobId={jobId} revision={revision} runScripts={runScripts} title={`${page.name} preview on ${device.label}`} />
+        <PreviewFrame pageId={page.id} jobId={jobId} draftId={draftId} revision={revision} runScripts={runScripts} title={`${page.name} preview on ${device.label}`} />
       </div>
     </div>
   </section>;

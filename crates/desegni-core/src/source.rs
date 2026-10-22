@@ -237,9 +237,23 @@ fn validate_javascript(
     let file = map.new_source_file(FileName::Custom("page.js".into()).into(), text.to_owned());
     let mut errors = vec![];
     let result = if module {
-        swc_ecma_parser::parse_file_as_module(&file, swc_ecma_parser::Syntax::Es(Default::default()), swc_ecma_ast::EsVersion::latest(), None, &mut errors).map(|_| ())
+        swc_ecma_parser::parse_file_as_module(
+            &file,
+            swc_ecma_parser::Syntax::Es(Default::default()),
+            swc_ecma_ast::EsVersion::latest(),
+            None,
+            &mut errors,
+        )
+        .map(|_| ())
     } else {
-        swc_ecma_parser::parse_file_as_script(&file, swc_ecma_parser::Syntax::Es(Default::default()), swc_ecma_ast::EsVersion::latest(), None, &mut errors).map(|_| ())
+        swc_ecma_parser::parse_file_as_script(
+            &file,
+            swc_ecma_parser::Syntax::Es(Default::default()),
+            swc_ecma_ast::EsVersion::latest(),
+            None,
+            &mut errors,
+        )
+        .map(|_| ())
     };
     if let Err(error) = result {
         errors.push(error);
@@ -393,7 +407,9 @@ fn validate_page_source_for_website(content: &SiteContent, imported: bool) -> So
         let tag = element.tag_name.as_ref();
         if tag == "script" {
             if element.attributes.iter().any(|attr| attr.name == "src") {
-                if !imported { diagnostics.push(diagnostic(&content.html,"html",element.span,base,"Remote and imported scripts are unavailable. Keep browser JavaScript in this page.")); }
+                if !imported {
+                    diagnostics.push(diagnostic(&content.html,"html",element.span,base,"Remote and imported scripts are unavailable. Keep browser JavaScript in this page."));
+                }
             } else if !element.attributes.iter().any(|attr| {
                 attr.name == "type"
                     && attr
@@ -409,7 +425,10 @@ fn validate_page_source_for_website(content: &SiteContent, imported: bool) -> So
                             text.span.lo.0.saturating_sub(base) as usize,
                             &content.html,
                             &mut diagnostics,
-                            imported && element.attributes.iter().any(|attr| attr.name == "type" && attr.value.as_deref() == Some("module")),
+                            imported
+                                && element.attributes.iter().any(|attr| {
+                                    attr.name == "type" && attr.value.as_deref() == Some("module")
+                                }),
                         );
                     }
                 }
@@ -512,6 +531,271 @@ fn authored_span(children: &[Child]) -> Option<Span> {
         }
     }
     (start != u32::MAX).then(|| Span::new(swc_common::BytePos(start), swc_common::BytePos(end)))
+}
+
+/// Overrides accept local DOM behavior, but never code loaders or reflection. Unknown
+/// capabilities stay copy-only: arbitrary JavaScript cannot be proven safe by URL matching.
+pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
+    use serde_json::Value;
+    use std::collections::BTreeSet;
+    let map = SourceMap::default();
+    let file = map.new_source_file(FileName::Custom("draft.js".into()).into(), text.to_owned());
+    let mut errors = vec![];
+    let script = swc_ecma_parser::parse_file_as_script(
+        &file,
+        swc_ecma_parser::Syntax::Es(Default::default()),
+        swc_ecma_ast::EsVersion::latest(),
+        None,
+        &mut errors,
+    )
+    .map_err(|_| Error("The draft JavaScript cannot be parsed.".into()))?;
+    crate::ensure(errors.is_empty(), "The draft JavaScript cannot be parsed.")?;
+    let tree = serde_json::to_value(script).map_err(|e| Error(e.to_string()))?;
+    let mut locals: BTreeSet<String> = [
+        "document",
+        "console",
+        "Math",
+        "JSON",
+        "Number",
+        "String",
+        "Boolean",
+        "Array",
+        "parseInt",
+        "parseFloat",
+        "isNaN",
+        "undefined",
+        "NaN",
+        "Infinity",
+        "event",
+        "alert",
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    fn binding(value: &Value, locals: &mut BTreeSet<String>) {
+        if value["type"] == "Identifier" {
+            if let Some(name) = value["value"].as_str() {
+                locals.insert(name.into());
+            }
+        }
+        // Complex binding patterns stay outside this small override capability set.
+    }
+    let mut pending = vec![&tree];
+    while let Some(value) = pending.pop() {
+        if let Some(object) = value.as_object() {
+            match value["type"].as_str().unwrap_or("") {
+                "VariableDeclarator" => binding(&value["id"], &mut locals),
+                "FunctionDeclaration" | "FunctionExpression" => {
+                    binding(&value["identifier"], &mut locals)
+                }
+                _ => (),
+            }
+            if let Some(params) = value["params"].as_array() {
+                for param in params {
+                    binding(param.get("pat").unwrap_or(param), &mut locals);
+                }
+            }
+            pending.extend(object.values());
+        } else if let Some(values) = value.as_array() {
+            pending.extend(values);
+        }
+    }
+    let properties = [
+        "querySelector",
+        "querySelectorAll",
+        "getElementById",
+        "addEventListener",
+        "removeEventListener",
+        "preventDefault",
+        "stopPropagation",
+        "closest",
+        "matches",
+        "contains",
+        "forEach",
+        "map",
+        "filter",
+        "reduce",
+        "find",
+        "indexOf",
+        "includes",
+        "push",
+        "pop",
+        "join",
+        "split",
+        "trim",
+        "toLowerCase",
+        "toUpperCase",
+        "classList",
+        "add",
+        "remove",
+        "toggle",
+        "replace",
+        "style",
+        "dataset",
+        "hidden",
+        "disabled",
+        "checked",
+        "value",
+        "textContent",
+        "innerText",
+        "length",
+        "body",
+        "documentElement",
+        "target",
+        "currentTarget",
+        "key",
+        "code",
+        "type",
+        "detail",
+        "focus",
+        "blur",
+        "showModal",
+        "close",
+        "log",
+        "warn",
+        "error",
+        "min",
+        "max",
+        "round",
+        "floor",
+        "ceil",
+        "abs",
+        "random",
+        "parse",
+        "stringify",
+    ];
+    let mut pending = vec![&tree];
+    while let Some(value) = pending.pop() {
+        if let Some(object) = value.as_object() {
+            let kind = value["type"].as_str().unwrap_or("");
+            crate::ensure(
+                !matches!(
+                    kind,
+                    "Import"
+                        | "NewExpression"
+                        | "TaggedTemplateExpression"
+                        | "WithStatement"
+                        | "Super"
+                        | "MetaProperty"
+                ),
+                "The draft can load or construct executable code. Copy code to keep it.",
+            )?;
+            if kind == "CallExpression" {
+                let callee = &value["callee"];
+                crate::ensure(
+                    callee["type"] == "MemberExpression"
+                        || callee["type"] == "FunctionExpression"
+                        || callee["type"] == "ArrowFunctionExpression"
+                        || callee["type"] == "Identifier"
+                            && callee["value"].as_str().is_some_and(|name| {
+                                [
+                                    "Number",
+                                    "String",
+                                    "Boolean",
+                                    "parseInt",
+                                    "parseFloat",
+                                    "isNaN",
+                                    "alert",
+                                ]
+                                .contains(&name)
+                            }),
+                    "The draft calls code that requires source review. Copy code to keep it.",
+                )?;
+            }
+            if kind == "Identifier" {
+                crate::ensure(
+                    value["value"].as_str().is_some_and(|name| {
+                        locals.contains(name)
+                            && ![
+                                "eval",
+                                "Function",
+                                "AsyncFunction",
+                                "GeneratorFunction",
+                                "fetch",
+                                "XMLHttpRequest",
+                                "WebSocket",
+                                "Worker",
+                                "SharedWorker",
+                                "importScripts",
+                                "setTimeout",
+                                "setInterval",
+                                "globalThis",
+                                "window",
+                                "self",
+                                "top",
+                                "parent",
+                                "frames",
+                                "opener",
+                                "navigator",
+                                "location",
+                                "Reflect",
+                                "Proxy",
+                            ]
+                            .contains(&name)
+                    }),
+                    "The draft uses script capabilities that require source review. Copy code to keep it.",
+                )?;
+            }
+            if kind == "MemberExpression" || kind == "OptionalChainingExpression" {
+                let property = &value["property"];
+                let name = property["value"].as_str().unwrap_or("");
+                let parent = value["object"]["property"]["value"].as_str().unwrap_or("");
+                let data_property = matches!(parent, "dataset" | "style")
+                    && !matches!(name, "constructor" | "prototype" | "__proto__");
+                crate::ensure(
+                    property["type"] == "Identifier"
+                        && (properties.contains(&name) || data_property),
+                    "The draft uses dynamic or executable script access. Copy code to keep it.",
+                )?;
+                pending.extend(
+                    object
+                        .iter()
+                        .filter(|(key, _)| key.as_str() != "property")
+                        .map(|(_, v)| v),
+                );
+            } else {
+                pending.extend(object.values());
+            }
+        } else if let Some(values) = value.as_array() {
+            pending.extend(values);
+        }
+    }
+    Ok(())
+}
+
+/// Every source element must survive the browser parser with its identity intact.
+pub(crate) fn validate_draft_html(html: &str) -> crate::Result<()> {
+    let identified = assign_editor_ids(html)?;
+    let (children, diagnostics, _) = parse_html(&identified);
+    crate::ensure(
+        diagnostics.is_empty(),
+        "The draft HTML cannot round-trip through the parser.",
+    )?;
+    let doc = crate::editing::parse(&identified)?;
+    let mut pending: Vec<_> = children.iter().collect();
+    while let Some(child) = pending.pop() {
+        if let Child::Element(element) = child {
+            if let Some(id) = element
+                .attributes
+                .iter()
+                .find(|a| a.name == crate::ELEMENT_ID_ATTRIBUTE)
+                .and_then(|a| a.value.as_deref())
+            {
+                let nodes = doc.select(&format!("[{}=\"{id}\"]", crate::ELEMENT_ID_ATTRIBUTE));
+                crate::ensure(
+                    nodes.nodes().len() == 1
+                        && nodes.nodes()[0].node_name().as_deref()
+                            == Some(element.tag_name.as_ref()),
+                    "The draft HTML cannot round-trip without losing element IDs.",
+                )?;
+            }
+            pending.extend(&element.children);
+            if let Some(fragment) = &element.content {
+                pending.extend(&fragment.children);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Add identities without reformatting authored HTML or changing source coordinates elsewhere.
@@ -811,19 +1095,30 @@ pub(crate) fn strip_editor_ids(html: &str) -> String {
     let mut pending: Vec<_> = children.iter().collect();
     let mut ranges = vec![];
     while let Some(child) = pending.pop() {
-        let Child::Element(element) = child else { continue; };
+        let Child::Element(element) = child else {
+            continue;
+        };
         pending.extend(&element.children);
-        if let Some(fragment) = &element.content { pending.extend(&fragment.children); }
+        if let Some(fragment) = &element.content {
+            pending.extend(&fragment.children);
+        }
         for attr in &element.attributes {
             if attr.name.as_ref() == crate::ELEMENT_ID_ATTRIBUTE && !attr.span.is_dummy() {
                 let mut start = attr.span.lo.0.saturating_sub(base) as usize;
-                if start > 0 && html.as_bytes()[start - 1] == b' ' { start -= 1; }
+                if start > 0 && html.as_bytes()[start - 1] == b' ' {
+                    start -= 1;
+                }
                 ranges.push((start, attr.span.hi.0.saturating_sub(base) as usize));
             }
         }
     }
-    ranges.sort_unstable(); ranges.dedup();
+    ranges.sort_unstable();
+    ranges.dedup();
     let mut result = html.to_owned();
-    for (start, end) in ranges.into_iter().rev() { if result.get(start..end).is_some() { result.replace_range(start..end, ""); } }
+    for (start, end) in ranges.into_iter().rev() {
+        if result.get(start..end).is_some() {
+            result.replace_range(start..end, "");
+        }
+    }
     result
 }

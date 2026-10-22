@@ -454,12 +454,16 @@ pub(crate) fn site_files(
         if name.split('/').any(|part| {
             part.starts_with('.') || matches!(part, "node_modules" | "target" | "vendor")
         }) {
-            if skipped.len() < 256 { skipped.push(name.clone()); }
+            if skipped.len() < 256 {
+                skipped.push(name.clone());
+            }
             continue;
         }
         let metadata = fs::symlink_metadata(&path).map_err(io)?;
         if metadata.file_type().is_symlink() {
-            if skipped.len() < 256 { skipped.push(name.clone()); }
+            if skipped.len() < 256 {
+                skipped.push(name.clone());
+            }
             continue;
         }
         if metadata.is_dir() {
@@ -474,12 +478,33 @@ pub(crate) fn site_files(
                 .unwrap_or("")
                 .to_ascii_lowercase();
             if ![
-                "html", "htm", "css", "js", "mjs", "png", "jpg", "jpeg", "webp", "gif", "svg",
-                "ico", "avif", "woff", "woff2", "ttf", "otf", "json", "wasm", "xml", "webmanifest",
+                "html",
+                "htm",
+                "css",
+                "js",
+                "mjs",
+                "png",
+                "jpg",
+                "jpeg",
+                "webp",
+                "gif",
+                "svg",
+                "ico",
+                "avif",
+                "woff",
+                "woff2",
+                "ttf",
+                "otf",
+                "json",
+                "wasm",
+                "xml",
+                "webmanifest",
             ]
             .contains(&extension.as_str())
             {
-                if skipped.len() < 256 { skipped.push(name.clone()); }
+                if skipped.len() < 256 {
+                    skipped.push(name.clone());
+                }
                 continue;
             }
             if !valid_site_path(&name) {
@@ -543,7 +568,12 @@ pub fn import_website_folder(folder: &Path) -> Result<ProjectFile> {
     );
     let WebsiteSnapshot { files, skipped } = read_website_files(&root)?;
     let mut project = desegni_core::import_website_files(&name, &files)?;
-    project.website.as_mut().expect("imported site").skipped.extend(skipped);
+    project
+        .website
+        .as_mut()
+        .expect("imported site")
+        .skipped
+        .extend(skipped);
     let hashes: BTreeMap<_, _> = files.iter().map(|(p, b)| (p.clone(), digest(b))).collect();
     let backup = root.join(".desegnos-original");
     if fs::symlink_metadata(&backup).is_ok() {

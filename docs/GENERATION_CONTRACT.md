@@ -242,3 +242,37 @@ The job record keeps validation kinds, dispositions and readable reasons. The se
 content, IDs or network telemetry. Formats 3–16 keep their frozen requirements and behavior.
 The AI conversation shows the correction exchange and validation notes; partial application
 reports “Applied N of M areas” and keeps each unresolved area's reason visible.
+
+## Retained unapplied output
+
+Format 17 keeps rejected page output from both the initial answer and repair in
+`GenerationJobView.drafts`, before recovery rewrites it. A page draft includes its
+area IDs, exact HTML/CSS/JavaScript strings (or element replacement fragments) in
+`code`, an optional reconstructed page, validator reasons, base source digest,
+and applied/dismissed flags. Unparseable answers remain copyable as exact text.
+Each provider round is bounded by the existing 8 MiB response envelope; optional
+reconstruction is bounded to another 4 MiB per round. The existing 20-attempt
+limit bounds retained history; job files have a 768 MiB ceiling. Reconstruction
+beyond its bound is copy-only; retained code is never truncated. Retry and Dismiss
+retain earlier code in the job file. Past generations exposes the same draft actions.
+
+`generation_draft({jobId, draftId, action: 'inspect' | 'apply' | 'dismiss',
+confirmedRevision?: number})` returns the current native eligibility, confirmation,
+job and optional workspace. Applying requires the revision reviewed in the inline
+confirmation, rechecks the current source, and commits through the durable Session
+history as one Undo step. Draft IDs are consumed like generation IDs, including
+through Undo and restart. Protected decision names appear in the confirmation.
+A retained page replaces that whole page, including shared code; the confirmation
+says so. Later page edits make that replacement stale; unchanged pages remain
+eligible across unrelated revisions. Normal safe application updates draft base
+digests to the resulting page. Stale drafts stay previewable and copyable.
+
+Source syntax, parser identity round-trip, duplicate/invented editor IDs, invalid
+area IDs and external scripts cannot be overridden. Changed JavaScript, embedded
+scripts and handlers pass a conservative parsed capability gate for local DOM
+behavior; dynamic code loading, reflection, computed access and unknown script
+capabilities remain copy-only. This deliberately favors retaining code over
+claiming arbitrary JavaScript is safe. Broaden the supported capability set only
+with corresponding security cases. `create_preview` accepts optional `draftId`,
+uses immutable retained source in the existing preview, and disables draft scripts.
+Security-blocked source has Copy code and Dismiss only.

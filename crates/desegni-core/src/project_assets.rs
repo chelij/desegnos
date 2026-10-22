@@ -82,7 +82,10 @@ impl Project {
         // Pictures no page uses any more are dropped; Undo keeps its own copy of the store.
         let mut used = referenced_ids(&pages);
         if let Some(site) = &self.website {
-            used.extend(site.files.values().filter_map(|v| v.strip_prefix(PROJECT_ASSET_SCHEME).and_then(|id| Uuid::parse_str(id).ok())));
+            used.extend(site.files.values().filter_map(|v| {
+                v.strip_prefix(PROJECT_ASSET_SCHEME)
+                    .and_then(|id| Uuid::parse_str(id).ok())
+            }));
         }
         pictures.retain(|id, _| used.contains(id));
         validate_pictures(&pictures)?;

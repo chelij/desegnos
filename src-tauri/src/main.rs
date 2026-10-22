@@ -21,8 +21,8 @@ mod recent;
 mod request_zip;
 mod system_open;
 mod usage;
-mod workspace;
 mod website_import;
+mod workspace;
 
 use generation::*;
 use preview_health::{editor_heartbeat, reload_workspace};
@@ -76,7 +76,9 @@ fn main() {
             ));
             app.manage(std::sync::Mutex::new(preview::PreviewRegistry::default()));
             app.manage(preview_health::PreviewHealth::default());
-            app.manage(std::sync::Mutex::new(website_import::WebsiteImports::default()));
+            app.manage(std::sync::Mutex::new(
+                website_import::WebsiteImports::default(),
+            ));
             #[cfg(target_os = "linux")]
             if let Some(window) = app.get_webview_window("editor") {
                 preview::configure_window(&window)?;
@@ -169,6 +171,7 @@ fn main() {
             cancel_generation,
             discard_generation,
             apply_generation,
+            generation_draft,
             create_preview,
             release_preview,
             editor_heartbeat,

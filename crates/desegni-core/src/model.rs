@@ -577,7 +577,9 @@ impl Project {
             )?;
         }
         self.validate_picture_store()?;
-        if let Some(site) = &self.website { site.validate(self)?; }
+        if let Some(site) = &self.website {
+            site.validate(self)?;
+        }
         let mut paths = BTreeSet::new();
         let mut source_bytes = 0_usize;
         for page in &self.pages {
