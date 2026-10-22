@@ -27,18 +27,101 @@ fn canonical(node: NodeRef<'_>) -> serde_json::Value {
     serde_json::json!({"name":node.node_name().map(|value|value.to_string()),"attrs":attrs,"children":children})
 }
 
-fn empty_layout(node: NodeRef<'_>) -> bool {
-    if node.is_comment() || node.is_text() && node.text().trim().is_empty() {
-        return true;
+// Keep diagnostics bounded and omit attribute values and page text from logs.
+fn outside_area(node: NodeRef<'_>, attribute: Option<&str>) -> String {
+    let name = node.node_name().unwrap_or_default();
+    let detail = match attribute {
+        Some(attribute) => format!("{name} {attribute}"),
+        None => name.to_string(),
+    };
+    let mut short: String = detail.chars().take(96).collect();
+    if detail.chars().count() > 96 {
+        short.push('…');
     }
-    matches!(
-        node.node_name().as_deref(),
-        Some("body" | "div" | "main" | "section")
-    ) && !node.attrs().iter().any(|attr| {
+    format!(
+        "The AI added or changed <{short}> outside the requested areas. Your page is unchanged."
+    )
+}
+
+fn empty_layout(node: NodeRef<'_>) -> Result<()> {
+    if node.is_comment() || node.is_text() && node.text().trim().is_empty() {
+        return Ok(());
+    }
+    ensure(
+        matches!(
+            node.node_name().as_deref(),
+            Some("body" | "div" | "main" | "section")
+        ),
+        outside_area(node, None),
+    )?;
+    for attr in node.attrs() {
         let name = attr.name.local.as_ref();
-        name.starts_with("on")
-            || matches!(name, "role" | "tabindex" | "contenteditable" | "aria-label")
-    }) && node.children().into_iter().all(empty_layout)
+        let allowed = attr.name.ns.as_ref().is_empty()
+            && (matches!(
+                name,
+                "class" | "id" | "style" | "aria-label" | "aria-labelledby"
+            ) || name.starts_with("data-") && !name.starts_with("data-desegnos")
+                || name == "role"
+                    && matches!(
+                        attr.value.trim(),
+                        "main" | "region" | "presentation" | "none" | "group"
+                    ));
+        ensure(allowed, outside_area(node, Some(name)))?;
+    }
+    for child in node.children() {
+        ensure(
+            !child.is_text() || child.text().trim().is_empty(),
+            outside_area(node, Some("text")),
+        )?;
+        empty_layout(child)?;
+    }
+    Ok(())
+}
+
+/// Find the first canonical difference, including removed nodes and attributes.
+fn outside_difference(before: NodeRef<'_>, after: NodeRef<'_>) -> Option<String> {
+    if canonical(before) == canonical(after) {
+        return None;
+    }
+    if before.node_name() != after.node_name() || before.is_text() || after.is_text() {
+        return Some(outside_area(after, None));
+    }
+    for (node, other) in [(after, before), (before, after)] {
+        for attr in node.attrs() {
+            if !other
+                .attrs()
+                .iter()
+                .any(|old| old.name == attr.name && old.value == attr.value)
+            {
+                return Some(outside_area(after, Some(attr.name.local.as_ref())));
+            }
+        }
+    }
+    fn children(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
+        node.children()
+            .into_iter()
+            .filter(|child| !child.is_comment())
+            .collect()
+    }
+    let old = children(before);
+    let new = children(after);
+    for index in 0..old.len().max(new.len()) {
+        match (old.get(index), new.get(index)) {
+            (Some(old), Some(new)) if old.is_text() || new.is_text() => {
+                if canonical(*old) != canonical(*new) {
+                    return Some(outside_area(after, Some("text")));
+                }
+            }
+            (Some(old), Some(new)) => {
+                if let Some(message) = outside_difference(*old, *new) {
+                    return Some(message);
+                }
+            }
+            (_, Some(node)) | (Some(node), _) => return Some(outside_area(*node, None)),
+            _ => {}
+        }
+    }
+    Some(outside_area(after, None))
 }
 
 impl GenerationCandidate {
@@ -285,7 +368,7 @@ impl GenerationCandidate {
                 }
                 ensure(
                     id.is_some_and(|id| requested.contains(&id) && found.insert(id)),
-                    "The AI added content outside the requested areas. Your page is unchanged.",
+                    outside_area(*node, Some(MARKER)),
                 )?;
             }
             ensure(
@@ -313,15 +396,12 @@ impl GenerationCandidate {
                 for node in nodes {
                     node.remove_from_parent();
                 }
-                ensure(
-                    canonical(crate::editing::body(&before)?) == canonical(remaining),
-                    "The AI changed content outside the selected elements. Your page is unchanged.",
-                )?;
+                if let Some(message) = outside_difference(crate::editing::body(&before)?, remaining)
+                {
+                    return Err(crate::Error(message));
+                }
             } else {
-                ensure(
-                    empty_layout(remaining),
-                    "The AI added content outside the requested areas. Your page is unchanged.",
-                )?;
+                empty_layout(remaining)?;
             }
         }
         Ok(())
@@ -675,10 +755,10 @@ fn validate_stable_scope(
     for root in area_roots {
         root.remove_from_parent();
     }
-    ensure(
-        canonical(before.root()) == canonical(after.root()),
-        "The AI changed content outside the selected elements. Your page is unchanged.",
-    )
+    if let Some(message) = outside_difference(before.root(), after.root()) {
+        return Err(crate::Error(message));
+    }
+    Ok(())
 }
 
 /// Small-screen media queries only: every width limit is at most 820 px and none sets a minimum
@@ -898,5 +978,146 @@ mod phone_tests {
         let wide =
             "body{color:red}h1{font-size:40px}@media (max-width: 1400px){h1{font-size:28px}}";
         assert_ne!(desktop_css(before).unwrap(), desktop_css(wide).unwrap());
+    }
+}
+
+#[cfg(test)]
+mod wrapper_tests {
+    use super::*;
+
+    fn fixture(
+        wrapper: &str,
+        tag: &str,
+        text: &str,
+    ) -> (Project, RequirementsSnapshot, GenerationCandidate) {
+        let saved: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/requirements8.json")).unwrap();
+        let mut project: Project = serde_json::from_value(saved["project"].clone()).unwrap();
+        project.schema_version = crate::SCHEMA_VERSION;
+        project.pages[0].content = None;
+        let template = project.pages[0].regions[0].clone();
+        project.pages[0].regions = (0..5)
+            .map(|_| {
+                let mut region = template.clone();
+                region.id = Uuid::new_v4();
+                region
+            })
+            .collect();
+        let snapshot = project.prepare_requirements().unwrap();
+        let roots: String = project.pages[0]
+            .regions
+            .iter()
+            .map(|region| {
+                format!(
+                    "<section data-desegnos-region='{}'>Requested content</section>",
+                    region.id
+                )
+            })
+            .collect();
+        let candidate = GenerationCandidate {
+            job_id: snapshot.job_id,
+            requirements_sha256: snapshot.sha256.clone(),
+            summary: "Library".into(),
+            regions: project.pages[0]
+                .regions
+                .iter()
+                .map(|region| crate::RegionOutcome {
+                    region_id: region.id,
+                    status: crate::RegionStatus::Implemented,
+                    explanation: "Implemented".into(),
+                })
+                .collect(),
+            pages: vec![crate::GeneratedPage {
+                page_id: project.home_page_id,
+                content: crate::SiteContent {
+                    html: format!("<{tag} {wrapper}>{text}{roots}</{tag}>"),
+                    css: String::new(),
+                    javascript: String::new(),
+                },
+            }],
+            component_requests: vec![],
+            decision_proposals: vec![],
+            criticism: vec![],
+        };
+        (project, snapshot, candidate)
+    }
+
+    #[test]
+    fn five_roots_accept_accessible_layout_wrapper() {
+        for role in ["main", "region", "presentation", "none", "group"] {
+            let attrs = format!(
+                "class='library-canvas' id='library' style='display:grid' data-library='books' aria-label=\"Cheli's Library\" aria-labelledby='title' role='{role}'"
+            );
+            let (project, snapshot, candidate) = fixture(&attrs, "main", "");
+            candidate.validate(&snapshot, &project).unwrap();
+            assert!(
+                snapshot
+                    .markdown
+                    .contains("region roots may be wrapped only in plain body/div/main/section")
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_wrappers_name_the_offending_element_and_attribute() {
+        for (attrs, tag, text, expected) in [
+            ("", "main", "Unrequested text", "<main text>"),
+            ("onclick='alert(1)'", "main", "", "<main onclick>"),
+            ("tabindex='0'", "main", "", "<main tabindex>"),
+            (
+                "contenteditable='true'",
+                "main",
+                "",
+                "<main contenteditable>",
+            ),
+            ("role='button'", "main", "", "<main role>"),
+            (
+                "data-desegnos-found='unrequested'",
+                "main",
+                "",
+                "<main data-desegnos-found>",
+            ),
+            ("title='Unrequested'", "main", "", "<main title>"),
+            ("", "nav", "", "<nav>"),
+            ("", "header", "", "<header>"),
+            ("", "footer", "", "<footer>"),
+            ("", "article", "", "<article>"),
+        ] {
+            let (project, snapshot, candidate) = fixture(attrs, tag, text);
+            let error = candidate.validate_scope(&snapshot, &project).unwrap_err();
+            assert!(error.0.contains(expected), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn existing_content_diagnostics_cover_changes_additions_and_removals() {
+        for (before, after, expected) in [
+            (
+                "<main></main>",
+                "<main aria-label='Changed'></main>",
+                "<main aria-label>",
+            ),
+            ("<main title='Old'></main>", "<main></main>", "<main title>"),
+            ("<main></main>", "<main><nav></nav></main>", "<nav>"),
+            ("<main><nav></nav></main>", "<main></main>", "<nav>"),
+            ("<main>Old</main>", "<main>Changed</main>", "<main text>"),
+        ] {
+            let before = crate::editing::parse(before).unwrap();
+            let after = crate::editing::parse(after).unwrap();
+            let message = outside_difference(before.root(), after.root()).unwrap();
+            assert!(message.contains(expected), "{message}");
+        }
+    }
+
+    #[test]
+    fn diagnostics_truncate_untrusted_names_and_omit_values() {
+        let attribute = format!("data-{}", "x".repeat(200));
+        let document =
+            crate::editing::parse(&format!("<main {attribute}='secret'></main>")).unwrap();
+        let node = document.select("main").nodes()[0];
+        let message = outside_area(node, Some(&attribute));
+        assert!(message.contains('…'));
+        assert!(!message.contains("secret"));
+        assert!(message.chars().count() < 200);
     }
 }
