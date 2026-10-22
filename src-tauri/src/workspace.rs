@@ -1774,7 +1774,7 @@ pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
 #[serde(untagged)]
 pub enum OpenProjectResult {
     Workspace(Box<WorkspaceView>),
-    Website { website: crate::website_import::FolderSelection },
+    Website { website: Box<crate::website_import::FolderSelection> },
 }
 #[tauri::command]
 pub async fn edit_website_folder(app: AppHandle, generation: State<'_, Mutex<crate::generation::GenerationService>>, imports: State<'_, Mutex<crate::website_import::WebsiteImports>>, folder_id: Uuid) -> NativeResult<WorkspaceView> {
@@ -1843,7 +1843,7 @@ pub async fn open_project(
     }
     if path.is_dir() && desegni_storage::project_in_folder(&path).map_err(message)?.is_none() {
         let website = imports.lock().map_err(message)?.select(path)?;
-        return Ok(Some(OpenProjectResult::Website { website }));
+        return Ok(Some(OpenProjectResult::Website { website: Box::new(website) }));
     }
     state.open_file_tab(&path)?;
     Ok(Some(OpenProjectResult::Workspace(Box::new(state.view()))))
