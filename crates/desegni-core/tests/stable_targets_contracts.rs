@@ -929,3 +929,25 @@ fn requests_reject_new_attachments_beyond_the_count_cap() {
             .contains("16 attachments")
     );
 }
+
+#[test]
+fn targeted_generation_names_content_changed_outside_selected_elements() {
+    let p = project();
+    let selected = target(&p, "article:nth-of-type(1)");
+    let p = describe(p, std::slice::from_ref(&selected));
+    let snapshot = p.prepare_requirements().unwrap();
+    let html = &p.pages[0].content.as_ref().unwrap().html;
+    for (altered, expected) in [
+        (
+            html.replace("<p", "<p aria-label='Changed'"),
+            "<p aria-label>",
+        ),
+        (html.replace("Unrelated", "Changed outside"), "<p text>"),
+        (format!("{html}<nav></nav>"), "<nav>"),
+    ] {
+        let error = candidate(&p, &snapshot, altered)
+            .validate(&snapshot, &p)
+            .unwrap_err();
+        assert!(error.0.contains(expected), "{error:?}");
+    }
+}
