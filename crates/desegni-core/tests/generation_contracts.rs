@@ -73,6 +73,11 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
         "A native disclosure explaining how the counter works.",
     );
     project.pages[0].content = Some(source("Existing home"));
+    let first_area = project.pages[0].regions[0].id;
+    let second_area = project.pages[0].regions[1].id;
+    project.pages[0].content.as_mut().unwrap().html = format!(
+        "<main><button id=\"counter\" data-desegnos-region=\"{first_area}\">Existing home</button><p data-desegnos-region=\"{second_area}\">Existing explanation</p></main>"
+    );
     project.pages[2].content = Some(source("PRIVATE UNREQUESTED SOURCE"));
     project.extensions.insert(
         "org.example.preserved".into(),
@@ -101,7 +106,12 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
         pages: vec![
             GeneratedPage {
                 page_id: home,
-                content: source("Count"),
+                content: SiteContent {
+                    html: format!(
+                        "<main><button id=\"counter\" data-desegnos-region=\"{first_area}\">Count</button><p data-desegnos-region=\"{second_area}\">Click to change the label.</p></main>"
+                    ),
+                    ..source("Count")
+                },
             },
             GeneratedPage {
                 page_id: details,
@@ -152,6 +162,12 @@ fn drafts_allow_explicit_placeholders_and_portable_image_downloads_without_packa
     assert!(snapshot.markdown.contains("data-desegnos-download"));
     assert!(snapshot.markdown.contains("\"packageInstalls\": false"));
     candidate.pages[0].content.html = "<a href='https://example.com/link'>Source</a><img id='portable' DATA-DESEGNOS-DOWNLOAD src='https://example.com/pixel.png' alt='Sample garden'><img id='missing' data-desegnos-download src='https://example.com/missing.png' alt='Sample workshop' srcset='https://example.com/bypass.png 2x'>".into();
+    candidate.pages[0].content.html = format!(
+        "<main><section data-desegnos-region=\"{}\">{}</section><p data-desegnos-region=\"{}\">Click to change the label.</p></main>",
+        project.pages[0].regions[0].id,
+        candidate.pages[0].content.html,
+        project.pages[0].regions[1].id
+    );
     assert_eq!(candidate.image_download_urls().unwrap().len(), 2);
     let pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=";
     let missing = candidate

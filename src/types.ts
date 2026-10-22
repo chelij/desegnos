@@ -83,7 +83,7 @@ export type GenerationCandidate = {
   decisionProposals: DecisionProposal[];
   criticism: DesignCriticism[];
 };
-export type GenerationJobView = { jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; context?: RequirementsSnapshot | null; rawReply?: string | null; createdAt?: string | null; areas: { pageId: string; regionId: string; rect: Rect; shape?: RegionShape }[]; generationMode: GenerationMode;
+export type GenerationJobView = { jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; context?: RequirementsSnapshot | null; earlierContexts?: RequirementsSnapshot[]; firstExchange?: { summary: string; regions: GenerationCandidate['regions']; usage: TokenUsage | null } | null; repairRounds?: number; repairAreaCount?: number; validationEvents?: { kind: string; disposition: string; regionId: string | null; message: string }[]; rawReply?: string | null; createdAt?: string | null; areas: { pageId: string; regionId: string; rect: Rect; shape?: RegionShape }[]; generationMode: GenerationMode;
   settings: ProviderSettings; status: GenerationStatus; estimateUsd: number; receivedBytes: number; message: string; candidate: GenerationCandidate | null;
   usage: TokenUsage | null; attempts: GenerationAttempt[]; acceptedDecisionIndices: number[]; recommendedDecisionIndices: number[];
   provider?: ProviderId; authentication: AuthenticationMethod; chatgptAccountId: string | null; failureKind: string | null; dossierError: string | null; providerError: ProviderError | null };

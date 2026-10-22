@@ -214,3 +214,31 @@ This first generation gate stores and renders native HTML/CSS/browser-JavaScript
 Requirements format 16 adds imported page context. It is selected only when the project has reviewed source-page assignments. The catalogue nests photos and work under actual affected page IDs and current routes, while identity assets and accepted brand decisions remain project-wide. Photo bytes still travel through verified `desegnos-asset:` references. Format recognition accepts 16; renderers for formats 3–15 are unchanged, including their byte/hash contracts.
 
 Image generation requires an enabled setting and a fresh accepted account probe (models discovery plus a streamed Responses image tool declaration with tool_choice none); unsupported runtime image calls disable that account’s images and finish with placeholders and one notice.
+
+## Validation recovery (format 17)
+
+Recovery runs before application, against the frozen project, in three layers:
+
+1. Normalise deterministic omissions before validation. Empty or missing HTML, CSS or
+   JavaScript preserves nonempty source. Omitted existing pages and areas preserve source.
+   Structural HTML comparison parses attributes (so order, quotes and void-element spelling
+   do not matter); existing conservative compaction ignores only non-rendering whitespace.
+   Every preservation is recorded in the local job's validation notes.
+2. Salvage independently. Reconstruct a failed page from original source and transplant one
+   requested root at a time, validating every intermediate result. Failed areas become open
+   conflicts with the validator's reason. Shared scripts stay unchanged. CSS is parsed with
+   lightningcss; original rules stay intact and additions use the element-fix selector policy,
+   accepting an implemented region root or IDs inside it, optional supported states and media
+   queries. Unscoped additions are dropped and recorded. No unvalidated page can apply.
+3. Repair once (`MAX_VALIDATION_REPAIR_ROUNDS = 1`). Freeze precise failures in CONTEXT.md,
+   request corrections from the same provider/model and validate again through layers 1–2.
+   Preserve already accepted areas while merging corrections. Usage includes both exchanges,
+   including failed repair usage. Stop cancels both; provider/network failures do not start
+   repair. The combined conservative estimates must fit the spending allowance. An earlier
+   `needs` context exchange is archived before freezing the repair context. Unresolved areas stay open.
+
+The job record keeps validation kinds, dispositions and readable reasons. The separate
+`validation-counts.json` contains only kind/disposition keys and saturated counts: no page
+content, IDs or network telemetry. Formats 3–16 keep their frozen requirements and behavior.
+The AI conversation shows the correction exchange and validation notes; partial application
+reports “Applied N of M areas” and keeps each unresolved area's reason visible.

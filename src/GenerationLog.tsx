@@ -58,7 +58,12 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
           <details><summary>Full instructions sent</summary><pre tabIndex={0} aria-label="Instructions sent">{job.requirements.markdown}</pre></details>
         </> : <p>{operation}</p>}
       </section>}
-      {job?.context && <>
+      {job?.earlierContexts?.map((context, index) => <section key={index} className="log-message from-you"><p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p><details><summary>Requested context sent</summary><pre tabIndex={0}>{context.markdown}</pre></details></section>)}
+      {job?.context && (job.repairRounds ?? 0) > 0 && <>
+        <section className="log-message from-ai" aria-label="First AI reply"><p className="log-who">{SERVICE[job.provider ?? 'openai']}</p><p>{job.firstExchange?.summary}</p><ul>{job.firstExchange?.regions.map(region => <li key={region.regionId}>{region.status === 'implemented' ? 'Done' : 'Needs correction'} · {region.explanation}</li>)}</ul>{job.firstExchange?.usage && <p className="log-meta">{job.firstExchange.usage.inputTokens.toLocaleString()} tokens sent · {job.firstExchange.usage.outputTokens.toLocaleString()} received</p>}{job.rawReply && <details><summary>Original reply</summary><pre tabIndex={0}>{job.rawReply}</pre></details>}</section>
+        <section className="log-message from-you" aria-label="Repair sent to the AI"><p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p><p>Asked the AI to fix {job.repairAreaCount ?? job.areas.length} areas</p><details><summary>Repair instructions sent</summary><pre tabIndex={0}>{job.context.markdown}</pre></details></section>
+      </>}
+      {job?.context && !(job.repairRounds ?? 0) && <>
         <section className="log-message from-ai" aria-label="AI context request"><p className="log-who">{SERVICE[job.provider ?? 'openai']}</p><p>Asked for {context.length} more {context.length === 1 ? 'element' : 'elements'}</p><ul>{context.map(item => <li key={item.id}><code>{item.html?.match(/<([a-z][a-z0-9-]*)/i)?.[1] ?? 'element'} · {item.id}</code>{item.missing ? ' · unavailable' : ''}</li>)}</ul></section>
         <section className="log-message from-you" aria-label="Context sent to the AI"><p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p><details><summary>Context sent</summary><pre tabIndex={0} aria-label="Context sent">{job.context.markdown}</pre></details></section>
       </>}
@@ -66,7 +71,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
         <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
         {working && !candidate ? <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p> : null}
         {candidate && <>
-          <p className="log-text">{candidate.summary}</p>
+          <p className="log-text">{job.status === 'applied' && candidate.regions.some(region => region.status === 'conflict') ? `Applied ${candidate.regions.filter(region => region.status === 'implemented').length} of ${candidate.regions.length} areas` : candidate.summary}</p>
           <ul className="log-outcomes">{candidate.regions.map(outcome => { const item = requests.find(request => request.key === outcome.regionId); return <li key={outcome.regionId} className={outcome.status}>
             <span className="log-meta">{item ? `${item.page} · Box ${item.box}` : 'Request'} · {outcome.status === 'implemented' ? 'Done' : 'Needs a decision'}</span>
             <p className="log-text">{outcome.explanation}</p>
@@ -76,6 +81,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
         </>}
         {failed && <p className="log-text">{job.status === 'cancelled' ? 'Stopped.' : job.message || 'The AI could not finish this request.'}{job.providerError?.responseFormat?.providerMessage ? ` ${job.providerError.responseFormat.providerMessage}` : ''}</p>}
         {failed && job.rawReply && <details><summary>Raw reply</summary><pre tabIndex={0} aria-label="Failed raw reply">{job.rawReply}</pre></details>}
+        {!!job.validationEvents?.length && <details><summary>Validation notes</summary><ul>{job.validationEvents.map((event, index) => <li key={index}>{event.message}</li>)}</ul></details>}
         {job.usage && <p className="log-meta">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
       </section>}
       <details className="log-message" aria-label="Past generations"><summary>Past generations · {history?.jobs.length ?? 0}</summary>

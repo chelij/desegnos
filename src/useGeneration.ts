@@ -132,7 +132,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const token = ++action.current; setOperationStartedAt(Date.now()); setOperation('Updating your canvas…'); setError('');
     try {
       const value = await call<WorkspaceView>('apply_generation', { ...args(), acceptedDecisionIndices: indices }, flow.current?.controller.signal);
-      if (!flow.current?.controller.signal.aborted && context.current === id) { applied(value); await refresh(); setVisible(!!job?.candidate?.regions.some(region => region.status === 'conflict')); }
+      if (!flow.current?.controller.signal.aborted && context.current === id) { applied(value); await refresh(); setVisible(!!job?.candidate?.regions.some(region => region.status === 'conflict') || !!job?.validationEvents?.some(event => event.regionId && event.disposition === 'conflicted')); }
     } catch (error) {
       if (!flow.current?.controller.signal.aborted && context.current === id) {
         await refresh();
