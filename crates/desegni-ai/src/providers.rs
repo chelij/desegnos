@@ -969,7 +969,7 @@ impl ForeignStream {
             // transport failures; credential echoes were rejected while receiving frames.
             let mut error = self.error(ErrorKind::Malformed);
             error.outcome = SubmissionOutcome::Received;
-            error.response_format = Some(crate::ResponseFormat {
+            error.response_format = Some(Box::new(crate::ResponseFormat {
                 diagnostic_reply: Some(
                     crate::scrub_diagnostic_reply(&self.text, None).into_boxed_str(),
                 ),
@@ -981,7 +981,7 @@ impl ForeignStream {
                 limit_bytes: None,
                 rejection: Some(rejection),
                 correlation: None,
-            });
+            }));
             return Err(error);
         }
         Ok(ProviderResponse {
