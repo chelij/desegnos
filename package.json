@@ -10,6 +10,7 @@
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "desktop": "node scripts/tauri.mjs",
+    "release:local": "node scripts/build-release.mjs",
     "test": "node scripts/cargo.mjs test --workspace",
     "check:rust": "node scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",
     "test:native": "node scripts/native-test.mjs",
