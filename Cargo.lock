@@ -4877,6 +4877,7 @@ dependencies = [
  "once_cell",
  "phf 0.11.3",
  "rustc-hash",
+ "serde",
  "string_enum",
  "swc_atoms",
  "swc_common",
