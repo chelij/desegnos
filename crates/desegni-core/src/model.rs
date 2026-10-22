@@ -1039,6 +1039,10 @@ impl Project {
                     .iter_mut()
                     .find(|r| r.id == region_id && !r.completed)
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                ensure(
+                    region.attachments.len() < 16,
+                    "A request supports at most 16 attachments.",
+                )?;
                 // Identifiers are assigned here so they stay unique on the page.
                 attachment.id = (1..)
                     .map(|n| format!("a{}{n}", &region_id.simple().to_string()[..4]))

@@ -47,6 +47,7 @@ function requestPromptRect(rect: Rect, zoom: number): Rect {
 }
 
 type CanvasProps = {
+  archiveReports?: Record<string, import('./types').ArchiveReport[]>; projectId?: string;
   pendingImagesChanged: (count: number) => void; canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
   projectImages?: import('./types').ProjectImage[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void;
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
@@ -57,7 +58,7 @@ type CanvasProps = {
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => void; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ archiveReports = {}, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
   const [context, setContext] = useState<CanvasContext | null>(null);
@@ -124,8 +125,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
   useEffect(() => { multiChanged?.(extras.length ? extras.length + 1 : 0); }, [extras.length, multiChanged]);
   const [dropTarget, setDropTarget] = useState<Rect | null>(null);
   const imagePicker = useRef<HTMLInputElement>(null);
-  const nativeDrop = useRef<{ id: string; pageId: string; source: string | null; selection: ElementSelection | null } | null>(null);
-  const nativeDrag = useRef<(value: { phase: string; id: string; position: Point | null; picture: { name: string; mime: string; data: string } | null; message: string | null }) => void>(() => {});
+  const nativeDrop = useRef<{ id: string; pageId: string; source: string | null; selection: ElementSelection | null; regionId?: string } | null>(null);
+  const nativeDrag = useRef<(value: { phase: string; id: string; position: Point | null; picture: { name: string; mime: string; data: string } | null; files: { name: string; mime: string; data: string }[]; fileErrors: string[]; message: string | null }) => void>(() => {});
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false; let stop: (() => void) | undefined;
@@ -999,6 +1000,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
       const pending = nativeDrop.current; if (!pending || pending.id !== value.id) return;
       nativeDrop.current = null; setDropTarget(null);
       if (pending.pageId !== pageRef.current.id || pending.source !== site.current?.source()) return;
+      if (pending.regionId && attach) {
+        if (value.files.length) attach(pending.regionId, value.files.map(file => new File([Uint8Array.from(atob(file.data), ch => ch.charCodeAt(0))], file.name, { type: file.mime })), []);
+        if (value.fileErrors.length) setElementError(value.fileErrors.join(' '));
+        else if (!value.files.length) setElementError(value.message ?? 'The files could not be attached.');
+        return;
+      }
       if (value.message) { setElementError(value.message); return; }
       if (!pending.selection) { setElementError('Drop the picture onto an image on the page.'); return; }
       if (value.picture) {
@@ -1012,7 +1019,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
     const world = allowed ? point(at) : null;
     const hit = world && page.content ? site.current?.imageAt(world.x, world.y) ?? null : null;
     setDropTarget(hit?.rect ?? null);
-    if (value.phase === 'pending') nativeDrop.current = { id: value.id, pageId: page.id, source: site.current?.source() ?? null, selection: hit };
+    if (value.phase === 'pending') nativeDrop.current = { id: value.id, pageId: page.id, source: site.current?.source() ?? null, selection: hit, regionId: allowed ? document.elementFromPoint(at!.x, at!.y)?.closest<HTMLElement>('[data-region-id]')?.dataset.regionId : undefined };
   };
 
   const foundUrl = element ? site.current?.foundSource(element.element) ?? null : null;
@@ -1095,7 +1102,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ pe
           {liveRequests && page.regions.map((region, index) => {
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
-            return <RequestBox key={region.id} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
+            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
               layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => change(region.id, patch)} />;
           })}
           {element && !liveView && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
@@ -1165,7 +1172,8 @@ function Ruler({ axis, unit, start, length, reference, zoom, cursor, selection }
   </div>;
 }
 
-function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
+function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
+  reports: import('./types').ArchiveReport[];
   stale?: boolean; repickNow?: () => void; removeNow?: () => void; attach?: (files: File[], links: string[]) => void; detach?: (attachmentId: string) => void;
   region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; controlsLayer: number; select: () => void;
   begin: (event: PointerEvent, kind: Gesture['kind'], region?: Region) => void;
@@ -1225,13 +1233,19 @@ function RequestBox({ region, number, rect, bounds, zoom, maxHeight, selected, f
     }}>
     <div className="request-frame" aria-hidden="true" />
     {dropping && <div className="request-drop-hint" aria-hidden="true">Drop to attach to this request</div>}
+    <div className="request-attachment-group">
     {!!region.attachments?.length && <ul className="request-attachments" aria-label="Attachments" onPointerDown={event => event.stopPropagation()}>{region.attachments.map(item => <li key={item.id} title={item.kind === 'link' ? item.url : item.name}>
       {item.kind === 'image' && item.dataUri ? <img src={item.preview ?? item.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true">{item.kind === 'link' ? '🔗' : '¶'}</span>}
       <span className="attachment-name">{item.name}</span>{detach && <button type="button" aria-label={`Remove ${item.name}`} onClick={() => detach(item.id)}>×</button>}
     </li>)}</ul>}
+    {reports.map((report, index) => <details className="request-archive-report" key={index} onPointerDown={event => event.stopPropagation()}>
+      <summary>From {report.name}: {report.added} added, {report.skipped.length} skipped{report.skipped.length ? ` (${new Set(report.skipped.map(item => item.reason)).size === 1 ? report.skipped[0].reason : 'multiple reasons'})` : ''}</summary>
+      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: {item.reason}</li>)}</ul>}
+    </details>)}
+    </div>
     {selected && attach && <>
-      <button type="button" className="request-attach" title="Attach pictures or text files (or drop them on the box)" aria-label={`Attach files to request ${number}`} onPointerDown={event => event.stopPropagation()} onClick={() => attachInput.current?.click()}>📎</button>
-      <input ref={attachInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html,text/plain" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) attach(files, []); }} />
+      <button type="button" className="request-attach" title="Attach pictures, text files or ZIPs (or drop them on the box)" aria-label={`Attach files to request ${number}`} onPointerDown={event => event.stopPropagation()} onClick={() => attachInput.current?.click()}>📎</button>
+      <input ref={attachInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html,.zip,application/zip,text/plain" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) attach(files, []); }} />
     </>}
     {stale && <div className="request-stale" role="alert" onPointerDown={event => event.stopPropagation()}><span>This element was removed.</span><button type="button" onClick={repickNow}>Pick again</button><button type="button" onClick={removeNow}>Remove request</button></div>}
     {!target && <span className="request-number" aria-hidden="true">{number}</span>}

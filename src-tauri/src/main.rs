@@ -18,6 +18,7 @@ mod preview;
 mod preview_health;
 mod project_location;
 mod recent;
+mod request_zip;
 mod system_open;
 mod usage;
 mod workspace;
@@ -95,6 +96,7 @@ fn main() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            request_zip::unpack_request_zip,
             export::export_website,
             usage::record_usage,
             workspace::open_preview_link,

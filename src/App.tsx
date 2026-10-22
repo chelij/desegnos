@@ -317,6 +317,7 @@ export default function App() {
   // One page-wide request per generated page, then Generate: the AI restyles each page to the
   // newly imported brand while keeping its content and layout.
   // Files and links dropped on a request travel with it to Generate.
+  const [archiveReports, setArchiveReports] = useState<Record<string, import('./types').ArchiveReport[]>>({});
   async function attachToRequest(regionId: string, files: File[], links: string[]) {
     const owner = current.current?.project?.pages.find(item => item.regions.some(region => region.id === regionId));
     if (!owner) return;
@@ -325,13 +326,27 @@ export default function App() {
     const problems: string[] = [];
     for (const file of files) {
       try {
+        if (/\.zip$/i.test(file.name)) {
+          if (file.size > 32 * 1024 * 1024) throw new Error(`${file.name}: exceeds the 32 MiB archive limit.`);
+          const count = current.current?.project?.pages.find(item => item.id === owner.id)?.regions.find(item => item.id === regionId)?.attachments?.length ?? 0;
+          const data = (await readImage(file)).split(',')[1];
+          const unpacked = await native<{ attachments: RequestAttachment[]; skipped: { name: string; reason: string }[] }>('unpack_request_zip', { name: file.name, data, remaining: Math.max(0, 16 - count) });
+          let added = 0;
+          for (const attachment of unpacked.attachments) {
+            try { await mutate({ type: 'add_region_attachment', page_id: owner.id, region_id: regionId, attachment }); added++; }
+            catch (reason) { unpacked.skipped.push({ name: attachment.name, reason: errorMessage(reason) }); }
+          }
+          const key = `${current.current?.project?.id}:${regionId}`;
+          setArchiveReports(previous => ({ ...previous, [key]: [...(previous[key] ?? []), { name: file.name, added, skipped: unpacked.skipped }] }));
+          continue;
+        }
         let attachment: RequestAttachment;
         if (/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
           attachment = { id: 'new', name: file.name.slice(0, 120), kind: 'image', dataUri: await readImage(file) };
         } else if (file.type.startsWith('text/') || /\.(txt|md|csv|json|html?)$/i.test(file.name)) {
           const text = await readText(file);
           attachment = { id: 'new', name: file.name.slice(0, 120), kind: 'text', text };
-        } else throw new Error(`${file.name}: only pictures (PNG, JPEG, WebP, GIF) and text files can be attached.`);
+        } else throw new Error(`${file.name}: only pictures (PNG, JPEG, WebP, GIF), text files, and ZIPs can be attached.`);
         await mutate({ type: 'add_region_attachment', page_id: owner.id, region_id: regionId, attachment });
       } catch (reason) { problems.push(errorMessage(reason)); }
     }
@@ -890,7 +905,7 @@ export default function App() {
       </div></div>
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
-      {page && <Canvas pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {(showGenerationStatus || resultReview) && <div className="canvas-pill" role="region" aria-label="Generation status">
         {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>

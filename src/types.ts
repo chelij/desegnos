@@ -130,3 +130,5 @@ export type Command =
 export type GenerationHistory = { jobs: { jobId: string; createdAt: string | null; status: GenerationStatus; usage: TokenUsage | null; summary: string; firstRequest: string }[]; skipped: number; truncated: boolean };
 
 export type WebsiteFolderSelection = { id: string; name: string; website: { path: string; framework: string | null; output: string | null; fresh: boolean; pages: string[]; buildCommand: string[] | null; installCommand: string | null; buildUnavailable: string | null } | null };
+
+export type ArchiveReport = { name: string; added: number; skipped: { name: string; reason: string }[] };
