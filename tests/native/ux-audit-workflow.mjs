@@ -268,7 +268,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await waitFor(() => driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"] .generation-heading')?.textContent === 'Stopped'), 'Stop did not visibly acknowledge cancellation');
     await driver.ready('//header//button[normalize-space(.)="Generate" and not(@disabled)]', 'xpath');
     assert.deepEqual((await workspace(driver)).project.pages, before.pages);
-    assert.match(await driver.execute(() => document.querySelector('.canvas-pill .generation-feedback-stopped').textContent), /Generation stopped.*Your work is safe\.$/);
+    assert.match(await driver.execute(() => document.querySelector('.canvas-pill .generation-feedback-error').textContent), /Generation stopped.*Your work is safe\.$/);
     const requests = requestCount(provider);
     await driver.button('Try again'); await driver.ready('dialog[open][aria-label="Try the same requests again?"]');
     assert.match(await driver.execute(() => document.querySelector('dialog[open]').textContent), /original saved request.*OpenAI.*may charge/s);
