@@ -111,8 +111,7 @@
 .free-workspace.tool-pan .canvas, .free-workspace.tool-pan .canvas.element-hover { cursor: grab; }
 .free-workspace.pan-ready .canvas, .free-workspace.pan-ready .canvas.element-hover { cursor: grab; }
 .free-workspace.panning .canvas, .free-workspace.panning .canvas.element-hover { cursor: grabbing; }
-.free-workspace .annotation textarea { overflow: hidden; }
-.free-workspace .annotation:focus-within textarea { overflow-y: auto; }
+.free-workspace .annotation textarea { overflow-y: auto; }
 .free-workspace .request-number { position: absolute; right: -1px; top: -20px; min-width: 18px; padding: 1px 5px; border-radius: 3px 3px 0 0; background: var(--annotation-border); color: var(--surface); font-size: 11px; line-height: 16px; text-align: center; pointer-events: none; }
 .free-workspace .annotation.selected .request-number { background: var(--annotation-focus); }
 .free-workspace .request-expand { display: block; width: 100%; min-height: 30px; height: 30px; padding: 3px 10px; text-align: left; border-top: 0; border-radius: 0 0 3px 3px; background: var(--annotation-surface); color: var(--annotation-text); border-color: var(--annotation-border); }
@@ -179,16 +178,17 @@
 .free-workspace .annotation.selected, .free-workspace .annotation:focus-within, .free-workspace .annotation.expanded { background: var(--annotation-surface); }
 .free-workspace .annotation.selected textarea, .free-workspace .annotation:focus-within textarea { text-shadow: none; }
 
-/* Request attachments: chips along the bottom of the box, a paperclip on the selected box,
+/* Request attachments: normal-flow rows below the text, a paperclip on the selected box,
    and a hint while dragging files over it. */
-.free-workspace .request-attachment-group { position: absolute; left: 6px; right: 34px; bottom: 6px; z-index: 2; max-height: 50%; overflow: auto; pointer-events: auto; }
+.free-workspace .request-attachment-group { padding: 6px; pointer-events: auto; }
 .free-workspace .request-archive-report { color: var(--annotation-text); background: var(--annotation-surface); font-size: 11px; }
 .free-workspace .request-attachments { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; pointer-events: auto; }
-.free-workspace .request-attachments li { display: flex; align-items: center; gap: 4px; max-width: 160px; padding: 2px 4px 2px 3px; border: 1px solid var(--annotation-border); border-radius: 4px; background: var(--annotation-surface); color: var(--annotation-text); font-size: 11px; }
-.free-workspace .request-attachments img { width: 18px; height: 18px; object-fit: cover; border-radius: 2px; }
-.free-workspace .request-attachments .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.free-workspace .request-attachments button { min-height: 0; padding: 0 3px; border: 0; background: transparent; font-size: 13px; line-height: 1; }
-.free-workspace .request-attach { position: absolute; right: 6px; bottom: 6px; z-index: 3; width: 26px; min-height: 26px; padding: 0; border: 1px solid var(--annotation-border); border-radius: 4px; background: var(--annotation-surface); font-size: 13px; line-height: 1; }
+.free-workspace .request-attachments li { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: min(160px, 100%); padding: 2px 4px 2px 3px; border: 1px solid var(--annotation-border); border-radius: 4px; background: var(--annotation-surface); color: var(--annotation-text); font-size: 11px; }
+.free-workspace .request-attachments img { flex: none; width: 18px; height: 18px; object-fit: cover; border-radius: 2px; }
+.free-workspace .request-attachments .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.free-workspace .request-attachments button { flex: none; min-width: 22px; min-height: 22px; color: var(--annotation-text); padding: 0 3px; border: 0; background: transparent; font-size: 13px; line-height: 1; }
+.free-workspace .request-attach-row { display: flex; justify-content: flex-end; padding: 0 6px 6px; }
+.free-workspace .request-attach { color: var(--annotation-text); width: 26px; min-height: 26px; padding: 0; border: 1px solid var(--annotation-border); border-radius: 4px; background: var(--annotation-surface); font-size: 13px; line-height: 1; }
 .free-workspace .request-drop-hint { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; border: 2px dashed var(--annotation-focus); background: color-mix(in srgb, var(--annotation-focus) 18%, var(--annotation-surface)); color: var(--annotation-text); font-size: 12px; font-weight: 600; pointer-events: none; }
 
 /* Live view: the real, interactive page sits over the static copy at the same place and zoom. */

@@ -336,6 +336,18 @@ try {
     assert.deepEqual(requestPlacement({ x: 99999, y: 99999, width: 1, height: 1 }, 1), { x: 99999, y: 99999, width: 160, height: 80 });
     assert.deepEqual(requestAt({ x: -100001, y: -100001 }, 0.25), { x: -100001, y: -100001, width: 1280, height: 640 });
   });
+  await test('request editor minima remain readable when an existing area shrinks at small zoom', () => {
+    const area = { x: -20, y: 40, width: 320, height: 160 };
+    for (const zoom of [0.001, 0.1, 0.25, 0.5, 1, 2, 4]) {
+      const editor = requestPlacement(area, zoom);
+      assert.ok(editor.width * zoom >= 160);
+      assert.ok(editor.height * zoom >= 80);
+      assert.equal(editor.x, area.x);
+      assert.equal(editor.y, area.y);
+      assert.ok(editor.width >= area.width && editor.height >= area.height);
+    }
+    assert.deepEqual(area, { x: -20, y: 40, width: 320, height: 160 });
+  });
   await test('pointer and keyboard resizing preserve the readable minimum', () => {
     const initial = { x: -16, y: -32, width: 320, height: 160 };
     const minimum = { x: 160, y: 80 };
