@@ -1,4 +1,4 @@
-//! Read-only detection. Build output is a snapshot, never a project destination.
+//! Source files stay read-only. Optional build tools are probed with --version.
 use crate::{io, project_folder};
 use desegni_core::{Error, Result, identity_source_page};
 use serde::Serialize;
@@ -19,6 +19,7 @@ pub struct WebsiteFolder {
     pub pages: Vec<String>,
     pub build_command: Option<Vec<String>>,
     pub install_command: Option<String>,
+    pub build_unavailable: Option<String>,
 }
 fn read(path: &Path) -> String {
     let mut text = String::new();
@@ -93,6 +94,12 @@ fn scan(
     Ok(())
 }
 pub fn detect_website_folder(folder: &Path) -> Result<Option<WebsiteFolder>> {
+    detect_with_tools(folder, &crate::system_tools::ToolSearch::default())
+}
+fn detect_with_tools(
+    folder: &Path,
+    tools: &crate::system_tools::ToolSearch,
+) -> Result<Option<WebsiteFolder>> {
     let root = folder.canonicalize().map_err(io)?;
     let package: serde_json::Value =
         serde_json::from_str(&read(&root.join("package.json"))).unwrap_or_default();
@@ -171,6 +178,7 @@ pub fn detect_website_folder(folder: &Path) -> Result<Option<WebsiteFolder>> {
         pages: source_pages,
         build_command: None,
         install_command: None,
+        build_unavailable: None,
     };
     result.pages.sort();
     if result.framework.is_none() {
@@ -200,10 +208,23 @@ pub fn detect_website_folder(folder: &Path) -> Result<Option<WebsiteFolder>> {
     } else if result.framework.as_deref() == Some("Hugo") {
         result.build_command = Some(vec!["hugo".into()]);
     } else if result.framework.as_deref() == Some("Eleventy") {
-        result.build_command = Some(vec!["node_modules/.bin/eleventy".into()]);
+        let package_dir = root.join("node_modules/@11ty/eleventy");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&read(&package_dir.join("package.json"))).unwrap_or_default();
+        let entry = manifest["bin"]["eleventy"]
+            .as_str()
+            .or_else(|| manifest["bin"].as_str())
+            .unwrap_or("cmd.cjs");
+        result.build_command = Some(vec![
+            "node".into(),
+            format!("node_modules/@11ty/eleventy/{entry}"),
+        ]);
         if !root.join("node_modules").is_dir() {
             result.install_command = Some(format!("{pm} install"));
         }
+    }
+    if let Some(args) = &result.build_command {
+        result.build_unavailable = tools.build_command(&root, args).err();
     }
     let candidates: &[&str] = if matches!(result.framework.as_deref(), Some("Hugo" | "Gatsby")) {
         &["public", "dist", "build", "out", "_site"]
@@ -255,7 +276,7 @@ pub fn import_detected_website(folder: &Path, fallback: &Path) -> Result<crate::
     if detected.framework.is_none() {
         return project_folder::import_website_folder(folder);
     }
-    if !detected.fresh {
+    if !detected.fresh && !(detected.output.is_some() && detected.build_unavailable.is_some()) {
         return Err(Error("Build site before editing it.".into()));
     }
     let output = detected
@@ -302,4 +323,44 @@ pub fn import_detected_website(folder: &Path, fallback: &Path) -> Result<crate::
     let file = crate::ProjectFile::acquire(&path)?;
     file.save(&project).map_err(|e| Error(e.to_string()))?;
     Ok(file)
+}
+
+#[cfg(test)]
+mod standalone_tests {
+    use super::*;
+
+    #[test]
+    fn missing_hugo_preserves_even_stale_existing_output() {
+        let root = std::env::temp_dir().join(format!("desegnos-no-tools-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("public")).unwrap();
+        fs::write(root.join("hugo.toml"), "title = 'Site'").unwrap();
+        fs::write(
+            root.join("public/index.html"),
+            "<!doctype html><h1>Built</h1>",
+        )
+        .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(root.join("public/index.html"))
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        let site = detect_with_tools(&root, &crate::system_tools::ToolSearch::empty())
+            .unwrap()
+            .unwrap();
+        assert!(!site.fresh);
+        assert_eq!(
+            site.build_unavailable.as_deref(),
+            Some("Needs Hugo to rebuild.")
+        );
+        assert_eq!(
+            site.output,
+            Some(root.canonicalize().unwrap().join("public"))
+        );
+        assert_eq!(site.pages, ["index.html"]);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

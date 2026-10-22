@@ -86,7 +86,7 @@ fn trusted(window: &WebviewWindow) -> NativeResult<()> {
 
 #[cfg(not(feature = "native-tests"))]
 async fn open_authorization(_: &AppHandle, url: &str) -> NativeResult<()> {
-    open::that_detached(url)
+    crate::system_open::open(url)
         .map_err(|_| "Desegnos could not open your system browser. Check the default browser and start sign-in again.".into())
 }
 
@@ -342,8 +342,9 @@ pub fn open_chatgpt_usage(app: AppHandle, window: WebviewWindow) -> NativeResult
     #[cfg(not(feature = "native-tests"))]
     {
         let _ = app;
-        open::that_detached(USAGE_URL)
-            .map_err(|_| "Desegnos could not open ChatGPT usage settings in your browser.".into())
+        crate::system_open::open(USAGE_URL).map_err(|_| {
+            "Couldn't open a browser. Open https://chatgpt.com/settings/usage manually.".into()
+        })
     }
     #[cfg(feature = "native-tests")]
     {

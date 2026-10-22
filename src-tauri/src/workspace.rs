@@ -247,12 +247,12 @@ impl Workspace {
 
     pub fn initialize(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let mut workspace = Self::from_directory(app.path().app_local_data_dir()?)?;
-        let documents = app
-            .path()
-            .document_dir()
-            .or_else(|_| app.path().home_dir().map(|home| home.join("Documents")))?;
-        workspace.system_project_location =
-            crate::project_location::default_from_documents(&documents);
+        if let Ok(documents) = app.path().document_dir() {
+            workspace.system_project_location =
+                crate::project_location::default_from_documents(&documents);
+        }
+        // Otherwise keep from_directory's app-data Projects fallback. A localized
+        // or absent Documents directory must not prevent the editor from starting.
         Ok(workspace)
     }
 
@@ -1444,7 +1444,7 @@ pub fn open_found_source(
             .map_err(message)?
             .ok_or("This item has no online source.")?
     };
-    open::that_detached(url).map_err(|_| "The source could not be opened in your browser.".into())
+    crate::system_open::open(url).map_err(|_| "Couldn't open a browser. Copy the source address and open it manually.".into())
 }
 
 /// A web link the user clicked in a preview, opened in their browser after they confirm it.
@@ -1454,8 +1454,8 @@ pub fn open_preview_link(window: tauri::WebviewWindow, url: String) -> NativeRes
         return Err("Only the editor can open links.".into());
     }
     let parsed = preview_link(&url)?;
-    open::that_detached(parsed.as_str())
-        .map_err(|_| "The link could not be opened in your browser.".into())
+    crate::system_open::open(parsed.as_str())
+        .map_err(|_| "Couldn't open a browser. Copy the link and open it manually.".into())
 }
 
 fn preview_link(url: &str) -> NativeResult<desegni_ai::WebUrl> {

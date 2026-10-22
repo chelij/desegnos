@@ -64,6 +64,10 @@ fn file_name(url: &Url, fallback: &str, extension: &str) -> String {
 }
 
 pub async fn fetch_website(input: &str, fixture: Option<&Url>) -> Result<WebsiteFiles, String> {
+    #[cfg(not(any(test, feature = "test-support")))]
+    if fixture.is_some() {
+        return Err("Test website sources are unavailable in this build.".into());
+    }
     let page_url = match fixture {
         Some(origin) => origin
             .join(input)

@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [features]
 default = ["portal-dialogs"]
+custom-protocol = ["tauri/custom-protocol"]
 # File dialogs use the desktop portal. rfd allows only one Linux backend, so native test builds
 # turn defaults off and use in-process GTK dialogs: the guarded Xvfb display has no portal.
 portal-dialogs = ["tauri-plugin-dialog/xdg-portal"]
@@ -45,3 +46,5 @@ desegni-ai = { path = "../crates/desegni-ai", features = ["test-support"] }
 [lints]
 workspace = true
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.5", features = ["process"] }
