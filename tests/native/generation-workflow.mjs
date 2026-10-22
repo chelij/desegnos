@@ -14,6 +14,7 @@ const generationDialog = 'dialog[open] .generation-dialog';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function dialogButton(driver, text) {
+  if (['Test connection', 'Replace key', 'Remove key'].includes(text)) return driver.menu([text], 'Account options');
   if (text === 'Refresh job') return driver.menu(['Advanced', 'Refresh job'], 'Generation options');
   if (text === 'AI settings') return driver.menu(['AI settings'], 'Generation options');
   if (text === 'Discard candidate') return driver.menu(['Discard result'], 'Generation options');
@@ -179,45 +180,46 @@ async function credentialWorkflow(driver, provider, step) {
     const model = initial.catalogue.find(value => value.id === 'gpt-6.1-sol');
     assert.ok(model && model.verifiedAt === '2026-10-18');
     assert.deepEqual(model.reasoningEfforts, ['low', 'medium', 'high']);
-    await driver.menu(['Advanced settings'], 'AI settings options');
+    await driver.click('details.ai-advanced > summary');
     await driver.fill('Maximum output tokens', '4096');
     await driver.select('Reasoning effort', 'low');
-    await driver.fill('Estimated request allowance (USD)', '1.50');
+    await driver.fill('API budget per generation (USD)', '1.50');
     await dialogButton(driver, 'Save AI settings');
     await waitFor(async () => (await driver.invoke('get_ai_settings')).settings.maxOutputTokens === 4096, 'AI settings were not acknowledged');
-    assert.deepEqual((await driver.invoke('get_ai_settings')).settings, { model: 'gpt-6.1-sol', maxOutputTokens: 4096, reasoningEffort: 'low', spendingLimitUsd: 1.5 });
+    assert.deepEqual((await driver.invoke('get_ai_settings')).settings, { model: 'gpt-6.1-sol', maxOutputTokens: 4096, reasoningEffort: 'low', spendingLimitUsd: 1.5, imageGeneration: initial.settings.imageGeneration });
     assert.equal(provider.requests().length, 0);
   });
   await step('An unavailable system vault requires an explicit session choice and clears the submitted key', async () => {
     await driver.fill('OpenAI API key', provider.key());
-    await dialogButton(driver, 'Save key');
-    await waitFor(() => driver.execute(() => /System credential storage is unavailable/i.test(document.querySelector('dialog[open] .ai-settings .message.error')?.textContent ?? '')), 'The isolated vault failure was not exposed in the key form');
+    await dialogButton(driver, 'Connect');
+    await waitFor(() => driver.execute(() => /System credential storage is unavailable/i.test([...document.querySelectorAll('dialog[open] .ai-settings [role="alert"]')].map(element => element.textContent).join(' '))), 'The isolated vault failure was not exposed in the key form');
     const failed = await driver.invoke('get_ai_settings');
     assert.equal(failed.credential.configured, false); assert.equal(failed.credential.storage, 'none');
-    assert.equal(await driver.execute(() => document.querySelector('dialog[open] input[type="password"]')?.value), '');
-    await driver.click('//dialog[@open]//label[normalize-space(.)="Current session only"]/input', 'xpath');
+    assert.equal(await driver.execute(() => document.querySelector('dialog[open] input[type="password"]')?.value ?? ''), '');
+    await driver.menu(['Where to keep the key', 'Current session only'], 'Account options');
     await driver.fill('OpenAI API key', provider.key());
-    await dialogButton(driver, 'Save key');
+    await dialogButton(driver, 'Connect');
     await waitFor(async () => (await driver.invoke('get_ai_settings')).credential.storage === 'session', 'Explicit session credential was not configured');
     const view = await driver.invoke('get_ai_settings');
     assert.equal(view.credential.configured, true); assert.equal(view.credential.maskedIdentifier.endsWith('A001'), true);
     assert.equal(JSON.stringify(view).includes(provider.key()), false);
-    assert.equal(await driver.execute(() => document.querySelector('dialog[open] input[type="password"]')?.value), '');
+    assert.equal(await driver.execute(() => document.querySelector('dialog[open] input[type="password"]')?.value ?? ''), '');
   });
-  await step('Test access, replace and remove use the real provider transport without generation or secret views', async () => {
-    await dialogButton(driver, 'Test access');
+  await step('Test connection, replace and remove use the real provider transport without generation or secret views', async () => {
+    await dialogButton(driver, 'Test connection');
     await waitFor(() => provider.modelRequests().length === 1, 'The actual model access GET was not sent');
+    await dialogButton(driver, 'Replace key');
     await driver.fill('Replacement API key', provider.key('replacement'));
     provider.expectKey('replacement');
-    await dialogButton(driver, 'Replace key');
+    await dialogButton(driver, 'Connect');
     await waitFor(async () => (await driver.invoke('get_ai_settings')).credential.maskedIdentifier?.endsWith('B002'), 'Replacement session key was not acknowledged');
-    await dialogButton(driver, 'Test access');
+    await dialogButton(driver, 'Test connection');
     await waitFor(() => provider.modelRequests().length === 2, 'Replacement key model access did not complete');
     await dialogButton(driver, 'Remove key');
     await waitFor(async () => !(await driver.invoke('get_ai_settings')).credential.configured, 'Remove key did not clear the session');
     provider.expectKey('primary');
     await driver.fill('OpenAI API key', provider.key());
-    await dialogButton(driver, 'Save key');
+    await dialogButton(driver, 'Connect');
     await waitFor(async () => (await driver.invoke('get_ai_settings')).credential.configured, 'The test session key was not restored');
     assert.equal(provider.generationRequests().length, 0);
     assert.deepEqual(provider.errors(), []);

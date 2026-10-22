@@ -206,15 +206,32 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   await step('AI settings connect a session key in reading order and show truthful connection and budget states', async () => {
     await driver.button('AI settings');
     await driver.fill('OpenAI API key', provider.key());
-    await driver.click('//fieldset[legend[normalize-space(.)="Keep this key"]]//label[contains(normalize-space(.),"Current session only")]/input', 'xpath');
-    await driver.button('Connect key');
+    await driver.menu(['Where to keep the key', 'Current session only'], 'Account options');
+    await driver.button('Connect');
     await waitFor(async () => (await driver.invoke('get_ai_settings')).credential.configured, 'The synthetic session key did not connect');
-    await driver.button('Test access'); await waitFor(() => driver.execute(() => document.querySelector('.ai-settings [role="status"]')?.textContent.includes('Connected')), 'Test access did not show its result');
-    const positions = await driver.execute(() => [document.querySelector('.ai-settings label'), document.querySelector('.api-key-connection'), document.querySelector('.ai-access-test')].map(element => element.getBoundingClientRect().top));
+    await driver.menu(['Test connection'], 'Account options'); await waitFor(() => driver.execute(() => document.querySelector('.ai-settings .operation-status')?.textContent === 'Connection checked.'), 'Test connection did not show its result');
+    const positions = await driver.execute(() => [document.querySelector('.ai-provider'), document.querySelector('.api-key-connection'), document.querySelector('.ai-model-row'), document.querySelector('.ai-features'), document.querySelector('.ai-advanced'), document.querySelector('.ai-save-actions')].map(element => element.getBoundingClientRect().top));
     assert.ok(positions.every((position, index) => index === 0 || position > positions[index - 1]));
-    await driver.click('details.ai-more summary');
+    const feature = await driver.execute(() => {
+      const toggle = document.querySelector('#ai-image-generation');
+      const label = document.querySelector('label[for="ai-image-generation"]');
+      const row = document.querySelector('.image-generation-access').getBoundingClientRect();
+      const bounds = toggle.getBoundingClientRect();
+      return { role: toggle.getAttribute('role'), label: label.textContent, right: Math.abs(row.right - bounds.right), status: document.querySelector('#ai-image-status').textContent, disabled: toggle.disabled };
+    });
+    assert.equal(feature.role, 'switch'); assert.equal(feature.label, 'Image generation'); assert.ok(feature.right <= 1);
+    assert.ok(['Available', 'Not available', 'Checking…', "Couldn't check"].includes(feature.status));
+    if (feature.status !== 'Available') assert.equal(feature.disabled, true);
+    // Native keyboard events: open with Enter, then Escape closes only the menu and restores focus.
+    await driver.execute(() => document.querySelector('.ai-account-options > button').focus());
+    await driver.command('POST', '/actions', { actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value: '\uE007' }, { type: 'keyUp', value: '\uE007' }] }] });
+    await driver.command('DELETE', '/actions');
+    await waitFor(() => driver.execute(() => document.querySelector('.ai-account-options > button')?.getAttribute('aria-expanded') === 'true'), 'Enter did not open account options');
+    await driver.command('POST', '/actions', { actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value: '\uE00C' }, { type: 'keyUp', value: '\uE00C' }] }] });
+    await driver.command('DELETE', '/actions');
+    await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .ai-settings') && document.querySelector('.ai-account-options > button')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Account options'), 'Escape did not close only account options and restore focus');
     await driver.fill('API budget per generation (USD)', '10'); await driver.button('Save AI settings');
-    await waitFor(() => driver.execute(() => document.querySelector('.ai-settings [role="status"]')?.textContent.includes('saved')), 'The bottom save did not acknowledge AI settings');
+    await waitFor(() => driver.execute(() => document.querySelector('.ai-settings .ai-save-actions [role="status"]')?.textContent.includes('saved')), 'The bottom save did not acknowledge AI settings');
     assert.match(await driver.execute(() => document.querySelector('.generation-settings-form').textContent), /not a guaranteed billing cap/);
     await physical.captureWindow(join(output, '06-ai-connection-window.png')); await closeDialog(driver);
     assert.equal((await driver.invoke('get_ai_settings')).credential.configured,true);

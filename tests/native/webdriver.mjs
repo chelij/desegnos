@@ -102,7 +102,7 @@ export class WebDriver {
     if (expanded !== 'true') await this.click(trigger, 'xpath');
     let menuId = await waitFor(() => this.execute(selector => document.evaluate(selector, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue?.getAttribute('aria-controls'), trigger), `${rootAriaLabel} did not open its menu`);
     for (let index = 0; index < path.length; index += 1) {
-      const selector = `//ul[@role="menu" and @id=${xpathString(menuId)}]/li/button[@aria-label=${xpathString(path[index])} and (@role="menuitem" or @role="menuitemcheckbox")]`;
+      const selector = `//ul[@role="menu" and @id=${xpathString(menuId)}]/li/button[@aria-label=${xpathString(path[index])} and (@role="menuitem" or @role="menuitemcheckbox" or @role="menuitemradio")]`;
       await this.click(selector, 'xpath');
       if (index + 1 < path.length) menuId = await waitFor(() => this.execute(value => document.evaluate(value, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue?.getAttribute('aria-controls'), selector), `${path[index]} did not open its submenu`);
     }

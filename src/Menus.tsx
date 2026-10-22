@@ -6,6 +6,7 @@ export type MenuItem = {
   action?: () => void;
   disabled?: boolean;
   checked?: boolean;
+  role?: 'menuitemradio';
   shortcut?: string;
   children?: MenuItem[];
   separator?: boolean;
@@ -112,7 +113,7 @@ function MenuLevel({ id, label, items, anchor, last = false, nested = false, bac
     style={{ left: position.left, top: position.top, visibility: position.ready ? 'visible' : 'hidden' }}>
     {items.map((item, index) => item.separator ? <li key={item.id} role="separator" className="menu-separator" /> : <li key={item.id} role="none">
       <button type="button" ref={element => { if (element) buttons.current.set(index, element); else buttons.current.delete(index); }}
-        role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'} aria-label={item.label} aria-checked={item.checked} disabled={item.disabled} tabIndex={-1}
+        role={item.role ?? (item.checked === undefined ? 'menuitem' : 'menuitemcheckbox')} aria-label={item.label} aria-checked={item.checked} disabled={item.disabled} tabIndex={-1}
         aria-haspopup={item.children?.length ? 'menu' : undefined} aria-expanded={item.children?.length ? submenu === index : undefined}
         aria-controls={submenu === index ? `${id}-${item.id}` : undefined} onClick={() => activate(index)}>
         <span className="menu-check" aria-hidden="true">{item.checked ? '✓' : ''}</span><span className="menu-label">{item.label}</span>
