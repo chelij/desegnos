@@ -498,7 +498,7 @@ export default function App() {
       else if (shortcut === 'rectangleTool' || shortcut === 'circleTool' || shortcut === 'freehandTool') { event.preventDefault(); setRequestShape(shortcut === 'rectangleTool' ? 'rect' : shortcut === 'circleTool' ? 'ellipse' : 'freehand'); setTool('request'); return; }
       else if (shortcut === 'selectTool' || shortcut === 'requestTool' || shortcut === 'panTool') { event.preventDefault(); setTool(shortcut === 'selectTool' ? 'select' : shortcut === 'requestTool' ? 'request' : 'pan'); return; }
       else if (shortcut === 'cutLayer') { if (activeLayer || selected) { event.preventDefault(); void canvas.current?.cutLayer(); } return; }
-      else if (shortcut === 'copyLayer') { if (activeLayer || selected) { event.preventDefault(); void canvas.current?.copyLayer(); } return; }
+      else if (shortcut === 'copyLayer') { if (window.getSelection()?.toString().trim()) return; if (activeLayer || selected) { event.preventDefault(); void canvas.current?.copyLayer(); } return; }
       else if (shortcut === 'pasteLayer') { event.preventDefault(); void canvas.current?.pasteLayer(); return; }
       else if (shortcut === 'layerForward' || shortcut === 'layerBackward' || shortcut === 'layerFront' || shortcut === 'layerBack') {
         if (activeLayer || selected) { event.preventDefault(); void canvas.current?.arrangeLayer(({ layerForward: 'forward', layerBackward: 'backward', layerFront: 'front', layerBack: 'back' } as const)[shortcut]); } return;
