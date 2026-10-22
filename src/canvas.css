@@ -111,8 +111,7 @@
 .free-workspace.tool-pan .canvas, .free-workspace.tool-pan .canvas.element-hover { cursor: grab; }
 .free-workspace.pan-ready .canvas, .free-workspace.pan-ready .canvas.element-hover { cursor: grab; }
 .free-workspace.panning .canvas, .free-workspace.panning .canvas.element-hover { cursor: grabbing; }
-.free-workspace .annotation textarea { overflow: hidden; }
-.free-workspace .annotation.selected textarea, .free-workspace .annotation.expanded textarea, .free-workspace .annotation:focus-within textarea { overflow-y: auto; }
+.free-workspace .annotation textarea { overflow-x: hidden; overflow-y: auto; }
 .free-workspace .request-number { position: absolute; right: -1px; top: -20px; min-width: 18px; padding: 1px 5px; border-radius: 3px 3px 0 0; background: var(--annotation-border); color: var(--surface); font-size: 11px; line-height: 16px; text-align: center; pointer-events: none; }
 .free-workspace .annotation.selected .request-number { background: var(--annotation-focus); }
 .free-workspace .request-expand { display: block; width: 100%; min-height: 30px; height: 30px; padding: 3px 10px; text-align: left; border-top: 0; border-radius: 0 0 3px 3px; background: var(--annotation-surface); color: var(--annotation-text); border-color: var(--annotation-border); }

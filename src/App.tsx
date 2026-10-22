@@ -438,7 +438,7 @@ export default function App() {
     await openAlongside(async discard => {
       await queue(async () => {
         accept(await native<WorkspaceView>('create_project', { name, viewport, parentDirectory: parentDirectory ?? null, appearance: resolvedTheme, discard }));
-        setSelected(null); setShowNew(false); setNotice('Blank project created.');
+        setSelected(null); setShowNew(false); setNotice('');
         setZoom(initialZoom(viewport.width, viewport.height));
         void refreshRecent().catch(() => {});
       });
@@ -560,7 +560,11 @@ export default function App() {
     const timer = setTimeout(() => { void native<{ ranges: SourceMapView['ranges'] }>('get_page_source_map', { projectId, pageId }).then(value => { if (active) setSourceMap({ html, ranges: value.ranges }); }, () => { if (active) setSourceMap(null); }); }, 150);
     return () => { active = false; clearTimeout(timer); };
   }, [mapHtml, project?.id, page?.id]);
-  useEffect(() => { document.title = project ? `${project.name} — Desegnos` : 'Desegnos'; }, [project?.name]);
+  useEffect(() => {
+    const title = project ? `${project.name} — Desegnos` : 'Desegnos';
+    document.title = title;
+    if (isTauri()) void getCurrentWindow().setTitle(title).catch(() => {});
+  }, [project?.name]);
   const activeProjectId = project?.id ?? null;
   const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' ? synchronize(command === 'prepare_generation', false) : undefined).then(() => queue(async workspace => {
     signal?.throwIfAborted();
@@ -939,8 +943,9 @@ export default function App() {
         </div>)}
       </div></div>
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
-      {workspaceNotices}
+      {codeView === 'code' && workspaceNotices}
       <div className="design-pane">
+      {codeView !== 'code' && workspaceNotices}
       {page && <Canvas archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {(showGenerationStatus || resultReview) && <div className="canvas-pill" role="region" aria-label="Generation status">
         {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
