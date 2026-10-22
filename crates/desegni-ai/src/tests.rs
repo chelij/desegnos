@@ -3036,6 +3036,9 @@ fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
     frozen.images = vec![desegni_core::RequestImage {
         attachment_id: "a1b2c1".into(),
         data_uri: preview.clone(),
+        stored_format: None,
+        transparent: None,
+        transparent_percent: None,
     }];
     let body: Value = serde_json::from_slice(
         &crate::settings::request_body(
