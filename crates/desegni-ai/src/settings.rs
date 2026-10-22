@@ -163,9 +163,12 @@ pub fn estimate_for_auth(
         .and_then(|body| estimate_body_with_reserve(authentication, &body, settings, reserve));
     result
         .and_then(|mut estimate| {
-            estimate.estimate_usd += image_generation_reserve(authentication, snapshot);
-            if authentication == AuthenticationMethod::ApiKey
-                && estimate.estimate_usd > settings.spending_limit_usd
+            let images = image_generation_reserve(authentication, snapshot);
+            estimate.estimate_usd += images;
+            if (authentication == AuthenticationMethod::ApiKey || images > 0.0)
+                && (!settings.spending_limit_usd.is_finite()
+                    || settings.spending_limit_usd <= 0.0
+                    || estimate.estimate_usd > settings.spending_limit_usd)
             {
                 return Err(ProviderError::before(ErrorKind::SpendingLimit));
             }
@@ -346,13 +349,13 @@ pub(crate) fn estimate_body_with_reserve(
     })
 }
 
-/// Reserve $0.50 per bounded low-quality image call, including reference and orchestration.
+/// Reserve $0.50 per bounded low-quality Image API call, including a reference.
 /// An estimate allowance, not a guaranteed provider billing cap.
 pub(crate) fn image_generation_reserve(
-    auth: AuthenticationMethod,
+    _auth: AuthenticationMethod,
     snapshot: &RequirementsSnapshot,
 ) -> f64 {
-    if auth != AuthenticationMethod::ApiKey || snapshot.format_version().unwrap_or(0) < 17 {
+    if snapshot.format_version().unwrap_or(0) < 17 {
         return 0.0;
     }
     snapshot
@@ -372,6 +375,14 @@ pub(crate) fn configure_response_body(
     body["stream"] = json!(true);
     body["store"] = json!(false);
     body["reasoning"] = json!({"effort": settings.reasoning_effort});
+    if authentication == AuthenticationMethod::Chatgpt {
+        if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
+            tools.retain(|tool| tool["type"] != "image_generation");
+        }
+        if body["tool_choice"]["type"] == "image_generation" {
+            body.as_object_mut().unwrap().remove("tool_choice");
+        }
+    }
     if authentication == AuthenticationMethod::ApiKey {
         body["service_tier"] = json!("default");
         body["max_output_tokens"] = json!(settings.max_output_tokens);

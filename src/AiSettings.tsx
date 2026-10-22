@@ -15,6 +15,9 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const [view, setView] = useState<AiSettingsView | null>(null);
   const [settings, setSettings] = useState<ProviderSettings | null>(null);
   const [key, setKey] = useState('');
+  const [imageKey, setImageKey] = useState('');
+  const [showImageKey, setShowImageKey] = useState(false);
+  const [imageStorage, setImageStorage] = useState<'system' | 'session'>('system');
   const [storage, setStorage] = useState<'system' | 'session'>('system');
   const [chatgptStorage, setChatgptStorage] = useState<'system' | 'session'>('system');
   const [loading, setLoading] = useState(true);
@@ -72,6 +75,11 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
       if (!value.credential.configured) setError(value.credential.vaultError ?? 'The key was not configured.');
       else { setReplacingKey(false); setStatus('Key connected.'); }
     }
+  }
+  async function connectImageKey() {
+    const entered = imageKey; setImageKey('');
+    const value = await action('set_ai_key', { image: true, key: entered, storage: imageStorage });
+    if (value?.imageKey.configured) setShowImageKey(false);
   }
   async function removeKey() {
     setKey('');
@@ -178,11 +186,23 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         </div>
         {usesChatgpt && view.chatgpt.modelsError && <p className="message error" role="alert">{view.chatgpt.modelsError}</p>}
         {!model && <p className="field-error" role="alert">{usesChatgpt ? !account?.connected ? 'Sign in to see available models.' : !account.planEnabled ? 'Allow ChatGPT plan usage to continue.' : 'No supported models. Test connection to refresh.' : 'Choose an available model.'}</p>}
-        {!usesChatgpt && <label className="ai-inline-field ai-budget">API budget per generation (USD)<input disabled={busy || pending} type="number" required min={0.01} step={0.01} aria-label="API budget per generation (USD)" aria-describedby="ai-budget-help" value={budget ?? String(settings.spendingLimitUsd)} onChange={event => { setBudget(event.target.value); if (event.target.value.trim() && Number.isFinite(event.target.valueAsNumber)) setSettings({ ...settings, spendingLimitUsd: event.target.valueAsNumber }); }} onBlur={() => setBudget(null)} /><span id="ai-budget-help" className="field-help">Blocks estimates over budget; not a guaranteed billing cap.</span></label>}
+        {(!usesChatgpt || view.imageKey.configured) && <label className="ai-inline-field ai-budget">API budget per generation (USD)<input disabled={busy || pending} type="number" required min={0.01} step={0.01} aria-label="API budget per generation (USD)" aria-describedby="ai-budget-help" value={budget ?? String(settings.spendingLimitUsd)} onChange={event => { setBudget(event.target.value); if (event.target.value.trim() && Number.isFinite(event.target.valueAsNumber)) setSettings({ ...settings, spendingLimitUsd: event.target.valueAsNumber }); }} onBlur={() => setBudget(null)} /><span id="ai-budget-help" className="field-help">Blocks estimates over budget; not a guaranteed billing cap.</span></label>}
         <section className="ai-features" aria-label="Features">
           <div className="ai-feature-row image-generation-access"><div className="ai-feature-copy"><label htmlFor="ai-image-generation">Image generation</label><div className="ai-feature-meta"><span className="ai-feature-pill" id="ai-image-status" role="status">{imageStatus}</span><button type="button" className="ai-refresh" aria-label="Check again" title="Check again" disabled={busy || !canTest || view.imageAccessChecking} onClick={() => { void testAccess(); }}>↻</button></div></div>
             <input id="ai-image-generation" className="ai-switch" type="checkbox" role="switch" aria-describedby="ai-image-status" disabled={busy || pending || checkingImages || view.imageAccessChecking || view.imageAccess?.available !== 'yes' || !connected || (usesChatgpt && !account?.planEnabled) || !provider?.capabilities.imageGeneration} checked={settings.imageGeneration} onChange={event => setSettings({ ...settings, imageGeneration: event.target.checked })} />
           </div>
+          {view.provider === 'openai' && <div className="ai-feature-meta">
+            {view.imageCredential && <span>{view.imageCredential === 'chatgpt' ? 'Using your ChatGPT sign-in' : view.imageCredential === 'imageKey' ? 'Using image key' : 'Using your API key'}</span>}
+            {(view.imageAccess?.available !== 'yes' || view.imageKey.configured) && <button type="button" disabled={busy || pending} onClick={() => setShowImageKey(value => !value)}>{view.imageKey.configured ? 'Replace image key' : 'Add image key'}</button>}
+            {view.imageKey.configured && <button type="button" disabled={busy || pending} onClick={() => { setImageKey(''); void action('remove_ai_key', { image: true }); }}>Remove image key</button>}
+          </div>}
+          {view.provider === 'openai' && showImageKey && <div className="ai-key-form">
+            <label>Image API key<input type="password" autoComplete="new-password" spellCheck={false} disabled={busy || pending} value={imageKey} onChange={event => setImageKey(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (imageKey.trim()) void connectImageKey(); } }} /></label>
+            <label>Store key<select value={imageStorage} disabled={busy || pending} onChange={event => setImageStorage(event.target.value as 'system' | 'session')}><option value="system">Secure storage</option><option value="session">This session</option></select></label>
+            <button type="button" disabled={busy || pending || !imageKey.trim()} onClick={() => { void connectImageKey(); }}>Connect image key</button>
+          </div>}
+          {view.provider === 'openai' && view.imageKey.vaultError && <p className="field-error" role="alert">{view.imageKey.vaultError}</p>}
+          {view.provider === 'openai' && view.imageAccess?.available !== 'yes' && [view.imageKeyAccess, view.mainImageAccess].find(access => access?.reason.includes('API Organization Verification')) && <p className="field-error">API Organization Verification required.</p>}
           <div className="ai-feature-row"><span>Web search</span><span className="ai-feature-pill">{provider?.capabilities.webSearch ? 'Available' : 'Not available'}</span></div>
         </section>
         <details className="ai-advanced" open={advanced} onToggle={event => setAdvanced(event.currentTarget.open)}><summary>Advanced</summary><fieldset className="advanced-settings"><legend>Model details</legend>{usesChatgpt && account && <p className="small muted">Registration: <span className="source-url">{account.id}</span></p>}{model && <div className="model-details">{!usesChatgpt && <p className="small">Standard input: USD {model.inputUsdPerMillion} / million tokens · Standard output: USD {model.outputUsdPerMillion} / million tokens</p>}

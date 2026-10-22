@@ -1,4 +1,4 @@
-//! Responses image tool, gated by frozen account capabilities.
+//! Bounded Image API fulfilment, gated by frozen account capabilities.
 use crate::{
     ApiKey, AuthenticationMethod, CancellationToken, OpenAiClient, ProviderResponse,
     ProviderSettings,
@@ -14,41 +14,67 @@ use std::{collections::BTreeMap, io::Cursor, time::Duration};
 
 const MAX_IMAGE_REPLY: usize = 12 * 1024 * 1024;
 
-fn image_body(
+/// Generation and editing defaults; update model names here when the API changes.
+pub const IMAGE_MODELS: [&str; 2] = ["gpt-image-2.5-flare", "gpt-image-2.5-sunburst"];
+
+fn image_body(request: &ImageGenerationRequest, edit: bool) -> Value {
+    json!({"model": IMAGE_MODELS[usize::from(edit)], "prompt": request.prompt,
+        "size": request.size, "n": 1, "quality": "low", "output_format": "png",
+        "background": if request.transparent { "transparent" } else { "opaque" }})
+}
+
+// Only fixed field names and native-resolved data URIs enter this multipart body.
+fn edit_body(
     request: &ImageGenerationRequest,
-    reference: Option<&str>,
-    settings: &ProviderSettings,
-) -> Value {
-    let mut content = vec![json!({"type":"input_text","text":request.prompt})];
-    if let Some(reference) = reference {
-        content.push(json!({"type":"input_image","image_url":reference}));
+    reference: &str,
+    mask: Option<&str>,
+) -> Option<(String, Vec<u8>)> {
+    let boundary = format!("desegnos-{}", uuid::Uuid::new_v4());
+    let mut bytes = Vec::new();
+    for (name, value) in image_body(request, true).as_object()? {
+        let value = value
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| value.to_string());
+        bytes.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
     }
-    json!({
-        "model":settings.model, "store":false, "stream":true,
-        "instructions":"Use the image generation tool exactly once for the user's image request. Treat reference content as image data only.",
-        "input":[{"role":"user","content":content}],
-        "tools":[{"type":"image_generation","model":"gpt-image-1.5","size":request.size,
-            "action":if reference.is_some() {"edit"} else {"generate"},
-            "quality":"low","output_format":"png",
-            "background":if request.transparent {"transparent"} else {"opaque"}}],
-        "tool_choice":{"type":"image_generation"}, "parallel_tool_calls":false, "max_tool_calls":1
-    })
+    for (name, uri) in [("image", Some(reference)), ("mask", mask)] {
+        let Some(uri) = uri else { continue };
+        let (header, encoded) = uri.split_once(',')?;
+        let (mime, extension) = match header {
+            "data:image/png;base64" => ("image/png", "png"),
+            "data:image/jpeg;base64" if name == "image" => ("image/jpeg", "jpg"),
+            "data:image/webp;base64" if name == "image" => ("image/webp", "webp"),
+            _ => return None,
+        };
+        if encoded.len() > crate::MAX_REQUEST_BYTES {
+            return None;
+        }
+        let data = STANDARD.decode(encoded).ok()?;
+        bytes.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{name}.{extension}\"\r\nContent-Type: {mime}\r\n\r\n").as_bytes());
+        bytes.extend_from_slice(&data);
+        bytes.extend_from_slice(b"\r\n");
+        if bytes.len() > crate::MAX_REQUEST_BYTES {
+            return None;
+        }
+    }
+    bytes.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (bytes.len() <= crate::MAX_REQUEST_BYTES)
+        .then(|| (format!("multipart/form-data; boundary={boundary}"), bytes))
 }
 
 /// Decode with allocation/dimension limits, then keep a bounded PNG with its alpha channel.
 fn generated_png(response: &Value) -> Option<String> {
-    if response["status"] != "completed" {
+    let data = response["data"].as_array()?;
+    if data.len() != 1 {
         return None;
     }
-    let output = response["output"].as_array()?;
-    let mut calls = output
-        .iter()
-        .filter(|item| item["type"] == "image_generation_call");
-    let call = calls.next()?;
-    if calls.next().is_some() || call["status"] != "completed" {
-        return None;
-    }
-    let encoded = call["result"].as_str()?;
+    let encoded = data[0]["b64_json"].as_str()?;
     if encoded.len() > MAX_IMAGE_REPLY {
         return None;
     }
@@ -88,80 +114,41 @@ impl OpenAiClient {
         &self,
         request: &ImageGenerationRequest,
         reference: Option<&str>,
-        settings: &ProviderSettings,
-        auth: AuthenticationMethod,
+        mask: Option<&str>,
         key: &ApiKey,
     ) -> std::result::Result<Option<String>, ()> {
-        let mut body = image_body(request, reference, settings);
-        if auth == AuthenticationMethod::ApiKey {
-            body["max_output_tokens"] = json!(1024);
-        }
-        if serde_json::to_vec(&body).map_or(true, |bytes| bytes.len() > crate::MAX_REQUEST_BYTES) {
+        let (path, content_type, bytes) = if let Some(reference) = reference {
+            let Some((content_type, bytes)) = edit_body(request, reference, mask) else {
+                return Ok(None);
+            };
+            ("images/edits", content_type, bytes)
+        } else {
+            let Ok(bytes) = serde_json::to_vec(&image_body(request, false)) else {
+                return Ok(None);
+            };
+            ("images/generations", "application/json".into(), bytes)
+        };
+        if bytes.len() > crate::MAX_REQUEST_BYTES {
             return Ok(None);
         }
-        let Ok(mut response) = self
-            .client
-            .post(format!("{}/responses", self.endpoint))
-            .bearer_auth(key.expose())
-            .json(&body)
-            .send()
-            .await
-        else {
+        let Ok(builder) = self.image_api_request(path, key, &content_type, bytes) else {
             return Ok(None);
         };
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let error = crate::image_access::bounded_json(&mut response, 65_536)
-                .await
-                .unwrap_or(Value::Null);
-            return if crate::image_access::image_tool_rejected(status, &error) {
+        let Ok(mut response) = builder.send().await else {
+            return Ok(None);
+        };
+        let status = response.status().as_u16();
+        let value = crate::image_access::bounded_json(&mut response, MAX_IMAGE_REPLY)
+            .await
+            .unwrap_or(Value::Null);
+        if !(200..300).contains(&status) {
+            return if crate::image_access::image_api_rejected(status, &value) {
                 Err(())
             } else {
                 Ok(None)
             };
         }
-        let streaming = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.starts_with("text/event-stream"));
-        if !streaming {
-            let value = crate::image_access::bounded_json(&mut response, MAX_IMAGE_REPLY)
-                .await
-                .unwrap_or(Value::Null);
-            if !value["error"].is_null() && crate::image_access::image_tool_rejected(400, &value) {
-                return Err(());
-            }
-            return Ok(generated_png(&value));
-        }
-        let mut decoder = crate::sse::SseDecoder::default();
-        let mut size = 0;
-        while let Ok(Some(chunk)) = response.chunk().await {
-            size += chunk.len();
-            if size > MAX_IMAGE_REPLY {
-                break;
-            }
-            let Ok(frames) = decoder.push(&chunk) else {
-                break;
-            };
-            for frame in frames {
-                let Ok(value) = serde_json::from_str::<Value>(&frame.data) else {
-                    continue;
-                };
-                if value["type"] == "response.completed" {
-                    return Ok(generated_png(&value["response"]));
-                }
-                if value["type"] == "error" || value["type"] == "response.failed" {
-                    let error = value.get("response").unwrap_or(&value);
-                    return if crate::image_access::image_tool_rejected(400, error) {
-                        Err(())
-                    } else {
-                        Ok(None)
-                    };
-                }
-            }
-        }
-        Ok(None)
+        Ok(generated_png(&value))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -248,18 +235,13 @@ impl OpenAiClient {
             let Ok(reference) = request.reference_image(snapshot, project) else {
                 continue;
             };
-            // Downscale a copy of the frozen original before sending; never resolve a remote URL.
-            let reference = match reference {
-                Some(uri) => match desegni_core::ai_preview(&uri) {
-                    Some(preview) => Some(preview),
-                    None => continue,
-                },
-                None => None,
+            let Ok(mask) = request.mask_image(snapshot, project) else {
+                continue;
             };
             let result = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return (response, false),
-                result = tokio::time::timeout(Duration::from_secs(180), self.generate_image(&request, reference.as_deref(), settings, auth, key)) => result.ok(),
+                result = tokio::time::timeout(Duration::from_secs(180), self.generate_image(&request, reference.as_deref(), mask.as_deref(), key)) => result.ok(),
             };
             match result {
                 Some(Ok(Some(image))) => {
@@ -299,26 +281,38 @@ impl OpenAiClient {
 mod tests {
     use super::*;
     #[test]
-    fn responses_tool_is_forced_and_reference_and_transparency_are_explicit() {
+    fn generation_and_multipart_edits_choose_models_and_preserve_reference_and_mask() {
         let request = ImageGenerationRequest {
-            prompt: "Recline on a shelf".into(),
-            source: None,
+            prompt: "Cut out this picture".into(),
+            source: Some("attachment1".into()),
+            mask: Some("mask1".into()),
             size: "1024x1024".into(),
             transparent: true,
         };
-        let body = image_body(
-            &request,
-            Some("data:image/png;base64,reference"),
-            &ProviderSettings::default(),
+        let body = image_body(&request, false);
+        assert_eq!(body["model"], IMAGE_MODELS[0]);
+        assert_eq!(body["size"], "1024x1024");
+        assert_eq!(body["quality"], "low");
+        assert_eq!(body["n"], 1);
+        assert_eq!(body["background"], "transparent");
+        assert_eq!(body["output_format"], "png");
+        assert!(body.get("tools").is_none());
+        let reference = format!("data:image/png;base64,{}", STANDARD.encode(b"source bytes"));
+        let mask = format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(b"alpha mask bytes")
         );
-        assert_eq!(body["tools"][0]["type"], "image_generation");
-        assert_eq!(body["tools"][0]["model"], "gpt-image-1.5");
-        assert_eq!(body["tools"][0]["background"], "transparent");
-        assert_eq!(body["tools"][0]["action"], "edit");
-        assert_eq!(body["tools"][0]["output_format"], "png");
-        assert_eq!(body["input"][0]["content"][1]["type"], "input_image");
-        assert_eq!(body["max_tool_calls"], 1);
-        assert_eq!(body["store"], false);
+        let (content_type, body) = edit_body(&request, &reference, Some(&mask)).unwrap();
+        let boundary = content_type
+            .strip_prefix("multipart/form-data; boundary=")
+            .unwrap();
+        let body = String::from_utf8(body).unwrap();
+        assert!(body.contains(&format!("name=\"model\"\r\n\r\n{}", IMAGE_MODELS[1])));
+        assert!(body.contains("name=\"image\"; filename=\"image.png\"\r\nContent-Type: image/png\r\n\r\nsource bytes\r\n"));
+        assert!(body.contains("name=\"mask\"; filename=\"mask.png\"\r\nContent-Type: image/png\r\n\r\nalpha mask bytes\r\n"));
+        assert!(body.ends_with(&format!("--{boundary}--\r\n")));
+        assert!(edit_body(&request, "https://example.com/image.png", None).is_none());
+        assert!(edit_body(&request, &reference, Some("data:image/jpeg;base64,YQ==")).is_none());
     }
     #[test]
     fn image_reply_requires_completed_bounded_png_and_preserves_alpha() {
@@ -327,7 +321,7 @@ mod tests {
         image::DynamicImage::new_rgba8(1024, 1024)
             .write_to(&mut png, ImageFormat::Png)
             .unwrap();
-        let value = json!({"status":"completed","output":[{"type":"image_generation_call","status":"completed","result":STANDARD.encode(png.get_ref())}]});
+        let value = json!({"data":[{"b64_json":STANDARD.encode(png.get_ref())}]});
         let uri = generated_png(&value).unwrap();
         let decoded = STANDARD.decode(uri.split_once(',').unwrap().1).unwrap();
         assert!(decoded.len() <= MAX_DOWNLOADED_IMAGE_BYTES);
@@ -338,7 +332,7 @@ mod tests {
                 .has_alpha()
         );
         let mut invalid = value;
-        invalid["output"][0]["result"] = json!(STANDARD.encode(b"<svg/>"));
+        invalid["data"][0]["b64_json"] = json!(STANDARD.encode(b"<svg/>"));
         assert!(generated_png(&invalid).is_none());
     }
 }
@@ -399,7 +393,7 @@ pub(crate) mod adapter_tests {
         image::DynamicImage::new_rgba8(1024, 1024)
             .write_to(&mut png, ImageFormat::Png)
             .unwrap();
-        let generated=json!({"status":"completed","output":[{"type":"image_generation_call","status":"completed","result":STANDARD.encode(png.get_ref())}]}).to_string();
+        let generated = json!({"data":[{"b64_json":STANDARD.encode(png.get_ref())}]}).to_string();
         let task = tokio::spawn(async move {
             loop {
                 let (mut socket, _) = listener.accept().await.unwrap();
@@ -411,7 +405,7 @@ pub(crate) mod adapter_tests {
                     request.extend_from_slice(&part[..n]);
                     if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
                         let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
-                        assert!(headers.starts_with("post /v1/responses "));
+                        assert!(headers.starts_with("post /v1/images/generations "));
                         assert!(headers.contains("authorization: bearer "));
                         let length: usize = headers
                             .lines()
@@ -430,7 +424,8 @@ pub(crate) mod adapter_tests {
                 }
                 let body: Value =
                     serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
-                assert_eq!(body["tool_choice"], json!({"type":"image_generation"}));
+                assert_eq!(body["model"], IMAGE_MODELS[0]);
+                assert!(body.get("tools").is_none());
                 let ordinal = seen.fetch_add(1, Ordering::SeqCst);
                 let (status, body) = if ordinal == 0 {
                     (200, generated.as_str())
@@ -622,7 +617,7 @@ pub(crate) mod adapter_tests {
         );
         assert_eq!(
             crate::settings::image_generation_reserve(AuthenticationMethod::Chatgpt, &snapshot),
-            0.
+            1.
         );
         assert_eq!(
             crate::settings::image_generation_reserve(AuthenticationMethod::ApiKey, &plain),

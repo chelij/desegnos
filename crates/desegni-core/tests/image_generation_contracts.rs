@@ -265,6 +265,7 @@ fn successful_generated_picture_is_stored_and_can_be_reused_as_an_edit_reference
         .unwrap();
     let id = *applied.pictures.keys().next().unwrap();
     let edit = ImageGenerationRequest {
+        mask: None,
         prompt: "Recline on a shelf".into(),
         source: Some(project_asset_reference(id)),
         size: "1024x1024".into(),
@@ -302,6 +303,7 @@ fn edit_reference_uses_only_an_attachment_from_the_frozen_request() {
         });
     let snapshot = project.prepare_requirements().unwrap();
     let request = ImageGenerationRequest {
+        mask: None,
         prompt: "Recline on a shelf".into(),
         source: Some("portrait1".into()),
         size: "1024x1024".into(),
@@ -438,4 +440,29 @@ fn mixed_existing_page_preserves_conflicted_source_and_shared_behavior() {
     let mut invalid = candidate;
     invalid.pages[0].content.css = "section { display:none }".into();
     assert!(invalid.validate(&snapshot, &project).is_err());
+}
+
+#[test]
+fn masks_require_a_source_and_resolve_only_native_references() {
+    let (project, snapshot, candidate) = fixture();
+    for attributes in [
+        "data-desegnos-mask='mask1'",
+        "data-desegnos-source='source1' data-desegnos-mask='https://example.com/mask.png'",
+        "data-desegnos-source='source1' data-desegnos-mask='../mask.png'",
+    ] {
+        let mut invalid = candidate.clone();
+        invalid.pages[0].content.html = invalid.pages[0].content.html.replace(
+            "data-desegnos-generate=",
+            &format!("{attributes} data-desegnos-generate="),
+        );
+        assert!(invalid.image_generation_requests().is_err());
+    }
+    let request = ImageGenerationRequest {
+        prompt: "Edit".into(),
+        source: Some("source1".into()),
+        mask: Some("unknown-mask".into()),
+        size: "1024x1024".into(),
+        transparent: true,
+    };
+    assert!(request.mask_image(&snapshot, &project).is_err());
 }

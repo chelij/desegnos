@@ -11,7 +11,7 @@ Mixed existing pages preserve shared CSS/JavaScript. If a conflicting rectangle 
 old DOM mapping, existing content outside ready roots/selected elements must remain unchanged.
 Pages containing only conflicts are omitted. Jobs with any validated ready source can apply.
 
-OpenAI API-key jobs advertise optional `capabilities.imageGeneration: {maxImages: 2,
+OpenAI jobs with confirmed Image API access advertise optional `capabilities.imageGeneration: {maxImages: 2,
 sizes: ["1024x1024"]}`. The settings switch defaults on for supported connections.
 An HTML `img` requests native processing with `data-desegnos-generate="prompt"`;
 `data-desegnos-source` optionally names a frozen request attachment or exact
@@ -19,10 +19,13 @@ An HTML `img` requests native processing with `data-desegnos-generate="prompt"`;
 an alpha PNG; the default is opaque. Size is fixed to `1024x1024`.
 
 After the main structured reply and image downloads, native code calls
-`POST https://api.openai.com/v1/responses` with `gpt-4.1` orchestrating one forced
-`image_generation` call using `gpt-image-1.5`, low quality and PNG output.
-This separate non-stream image response is never fed into the candidate-text SSE parser.
-References use the existing bounded 512 px JPEG preview of the frozen original.
+`POST https://api.openai.com/v1/images/generations` with `gpt-image-2.5-flare`,
+or `/v1/images/edits` with `gpt-image-2.5-sunburst` and a multipart reference image.
+Models are listed together in `image_generation.rs`. Both use low quality and PNG output.
+`data-desegnos-mask` optionally names a PNG attachment or project asset; its alpha mask
+applies to the first reference. Original reference/mask bytes are sent within the existing
+16 MiB request bound, preserving mask dimensions and alpha. Remote references are forbidden.
+Image API JSON (`data[].b64_json`) is separate from the candidate-text SSE parser.
 At most two distinct calls and 64 placements are accepted, with 4,096 characters per
 prompt, a 12 MiB wire-response ceiling, bounded PNG decoding, 256 KiB per stored PNG
 and 512 KiB total. PNGs are reduced as needed without flattening their alpha.
@@ -37,13 +40,21 @@ On apply, existing picture storage converts accepted inline results into shared
 Both existing OpenAI text paths use `/v1/responses`: API keys use bearer keys;
 ChatGPT sign-in uses the OAuth resource token obtained for
 `https://api.openai.com/v1` with `resource.invoke chatgpt.tokens.use.direct`.
-Neither that scope nor model discovery establishes image-tool entitlement.
-**ChatGPT-sign-in image generation is disabled**, with no API-key fallback; the
-capability is absent from frozen requirements and the switch explains this limitation.
-Other providers also omit it. Official documentation confirms the API-key tool/reference
-path, not entitlement through this app's ChatGPT OAuth registration (reviewed 2026-10-22):
-[image tool](https://developers.openai.com/api/docs/guides/tools-image-generation),
-[image generation](https://developers.openai.com/api/docs/guides/image-generation).
+Image access is checked independently for the active credential first, then the optional
+Image API key. The free probe posts the default image model with invalid `size: "16x16"`:
+only a 400 validation error about that parameter confirms access. Authorization, subscription
+sharing and organization-verification errors disable that credential; transient failures
+remain unknown. Error details are scrubbed before caching in `image-api-access.json`.
+This separate cache intentionally ignores old Responses-tool probe results.
+The main credential wins when both have confirmed access; otherwise a confirmed image key
+is used. Its secret lives in the same secure credential store/session mechanism as API keys,
+under a separate service, never in plain settings or job files. AI settings report both
+probe results and the selected credential. ChatGPT text usage can stay on the plan while
+images use the separately billed key and existing spending allowance. API Organization
+Verification may be required. Other providers omit the image capability.
+Responses bodies for ChatGPT sign-ins never include the built-in `image_generation` tool;
+the existing structured `data-desegnos-generate` request mechanism remains in use.
+See the [official Image API guide](https://developers.openai.com/api/docs/guides/image-generation).
 
 The following notes describe earlier versions. Rectangle and element requests previously
 used **format 14**. Shaped area requests used **format 15**:
