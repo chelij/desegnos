@@ -13,7 +13,7 @@ export async function sourceEditWorkflow(driver,physical,step,evidence) {
   const css="main { padding: 24px; }\nh1 { color: #245583; }";
   const javascript="document.querySelector('h1').dataset.ready = 'yes';";
   await step('Native source editing makes one durable transaction with exact source and a resolvable line map',async()=>{
-    await driver.button('Blank website');await driver.fill('Project name','Typed source check');await driver.button('Create project');
+    await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');await driver.fill('Project name','Typed source check');await driver.button('Create project');
     original=(await driver.invoke('get_workspace')).project;project=original;
     await physical.initialize(evidence);
     accepted=await driver.invoke('edit_page_source',{projectId:project.id,pageId:project.homePageId,revision:project.revision,html,css,javascript});project=accepted.project;

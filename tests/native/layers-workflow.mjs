@@ -149,7 +149,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
   let projectId, originalRequests, baseline, copiedId, copiedAppearance, savedProject;
 
   await step('Create two overlapping requests through trusted canvas drags', async () => {
-    await driver.button('Blank website'); await driver.fill('Project name', 'Native layers'); await driver.button('Create project');
+    await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name', 'Native layers'); await driver.button('Create project');
     projectId = await waitFor(async () => (await workspace(driver)).project?.id, 'The layer project did not open');
     await physical.initialize(evidence); await driver.button('Fit');
     const view = await physical.rect('.workspace-scroll');
@@ -220,7 +220,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
   await step('Selection offers Edit, Ask AI and Delete, and Layers opens at its selection anchor', async () => {
     await selectSite(driver, physical, 'blue-card'); await closeLayers(driver);
     assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar > button')].map(button => ({ label: button.getAttribute('aria-label'), text: button.textContent.trim() }))),
-      [{label:null,text:'Edit'},{label:null,text:'Ask AI'},{label:null,text:'Style'},{label:'Undo changes to this element',text:''},{label:'Delete layer',text:''}]);
+      [{label:null,text:'Edit'},{label:null,text:'Ask AI'},{label:null,text:'Style'},{label:'Undo changes to this element',text:''},{label:'Delete element',text:''}]);
     await driver.button('Layers'); await driver.ready(panel); await settled(driver);
     const anchor = await physical.rect('.element-toolbar'), popup = await physical.rect(panel);
     assert.ok(Math.abs(anchor.left - popup.left) < 1, JSON.stringify({ anchor, popup }));
@@ -290,7 +290,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     for (const label of ['Add request here', 'Paste', 'Fit to screen', 'Show grid', 'Layers']) await driver.ready(`.editor-menu [aria-label=${JSON.stringify(label)}]`);
     await driver.click('.editor-menu [aria-label="Add request here"]');
     await waitFor(async () => pending((await workspace(driver)).project).length === 1, 'The canvas menu did not create a real request');
-    await driver.ready('.element-toolbar [aria-label="Delete layer"]'); await driver.click('.element-toolbar [aria-label="Delete layer"]'); if(await driver.execute(()=>!!document.querySelector('dialog[open]'))) await driver.button('Remove');
+    await driver.ready('.element-toolbar [aria-label="Delete request"]'); await driver.click('.element-toolbar [aria-label="Delete request"]'); if(await driver.execute(()=>!!document.querySelector('dialog[open]'))) await driver.button('Remove');
     await waitFor(async () => pending((await workspace(driver)).project).length === 0, 'The temporary menu request was not removed');
     assert.equal(provider.generationRequests().length, 1);
   });
@@ -416,7 +416,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await physical.keys('Z', 1, ['Control']); await waitFor(async () => pending((await workspace(driver)).project).some(item => item.id === request.id), 'Undo did not restore the cut request');
     assert.deepEqual(pending((await workspace(driver)).project).find(item => item.id === request.id), request);
     await selectRequest(driver, physical, request.id); await closeLayers(driver);
-    await physical.click(await physical.center('.element-toolbar [aria-label="Delete layer"]')); await driver.button('Remove');
+    await physical.click(await physical.center('.element-toolbar [aria-label="Delete request"]')); await driver.button('Remove');
     await waitFor(async () => pending((await workspace(driver)).project).length === 0, 'Quick Delete did not remove the pending request');
     await physical.keys('Z', 1, ['Control']); await waitFor(async () => pending((await workspace(driver)).project).length === 1, 'Undo did not restore quick Delete');
   });
@@ -426,9 +426,9 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await waitFor(async () => (await driver.invoke('get_generation', { projectId }))?.status === 'blocked', 'The controlled missing-input attempt did not stop for review');
     await driver.button('Details'); await driver.ready('section[aria-label="Finish your draft"]');
     const normal = await driver.execute(() => document.querySelector('section[aria-label="Finish your draft"]').innerText);
-    assert.match(normal, /Requests needing details/); assert.ok(!normal.includes('dependency gate'));
+    assert.match(normal, /Requests needing a decision/); assert.ok(!normal.includes('dependency gate'));
     await driver.menu(['Advanced', 'AI instructions sent'], 'Generation options');
-    await driver.ready('pre[aria-label="Generation REQUIREMENTS.md source"]');
+    await driver.ready('pre[aria-label="AI instructions source"]');
     await driver.click('[aria-label="Generation options"]'); await driver.click('.editor-menu [aria-label="Advanced"]');
     const visible = await driver.execute(() => {
       const menu = document.querySelector('.editor-menu[aria-label="Advanced"]'), r = menu.getBoundingClientRect();
@@ -443,7 +443,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
 
   await step('Generate draft freezes the new policy, downloads actual images and shows honest placeholders', async () => {
     const previous = (await driver.invoke('get_generation', { projectId })).jobId;
-    provider.setMode('complete', { draftAudit: true }); await driver.button('Build draft');
+    provider.setMode('complete', { draftAudit: true }); await driver.button('Build draft'); await driver.button('Send paid request');
     const job = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.jobId !== previous && value?.status === 'applied' && value; }, 'The fresh labelled draft did not apply', 25_000);
     assert.match(job.requirements.markdown, /Requirements format: 14/); assert.match(job.requirements.markdown, /clearly defined placeholders/);
     const image = await waitFor(() => driver.execute(() => {
@@ -459,7 +459,13 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     if(await driver.execute(()=>!!document.querySelector('button[aria-label="Keep changes"]'))) await driver.button('Keep changes');
     const parent = join(output, 'image-export'); await mkdir(parent, { recursive: true });
     await chooseFolder(physical, () => driver.button('Export'), parent, output, 'image-export');
-    await driver.ready('.export-notice');
+    await driver.ready('.export-notice .export-check');
+    const warnings = await driver.execute(() => document.querySelectorAll('.export-notice details li').length);
+    assert.ok(warnings > 0);
+    assert.equal(await driver.execute(() => document.querySelector('.export-check').textContent), `${warnings} to check`);
+    await driver.click('.export-check'); await driver.ready('section[aria-label="Page check"]');
+    assert.equal(await driver.execute(() => document.querySelector('.export-check').getAttribute('aria-expanded')), 'true');
+    await driver.button('Close page check');
     const directory = await waitFor(async () => { const entries = (await readdir(parent, { withFileTypes: true })).filter(item => item.isDirectory()); return entries.length === 1 && join(parent, entries[0].name); }, 'The image draft did not export');
     const exported = await inspectChromiumPage({ url: pathToFileURL(join(directory, 'index.html')).href, outputDirectory: output, label: 'exported-image-draft', expression: `(() => ({ photo: document.querySelector('#downloaded-photo')?.naturalWidth, missing: document.querySelector('#missing-photo')?.naturalWidth, src: document.querySelector('#downloaded-photo')?.getAttribute('src'), disabled: document.querySelector('button')?.disabled }))()` });
     assert.equal(exported.value.photo, 2); assert.equal(exported.value.missing, 640); assert.equal(exported.value.disabled, true);
@@ -473,7 +479,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     await closeLayers(driver); projectPath = (await driver.invoke('get_workspace')).path; await driver.button('Save');
     savedProject = (await savedState(driver, projectPath)).project;
     await verifyArchive(projectPath, savedProject, await driver.invoke('get_project_notes'));
-    await driver.menu(['New project']); await driver.button('Blank website'); await driver.fill('Project name', 'Temporary Layers reopen check'); await driver.button('Create project');
+    await driver.menu(['New project']); await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name', 'Temporary Layers reopen check'); await driver.button('Create project');
     await waitFor(async () => (await workspace(driver)).project?.id !== savedProject.id, 'The temporary blank project did not replace the saved layer project');
     const unsaved = (await workspace(driver)).dirty;
     await chooseFile(physical, async () => { await driver.menu(['Open project']); }, projectPath, output, 'layers-open');
@@ -485,7 +491,13 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
   await step('Exported ordinary files preserve copied layers and pseudo-elements without native runtime', async () => {
     const parent = join(output, 'export-parent'); await mkdir(parent, { recursive: true });
     await chooseFolder(physical, () => driver.button('Export'), parent, output, 'layers-export');
-    await driver.ready('.export-notice');
+    await driver.ready('.export-notice .export-check');
+    const warnings = await driver.execute(() => document.querySelectorAll('.export-notice details li').length);
+    assert.ok(warnings > 0);
+    assert.equal(await driver.execute(() => document.querySelector('.export-check').textContent), `${warnings} to check`);
+    await driver.click('.export-check'); await driver.ready('section[aria-label="Page check"]');
+    assert.equal(await driver.execute(() => document.querySelector('.export-check').getAttribute('aria-expanded')), 'true');
+    await driver.button('Close page check');
     const directory = await waitFor(async () => { const entries = (await readdir(parent, { withFileTypes: true })).filter(item => item.isDirectory()); return entries.length === 1 && join(parent, entries[0].name); }, 'Export did not create the real website folder');
     const index = join(directory, 'index.html'); assert.match(await readFile(index, 'utf8'), /Blue card/);
     const result = await inspectChromiumPage({ url: pathToFileURL(index).href, outputDirectory: output, label: 'exported-layers', expression: `(() => {

@@ -236,7 +236,7 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
     const frozen = reviewed.requests.find(item => item.regionId === request.id);
     assert.deepEqual(frozen.placementHint, request.rect);
     assert.ok(frozen.placementPercent.x < 0, 'Requirements must express intentional negative percentages');
-    await driver.click('.element-toolbar [aria-label="Delete layer"]');
+    await driver.click('.element-toolbar [aria-label="Delete request"]');
     await driver.click('//dialog[@open]//button[normalize-space(.)="Remove"]', 'xpath');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions.length === 2, 'The temporary off-guide request was not removed');
     assert.deepEqual((await driver.invoke('get_workspace')).project.pages, before.pages);
@@ -263,7 +263,7 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
     await physical.keys('Right');
     const moved = await waitFor(async () => { const value = await region(2); return Math.abs(value.rect.x - snapped.rect.x - steps.x) < 0.000001 && value; }, 'The move grip did not use the configured 5% step');
     await writeFile(join(evidence, 'percentage-grid-gesture.json'), JSON.stringify({ settings: { ...before.gridSettings, snap: true }, steps, snapped: snapped.rect, moved: moved.rect }, null, 2));
-    await driver.click('.element-toolbar [aria-label="Delete layer"]');
+    await driver.click('.element-toolbar [aria-label="Delete request"]');
     await driver.click('//dialog[@open]//button[normalize-space(.)="Remove"]', 'xpath');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions.length === 2, 'The temporary snapping request was not removed');
     await driver.button('Grid and rulers');

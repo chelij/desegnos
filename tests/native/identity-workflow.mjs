@@ -85,14 +85,14 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
   await physical.initialize(output);
 
   let blankProject;
-  await step('New projects always start blank; Import context opens from the main window', async () => {
+  await step('New projects always start blank; Use a site or brand opens from the main window', async () => {
     await driver.button('Save');
     await savedState(driver, sourceProjectPath);
     sourceProjectHash = hash(await readFile(sourceProjectPath));
     await driver.button('New project');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] input[name="projectName"]')), false);
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] button[aria-label="Use my existing brand"]')), false);
-    await driver.click('//dialog[@open]//button[@aria-label="Blank website"]', 'xpath');
+    await driver.ready('//dialog[@open]//button[.//strong[normalize-space(.)="Use my existing brand"]]', 'xpath');
+    await driver.click('//dialog[@open]//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
     await driver.fill('Project name', 'Imported Northstar website');
     await driver.button('Web');
     assert.deepEqual(await driver.execute(() => [...document.querySelector('dialog[open] select').options].map(option => option.value)), ['1440x900', '1920x1080', '1536x864', '1366x768', '1280x720', '2560x1440', 'custom']);
@@ -102,8 +102,8 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     blankProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id !== originalProject.id && value; }, 'The blank project did not open');
     // The source project stays open in its own tab group.
     const openIds = (await workspace(driver)).openProjects.map(open => open.id); assert.ok(openIds.includes(originalProject.id) && openIds.at(-1) === blankProject.id, JSON.stringify(openIds));
-    await driver.button('Import context');
-    await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .import-context')), 'Import context did not open');
+    await driver.button('Use a site or brand…');
+    await driver.ready('dialog[open][aria-label="Use a site or brand"] .import-context');
     assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] button')].find(button => button.textContent.trim() === 'Add to project')?.disabled), true);
     assert.match(await driver.execute(() => document.querySelector('.import-context').textContent), /1\. Where is your brand\?.*Read your brand first/s);
     await physical.captureWindow(join(output, 'new-project-choice-window.png'));
