@@ -956,11 +956,33 @@ impl ForeignStream {
         if !self.stopped || (self.provider == ProviderId::Anthropic && !self.terminal) {
             return Err(self.error(ErrorKind::Truncated));
         }
-        if self.response_id.is_none()
-            || self.text.is_empty()
-            || !serde_json::from_str::<Value>(&self.text).is_ok_and(|v| v.is_object())
-        {
+        if self.response_id.is_none() || self.text.is_empty() {
             return Err(self.error(ErrorKind::Malformed));
+        }
+        let rejection = match serde_json::from_str::<Value>(&self.text) {
+            Err(_) => Some(crate::ResponseRejection::CandidateJson),
+            Ok(value) if !value.is_object() => Some(crate::ResponseRejection::CandidateShape),
+            _ => None,
+        };
+        if let Some(rejection) = rejection {
+            // Only a completed final answer is repairable. Wire/terminal errors above remain
+            // transport failures; credential echoes were rejected while receiving frames.
+            let mut error = self.error(ErrorKind::Malformed);
+            error.outcome = SubmissionOutcome::Received;
+            error.response_format = Some(crate::ResponseFormat {
+                diagnostic_reply: Some(
+                    crate::scrub_diagnostic_reply(&self.text, None).into_boxed_str(),
+                ),
+                content_type: Some("text/event-stream".into()),
+                body_kind: crate::ResponseBodyKind::Text,
+                body_bytes: self.text.len(),
+                provider_message: None,
+                body_truncated: false,
+                limit_bytes: None,
+                rejection: Some(rejection),
+                correlation: None,
+            });
+            return Err(error);
         }
         Ok(ProviderResponse {
             text: self.text,
@@ -1273,5 +1295,29 @@ mod tests {
             );
             server.await.unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod validation_repair_tests {
+    use super::*;
+
+    #[test]
+    fn completed_bad_json_is_distinguished_from_an_interrupted_stream() {
+        let mut stream = ForeignStream::new(ProviderId::Google);
+        stream.response_id = Some("repair-fixture".into());
+        stream.text = "{unfinished JSON".into();
+        stream.stopped = true;
+        let error = stream.finish().unwrap_err();
+        assert_eq!(error.outcome, SubmissionOutcome::Received);
+        assert_eq!(
+            error.response_format.unwrap().rejection,
+            Some(crate::ResponseRejection::CandidateJson)
+        );
+        let mut interrupted = ForeignStream::new(ProviderId::Google);
+        interrupted.text = "{unfinished JSON".into();
+        let error = interrupted.finish().unwrap_err();
+        assert_ne!(error.outcome, SubmissionOutcome::Received);
+        assert!(error.response_format.is_none());
     }
 }

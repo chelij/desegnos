@@ -126,7 +126,19 @@ pub struct GenerationJobView {
     #[serde(default)]
     context: Option<RequirementsSnapshot>,
     #[serde(default)]
+    earlier_contexts: Vec<RequirementsSnapshot>,
+    #[serde(default)]
     raw_reply: Option<String>,
+    #[serde(default)]
+    validation_events: Vec<desegni_core::ValidationEvent>,
+    #[serde(default)]
+    validation_counts_recorded: bool,
+    #[serde(default)]
+    repair_rounds: usize,
+    #[serde(default)]
+    first_exchange: Option<ValidationExchange>,
+    #[serde(default)]
+    repair_area_count: usize,
     #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
@@ -155,6 +167,14 @@ pub struct GenerationJobView {
     recommended_decision_indices: Vec<usize>,
     #[serde(default)]
     dossier_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ValidationExchange {
+    summary: String,
+    regions: Vec<desegni_core::RegionOutcome>,
+    usage: Option<TokenUsage>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1052,6 +1072,12 @@ impl GenerationService {
                 base_revision: project.revision,
                 requirements,
                 context: None,
+                earlier_contexts: vec![],
+                validation_events: vec![],
+                validation_counts_recorded: false,
+                repair_rounds: 0,
+                first_exchange: None,
+                repair_area_count: 0,
                 raw_reply: None,
                 created_at: Some(now()),
                 areas: project
@@ -1188,6 +1214,11 @@ impl GenerationService {
             .map_err(message)?;
         }
         record.view.context = None;
+        record.view.earlier_contexts.clear();
+        record.view.validation_events.clear();
+        record.view.validation_counts_recorded = false;
+        record.view.first_exchange = None;
+        record.view.repair_area_count = 0;
         let reply_path = directory.join("REPLY.txt");
         if reply_path.exists() {
             regular_file(&reply_path)?;
@@ -1253,6 +1284,11 @@ impl GenerationService {
                     MAX_JOB_BYTES,
                 )?
             };
+            let latest = record
+                .view
+                .attempts
+                .last()
+                .is_some_and(|attempt| attempt.ordinal == ordinal);
             if let Some(attempt) = record
                 .view
                 .attempts
@@ -1268,8 +1304,14 @@ impl GenerationService {
                 }
                 if usage.is_some() {
                     attempt.usage = usage;
+                    if latest {
+                        record.view.usage = usage;
+                    }
                 }
                 attempt.finished_at.get_or_insert_with(now);
+                if latest {
+                    self.record_validation_counts(&mut record);
+                }
                 self.persist_retaining(record)?;
             }
             return Ok(());
@@ -1294,6 +1336,7 @@ impl GenerationService {
                     attempt.usage = usage;
                     record.view.usage = usage;
                 }
+                self.record_validation_counts(&mut record);
                 self.persist_retaining(record)?;
             }
             self.active.remove(&job_id);
@@ -1315,7 +1358,8 @@ impl GenerationService {
                     &response.text,
                     std::env::var("DESEGNI_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                match GenerationCandidate::from_reply(&response.text, &record.view.requirements, original).and_then(|mut candidate| {
+                match desegni_core::recover_generation_reply(&response.text, &record.view.requirements, original).and_then(|(mut candidate, events)| {
+                    record.view.validation_events.extend(events);
                     let format = record.view.requirements.format_version()?;
                     if (8..12).contains(&format) { candidate.resolve_project_assets(original)?; }
                     candidate.validate(&record.view.requirements, original)?;
@@ -1386,6 +1430,7 @@ impl GenerationService {
                 record.error = Some(error);
             }
         }
+        self.record_validation_counts(&mut record);
         if let Some(attempt) = record.view.attempts.last_mut() {
             attempt.status = record.view.status;
             attempt.finished_at = Some(now());
@@ -1393,6 +1438,52 @@ impl GenerationService {
         let _ = self.persist_retaining(record);
         self.active.remove(&job_id);
         Ok(())
+    }
+
+    fn record_validation_counts(&self, record: &mut JobRecord) {
+        if record.view.validation_counts_recorded || record.view.validation_events.is_empty() {
+            return;
+        }
+        let counter_path = self.directory.join("validation-counts.json");
+        let mut counts: BTreeMap<String, u64> = if counter_path.exists() {
+            match read_json(&counter_path, 64 * 1024) {
+                Ok(counts) => counts,
+                Err(error) => {
+                    record
+                        .view
+                        .validation_events
+                        .push(desegni_core::ValidationEvent {
+                            kind: "telemetryStorage".into(),
+                            disposition: "conflicted".into(),
+                            region_id: None,
+                            message: format!(
+                                "Kept unreadable local validation counts unchanged: {error}"
+                            ),
+                        });
+                    return;
+                }
+            }
+        } else {
+            BTreeMap::new()
+        };
+        for event in &record.view.validation_events {
+            let count = counts
+                .entry(format!("{}:{}", event.kind, event.disposition))
+                .or_default();
+            *count = count.saturating_add(1);
+        }
+        if let Err(error) = write_json(&counter_path, &counts) {
+            record
+                .view
+                .validation_events
+                .push(desegni_core::ValidationEvent {
+                    kind: "telemetryStorage".into(),
+                    disposition: "conflicted".into(),
+                    region_id: None,
+                    message: format!("Could not save local validation counts: {error}"),
+                });
+        }
+        record.view.validation_counts_recorded = true;
     }
 
     fn handle_finish_error(&mut self, job_id: Uuid, ordinal: usize, error: &str) {
@@ -2111,6 +2202,29 @@ fn total_usage(first: Option<TokenUsage>, second: Option<TokenUsage>) -> Option<
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn validation_repair_allowed(
+    status: JobStatus,
+    stopped: bool,
+    rounds: usize,
+    provider_failed: bool,
+    authentication: AuthenticationMethod,
+    spent_estimate: f64,
+    repair_estimate: Option<f64>,
+    limit: f64,
+) -> bool {
+    status == JobStatus::Generating
+        && !stopped
+        && !provider_failed
+        && rounds < desegni_core::MAX_VALIDATION_REPAIR_ROUNDS
+        && repair_estimate.is_some_and(|estimate| {
+            estimate.is_finite()
+                && estimate >= 0.0
+                && (authentication == AuthenticationMethod::Chatgpt
+                    || spent_estimate + estimate <= limit)
+        })
+}
+
 async fn submit(
     app: AppHandle,
     window: WebviewWindow,
@@ -2205,6 +2319,18 @@ async fn submit(
                 }
             };
             let mut result = ask(&request.requirements).await;
+            // A completed, unambiguous final answer with malformed JSON/schema is a
+            // validation failure, not a transport retry. All other provider failures stop here.
+            if request.requirements.format_version().is_ok_and(|v| v >= 17) {
+                if let Err(error) = &result {
+                    if error.outcome == SubmissionOutcome::Received && error.response_format.as_ref().is_some_and(|format|
+                        matches!(format.rejection, Some(desegni_ai::ResponseRejection::CandidateJson | desegni_ai::ResponseRejection::CandidateShape))) {
+                        if let Some(text) = error.response_format.as_ref().and_then(|format| format.diagnostic_reply.as_ref()) {
+                            result = Ok(ProviderResponse { text: text.to_string(), response_id: error.response_id.clone().unwrap_or_default(), usage: error.usage });
+                        }
+                    }
+                }
+            }
             // An element fix may ask once for other elements' HTML; reply automatically and keep
             // the final answer tied to the frozen requirements.
             if let Ok(first) = &result
@@ -2250,6 +2376,124 @@ async fn submit(
                     response.usage = total_usage(usage, response.usage);
                     response
                 });
+            }
+            // One validation repair is distinct from a user retry. It uses the same frozen
+            // provider/model, cancellation token, accounting and persisted context exchange.
+            if request.requirements.format_version().is_ok_and(|v| v >= 17) {
+                if let Ok(first_response) = &mut result {
+                    let recovered = desegni_core::recover_generation_reply(&first_response.text, &request.requirements, &original);
+                    let (first_candidate, mut events) = match recovered {
+                        Ok((candidate, events)) => (Some(candidate), events),
+                        Err(error) => (None, vec![desegni_core::ValidationEvent {
+                            kind: "replyStructure".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string(),
+                        }]),
+                    };
+                    let initial_reply_diagnostic = first_candidate.is_none().then(|| desegni_ai::scrub_diagnostic_reply(&first_response.text, None));
+                    let follow_up = request.requirements.validation_repair(&events).ok().flatten();
+                    if let Some(follow_up) = follow_up.filter(|_| !cancel_ref.is_cancelled()) {
+                        // Reserve the full first-round estimate plus the complete repair estimate.
+                        // Unknown pricing/estimation never authorizes additional spending.
+                        let repair_estimate = client_ref.estimate(request.authentication, &follow_up, request.generation_mode,
+                            &desegni_core::result_schema(&follow_up), &request.settings).ok().map(|estimate| estimate.estimate_usd);
+                        let previous_context = shared_app.state::<Mutex<GenerationService>>().lock().ok()
+                            .and_then(|service| service.jobs.get(&job_id).and_then(|record| record.view.context.clone()));
+                        let previous_estimate = previous_context.as_ref().map(|context| client_ref.estimate(request.authentication, context,
+                            request.generation_mode, &desegni_core::result_schema(context), &request.settings).ok().map(|estimate| estimate.estimate_usd));
+                        let spent_estimate = request.estimate_usd + previous_estimate.flatten().unwrap_or(0.0);
+                        let known_cost = previous_estimate.is_none() || previous_estimate.flatten().is_some();
+                        let allowed = validation_repair_allowed(request.status, cancel_ref.is_cancelled(), request.repair_rounds, false,
+                            request.authentication, spent_estimate, repair_estimate.filter(|_| known_cost), request.settings.spending_limit_usd);
+                        if allowed {
+                            let persisted = (|| -> NativeResult<bool> {
+                                let state = shared_app.state::<Mutex<GenerationService>>();
+                                let mut service = state.lock().map_err(message)?;
+                                let mut record = service.jobs.get(&job_id).cloned().ok_or("The active job is unavailable.")?;
+                                if record.view.status != JobStatus::Generating || cancel_ref.is_cancelled()
+                                    || record.view.repair_rounds >= desegni_core::MAX_VALIDATION_REPAIR_ROUNDS { return Ok(false); }
+                                if let Some(previous) = record.view.context.take() {
+                                    let path = service.job_directory(original.id, job_id).join("CONTEXT.md");
+                                    regular_file(&path)?;
+                                    let archived = service.job_directory(original.id, job_id).join(format!("attempt-{ordinal}-needs-CONTEXT.md"));
+                                    if archived.exists() { return Err("The prior context archive already exists.".into()); }
+                                    fs::rename(path, archived).map_err(message)?;
+                                    record.view.earlier_contexts.push(previous);
+                                }
+                                record.view.first_exchange = Some(ValidationExchange {
+                                    summary: first_candidate.as_ref().map_or_else(|| "The AI reply did not match the required format.".into(), |c| c.summary.clone()),
+                                    regions: first_candidate.as_ref().map_or_else(Vec::new, |c| c.regions.clone()), usage: first_response.usage,
+                                });
+                                if let Some(reply) = &initial_reply_diagnostic { record.view.raw_reply = Some(reply.clone()); }
+                                record.view.validation_events = events.clone();
+                                record.view.context = Some(follow_up.clone());
+                                record.view.repair_rounds += 1;
+                                record.view.repair_area_count = if events.iter().any(|e| e.disposition == "conflicted" && e.region_id.is_none()) {
+                                    record.view.areas.len()
+                                } else { events.iter().filter(|e| e.disposition == "conflicted").filter_map(|e| e.region_id).collect::<BTreeSet<_>>().len() };
+                                record.view.message = format!("Asked the AI to fix {} areas", record.view.repair_area_count);
+                                service.persist(record)?;
+                                Ok(true)
+                            })().unwrap_or_else(|error| {
+                                events.push(desegni_core::ValidationEvent { kind: "repairStorage".into(), disposition: "conflicted".into(), region_id: None, message: format!("Skipped the repair because its context could not be saved: {error}") });
+                                false
+                            });
+                            if persisted {
+                                let first_usage = first_response.usage;
+                                match ask(&follow_up).await {
+                                    Ok(second) => {
+                                        first_response.usage = total_usage(first_usage, second.usage);
+                                        let corrected = request.requirements.adopt_follow_up_reply(&follow_up, &second.text)
+                                            .and_then(|text| desegni_core::recover_generation_reply(&text, &request.requirements, &original));
+                                        match corrected {
+                                            Ok((candidate, more)) => {
+                                                events.extend(more);
+                                                let merged = first_candidate.as_ref().map_or_else(|| Ok(candidate.clone()), |first|
+                                                    desegni_core::merge_validation_repair(first, &candidate, &request.requirements, &original));
+                                                if let Ok(merged) = merged {
+                                                    for outcome in merged.regions.iter().filter(|r| r.status == desegni_core::RegionStatus::Conflict) {
+                                                        if !events.iter().any(|e| e.region_id == Some(outcome.region_id) && e.message == outcome.explanation) {
+                                                            events.push(desegni_core::ValidationEvent { kind: desegni_core::validation_failure_kind(&outcome.explanation).into(), disposition: "conflicted".into(), region_id: Some(outcome.region_id), message: outcome.explanation.clone() });
+                                                        }
+                                                    }
+                                                    for e in &mut events {
+                                                        if e.disposition == "conflicted" && (e.region_id.is_some_and(|id| merged.regions.iter().any(|r| r.region_id == id && r.status == desegni_core::RegionStatus::Implemented)) || e.region_id.is_none() && e.kind == "replyStructure" && merged.is_ready()) { e.disposition = "repaired".into(); }
+                                                    }
+                                                    first_response.text = serde_json::to_string(&merged).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
+                                                }
+                                            }
+                                            Err(error) => events.push(desegni_core::ValidationEvent { kind: "repairValidation".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() }),
+                                        }
+                                    }
+                                    Err(error) => {
+                                        // The paid first result remains usable if the repair transport fails.
+                                        first_response.usage = total_usage(first_usage, error.usage);
+                                        events.push(desegni_core::ValidationEvent { kind: "repairProvider".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() });
+                                    }
+                                }
+                            }
+                        } else {
+                            let (kind, message) = if request.repair_rounds >= desegni_core::MAX_VALIDATION_REPAIR_ROUNDS {
+                                ("repairRoundLimit", "This job has already used its one validation repair round.")
+                            } else if repair_estimate.is_none() || !known_cost {
+                                ("repairEstimate", "Skipped the repair because its combined cost could not be estimated.")
+                            } else { ("repairLimit", "Skipped the repair because it would exceed the spending limit.") };
+                            events.push(desegni_core::ValidationEvent { kind: kind.into(), disposition: "conflicted".into(), region_id: None, message: message.into() });
+                        }
+                    }
+                    // Expand/normalise before the image adapters parse the candidate as well.
+                    let final_candidate = desegni_core::recover_generation_reply(&first_response.text, &request.requirements, &original)
+                        .map(|(candidate, _)| candidate)
+                        .or_else(|error| desegni_core::conflicted_generation(&request.requirements, &original, &error.to_string()));
+                    if let Ok(candidate) = final_candidate {
+                        first_response.text = serde_json::to_string(&candidate).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
+                    }
+                    if let Ok(mut service) = shared_app.state::<Mutex<GenerationService>>().lock() {
+                        if let Some(mut record) = service.jobs.get(&job_id).cloned() {
+                            record.view.validation_events = events;
+                            if let Some(reply) = initial_reply_diagnostic { record.view.raw_reply = Some(reply); }
+                            let _ = service.persist_retaining(record);
+                        }
+                    }
+                }
             }
             match result {
                 Ok(response) => {
@@ -2449,7 +2693,22 @@ pub fn apply_generation(
         return Err(error);
     }
     record.view.status = JobStatus::Applied;
-    record.view.message = "Page updated.".into();
+    let total = record
+        .view
+        .candidate
+        .as_ref()
+        .map_or(0, |c| c.regions.len());
+    let applied = record.view.candidate.as_ref().map_or(0, |c| {
+        c.regions
+            .iter()
+            .filter(|r| r.status == desegni_core::RegionStatus::Implemented)
+            .count()
+    });
+    record.view.message = if applied < total {
+        format!("Applied {applied} of {total} areas")
+    } else {
+        "Page updated.".into()
+    };
     if let Err(error) = service.persist(record.clone()) {
         record.view.message = format!(
             "The project was applied and kept locally, but its job-history update failed: {error} The applied job ID prevents duplicate changes."

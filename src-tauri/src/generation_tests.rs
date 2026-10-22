@@ -68,14 +68,45 @@ fn project() -> Project {
 }
 
 fn candidate(project: &Project, view: &GenerationJobView, label: &str) -> GenerationCandidate {
+    let source = project.pages[0].content.clone().unwrap_or(SiteContent {
+        html: String::new(),
+        css: String::new(),
+        javascript: String::new(),
+    });
+    let roots = project.pages[0].regions.iter().map(|region| format!("<section data-desegnos-region=\"{}\"><button>{label}</button><details><summary>Explanation</summary><p>Native disclosure.</p></details></section>", region.id)).collect::<String>();
     GenerationCandidate {
         job_id: view.job_id,
         requirements_sha256: view.requirements.sha256.clone(),
         summary: format!("Implemented the requested button and disclosure: {label}."),
-        regions: project.pages.iter().flat_map(|page| page.regions.iter().filter(|region| !region.prompt.trim().is_empty()).map(|region| RegionOutcome { region_id: region.id, status: RegionStatus::Implemented, explanation: "Implemented using native HTML and browser behavior.".into() })).collect(),
-        pages: vec![GeneratedPage { page_id: project.home_page_id, content: SiteContent { html: format!("<main><button>{label}</button><details><summary>Explanation</summary><p>Native disclosure.</p></details></main>"), css: "main { display: grid; gap: 1rem; }".into(), javascript: "document.querySelector('button').addEventListener('click', event => { event.target.textContent = 'Clicked'; });".into() } }],
+        regions: project
+            .pages
+            .iter()
+            .flat_map(|page| {
+                page.regions
+                    .iter()
+                    .filter(|region| !region.prompt.trim().is_empty())
+                    .map(|region| RegionOutcome {
+                        region_id: region.id,
+                        status: RegionStatus::Implemented,
+                        explanation: "Implemented using native HTML and browser behavior.".into(),
+                    })
+            })
+            .collect(),
+        pages: vec![GeneratedPage {
+            page_id: project.home_page_id,
+            content: SiteContent {
+                html: format!("{}{roots}", source.html),
+                css: source.css,
+                javascript: source.javascript,
+            },
+        }],
         component_requests: vec![],
-        decision_proposals: vec![DecisionProposal { topic: "Control shape".into(), value: "Square button".into(), scope: Scope::Page(project.home_page_id), rationale: "A distinct primary control.".into() }],
+        decision_proposals: vec![DecisionProposal {
+            topic: "Control shape".into(),
+            value: "Square button".into(),
+            scope: Scope::Page(project.home_page_id),
+            rationale: "A distinct primary control.".into(),
+        }],
         criticism: vec![],
     }
 }
@@ -1994,4 +2025,103 @@ fn image_key_is_separate_and_selection_prefers_the_active_connection() {
     service.image_credentials.remove_key().unwrap();
     assert!(service.credentials.status().configured);
     assert!(!service.image_credentials.status().configured);
+}
+
+#[test]
+fn validation_repair_gate_skips_stop_limit_provider_error_and_second_round() {
+    let allowed = |stopped, rounds, provider_failed, estimate| {
+        validation_repair_allowed(
+            JobStatus::Generating,
+            stopped,
+            rounds,
+            provider_failed,
+            AuthenticationMethod::ApiKey,
+            0.6,
+            estimate,
+            1.0,
+        )
+    };
+    assert!(allowed(false, 0, false, Some(0.3)));
+    assert!(
+        !allowed(true, 0, false, Some(0.3)),
+        "Stop forbids another send"
+    );
+    assert!(
+        !allowed(false, 0, true, Some(0.3)),
+        "Provider errors never trigger validation repair"
+    );
+    assert!(
+        !allowed(false, 0, false, Some(0.5)),
+        "Combined estimate exceeds the limit"
+    );
+    assert!(
+        !allowed(false, 0, false, None),
+        "Unknown price cannot authorize spending"
+    );
+    assert!(
+        !allowed(false, 1, false, Some(0.3)),
+        "One repair per job, including explicit retries"
+    );
+    assert!(!validation_repair_allowed(
+        JobStatus::Cancelled,
+        false,
+        0,
+        false,
+        AuthenticationMethod::ApiKey,
+        0.6,
+        Some(0.3),
+        1.0
+    ));
+    assert_eq!(
+        total_usage(Some(usage(1)), Some(usage(2)))
+            .unwrap()
+            .total_tokens,
+        330
+    );
+}
+
+#[test]
+fn validation_notes_and_content_free_counters_survive_reopening() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let project = project();
+    let prepared = service.prepare(&project).unwrap();
+    service.begin(&project, prepared.job_id, false).unwrap();
+    let mut generated = candidate(&project, &prepared, "Private fixture label");
+    generated.pages[0].content.css.clear();
+    service
+        .finish(
+            &project,
+            Some(&project),
+            prepared.job_id,
+            1,
+            Ok(response(&generated, 1)),
+        )
+        .unwrap();
+    let view = service.saved_job(project.id, prepared.job_id).unwrap();
+    assert!(
+        view.validation_events
+            .iter()
+            .any(|event| event.kind == "omittedField" && event.disposition == "normalised")
+    );
+    let bytes = fs::read_to_string(service.directory.join("validation-counts.json")).unwrap();
+    let counts: BTreeMap<String, u64> = serde_json::from_str(&bytes).unwrap();
+    assert_eq!(counts["omittedField:normalised"], 1);
+    assert!(!bytes.contains("Private fixture label"));
+    assert!(!bytes.contains(&prepared.job_id.to_string()));
+    assert!(view.validation_counts_recorded);
+    service
+        .finish(
+            &project,
+            Some(&project),
+            prepared.job_id,
+            1,
+            Ok(response(&generated, 1)),
+        )
+        .unwrap();
+    assert_eq!(
+        fs::read_to_string(service.directory.join("validation-counts.json")).unwrap(),
+        bytes,
+        "A repeated completion must not count failures twice"
+    );
 }

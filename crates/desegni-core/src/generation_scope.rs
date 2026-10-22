@@ -6,6 +6,20 @@ use uuid::Uuid;
 
 const MARKER: &str = "data-desegnos-region";
 
+pub(crate) const CSS_SCOPE_STATES: &[&str] = &[
+    "::before",
+    "::after",
+    ":before",
+    ":after",
+    ":focus-visible",
+    ":focus-within",
+    ":disabled",
+    ":checked",
+    ":hover",
+    ":focus",
+    ":active",
+];
+
 fn canonical(node: NodeRef<'_>) -> serde_json::Value {
     if node.is_comment() {
         return serde_json::Value::Null;
@@ -155,7 +169,14 @@ impl GenerationCandidate {
             if let Some(source) = &page.content {
                 let source = crate::compact_site_content(source);
                 ensure(
-                    source.css == after_content.css
+                    (source.css == after_content.css
+                        || crate::generation_recovery::validate_region_css(
+                            &source.css,
+                            &after_content.css,
+                            self,
+                            page,
+                        )
+                        .is_ok())
                         && source.javascript == after_content.javascript,
                     "A partial page must preserve shared CSS and JavaScript; use inline styles in ready regions.",
                 )?;
@@ -316,7 +337,12 @@ impl GenerationCandidate {
                     .iter()
                     .all(|region| region.has_targets() || !region.shape.is_rect())
             {
-                validate_shaped_scope(original, &page.content, &regions)?;
+                validate_shaped_scope(
+                    original,
+                    &page.content,
+                    &regions,
+                    (snapshot.format_version()? >= 17).then_some(self),
+                )?;
                 continue;
             }
             // Rectangular requests on an existing page have no trustworthy mapping
@@ -331,6 +357,7 @@ impl GenerationCandidate {
                     &page.content,
                     &regions,
                     snapshot.format_version()? >= 12,
+                    (snapshot.format_version()? >= 17).then_some(self),
                 )?;
                 continue;
             }
@@ -340,6 +367,40 @@ impl GenerationCandidate {
                 .is_some_and(|source| !source.html.trim().is_empty())
                 && !targeted
             {
+                if snapshot.format_version()? >= 17 {
+                    let before =
+                        crate::editing::parse(&original.content.as_ref().expect("source").html)?;
+                    let after = crate::editing::parse(&page.content.html)?;
+                    for region in &regions {
+                        let selector = format!("[{MARKER}=\"{}\"]", region.id);
+                        let old = before.select(&selector);
+                        let new = after.select(&selector);
+                        if let Some(old_id) = old
+                            .nodes()
+                            .first()
+                            .and_then(|node| node.attr(crate::ELEMENT_ID_ATTRIBUTE))
+                        {
+                            ensure(
+                                new.nodes().len() == 1
+                                    && new.nodes()[0].attr(crate::ELEMENT_ID_ATTRIBUTE).as_deref()
+                                        == Some(old_id.as_ref()),
+                                format!(
+                                    "Area {} must preserve editor element ID {} on its region root.",
+                                    region.id, old_id
+                                ),
+                            )?;
+                        }
+                        for doc in [&before, &after] {
+                            for node in doc.select(&format!("[{MARKER}=\"{}\"]", region.id)).nodes()
+                            {
+                                node.remove_from_parent();
+                            }
+                        }
+                    }
+                    if let Some(message) = outside_difference(before.root(), after.root()) {
+                        return Err(crate::Error(message));
+                    }
+                }
                 continue;
             }
             let document = crate::editing::parse(&page.content.html)?;
@@ -412,10 +473,20 @@ fn validate_shaped_scope(
     original: &crate::Page,
     candidate: &crate::SiteContent,
     regions: &[&crate::Region],
+    current: Option<&GenerationCandidate>,
 ) -> Result<()> {
     let source = original.content.as_ref().expect("checked source");
     if source.css != candidate.css {
-        validate_selected_css(&source.css, &candidate.css, regions)?;
+        if let Some(current) = current {
+            crate::generation_recovery::validate_region_css(
+                &source.css,
+                &candidate.css,
+                current,
+                original,
+            )?;
+        } else {
+            validate_selected_css(&source.css, &candidate.css, regions)?;
+        }
     }
     ensure(
         source.javascript == candidate.javascript,
@@ -601,10 +672,20 @@ fn validate_stable_scope(
     candidate: &crate::SiteContent,
     regions: &[&crate::Region],
     scoped_css: bool,
+    current: Option<&GenerationCandidate>,
 ) -> Result<()> {
     let source = original.content.as_ref().expect("checked source");
     if scoped_css && source.css != candidate.css {
-        validate_selected_css(&source.css, &candidate.css, regions)?;
+        if let Some(current) = current {
+            crate::generation_recovery::validate_region_css(
+                &source.css,
+                &candidate.css,
+                current,
+                original,
+            )?;
+        } else {
+            validate_selected_css(&source.css, &candidate.css, regions)?;
+        }
     }
     ensure(
         (source.css == candidate.css || scoped_css) && source.javascript == candidate.javascript,
@@ -863,16 +944,9 @@ fn validate_phone_scope(original: &crate::Page, candidate: &crate::SiteContent) 
 /// New rules may only match selected roots themselves. Nested selectors, global at-rules,
 /// selector functions and sibling/descendant combinators cannot broaden the edit.
 fn validate_selected_css(before: &str, after: &str, regions: &[&crate::Region]) -> Result<()> {
-    use lightningcss::rules::{CssRule, CssRuleList};
-    use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
-    use lightningcss::traits::ToCss;
     let suffix = after
         .strip_prefix(before)
-        // Compact sources (format 14) join the additions without a line break.
-        .map(|value| value.strip_prefix('\n').unwrap_or(value))
         .ok_or_else(|| crate::Error("Existing CSS must remain unchanged.".into()))?;
-    let sheet = StyleSheet::parse(suffix, ParserOptions::default())
-        .map_err(|_| crate::Error("Scoped CSS could not be parsed.".into()))?;
     let ids: BTreeSet<_> = regions
         .iter()
         .flat_map(|region| {
@@ -881,9 +955,18 @@ fn validate_selected_css(before: &str, after: &str, regions: &[&crate::Region]) 
                 .into_iter()
                 .chain(region.elements_in_area().map(|bound| &bound.target))
         })
-        .map(|target| target.id.as_str())
+        .map(|target| (crate::ELEMENT_ID_ATTRIBUTE.to_string(), target.id.clone()))
         .collect();
-    fn rules(list: &CssRuleList<'_>, ids: &BTreeSet<&str>, depth: usize) -> Result<()> {
+    validate_scoped_rules(suffix, &ids)
+}
+
+pub(crate) fn validate_scoped_rules(css: &str, ids: &BTreeSet<(String, String)>) -> Result<()> {
+    use lightningcss::rules::{CssRule, CssRuleList};
+    use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
+    use lightningcss::traits::ToCss;
+    let sheet = StyleSheet::parse(css, ParserOptions::default())
+        .map_err(|_| crate::Error("Scoped CSS could not be parsed.".into()))?;
+    fn rules(list: &CssRuleList<'_>, ids: &BTreeSet<(String, String)>, depth: usize) -> Result<()> {
         ensure(
             depth <= 8 && list.0.len() <= 512,
             "Scoped CSS is too complex.",
@@ -902,9 +985,9 @@ fn validate_selected_css(before: &str, after: &str, regions: &[&crate::Region]) 
                             crate::Error("Scoped CSS selectors could not be read.".into())
                         })?;
                     for selector in selectors.split(',').map(str::trim) {
-                        let valid = ids.iter().any(|id| {
-                            let quoted = format!("[data-desegnos-id=\"{id}\"]");
-                            let unquoted = format!("[data-desegnos-id={id}]");
+                        let valid = ids.iter().any(|(attribute, id)| {
+                            let quoted = format!("[{attribute}=\"{id}\"]");
+                            let unquoted = format!("[{attribute}={id}]");
                             let Some(mut tail) = selector
                                 .strip_prefix(&quoted)
                                 .or_else(|| selector.strip_prefix(&unquoted))
@@ -912,28 +995,22 @@ fn validate_selected_css(before: &str, after: &str, regions: &[&crate::Region]) 
                                 return false;
                             };
                             while !tail.is_empty() {
-                                let Some(next) = [
-                                    "::before",
-                                    "::after",
-                                    ":before",
-                                    ":after",
-                                    ":focus-visible",
-                                    ":focus-within",
-                                    ":disabled",
-                                    ":checked",
-                                    ":hover",
-                                    ":focus",
-                                    ":active",
-                                ]
-                                .iter()
-                                .find_map(|pseudo| tail.strip_prefix(pseudo)) else {
+                                let Some(next) = CSS_SCOPE_STATES
+                                    .iter()
+                                    .find_map(|pseudo| tail.strip_prefix(pseudo))
+                                else {
                                     return false;
                                 };
                                 tail = next;
                             }
                             true
                         });
-                        ensure(valid, "A CSS rule targets an unselected element.")?;
+                        ensure(
+                            valid,
+                            format!(
+                                "CSS selector {selector} targets content outside the accepted areas."
+                            ),
+                        )?;
                     }
                 }
                 CssRule::Media(media) => rules(&media.rules, ids, depth + 1)?,
@@ -946,7 +1023,7 @@ fn validate_selected_css(before: &str, after: &str, regions: &[&crate::Region]) 
         }
         Ok(())
     }
-    rules(&sheet.rules, &ids, 0)
+    rules(&sheet.rules, ids, 0)
 }
 
 #[cfg(test)]
