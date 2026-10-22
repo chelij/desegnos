@@ -19,6 +19,7 @@ async function button(driver, name) {
     });
     await driver.menu(['Advanced', 'Refresh job'], 'Generation options'); return;
   }
+  if (['Add account', 'Reconnect', 'Test connection', 'Sign out'].includes(name)) return driver.menu([name], 'Account options');
   if (name === 'Refresh job') return driver.menu(['Advanced', 'Refresh job'], 'Generation options');
   if (name === 'AI settings') return driver.menu(['AI settings'], 'Generation options');
   if (name === 'Discard candidate') return driver.menu(['Discard result'], 'Generation options');
@@ -43,15 +44,22 @@ async function openSettings(driver) {
   await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .ai-settings form')), 'ChatGPT settings did not mount');
 }
 async function selectMethod(driver, value) {
-  await driver.click(`dialog[open] input[name="authentication"][value="${value}"]`);
+  const provider = value === 'chatgpt' ? 'openai-chatgpt' : 'openai';
+  await driver.select('Provider', provider);
   await waitFor(async () => (await settings(driver)).authentication === value, 'The native authentication preference did not update');
-  await waitFor(() => driver.execute(method => { const input = document.querySelector(`dialog[open] input[name="authentication"][value="${method}"]`); return input?.checked && !input.closest('fieldset').disabled; }, value), 'The editor did not accept the generation method');
+  await waitFor(() => driver.execute(choice => { const select = document.querySelector('.ai-provider select'); return select?.value === choice && !select.disabled; }, provider), 'The editor did not accept the generation method');
 }
 async function sessionStorage(driver) {
-  await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .chatgpt-storage:not([disabled])')), 'Sign-in storage stayed busy');
-  await driver.click('//fieldset[contains(@class,"chatgpt-storage")]//label[contains(normalize-space(.),"Current session only")]/input', 'xpath');
-  await waitFor(() => driver.execute(() => [...document.querySelectorAll('dialog[open] input[name="chatgptStorage"]')][1]?.checked), 'The editor did not accept session sign-in storage');
+  await driver.menu(['Where to keep the sign-in', 'Current session only'], 'Account options');
+  // Reopen the submenu to verify the selected storage, rather than only clicking it.
+  await driver.menu(['Where to keep the sign-in'], 'Account options');
+  await waitFor(() => driver.execute(() => !!document.querySelector('[role="menuitemradio"][aria-label="Current session only"][aria-checked="true"]')), 'The editor did not accept session sign-in storage');
+  for (let level = 0; level < 2; level += 1) {
+    await driver.command('POST', '/actions', { actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value: '\uE00C' }, { type: 'keyUp', value: '\uE00C' }] }] });
+    await driver.command('DELETE', '/actions');
+  }
 }
+
 async function signedIn(driver, previousActive = null) {
   const view = await waitFor(async () => { const value = await settings(driver); return value.chatgpt.signIn.status === 'complete' && value.chatgpt.activeAccountId !== previousActive && value; }, 'Signed loopback OAuth did not complete', 20_000);
   await waitFor(() => driver.execute(() => !!document.querySelector('dialog[aria-label="You\'re using your ChatGPT plan"][open]')), 'The first plan-use confirmation did not appear');
@@ -104,7 +112,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
   await step('ChatGPT authorization can be cancelled with no generation or account replacement', async () => {
     await openSettings(driver); await selectMethod(driver, 'chatgpt'); await sessionStorage(driver);
     provider.oauth.setMode('pending'); const before = provider.generationRequests().length;
-    await button(driver, 'Continue with ChatGPT');
+    await button(driver, 'Sign in with ChatGPT');
     await waitFor(async () => (await settings(driver)).chatgpt.signIn.status === 'awaitingBrowser', 'The real callback listener did not enter pending sign-in');
     await close(driver); await openSettings(driver);
     await button(driver, 'Cancel sign-in');
@@ -114,14 +122,14 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
   });
   await step('A real signed OAuth callback verifies PKCE and exposes only verified supported account models', async () => {
     await sessionStorage(driver);
-    provider.oauth.setMode('complete', 'first'); await button(driver, 'Continue with ChatGPT');
+    provider.oauth.setMode('complete', 'first'); await button(driver, 'Sign in with ChatGPT');
     const view = await signedIn(driver); first = view.chatgpt.accounts.find(value => value.id === view.chatgpt.activeAccountId);
     assert.equal(first.storage, 'session'); assert.equal(first.connected, true); assert.equal(first.planEnabled, true);
     assert.deepEqual(view.catalogue.map(value => value.id), ['gpt-6.1-sol']);
     assert.deepEqual(view.chatgpt.models.map(value => value.id), ['future-unverified-model', 'gpt-6.1-sol']);
     assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] input[type="number"]')].length), 0);
-    await button(driver, 'Test access');
-    await waitFor(() => driver.execute(() => document.querySelector('.ai-settings .operation-status')?.textContent === 'Connected. Ready to generate.'), 'ChatGPT Test access did not finish');
+    await button(driver, 'Test connection');
+    await waitFor(() => driver.execute(() => document.querySelector('.ai-settings .operation-status')?.textContent === 'Connection checked.'), 'ChatGPT Test connection did not finish');
     const authorization = provider.oauth.records().findLast(value => value.path === '/api/accounts/authorize');
     const exchange = provider.oauth.records().findLast(value => value.grantType === 'authorization_code');
     assert.ok(authorization.initial && exchange.pkceValidated && exchange.redirectValidated && exchange.dynamicClientExcluded);
@@ -346,7 +354,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
   });
   await step('Reconnect reuses the registration and host mapping without repeating the welcome acknowledgment', async () => {
     await openSettings(driver); await selectMethod(driver, 'chatgpt'); await sessionStorage(driver);
-    provider.oauth.setMode('complete', 'first'); await button(driver, 'Reconnect with ChatGPT');
+    provider.oauth.setMode('complete', 'first'); await button(driver, 'Reconnect');
     const view = await waitFor(async () => { const value = await settings(driver); return value.chatgpt.signIn.status === 'complete' && value.chatgpt.accounts.find(account => account.id === first.id).connected && value; }, 'Returning ChatGPT sign-in did not complete');
     assert.equal(view.chatgpt.showWelcome, false); assert.equal(view.chatgpt.accounts.length, 2);
     const authorizations = provider.oauth.records().filter(value => value.path === '/api/accounts/authorize' && value.profile === 'first');
@@ -363,20 +371,20 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
     assert.deepEqual(view.catalogue, []); assert.deepEqual(view.chatgpt.models, []);
     await assert.rejects(() => driver.invoke('prepare_generation'), /grant plan usage|plan usage|plan permission/);
     assert.equal(provider.generationRequests().length, before);
-    await waitFor(() => driver.execute(() => document.querySelector('.chatgpt-account-status')?.textContent.includes('Plan usage not authorized')), 'The editor did not show denied plan permission');
+    await waitFor(() => driver.execute(() => [...document.querySelectorAll('.chatgpt-accounts [role="alert"]')].some(element => element.textContent.includes('Plan usage not authorized'))), 'The editor did not show denied plan permission');
     await driver.select('ChatGPT account', first.id);
     await waitFor(async () => (await settings(driver)).catalogue.some(model => model.id === 'gpt-6.1-sol'), 'Account switching did not refresh model discovery');
   });
   await step('Repair secure storage saves a retained rotation through the real UI without replaying OAuth or generation', async () => {
     const flag = join(process.env.XDG_DATA_HOME, 'io.github.chelij.desegni/generation/chatgpt/native-test-vault-write-failure');
-    await driver.click('//fieldset[contains(@class,"chatgpt-storage")]//label[contains(normalize-space(.),"System credential manager")]/input', 'xpath');
+    await driver.menu(['Where to keep the sign-in', 'Save securely on this device'], 'Account options');
     provider.oauth.setMode('complete', 'first', { expiresIn: 30 });
-    await button(driver, 'Reconnect with ChatGPT');
+    await button(driver, 'Reconnect');
     await waitFor(async () => { const view = await settings(driver); return view.chatgpt.signIn.status === 'complete' && view.chatgpt.accounts.find(account => account.id === first.id).storage === 'system'; }, 'The fault-test account did not accept native system-storage mode');
     const before = provider.generationRequests().length;
     provider.oauth.setRefreshHook(() => writeFile(flag, 'Controlled native vault write failure.\n', { mode: 0o600 }));
     try {
-      await button(driver, 'Test access');
+      await button(driver, 'Test connection');
       await waitFor(async () => (await settings(driver)).chatgpt.accounts.find(account => account.id === first.id).storageRepairRequired, 'The rotated bundle was not retained after the controlled secure-write failure');
       await waitFor(() => driver.execute(() => [...document.querySelectorAll('dialog[open] button')].some(button => button.textContent.trim() === 'Repair secure storage' && !button.disabled)), 'The native storage repair action did not appear');
       const oauthCount = provider.oauth.records().length;
@@ -392,12 +400,12 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
     await writeFile(flag, 'Controlled native vault removal failure.\n', { mode: 0o600 });
     try {
       await button(driver, 'Sign out');
-      await waitFor(() => driver.execute(() => document.querySelector('.chatgpt-account-status')?.textContent.includes('Disconnected')), 'The editor kept stale connected status after native sign-out disabled access but vault removal failed');
+      await waitFor(() => driver.execute(() => document.querySelector('.chatgpt-account-status')?.textContent.includes('Not connected')), 'The editor kept stale connected status after native sign-out disabled access but vault removal failed');
       assert.equal((await settings(driver)).chatgpt.accounts.find(account => account.id === first.id).connected, false);
       assert.equal(provider.generationRequests().length, before);
     } finally { await rm(flag, { force: true }); }
     await sessionStorage(driver); provider.oauth.setMode('complete', 'first');
-    await button(driver, 'Reconnect with ChatGPT');
+    await button(driver, 'Reconnect');
     await waitFor(async () => { const view = await settings(driver); return view.chatgpt.signIn.status === 'complete' && view.chatgpt.accounts.find(account => account.id === first.id).storage === 'session'; }, 'Session reconnect did not retire the synthetic system credential');
     await close(driver); await assertCanvasOnly(driver);
     accepted = (await driver.invoke('get_workspace')).project;

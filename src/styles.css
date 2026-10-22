@@ -189,24 +189,12 @@ p { margin-bottom: 12px; }
 .snapshot-details dl { display: grid; grid-template-columns: 70px minmax(0, 1fr); gap: 6px 12px; }
 .snapshot-details dd { margin: 0; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
 
-.ai-settings { gap: 22px; }
 .settings-form { display: grid; gap: 16px; }
 .settings-form h3 { margin-bottom: 0; }
 .settings-form > button { justify-self: start; }
 .settings-form fieldset { display: grid; gap: 10px; }
 .model-details { display: grid; gap: 5px; }
 .source-url, .masked-key, .response-id, .digest { overflow-wrap: anywhere; }
-.credential-status { padding-top: 20px; border-top: 1px solid var(--border-soft); }
-.credential-status .inline-actions { margin-top: 14px; }
-.credential-status + .settings-form { padding-top: 20px; border-top: 1px solid var(--border-soft); }
-.authentication-method > .inline-actions { gap: 16px; }
-.chatgpt-accounts { display: grid; gap: 14px; padding-bottom: 20px; border-bottom: 1px solid var(--border-soft); }
-.chatgpt-accounts .field-help { margin-top: 0; }
-.chatgpt-accounts p { overflow-wrap: anywhere; }
-.chatgpt-account-status { display: grid; gap: 5px; }
-.chatgpt-storage { display: grid; gap: 10px; }
-.plan-usage { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; color: var(--muted); font-size: 12px; }
-.plan-usage button { font-size: 12px; }
 .plan-disclosure { margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--border-soft); }
 .plan-disclosure p { font-size: 13px; }
 .generation-dialog, .accepted-preview { padding: 22px; }
