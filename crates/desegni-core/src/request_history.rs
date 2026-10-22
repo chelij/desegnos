@@ -21,6 +21,9 @@ pub struct EarlierRequest {
     pub request: String,
     pub outcome: String,
     pub summary: String,
+    /// The complete original scope of the job-wide summary. Empty for older indexes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub summary_targets: Vec<(Uuid, Uuid)>,
 }
 
 /// Read only request data blocks, never attachments, page source, or prior context.
@@ -82,6 +85,7 @@ pub fn earlier_requests(
                                 &summary.split_whitespace().collect::<Vec<_>>().join(" "),
                                 200,
                             ),
+                            summary_targets: Vec::new(),
                         })
                     };
                     if let Some(request) = parse() {
@@ -100,6 +104,10 @@ pub fn earlier_requests(
             fence = Some(start.to_owned());
             block.clear();
         }
+    }
+    let summary_targets = snapshot.target_ids().unwrap_or_default();
+    for request in &mut requests {
+        request.summary_targets = summary_targets.clone();
     }
     requests
 }
@@ -211,8 +219,13 @@ impl RequirementsSnapshot {
                 continue;
             }
             // JSON quoting keeps exact user text as data, including line breaks and fences.
+            // A per-area record still carries a job-wide summary. Never expose it to a
+            // narrower request, or when an older index cannot establish its scope.
+            let summary = (!r.summary_targets.is_empty()
+                && r.summary_targets.iter().all(|target| ids.contains(target)))
+            .then(|| clip(&r.summary, 200));
             let entry = serde_json::json!({"page":r.page_id,"area":r.region_id,"when":relative(now,r.requested_at),
-                "request":clip(&r.request,300),"outcome":clip(&r.outcome,320),"summary":clip(&r.summary,200)});
+                "request":clip(&r.request,300),"outcome":clip(&r.outcome,320),"summary":summary});
             let line = format!("{}\n", entry);
             if HEADING.chars().count() + section.chars().count() + line.chars().count() + 4
                 > REQUEST_HISTORY_CHARS
@@ -305,6 +318,7 @@ mod tests {
             request: format!("Exact request {n}: café\nplease keep this"),
             outcome: "applied".into(),
             summary: format!("Changed the photo {n}."),
+            summary_targets: vec![(p.home_page_id, p.pages[0].regions[0].id)],
         }
     }
     #[test]
@@ -350,6 +364,23 @@ mod tests {
             .validate_current(&p)
             .unwrap();
     }
+    #[test]
+    fn request_history_older_index_omits_summary_with_unknown_scope() {
+        let p = project();
+        let mut value = serde_json::to_value(record(&p, 1)).unwrap();
+        value.as_object_mut().unwrap().remove("summaryTargets");
+        let entry: EarlierRequest = serde_json::from_value(value).unwrap();
+        let snapshot = p
+            .prepare_requirements()
+            .unwrap()
+            .with_earlier_requests(&p, &[entry], 7200)
+            .unwrap();
+        assert!(snapshot.request_history.contains("Exact request 1"));
+        assert!(snapshot.request_history.contains("\"summary\":null"));
+        assert!(!snapshot.request_history.contains("Changed the photo"));
+        snapshot.validate_current(&p).unwrap();
+    }
+
     #[test]
     fn request_history_budget_and_five_per_area_limit() {
         let p = project();
@@ -465,6 +496,7 @@ mod index_tests {
                     requested_at: n as i64,
                     request: format!("request {n}"),
                     summary: "One-line change".into(),
+                    summary_targets: vec![(page_id, Uuid::from_u128(region))],
                     outcome: if n == 10 {
                         "undone (do not repeat)".into()
                     } else {

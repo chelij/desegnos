@@ -737,7 +737,11 @@ mod tests {
                 .unwrap(),
         );
         let runtime = std::str::from_utf8(script.body()).unwrap();
-        assert!(runtime.contains("function(root, window)") && runtime.contains("catch (error)"));
+        assert_eq!(script.status(), StatusCode::OK);
+        assert!(
+            runtime.contains("root.querySelector('button').textContent='Sorted';")
+                && runtime.contains("catch (error)")
+        );
         let script = registry.serve(
             &Request::get(live.url.replace("index.html", "site.js"))
                 .body(vec![])
@@ -747,6 +751,10 @@ mod tests {
         let paused = registry
             .register(&project, None, project.home_page_id, false)
             .unwrap();
+        let document = registry.serve(&Request::get(&paused.url).body(vec![]).unwrap());
+        let html = std::str::from_utf8(document.body()).unwrap();
+        assert!(!html.contains("./regions.js"));
+        assert!(!html.contains("./site.js"));
         let script = registry.serve(
             &Request::get(paused.url.replace("index.html", "regions.js"))
                 .body(vec![])

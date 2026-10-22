@@ -1055,11 +1055,53 @@ fn future_requirements_filter_previous_generated_context_to_the_requested_scope(
             },
         )
         .unwrap();
-    let future = home_only.prepare_requirements().unwrap();
+    let history = earlier_requests(
+        &snapshot,
+        1,
+        "drafted",
+        &candidate.summary,
+        &candidate.regions,
+    );
+    // The job-wide summary is relevant while all of its original targets are requested.
+    let all_scopes = recorded
+        .prepare_requirements()
+        .unwrap()
+        .with_earlier_requests(&recorded, &history, 7200)
+        .unwrap();
+    assert!(all_scopes.request_history.contains(&candidate.summary));
+    let future = home_only
+        .prepare_requirements()
+        .unwrap()
+        .with_earlier_requests(&home_only, &history, 7200)
+        .unwrap();
     future.validate_current(&home_only).unwrap();
-    assert!(future.markdown.contains("Square counter button"));
-    assert!(future.markdown.contains("Plain language"));
-    assert!(future.markdown.contains("\"summary\": null"));
+    assert!(
+        future
+            .markdown
+            .contains("## Earlier requests for these areas")
+    );
+    assert!(!future.markdown.contains("## Previous generation notes"));
+    assert!(
+        future
+            .request_history
+            .contains("An accessible native counter control.")
+    );
+    assert!(
+        future
+            .request_history
+            .contains("Explain the counter below its button.")
+    );
+    assert!(
+        !future
+            .request_history
+            .contains("A native disclosure explaining how the counter works.")
+    );
+    assert_eq!(future.request_history.matches("\"request\"").count(), 2);
+    assert!(future.request_history.contains("\"summary\":null"));
+    let context = future.dossier_context.as_ref().unwrap();
+    assert_eq!(context.decision_proposals[0].value, "Square counter button");
+    assert_eq!(context.decision_proposals[1].value, "Plain language");
+    assert!(context.summary.is_none());
     for private in ["PRIVATE CROSS PAGE", "PRIVATE DETAIL"] {
         assert!(!future.markdown.contains(private));
     }
