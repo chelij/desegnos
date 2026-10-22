@@ -69,7 +69,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
       </>}
       {job && <section className={`log-message from-ai${failed ? ' failed' : ''}`} aria-label="AI reply" aria-live="polite">
         <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
-        {working && !candidate ? <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p> : null}
+        {working && !candidate ? <p className="log-working">{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p> : null}
         {candidate && <>
           <p className="log-text">{job.status === 'applied' && candidate.regions.some(region => region.status === 'conflict') ? `Applied ${candidate.regions.filter(region => region.status === 'implemented').length} of ${candidate.regions.length} areas` : candidate.summary}</p>
           <ul className="log-outcomes">{candidate.regions.map(outcome => { const item = requests.find(request => request.key === outcome.regionId); return <li key={outcome.regionId} className={outcome.status}>
@@ -79,7 +79,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
           {candidate.criticism.length > 0 && <details><summary>Suggestions ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{item.message}</p><p className="log-meta">{item.suggestion}</p></li>)}</ul></details>}
           <details><summary>Raw reply</summary><pre tabIndex={0} aria-label="Raw reply">{raw}</pre></details>
         </>}
-        {failed && <p className="log-text">{job.status === 'cancelled' ? 'Stopped.' : job.message || 'The AI could not finish this request.'}{job.providerError?.responseFormat?.providerMessage ? ` ${job.providerError.responseFormat.providerMessage}` : ''}</p>}
+        {failed && <details><summary>Show details</summary><p className="log-text">{job.status === 'cancelled' ? 'Stopped.' : job.message || 'The AI could not finish this request.'}{job.providerError?.responseFormat?.providerMessage ? ` ${job.providerError.responseFormat.providerMessage}` : ''}</p></details>}
         {failed && job.rawReply && <details><summary>Raw reply</summary><pre tabIndex={0} aria-label="Failed raw reply">{job.rawReply}</pre></details>}
         {!!job.validationEvents?.length && <details><summary>Validation notes</summary><ul>{job.validationEvents.map((event, index) => <li key={index}>{event.message}</li>)}</ul></details>}
         {job.usage && <p className="log-meta">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
@@ -87,13 +87,13 @@ export function GenerationLog({ job: currentJob, operation, error, project, clos
       <details className="log-message" aria-label="Past generations"><summary>Past generations · {history?.jobs.length ?? 0}</summary>
         {history?.jobs.map(item => <p key={item.jobId}><button type="button" disabled={loadingPast} aria-pressed={past?.jobId === item.jobId} onClick={() => { void showPast(item.jobId); }}>
           <span className="log-meta">{item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Earlier generation'} · {statusLabel(item.status)}</span><br />
-          <span style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(item.firstRequest || item.summary).split('\n')[0].slice(0, 160)}</span>{item.usage && <><br /><span className="log-meta">{item.usage.inputTokens.toLocaleString()} sent · {item.usage.outputTokens.toLocaleString()} received</span></>}
+          <span style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{(item.firstRequest || item.summary).split('\n')[0].replace(/\s*·\s*[a-f0-9]{8,64}\b/gi, '').slice(0, 160)}</span>{item.usage && <><br /><span className="log-meta">{item.usage.inputTokens.toLocaleString()} tokens sent · {item.usage.outputTokens.toLocaleString()} received</span></>}
         </button></p>)}
         {history?.skipped ? <p className="field-help">{history.skipped} saved records could not be read.</p> : null}
         {history?.truncated && <p className="field-help">Showing the latest 100 saved generations.</p>}
         {historyError && <p role="alert">{historyError}</p>}
       </details>
-      {error && <section className="log-message from-ai failed" role="alert"><p className="log-who">Desegnos</p><p className="log-text">{error}</p></section>}
+      {error && <section className="log-message from-ai failed"><p className="log-who">Desegnos</p><details><summary>Show details</summary><p className="log-text">{error}</p></details></section>}
     </div>
   </aside>;
 }
