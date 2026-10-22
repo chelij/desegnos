@@ -130,10 +130,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     {pollingError && <p className="message error" role="alert">{pollingError}</p>}
     {loading ? <p role="status">Reading AI settings…</p> : !view || !settings ? <button onClick={() => { void load(); }}>Retry AI settings</button> : <>
       <label className="ai-provider ai-inline-field">Provider<select disabled={busy || pending || dirty} value={usesChatgpt ? 'openai-chatgpt' : view.provider} onChange={event => { setKey(''); setReplacingKey(false); setStatus(''); void chooseProvider(event.target.value); }}>
-        {(view.providers ?? []).flatMap(item => item.id === 'openai' ? [
-          ...(item.signInSupported ? [<option key="openai-chatgpt" value="openai-chatgpt">ChatGPT plan</option>] : []),
-          <option key="openai" value="openai">API key</option>,
-        ] : [<option key={item.id} value={item.id} disabled={!item.available}>{item.name}{!item.available ? ' — coming soon' : ''}</option>])}
+        {(view.providers ?? []).map(item => <option key={item.id} value={item.id} disabled={!item.available}>{item.name}{item.id === 'local' ? '' : ' (API key)'}{!item.available ? ' — coming soon' : ''}</option>)}
+        {view.providers?.some(item => item.id === 'openai' && item.signInSupported) && <option value="openai-chatgpt">ChatGPT plan</option>}
       </select></label>
       {view.configurationError && <p className="message error" role="alert">{view.configurationError}</p>}
       <section className={usesChatgpt ? 'chatgpt-accounts' : 'api-key-connection'} aria-label={usesChatgpt ? 'ChatGPT account settings' : `${providerName} key connection`}>
