@@ -203,6 +203,36 @@ impl Project {
                     .map(move |r| (p, r))
             })
             .collect();
+        self.prepare_targeted_requirements(
+            capabilities,
+            &targets.iter().map(|(_, r)| r.id).collect::<Vec<_>>(),
+        )
+    }
+
+    /// Prepare a new job for exactly these requests, including previously completed requests.
+    pub fn prepare_targeted_requirements(
+        &self,
+        capabilities: GenerationCapabilities,
+        region_ids: &[Uuid],
+    ) -> Result<RequirementsSnapshot> {
+        self.validate()?;
+        capabilities.validate()?;
+        let targets: Vec<_> = self
+            .pages
+            .iter()
+            .flat_map(|page| {
+                page.regions
+                    .iter()
+                    .filter(|region| {
+                        region_ids.contains(&region.id) && !region.prompt.trim().is_empty()
+                    })
+                    .map(move |region| (page, region))
+            })
+            .collect();
+        ensure(
+            !targets.is_empty() && targets.len() <= MAX_GENERATION_REGIONS,
+            "The draft's requests are no longer available.",
+        )?;
         let dossier_context = self.dossier_context(
             &targets
                 .iter()

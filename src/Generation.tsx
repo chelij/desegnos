@@ -43,7 +43,7 @@ function requestLabel(project: Project, id: string) {
     const index = page.regions.findIndex(region => region.id === id);
     if (index >= 0) return `${page.name} · Box ${index + 1}`;
   }
-  return id;
+  return 'Request';
 }
 
 export function GenerationFeedback({ controller, compact = false, children }: {
@@ -62,7 +62,7 @@ export function GenerationFeedback({ controller, compact = false, children }: {
       {elapsedSeconds !== null && (!compact || job?.status === 'generating' || !!operation) && <p className="generation-activity" aria-live="off">
         <span role="timer" aria-live="off">{Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}</span>
       </p>}
-      {compact && error && <p className="generation-feedback-error" role="alert">{error}</p>}
+
     </div>{children && <div className="generation-status-actions">{children}</div>}
   </section>;
 }

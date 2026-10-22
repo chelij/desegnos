@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { native } from './api';
+import { pendingDrafts } from './generationDraftState';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import { PagePreview } from './Preview';
 import type { DraftReview, GenerationDraft, GenerationJobView, Project } from './types';
@@ -9,7 +10,8 @@ export function GenerationDrafts({ job, project, controller, pageId, compact = f
   job: GenerationJobView; project: Project; controller: GenerationController; pageId?: string;
   compact?: boolean; changed?: (job: GenerationJobView) => void;
 }) {
-  return <>{job.drafts?.filter(draft => !draft.dismissed && !draft.applied && (!pageId || draft.pageId === pageId)).map(draft =>
+  if (compact) return null;
+  return <>{pendingDrafts(job).filter(draft => !pageId || draft.pageId === pageId).map(draft =>
     <Draft compact={compact} key={draft.id} draft={draft} job={job} project={project} controller={controller} changed={changed} />)}</>;
 }
 
@@ -22,7 +24,6 @@ function Draft({ draft, job, project, controller, compact, changed }: {
   const [preview, setPreview] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const [copied, setCopied] = useState(false);
   const page = project.pages.find(page => page.id === draft.pageId);
   const areas = job.areas.filter(area => draft.regionIds.includes(area.regionId)).map(area => {
     const index = page?.regions.findIndex(region => region.id === area.regionId) ?? -1;
@@ -33,7 +34,7 @@ function Draft({ draft, job, project, controller, compact, changed }: {
     setReview(null); setConfirm(false);
     void native<DraftReview>('generation_draft', { jobId: job.jobId, draftId: draft.id, action: 'inspect' }).then(value => {
       if (active) setReview(value);
-    }, error => { if (active) setError(String(error)); });
+    }, error => { if (active) setError('Could not review this draft. It is still saved.'); });
     return () => { active = false; };
   }, [job.jobId, draft.id, project.revision]);
   async function act(action: 'dismiss' | 'apply') {
@@ -41,50 +42,42 @@ function Draft({ draft, job, project, controller, compact, changed }: {
     try {
       const value = await controller.draftAction(job.jobId, draft.id, action, review?.revision);
       changed?.(value.job); setConfirm(false); setPreview(false);
-    } catch (error) { setError(String(error)); setConfirm(false); }
+    } catch { setError('Could not apply this action. Review the draft and try again.'); setConfirm(false); }
     finally { setBusy(false); }
   }
-  async function copy() {
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(draft.code);
-      else {
-        const text = document.createElement('textarea'); text.value = draft.code;
-        text.style.position = 'fixed'; text.style.opacity = '0'; document.body.append(text);
-        try { text.select(); if (!document.execCommand('copy')) throw new Error('Copy failed. Select the retained code below.'); }
-        finally { text.remove(); }
-      }
-      setCopied(true);
-    } catch (error) { setError(String(error)); }
+  async function repair() {
+    setBusy(true); setError('');
+    try { await controller.repairDraft(job.jobId, draft.id); }
+    catch { setError('Could not start the repair. Your draft is still saved.'); }
+    finally { setBusy(false); }
   }
-  const reason = plainReason(draft.reason);
+  const reasons = [...new Set([draft.reason, review?.blocked].filter(Boolean).map(value => plainReason(value!)))];
   const body = <>
-    <p className="log-text">{reason}</p>
-    {review?.blocked && <p className="field-help">{review.blocked}</p>}
+    {reasons.map(reason => <p key={reason} className="log-text">{reason}</p>)}
   </>;
   return <section className={compact ? 'generation-status compact' : 'log-outcomes'} aria-label={`${areas || page?.name || 'Reply'} draft`}>
     <span className="log-meta">Draft · {page?.name ?? 'Reply'}{areas && ` · ${areas}`}</span>
-    {compact ? <details><summary>{reason}</summary>{body}</details> : body}
+    {body}
     <div className="form-actions">
       {review?.previewable && page && <button type="button" disabled={busy} onClick={() => setPreview(true)}>Preview</button>}
       {review && !review.blocked && <button type="button" disabled={busy || !!controller.operation || controller.canStop} onClick={() => setConfirm(true)}>Apply anyway</button>}
-      <button type="button" onClick={() => { void copy(); }}>{copied ? 'Copied' : 'Copy code'}</button>
+      <button type="button" disabled={busy || !!controller.operation || controller.canStop} onClick={() => { void repair(); }}>Ask AI to fix</button>
       <button type="button" disabled={busy} onClick={() => { void act('dismiss'); }}>Dismiss</button>
     </div>
     {confirm && !preview && review && <div className="field-help" role="group" aria-label="Confirm draft application">
-      <p>{review.confirmation}</p><button type="button" className="primary" disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button>{' '}
+      <p>Replace this page with the saved draft? You can undo this change.</p><button type="button" className="primary" disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button>{' '}
       <button type="button" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button>
     </div>}
     {error && <p role="alert">{error}</p>}
-    {!compact && <details><summary>Retained code</summary><pre tabIndex={0}>{draft.code}</pre></details>}
     {preview && page && <WorkspaceSurface place="canvas" title="Previewing draft" close={() => setPreview(false)} headerActions={<div className="draft-preview-bar"><button type="button" disabled={busy || !!review?.blocked || !!controller.operation || controller.canStop} onClick={() => setConfirm(true)}>Apply anyway</button><button type="button" onClick={() => setPreview(false)}>Back</button></div>}>
-      {confirm && review && <div className="draft-preview-confirm" role="group" aria-label="Confirm draft application"><p>{review.confirmation}</p><button disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button><button onClick={() => setConfirm(false)}>Cancel</button></div>}
+      {confirm && review && <div className="draft-preview-confirm" role="group" aria-label="Confirm draft application"><p>Replace this page with the saved draft? You can undo this change.</p><button disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button><button onClick={() => setConfirm(false)}>Cancel</button></div>}
       {error && <p role="alert">{error}</p>}<PagePreview page={page} revision={project.revision} jobId={job.jobId} draftId={draft.id} /></WorkspaceSurface>}
   </section>;
 }
 
-function plainReason(reason: string) {
-  const text = reason.replace(/Area [0-9a-f-]+(?:, page [0-9a-f-]+)?:\s*/gi, '').split('Excerpt:')[0].trim();
-  if (/CSS outside|CSS selector|stylesheet|sharedCss/i.test(text)) return 'Styles affect content outside this area.';
-  if (/JavaScript|shared behavior/i.test(text)) return 'Behavior changes affect content outside this area.';
-  return text.split('\n')[0].replace(/ Your page is unchanged\./g, '').slice(0, 240);
+export function plainReason(reason: string) {
+  if (/dynamic|executable|script|JavaScript|shared behavior/i.test(reason)) return 'This script reaches outside its box.';
+  if (/CSS outside|CSS selector|stylesheet|sharedCss/i.test(reason)) return 'Styles affect content outside this box.';
+  if (/changed|revision|stale/i.test(reason)) return 'The page has changed since this draft was made.';
+  return 'This draft needs a correction before it can be applied automatically.';
 }

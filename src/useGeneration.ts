@@ -76,7 +76,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     catch (error) { if (!signal?.aborted && context.current === id && version === epoch.current) setError(describe(error)); throw error; }
     finally { if (!signal?.aborted && context.current === id && token === action.current) setOperation(null); }
   }
-  async function prepare() {
+  async function prepare(draft?: { jobId: string; draftId: string }) {
     if (running) return;
     setVisible(false); setRunning(true); setStopped(false);
     let finish!: () => void;
@@ -86,7 +86,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     try {
       if (job && ['prepared', 'ready', 'blocked'].includes(job.status)) await perform('discard_generation', 'Preparing your changes…', { jobId: job.jobId }, signal);
       signal.throwIfAborted();
-      const prepared = await perform('prepare_generation', 'Preparing AI instructions…', undefined, signal);
+      const prepared = await perform('prepare_generation', 'Preparing AI instructions…', draft ? { repairJobId: draft.jobId, repairDraftId: draft.draftId } : undefined, signal);
       current.jobId = prepared.jobId;
       signal.throwIfAborted();
       automatic.current = prepared.jobId;
@@ -132,7 +132,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const token = ++action.current; setOperationStartedAt(Date.now()); setOperation('Updating your canvas…'); setError('');
     try {
       const value = await call<WorkspaceView>('apply_generation', { ...args(), acceptedDecisionIndices: indices }, flow.current?.controller.signal);
-      if (!flow.current?.controller.signal.aborted && context.current === id) { applied(value); await refresh(); setVisible(!!job?.candidate?.regions.some(region => region.status === 'conflict') || !!job?.validationEvents?.some(event => event.regionId && event.disposition === 'conflicted')); }
+      if (!flow.current?.controller.signal.aborted && context.current === id) { applied(value); await refresh(); setVisible(false); }
     } catch (error) {
       if (!flow.current?.controller.signal.aborted && context.current === id) {
         await refresh();
@@ -159,7 +159,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     }
     return value;
   }
-  return { draftAction, job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
+  return { draftAction, repairDraft: (jobId: string, draftId: string) => prepare({ jobId, draftId }), job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
     start: () => launch('start_generation', 'Starting generation…'),
     cancel,
     discard: () => perform('discard_generation', 'Discarding candidate…', args()),

@@ -127,6 +127,8 @@ pub struct GenerationJobView {
     #[serde(default)]
     context: Option<RequirementsSnapshot>,
     #[serde(default)]
+    draft_feedback: Vec<desegni_core::ValidationEvent>,
+    #[serde(default)]
     earlier_contexts: Vec<RequirementsSnapshot>,
     #[serde(default)]
     raw_reply: Option<String>,
@@ -1027,6 +1029,15 @@ impl GenerationService {
         project: &Project,
         account_id: Option<Uuid>,
     ) -> NativeResult<GenerationJobView> {
+        self.prepare_targeted(project, account_id, None)
+    }
+
+    fn prepare_targeted(
+        &mut self,
+        project: &Project,
+        account_id: Option<Uuid>,
+        draft: Option<desegni_core::GenerationDraft>,
+    ) -> NativeResult<GenerationJobView> {
         if let Some(error) = &self.configuration_error {
             return Err(error.clone());
         }
@@ -1045,22 +1056,58 @@ impl GenerationService {
         {
             return Err("Apply or discard the existing generation review, or cancel its running request, before starting another.".into());
         }
-        let requirements = project
-            .prepare_requirements_with_capabilities(
-                self.provider.capabilities_for(
-                    self.authentication,
-                    &self.settings,
-                    self.selected_image_cache_id(account_id)
-                        .as_ref()
-                        .and_then(|id| self.image_access.get(id)),
-                ),
-            )
+        let capabilities = self.provider.capabilities_for(
+            self.authentication,
+            &self.settings,
+            self.selected_image_cache_id(account_id)
+                .as_ref()
+                .and_then(|id| self.image_access.get(id)),
+        );
+        let requirements = if let Some(draft) = &draft {
+            project.prepare_targeted_requirements(capabilities, &draft.region_ids)
+        } else {
+            project.prepare_requirements_with_capabilities(capabilities)
+        }
+        .map_err(message)?;
+        let requirements_targets: BTreeSet<_> = project
+            .pages
+            .iter()
+            .flat_map(|page| page.regions.iter())
+            .filter(|region| {
+                !region.prompt.trim().is_empty()
+                    && draft.as_ref().map_or(!region.completed, |draft| {
+                        draft.region_ids.contains(&region.id)
+                    })
+            })
+            .map(|region| region.id)
+            .collect();
+        let draft_feedback: Vec<_> = draft
+            .as_ref()
+            .map(|draft| {
+                draft
+                    .region_ids
+                    .iter()
+                    .filter(|id| requirements_targets.contains(*id))
+                    .map(|id| desegni_core::ValidationEvent {
+                        kind: "draftRepair".into(),
+                        disposition: "conflicted".into(),
+                        region_id: Some(*id),
+                        message: format!(
+                            "Fix the previous draft for this request. Validation feedback: {}",
+                            draft.reason
+                        ),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let repair = requirements
+            .validation_repair(&draft_feedback)
             .map_err(message)?;
         let estimate = self
             .adapter(self.provider)?
             .estimate(
                 self.authentication,
-                &requirements,
+                repair.as_ref().unwrap_or(&requirements),
                 project.generation_mode,
                 &desegni_core::result_schema(&requirements),
                 &self.settings,
@@ -1075,6 +1122,7 @@ impl GenerationService {
                 base_revision: project.revision,
                 requirements,
                 context: None,
+                draft_feedback,
                 earlier_contexts: vec![],
                 validation_events: vec![],
                 drafts: vec![],
@@ -1090,7 +1138,7 @@ impl GenerationService {
                     .flat_map(|page| {
                         page.regions
                             .iter()
-                            .filter(|region| !region.completed && !region.prompt.trim().is_empty())
+                            .filter(|region| requirements_targets.contains(&region.id))
                             .map(move |region| GenerationArea {
                                 page_id: page.id,
                                 region_id: region.id,
@@ -1157,11 +1205,16 @@ impl GenerationService {
             .requirements
             .validate_current(project)
             .map_err(message)?;
+        let repair = record
+            .view
+            .requirements
+            .validation_repair(&record.view.draft_feedback)
+            .map_err(message)?;
         let estimate = self
             .adapter(record.view.provider)?
             .estimate(
                 record.view.authentication,
-                &record.view.requirements,
+                repair.as_ref().unwrap_or(&record.view.requirements),
                 record.view.generation_mode,
                 &desegni_core::result_schema(&record.view.requirements),
                 &record.view.settings,
@@ -2043,6 +2096,8 @@ pub async fn prepare_generation(
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
+    repair_job_id: Option<Uuid>,
+    repair_draft_id: Option<Uuid>,
 ) -> NativeResult<GenerationJobView> {
     trusted(&window)?;
     refresh_image_access(&state, &chatgpt, false).await?;
@@ -2076,7 +2131,33 @@ pub async fn prepare_generation(
     if service.authentication != authentication || service.provider != provider {
         return Err("The generation method changed while preparing this request. Review it and prepare again.".into());
     }
-    if let Some(account_id) = account_id {
+    let draft = match (repair_job_id, repair_draft_id) {
+        (Some(job_id), Some(draft_id)) => {
+            let saved = service.saved_job(project.id, job_id)?;
+            let mut draft = saved
+                .drafts
+                .into_iter()
+                .find(|d| d.id == draft_id && !d.dismissed && !d.applied)
+                .ok_or("The draft is no longer available.")?;
+            if let Err(error) = draft.check(project) {
+                draft.reason = error.to_string();
+            }
+            if draft.region_ids.is_empty() {
+                draft.region_ids = saved
+                    .areas
+                    .iter()
+                    .filter(|area| draft.page_id.is_none_or(|id| area.page_id == id))
+                    .map(|area| area.region_id)
+                    .collect();
+            }
+            Some(draft)
+        }
+        (None, None) => None,
+        _ => return Err("Choose a saved draft to repair.".into()),
+    };
+    if let Some(draft) = draft {
+        service.prepare_targeted(project, account_id, Some(draft))
+    } else if let Some(account_id) = account_id {
         service.prepare_bound(project, Some(account_id))
     } else {
         service.prepare(project)
@@ -2322,7 +2403,14 @@ async fn submit(
                         .await
                 }
             };
-            let mut result = ask(&request.requirements).await;
+            let repair = request.requirements.validation_repair(&request.draft_feedback).ok().flatten();
+            let mut result = ask(repair.as_ref().unwrap_or(&request.requirements)).await;
+            if let (Some(repair), Ok(response)) = (&repair, &mut result) {
+                // Reuse the validated follow-up digest adoption; the original job stays immutable.
+                if let Ok(text) = request.requirements.adopt_follow_up_reply(repair, &response.text) {
+                    response.text = text;
+                }
+            }
             // A completed, unambiguous final answer with malformed JSON/schema is a
             // validation failure, not a transport retry. All other provider failures stop here.
             if request.requirements.format_version().is_ok_and(|v| v >= 17)
@@ -2992,7 +3080,11 @@ pub fn generation_draft(
     let changed = match action.as_str() {
         "inspect" => false,
         "dismiss" => {
-            view.drafts[index].dismissed = true;
+            for retained in &mut view.drafts {
+                if retained.page_id == draft.page_id && retained.code == draft.code {
+                    retained.dismissed = true;
+                }
+            }
             true
         }
         "apply" => {
@@ -3015,7 +3107,11 @@ pub fn generation_draft(
             }
             drop(file);
             workspace.apply_draft(&view.requirements, &draft)?;
-            view.drafts[index].applied = true;
+            for retained in &mut view.drafts {
+                if retained.page_id == draft.page_id && retained.code == draft.code {
+                    retained.applied = true;
+                }
+            }
             true
         }
         _ => return Err("Unknown draft action.".into()),

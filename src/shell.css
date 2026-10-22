@@ -137,7 +137,7 @@
 @media (max-width: 760px) { .layers-popover { max-height: 65%; } }
 
 /* One floating status pill above the canvas tools: progress, failure and result never move the canvas. */
-.canvas-pill { position: absolute; z-index: 7; bottom: 72px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 6px 6px 6px 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); box-shadow: 0 3px 12px #00000028; font-size: 13px; }
+.canvas-pill { position: absolute; z-index: 7; bottom: 72px; left: 50%; transform: translateX(-50%); display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; max-width: calc(100% - 24px); padding: 6px 6px 6px 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); box-shadow: 0 3px 12px #00000028; font-size: 13px; }
 .canvas-pill > strong { white-space: nowrap; }
 .canvas-pill button { min-height: 30px; padding: 3px 12px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
 .canvas-pill .pill-close { border-color: transparent; background: transparent; font-size: 18px; padding-inline: 8px; }

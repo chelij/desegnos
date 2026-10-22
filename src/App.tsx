@@ -24,7 +24,7 @@ import { FirstRunTips } from './Onboarding';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
 import type { WebsiteFolderSelection } from './types';
-import { GenerationDrafts } from './GenerationDrafts';
+import { pendingDrafts } from './generationDraftState';
 import { GenerationLog } from './GenerationLog';
 import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './deletePreference';
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
@@ -605,6 +605,7 @@ function Editor() {
   }, [generation.canStop, generation.cancel]);
   useEffect(() => { setRetryResult(false); }, [resultReview?.jobId]);
   useEffect(() => { if (generation.visible) { setShowLog(true); generation.close(); } }, [generation.visible]);
+  const draftCount = pendingDrafts(generation.job).length;
   const showGenerationStatus = generation.stopped || working || !!generation.error || !!generation.job && ['prepared', 'blocked', 'failed', 'unknown', 'cancelled'].includes(generation.job.status);
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
@@ -915,8 +916,8 @@ function Editor() {
       <div className="design-pane">
       <SurfaceHost place="canvas" />
       {page && <Canvas archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
-      {(showGenerationStatus || resultReview || generation.job?.drafts?.some(draft => !draft.dismissed && !draft.applied && draft.pageId === page?.id)) && <div className="canvas-pill" role="region" aria-label="Generation status">
-        {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
+      {(showGenerationStatus || resultReview || draftCount > 0) && <div className="canvas-pill" role="region" aria-label="Generation status">
+        {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>{draftCount > 0 && <button onClick={openGeneration}>· {draftCount} {draftCount === 1 ? 'draft' : 'drafts'}</button>}
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
           <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => setRetryResult(true)}>Try again</button>
           {retryResult && <span role="group" aria-label="Confirm retry">Try again using your AI account? <button onClick={() => { setRetryResult(false); run(() => rejectResult(true)); }}>Yes</button><button onClick={() => setRetryResult(false)}>No</button></span>}
@@ -928,7 +929,7 @@ function Editor() {
           {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
           {!working && <button onClick={openGeneration}>Details</button>}
         </GenerationFeedback>}
-        {generation.job && <GenerationDrafts job={generation.job} project={project} controller={generation} pageId={page?.id} compact />}
+        {!resultReview && draftCount > 0 && <button onClick={openGeneration}>{draftCount} {draftCount === 1 ? 'draft' : 'drafts'}</button>}
       </div>}
       <FirstRunTips />
       {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
