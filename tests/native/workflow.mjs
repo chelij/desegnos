@@ -231,6 +231,16 @@ export async function recoverProject(driver, expected, step) {
     assert.equal(before.recovery.projectId, expected.id);
     assert.equal(before.recovery.revision, expected.revision);
     const remaining = before.recoveries.filter(item => item.projectId !== expected.id);
+    const section = `//dialog[@open]//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]`;
+    const dismiss = `${section}//button[normalize-space(.)="Dismiss"]`;
+    assert.equal((await driver.all(dismiss, 'xpath')).length, 1);
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] button')].some(button => button.textContent === 'Dismiss all')), before.recoveries.length >= 2);
+    if (!before.recoveries.find(item => item.projectId === expected.id).savedPath) {
+      await driver.click(dismiss, 'xpath');
+      await waitFor(() => driver.execute(() => document.querySelector('dialog[open] .recovery-list').textContent.includes('Never saved — dismiss anyway?')), 'Never-saved recovery did not ask before dismissal');
+      await driver.click(`${section}//button[normalize-space(.)="Cancel"]`, 'xpath');
+      assert.deepEqual((await driver.invoke('get_workspace')).recoveries, before.recoveries, 'Cancel changed recovery data');
+    }
     await driver.click(action, 'xpath');
     await waitFor(() => driver.execute(() => !!document.querySelector('[data-testid="canvas"]')), 'Recovery did not restore the canvas');
     const after = await driver.invoke('get_workspace');
@@ -239,6 +249,8 @@ export async function recoverProject(driver, expected, step) {
       remaining.sort((a, b) => a.projectId.localeCompare(b.projectId)));
     assert.equal(after.recoveryError, null);
     assert.equal(after.dirty, true);
+    await assert.rejects(driver.invoke('dismiss_recovery', { projectId: expected.id }));
+    assert.deepEqual((await driver.invoke('get_workspace')).project, expected, 'Dismissing an open project changed it');
     await assertCanvasOnly(driver);
     assert.equal(await driver.execute(() => document.querySelectorAll('[data-testid="canvas"] textarea').length), expected.pages.find(page => page.id === expected.homePageId).regions.filter(region => !region.completed).length);
   });

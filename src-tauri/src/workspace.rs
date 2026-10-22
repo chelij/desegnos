@@ -527,6 +527,10 @@ impl Workspace {
         let Some(id) = self.session.as_ref().map(|session| session.project().id) else {
             return Ok(());
         };
+        self.discard_recovery_pointer(id)
+    }
+
+    fn discard_recovery_pointer(&self, id: Uuid) -> NativeResult<()> {
         let pointer = self.pointer_path(id);
         if pointer.exists() {
             fs::rename(
@@ -1117,6 +1121,24 @@ impl Workspace {
                 self.save_conflict(&project, pending.destination, *failure, pending.save_as)
             }
         }
+    }
+
+    fn dismiss_recovery(&mut self, project_id: Uuid) -> NativeResult<()> {
+        if self
+            .open_projects()
+            .iter()
+            .any(|open| open.id == project_id)
+        {
+            return Err("Close this project before dismissing its recovery.".into());
+        }
+        let _ownership = self
+            .acquire_ownership(project_id)?
+            .ok_or("This project is already active in another Desegnos window.")?;
+        self.read_recovery(project_id)?
+            .ok_or("There are no unsaved changes to recover for this project.")?;
+        self.discard_recovery_pointer(project_id)?;
+        self.refresh_recoveries();
+        Ok(())
     }
 
     fn recover(&mut self, project_id: Option<Uuid>, discard: bool) -> NativeResult<()> {
@@ -2055,6 +2077,16 @@ pub async fn save_requirements(
 }
 
 #[tauri::command]
+pub fn dismiss_recovery(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    state.dismiss_recovery(project_id)?;
+    Ok(state.view())
+}
+
+#[tauri::command]
 pub fn recover_project(
     state: WorkspaceState<'_>,
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
@@ -2368,6 +2400,73 @@ mod tests {
                 .flatten()
                 .any(|entry| entry.file_name().to_string_lossy().ends_with(".journal"))
         );
+    }
+
+    #[test]
+    fn dismiss_recovery_preserves_journal_and_saved_file_and_refuses_open_projects() {
+        for saved in [false, true] {
+            let temp = Temp::new();
+            let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+            let original = project("Dismiss recovery");
+            let id = original.id;
+            let path = temp.0.join("saved.desegni");
+            workspace.start(original.clone(), None, None).unwrap();
+            if saved {
+                workspace
+                    .save_snapshot(&original, Some(path.clone()))
+                    .unwrap();
+            }
+            change_grid(&mut workspace);
+            let saved_bytes = fs::read(&path).ok();
+            let pointer_bytes = fs::read(workspace.pointer_path(id)).unwrap();
+            let pointer: RecoveryPointer = serde_json::from_slice(&pointer_bytes).unwrap();
+            let journal = temp.0.join(pointer.journal_file);
+            let journal_bytes = fs::read(&journal).unwrap();
+
+            assert!(workspace.dismiss_recovery(id).is_err());
+            workspace
+                .open_tab(|state| state.start(project("Other open project"), None, None))
+                .unwrap();
+            assert!(workspace.dismiss_recovery(id).is_err());
+            let mut other_window = Workspace::from_directory(temp.0.clone()).unwrap();
+            assert!(other_window.dismiss_recovery(id).is_err());
+            assert_eq!(fs::read(workspace.pointer_path(id)).unwrap(), pointer_bytes);
+            drop(other_window);
+            drop(workspace);
+
+            let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+            assert!(
+                restarted
+                    .view()
+                    .recoveries
+                    .iter()
+                    .any(|item| item.project_id == id)
+            );
+            restarted.dismiss_recovery(id).unwrap();
+            assert!(
+                !restarted
+                    .view()
+                    .recoveries
+                    .iter()
+                    .any(|item| item.project_id == id)
+            );
+            assert!(!restarted.pointer_path(id).exists());
+            assert_eq!(
+                fs::read(temp.0.join(format!("{id}.recovery.discarded.json"))).unwrap(),
+                pointer_bytes
+            );
+            assert_eq!(fs::read(&journal).unwrap(), journal_bytes);
+            assert_eq!(fs::read(&path).ok(), saved_bytes);
+            drop(restarted);
+            let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+            assert!(
+                !restarted
+                    .view()
+                    .recoveries
+                    .iter()
+                    .any(|item| item.project_id == id)
+            );
+        }
     }
 
     fn change_grid(workspace: &mut Workspace) {
