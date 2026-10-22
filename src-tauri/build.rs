@@ -48,6 +48,7 @@ fn main() {
             "prepare_requirements",
             "save_requirements",
             "recover_project",
+            "dismiss_recovery",
             "get_project_notes",
             "get_ai_settings",
             "save_ai_settings",

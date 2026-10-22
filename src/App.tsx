@@ -417,6 +417,15 @@ export default function App() {
       });
     });
   }
+  async function dismissRecoveries(projectIds: string[]) {
+    await queue(async () => {
+      for (const projectId of projectIds) {
+        if (!current.current?.recoveries.some(item => item.projectId === projectId)) continue;
+        accept(await native<WorkspaceView>('dismiss_recovery', { projectId }));
+      }
+    });
+  }
+  useEffect(() => { if (!view?.recoveries.length) setShowRecovery(false); }, [view?.recoveries.length]);
   async function travel(command: 'undo_project' | 'redo_project') {
     await synchronize();
     await settle();
@@ -918,7 +927,7 @@ export default function App() {
     {!!view?.siteWarnings?.length && dismissedSiteWarnings !== `${project?.id}:${view.siteWarnings.join('\n')}` && <div className="message warning" role="status"><span>Project saved. {view.siteWarnings.join(' ')}</span><button aria-label="Dismiss website warning" onClick={() => setDismissedSiteWarnings(`${project?.id}:${view.siteWarnings?.join('\n')}`)}>Dismiss</button></div>}
     {showProjectLocation && <Modal title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></Modal>}
     {showRecovery && view && <Modal title="Recover unsaved projects" close={() => setShowRecovery(false)}><DialogError error={error} dismiss={() => setError('')} />
-      <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} /></Modal>}
+      <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></Modal>}
     {showImport && <Modal title="Import context" wide close={() => setShowImport(false)}><ImportContext initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} /></Modal>}
     {showStyleGuide && project && <Modal title="Style guide" wide close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></Modal>}
     {showNotes && project && <Modal title="Project brief" wide close={() => setShowNotes(null)}><DialogError error={error} dismiss={() => setError('')} /><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} markdown={getNotes} /></Modal>}
@@ -964,12 +973,28 @@ function editedAgo(editedAtMs: number) {
   return !Number.isFinite(minutes) ? 'Unsaved draft' : minutes < 1 ? 'Edited just now' : minutes < 60 ? `Edited ${minutes} min ago` : minutes < 1440 ? `Edited ${Math.floor(minutes / 60)} hr ago` : `Edited ${Math.floor(minutes / 1440)} days ago`;
 }
 
-function RecoveryList({ items, busy, recover }: { items: RecoveryInfo[]; busy: boolean; recover: (id: string) => void }) {
+function RecoveryList({ items, busy, recover, dismiss }: { items: RecoveryInfo[]; busy: boolean; recover: (id: string) => void; dismiss: (ids: string[]) => Promise<void> }) {
+  const [confirmIds, setConfirmIds] = useState<string[] | null>(null);
+  const submit = (ids: string[]) => { void dismiss(ids).then(() => setConfirmIds(null)).catch(() => {}); };
+  const requestDismiss = (selected: RecoveryInfo[]) => {
+    const ids = selected.map(item => item.projectId);
+    if (selected.some(item => !item.savedPath)) setConfirmIds(ids);
+    else submit(ids);
+  };
+  const confirmation = <div><p>Never saved — dismiss anyway?</p><div className="form-actions">
+    <button className="danger" disabled={busy} onClick={() => confirmIds && submit(confirmIds)}>Dismiss</button>
+    <button disabled={busy} onClick={() => setConfirmIds(null)}>Cancel</button>
+  </div></div>;
   return <div className="recovery-list">{items.map(item => <section key={item.projectId} aria-label={`Recover ${item.name}`}>
     <p>“{item.name}” has unsaved changes.</p>
     <p className="muted" title={item.savedPath ?? undefined}>{editedAgo(item.editedAtMs)}{item.savedPath ? ` · ${item.savedPath.split(/[\\/]/).at(-1)}` : ' · Never saved'}</p>
-    <button disabled={busy} onClick={() => recover(item.projectId)}>Recover project</button>
-  </section>)}</div>;
+    {confirmIds?.length === 1 && confirmIds[0] === item.projectId ? confirmation : <div className="form-actions">
+      <button disabled={busy} onClick={() => recover(item.projectId)}>Recover project</button>
+      <button disabled={busy} onClick={() => requestDismiss([item])}>Dismiss</button>
+    </div>}
+  </section>)}
+    {items.length >= 2 && (confirmIds && confirmIds.length > 1 ? confirmation : <div className="form-actions"><button disabled={busy} onClick={() => requestDismiss(items)}>Dismiss all</button></div>)}
+  </div>;
 }
 
 function RenameProject({ name, submit }: { name: string; submit: (value: string) => Promise<void> }) {
