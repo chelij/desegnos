@@ -147,8 +147,7 @@
 .canvas-pill .generation-status-copy { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .canvas-pill .generation-status-copy p { margin: 0; }
 .canvas-pill .generation-detail, .canvas-pill .generation-activity { color: var(--muted); font-size: 12px; }
-.canvas-pill .generation-feedback-error, .canvas-pill .generation-feedback-stopped { white-space: normal !important; max-width: 340px; font-size: 12px; }
-.canvas-pill .generation-feedback-stopped { color: var(--muted); }
+.canvas-pill .generation-feedback-error { white-space: normal !important; max-width: 340px; font-size: 12px; }
 @media (max-width: 820px) { .canvas-pill { bottom: 116px; } .canvas-pill .generation-status.compact { flex-wrap: wrap; } }
 
 /* Design / Split / Code, as in Dreamweaver. The design pane stays mounted in Code view so canvas state survives. */
@@ -280,8 +279,6 @@
 .editor-shell { position: relative; }
 .workspace-notices { position: absolute; z-index: 18; top: 12px; right: 14px; display: grid; gap: 8px; width: min(540px, calc(100% - 28px)); max-height: calc(100% - 24px); overflow: auto; pointer-events: none; }
 .workspace-notices > * { pointer-events: auto; margin: 0; background: var(--surface); border: 1px solid var(--border); }
-.design-pane:has(> .free-workspace.with-rulers) > .workspace-notices { top: 40px; width: min(540px, calc(100% - 56px)); max-height: calc(100% - 52px); }
-.workspace.view-code:has(> .generation-log) > .workspace-notices { right: calc(min(360px, 40%) + 14px); width: min(540px, calc(100% - min(360px, 40%) - 28px)); }
 
 .generation-cost { color: var(--muted); font-size: 12px; white-space: nowrap; }
 

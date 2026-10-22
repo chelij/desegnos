@@ -1207,12 +1207,12 @@ function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, se
     setNaturalHeight(current => current === height ? current : height);
   }, [draft, promptRect.width, zoom]);
   const minimumHeight = promptRect.height * zoom;
-  // Keep selected text inside the projected box, with room for two readable lines.
+  // Reading long text never changes the placement hint; cap the editor and scroll inside it.
   const collapseHeight = target || shaped ? Math.max(minimumHeight, maxHeight) : minimumHeight;
   const fullHeight = Math.max(minimumHeight, naturalHeight);
   const hasMore = fullHeight > collapseHeight;
-  const displayHeight = selected || !target && !shaped ? Math.max(minimumHeight, 62) : expanded ? Math.min(fullHeight, maxHeight) : Math.min(collapseHeight, fullHeight);
-  const showExpand = hasMore && !selected && (target || shaped);
+  const displayHeight = selected || expanded ? Math.min(fullHeight, maxHeight) : Math.min(collapseHeight, fullHeight);
+  const showExpand = hasMore && !selected;
   const shown = { ...promptRect, height: (displayHeight + (showExpand ? 30 : 0)) / zoom };
   useLayoutEffect(() => { if (selected) shownChanged({ id: region.id, rect: shown }); }, [selected, region.id, shown.x, shown.y, shown.width, shown.height, shownChanged]);
   // Bound the painted area while keeping the text and grips anchored to their
@@ -1223,7 +1223,7 @@ function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, se
   const resizeVisible = at(rect.x + rect.width, rect.y + rect.height);
   return <>
   {shaped && <RegionOutline shape={region.shape!} rect={rect} bounds={bounds} zoom={zoom} layer={layer} selected={selected} regionId={region.id} onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); select(); }} />}
-  {selected && !target && !shaped && <div className="element-selection request-placement" style={{ ...paintStyle({ ...rect, height: displayHeight / zoom }, bounds, zoom), zIndex: controlsLayer }} aria-hidden="true" />}
+  {selected && !target && !shaped && <div className="element-selection request-placement" style={{ ...paintStyle(rect, bounds, zoom), zIndex: controlsLayer }} aria-hidden="true" />}
   {target && <div className="element-selection" data-testid="element-selection" style={{ ...paintStyle(rect, bounds, zoom), zIndex: layer }} aria-hidden="true" />}
   <div data-region-id={region.id} className={`annotation ${target || shaped ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...paintStyle(shown, bounds, zoom), zIndex: layer }}
     onPointerDown={event => { if (event.target === event.currentTarget) { event.preventDefault(); event.stopPropagation(); text.current?.focus({ preventScroll: true }); } }}
