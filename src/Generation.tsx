@@ -17,7 +17,7 @@ const rejectionLabels: Record<ResponseRejection, string> = {
   messagePhase: 'Unrecognized message phase', contentShape: 'Missing or unsupported text content',
   answerCount: 'Expected one final answer; intermediate commentary is excluded', credentialEcho: 'Reply contains a credential',
   candidateJson: 'Final answer is not valid JSON', candidateShape: 'Final answer is not a site object',
-  jobMismatch: 'Returned job ID differs from the frozen request', requirementsMismatch: 'Returned instructions differ from the saved request',
+  jobMismatch: 'Returned job ID differs from the frozen request', requirementsMismatch: 'Returned requirements digest differs from the frozen request',
   usage: 'Reported usage is missing fields or has inconsistent totals',
 };
 const correlationLabels: Record<ResponseCorrelation['cause'], string> = {
@@ -47,30 +47,6 @@ function requestLabel(project: Project, id: string) {
   return id;
 }
 
-const pageChanged = (raw: string) => /stale|generate new requirements|page source changed|requested area.*(?:changed|removed)|context.*changed/i.test(raw);
-
-export function generationNeedsNewRequest(error: string, job: GenerationJobView | null) {
-  const raw = error || job?.message || '';
-  return pageChanged(raw) || /cost estimate changed|already applied|twenty-attempt limit|frozen requirements file changed/i.test(raw);
-}
-
-export function generationMessage(error: string, job: GenerationJobView | null) {
-  const raw = error || job?.message || '';
-  let message = 'The AI could not finish this request. Review Details, then try again.';
-  if (pageChanged(raw)) message = 'You changed the page while this was building, so the result no longer fits. Generate again to build from your current boxes.';
-  else if (/cost estimate changed/i.test(raw)) message = 'The price estimate changed. Generate again to prepare a new request with current pricing.';
-  else if (/already applied|twenty-attempt limit|frozen requirements file changed/i.test(raw)) message = 'This saved request cannot be used again. Generate again to build from your current boxes.';
-  else if (/Only a current candidate with ready regions|rejected the candidate|rejected.*reply|invalid.*(?:reply|response)/i.test(raw)) message = 'The AI returned a result that could not be used. Try again to build another version.';
-  else if (job?.failureKind === 'chatgptUsageLimit') message = 'Your ChatGPT plan or credits limit was reached. Open Details to manage usage before trying again.';
-  else if (/AI settings|API key|connect.*account|credential|authentication|unauthorized/i.test(raw)) message = 'The AI connection needs attention. Review AI settings, then try again.';
-  else if (/spending|budget|output.*(?:cap|limit)|cost estimate/i.test(raw)) message = 'The request exceeds your current AI limits. Review Model and spending in AI settings, then try again.';
-  else if (job?.status === 'unknown') message = 'The result did not arrive, and the provider may still count this request. Review Details before trying again.';
-  else if (job?.status === 'cancelled') message = 'Generation stopped, but submitted work may still count toward your bill or plan. Try again when you are ready.';
-  else if (job?.status === 'blocked' && job.candidate?.regions.some(region => region.status === 'conflict')) message = 'A request needs your decision. Open Details to review it before generating again.';
-  else if (/progress.*refreshed/i.test(raw)) message = 'Progress could not be refreshed. Open Details to check the request before trying again.';
-  return `${message} Your work is safe.`;
-}
-
 export function GenerationFeedback({ controller, compact = false, children }: {
   controller: GenerationController; compact?: boolean; children?: ReactNode;
 }) {
@@ -79,37 +55,18 @@ export function GenerationFeedback({ controller, compact = false, children }: {
   if (!job && !operation && !error && !controller.stopped) return null;
   const minutes = elapsedSeconds ?? 0;
   const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your page…' : 'Building your page…',
-    ready: 'Updating your page…', blocked: 'Couldn’t update the page', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
+    ready: 'Updating your page…', blocked: 'Needs a little more detail', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your page…', applied: 'Page updated' };
-  const failed = !!error || !!job && ['failed', 'unknown', 'blocked'].includes(job.status);
-  const stopped = controller.stopped || job?.status === 'cancelled';
   const heading = operation === 'Stopping…' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
   return <section className={`generation-status${compact ? ' compact' : ''}`} data-job-status={job?.status} aria-label="Generation status">
     <div className="generation-status-copy"><p className="generation-heading" role="status" aria-atomic="true"><strong>{heading}</strong></p>
       {elapsedSeconds !== null && (!compact || job?.status === 'generating' || !!operation) && <p className="generation-activity" aria-live="off">
         <span role="timer" aria-live="off">{Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}</span>
       </p>}
-      {compact && (failed || stopped) && <p className={failed ? 'generation-feedback-error' : 'generation-feedback-stopped'} role={failed ? 'alert' : undefined}>{controller.stopped && !job && !error ? 'Generation stopped. Your work is safe.' : generationMessage(error, job)}</p>}
+      {compact && error && <p className="generation-feedback-error" role="alert">{error}</p>}
     </div>{children && <div className="generation-status-actions">{children}</div>}
   </section>;
 }
-
-export function RetryConfirmation({ job, settings, fresh = false, undo = false, busy, send, close }: {
-  job: GenerationJobView | null; settings: AiSettingsView | null; fresh?: boolean; undo?: boolean; busy: boolean; send: () => void; close: () => void;
-}) {
-  const plan = (fresh ? settings?.authentication : job?.authentication) === 'chatgpt';
-  const provider = (fresh ? settings?.provider : job?.provider) ?? settings?.provider ?? 'openai';
-  const service = providerName(provider);
-  const accountId = fresh ? settings?.chatgpt.activeAccountId : job?.chatgptAccountId;
-  const account = settings?.chatgpt.accounts.find(account => account.id === accountId);
-  return <Modal title={fresh ? 'Build another version?' : 'Try the same requests again?'} close={close}><div className="dialog-body">
-    <p>{fresh ? `${undo ? 'This undoes the result and sends' : 'This sends'} a new request using your current boxes and AI settings.` : `This sends the original saved request to ${plan ? account?.label ?? 'the original ChatGPT account' : service} again.`}</p>
-    <p>{plan ? 'This counts toward your ChatGPT plan or credits. Earlier attempts may also have used your plan or credits.' : `${service} may charge for another request.${!fresh && job ? ` Estimated job cost: ${money(job.estimateUsd)}.` : ''} Earlier attempts may also have been charged.`}</p>
-    <div className="form-actions"><button className="primary" disabled={busy} onClick={send}>{plan ? 'Send using plan or credits' : 'Send paid request'}</button><button onClick={close}>Keep editing</button></div>
-  </div></Modal>;
-}
-
-export const providerName = (provider: string) => ({ openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as Record<string, string>)[provider] ?? 'AI provider';
 
 function GenerationDetails({ controller, project, settings, openSettings, manageUsage, editRequest, close }: {
   controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void; close: () => void;
@@ -143,10 +100,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   });
   const source = candidate?.pages.find(page => page.pageId === pageId) ?? candidate?.pages[0];
   const page = project.pages.find(page => page.id === source?.pageId);
-  const newRequest = !job || job.status === 'applied' || job.status === 'blocked' || generationNeedsNewRequest(error, job);
   const canRetry = !!job && (['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status) || (job.status === 'applied' && conflicts.length > 0));
-  const retryDisabled = !!operation || (newRequest && !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim())));
-  const retryLabel = conflicts.length > 0 ? 'Build remaining draft' : job?.status === 'blocked' ? 'Build draft' : newRequest ? 'Generate again' : 'Try again';
   const canDiscard = !!job && ['prepared', 'ready', 'blocked', 'failed', 'unknown', 'cancelled'].includes(job.status);
   const alreadyApplied = !!job && project.appliedJobIds.includes(job.jobId);
   const title = job?.status === 'prepared' ? 'Generation details' : job?.status === 'ready' ? 'Generation details' : 'Generation';
@@ -173,7 +127,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
       { id: 'source', label: showSource ? 'Hide source code' : 'Source code', disabled: !candidate?.pages.length, action: () => { setTab('review'); setShowSource(value => !value); } },
       { id: 'attempts', label: 'Attempts', action: () => setTab('attempts') },
       { id: 'refresh', label: 'Refresh job', disabled: !!operation, action: () => { void controller.refresh(); } },
-      ...(canRetry ? [{ id: 'retry-snapshot', label: newRequest ? retryLabel : 'Retry original request', disabled: retryDisabled, action: () => setConfirmRetry(true) }] : []),
+      ...(canRetry ? [{ id: 'retry-snapshot', label: 'Retry original request', disabled: !!operation, action: () => setConfirmRetry(true) }] : []),
     ] },
     { id: 'settings', label: 'AI settings', action: openSettings },
     ...(canDiscard ? [{ id: 'discard', label: job?.status === 'prepared' ? 'Discard request' : 'Discard result', disabled: !!operation, action: () => { void controller.discard().catch(() => {}); } }] : []),
@@ -183,18 +137,18 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
         {job?.status === 'prepared' && <button className="primary" disabled={!!operation} onClick={() => { void controller.start().catch(() => {}); }}>Send and generate</button>}
         {controller.canStop && <button onClick={() => { void controller.cancel().catch(() => {}); }}>Cancel generation</button>}
       </GenerationFeedback>}><div className="generation-dialog">
-      {error && <details><summary>Show details</summary><p className="preserve-text">{error}</p></details>}
+      {error && <p className="message error" role="alert">{error}</p>}
       {usageError && <p className="message error" role="alert">{usageError}</p>}
       {job?.dossierError && <p className="message warning" role="alert">Your result is saved, but the project brief needs attention: {job.dossierError}</p>}
       {!job ? <><p>{operation ? 'Preparing…' : 'No generation request is prepared.'}</p><div className="form-actions">
-        <button onClick={openSettings}>AI settings</button>{!operation && <button disabled={retryDisabled} onClick={() => setConfirmRetry(true)}>Prepare request again</button>}
+        <button onClick={openSettings}>AI settings</button>{!operation && <button onClick={() => { void controller.prepare().catch(() => {}); }}>Prepare request again</button>}
       </div></> : <>
         {job.status === 'unknown' && <p className="message warning">The AI may have finished this request, but the result didn’t arrive. Trying again {usesChatgpt ? 'uses your plan again' : 'may cost again'}.</p>}
         {job.status === 'cancelled' && <p className="small muted">{usesChatgpt ? 'Submitted work may still count toward your plan.' : 'Submitted work may still be charged.'}</p>}
         {usageLimit && <p className="message warning"><strong>ChatGPT usage limit reached.</strong> Review your plan or this app’s limit in ChatGPT settings.</p>}
         {job.status === 'applied' && !alreadyApplied && <p className="message warning">This job was applied earlier. The current project does not include that application; it may have been undone.</p>}
-        <div className="generation-review-toolbar"><p>{job.requirements.regionCount} {job.requirements.regionCount === 1 ? 'request' : 'requests'} · {affectedPages.join(', ')} · {job.generationMode === 'strict' ? 'Precise' : 'Flexible'}</p><MenuButton label="More" ariaLabel="Generation options" items={more} /></div>
-        {tab === 'details' && <section className="generation-section"><h3>Request details</h3><dl className="generation-facts"><dt>Cost</dt><dd>{usesChatgpt ? `Counts toward ${frozenAccount?.label ?? 'your ChatGPT'} plan or credits` : `About ${money(job.estimateUsd)}; final charges may vary`}</dd><dt>Provider</dt><dd>{service}</dd><dt>Authentication</dt><dd>{usesChatgpt ? 'ChatGPT plan' : 'API key'}</dd><dt>Model</dt><dd>{job.settings.model}</dd><dt>Generation mode</dt><dd>{job.generationMode === 'strict' ? 'Precise' : 'Flexible'}</dd>
+        <div className="generation-review-toolbar"><p>{job.requirements.regionCount} {job.requirements.regionCount === 1 ? 'request' : 'requests'} · {affectedPages.join(', ')} · {readable(job.generationMode)}</p><MenuButton label="More" ariaLabel="Generation options" items={more} /></div>
+        {tab === 'details' && <section className="generation-section"><h3>Request details</h3><dl className="generation-facts"><dt>Cost</dt><dd>{usesChatgpt ? `Counts toward ${frozenAccount?.label ?? 'your ChatGPT'} plan or credits` : `About ${money(job.estimateUsd)}; final charges may vary`}</dd><dt>Provider</dt><dd>{service}</dd><dt>Authentication</dt><dd>{usesChatgpt ? 'ChatGPT plan' : 'API key'}</dd><dt>Model</dt><dd>{job.settings.model}</dd><dt>Generation mode</dt><dd>{readable(job.generationMode)}</dd>
           {usesChatgpt ? <><dt>Account</dt><dd>{frozenAccount?.label ?? job.chatgptAccountId ?? 'No account recorded'}{frozenAccount && <span className="small muted"> · {job.chatgptAccountId}</span>}</dd><dt>Reasoning effort</dt><dd>{job.settings.reasoningEffort}</dd></> : <>
             <dt>Estimated job cost</dt><dd>{money(job.estimateUsd)}</dd><dt>Estimate allowance</dt><dd>{money(job.settings.spendingLimitUsd)}</dd>
             <dt>Output cap</dt><dd>{job.settings.maxOutputTokens.toLocaleString()} tokens · {job.settings.reasoningEffort} reasoning</dd></>}</dl>
@@ -215,8 +169,8 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
           {providerError.requestId && <><dt>Request ID</dt><dd>{providerError.requestId}</dd></>}
         </dl></section>}
         {job.usage && <p className="token-usage">Reported usage: {job.usage.inputTokens.toLocaleString()} input · {job.usage.outputTokens.toLocaleString()} output · {job.usage.totalTokens.toLocaleString()} total tokens</p>}</section>}
-        {tab === 'requirements' && <section className="generation-section"><h3>AI instructions</h3>
-          <p className="digest">SHA-256: <code>{job.requirements.sha256}</code></p><pre className="markdown-source" tabIndex={0} aria-label="AI instructions source">{job.requirements.markdown}</pre>
+        {tab === 'requirements' && <section className="generation-section"><h3>REQUIREMENTS.md</h3>
+          <p className="digest">SHA-256: <code>{job.requirements.sha256}</code></p><pre className="markdown-source" tabIndex={0} aria-label="Generation REQUIREMENTS.md source">{job.requirements.markdown}</pre>
         </section>}
         {tab === 'attempts' && <section className="generation-section"><h3>Actual attempts</h3>{job.attempts.length === 0 ? <p className="muted">No provider attempt has been recorded.</p> : <ol className="attempt-list">{job.attempts.map(attempt => <li key={attempt.ordinal}>
           <strong>Attempt {attempt.ordinal} · {readable(attempt.status)}</strong><p className="small">Started {attempt.startedAt}{attempt.finishedAt ? ` · Finished ${attempt.finishedAt}` : ''}</p>
@@ -224,7 +178,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
         </li>)}</ol>}</section>}
         {tab === 'review' && <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><p>Couldn’t build the page.</p>{job.message && <details><summary>Show details</summary><p className="small">{job.message}</p></details>}</>}</> : <>
           {job.status === 'applied' && conflicts.length > 0 && <p>Applied {candidate.regions.length - conflicts.length} of {candidate.regions.length} areas</p>}
-          {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft"><h3>Requests needing a decision</h3>
+          {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft"><h3>Requests needing details</h3>
             <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
               const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
               return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
@@ -251,12 +205,15 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
         </>}</section>}
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
-          {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply completed changes' : 'Apply changes'}</button>}
-          {canRetry && <button className="primary" disabled={retryDisabled} onClick={() => setConfirmRetry(true)}>{retryLabel}</button>}
+          {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready regions' : 'Apply changes'}</button>}
+          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>{conflicts.length > 0 ? 'Build remaining draft' : job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
         </div>
       </>}
     </div></Modal>
-    {confirmRetry && <RetryConfirmation job={job} settings={settings} fresh={newRequest} busy={retryDisabled} close={() => setConfirmRetry(false)} send={() => { setConfirmRetry(false); void (newRequest ? controller.prepare() : controller.retry()).catch(() => {}); }} />}
+    {confirmRetry && job && <Modal title="Try the same requests again?" close={() => setConfirmRetry(false)}><div className="dialog-body"><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
+      <p>{usesChatgpt ? 'The retry counts toward that account’s ChatGPT plan or credits balance. Earlier attempts may also have used your plan or credits.' : `Estimated job cost: ${money(job.estimateUsd)}. Earlier attempts may also have been charged.`}</p>
+      {usageError && <p className="message error" role="alert">{usageError}</p>}
+      <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { setConfirmRetry(false); void controller.retry().catch(() => {}); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={() => setConfirmRetry(false)}>Keep current job</button></div></div></Modal>}
   </>;
 }
 

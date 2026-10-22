@@ -500,8 +500,12 @@ impl Project {
                 }).collect());
             }
             if format >= 18 {
-                area["layerOrder"] =
-                    serde_json::json!(page.request_layers().iter().position(|r| r.id == region.id));
+                area["layerOrder"] = serde_json::json!(
+                    targets
+                        .iter()
+                        .filter(|(p, _)| p.id == page.id)
+                        .position(|(_, r)| r.id == region.id)
+                );
                 area["scope"] = serde_json::json!(if region.is_whole_page(page) {
                     "page"
                 } else {
@@ -716,7 +720,8 @@ impl Project {
             "exceptions":self.exceptions.iter().filter(|e|relevant(&e.scope)).collect::<Vec<_>>(),
             "routes":self.pages.iter().map(|p|(&p.id,&p.name,&p.path,p.included)).collect::<Vec<_>>() });
         if format >= 18 {
-            // Even unsubmitted/empty layers can change which request is the base.
+            // Freeze submitted order and effective authority, not unrelated pending state.
+            // An unsubmitted layer matters only when it changes a submitted request's scope.
             context["requestLayers"] = serde_json::json!(
                 self.pages
                     .iter()
@@ -725,7 +730,8 @@ impl Project {
                         p.id,
                         p.request_layers()
                             .iter()
-                            .map(|r| (r.id, r.z_index))
+                            .filter(|r| targets.contains(&(p.id, r.id)))
+                            .map(|r| (r.id, r.z_index, r.is_whole_page(p)))
                             .collect::<Vec<_>>()
                     ))
                     .collect::<Vec<_>>()

@@ -617,6 +617,9 @@ fn changing_an_unsubmitted_lower_layer_invalidates_frozen_scope() {
     p.pages[0].regions.push(empty);
     let s = p.prepare_requirements().unwrap();
     s.validate_current(&p).unwrap();
+    // Adding/moving an unrelated layer above the base must not discard ready work.
+    p.pages[0].regions[1].z_index = 3;
+    s.validate_current(&p).unwrap();
     p.pages[0].regions[1].z_index = -1;
     assert!(!p.pages[0].regions[0].is_whole_page(&p.pages[0]));
     assert!(s.validate_current(&p).is_err());

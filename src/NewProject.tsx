@@ -1,5 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { homeDir } from '@tauri-apps/api/path';
+import { useState, type FormEvent } from 'react';
 import type { AiSettingsView, ProjectLocationView, Viewport } from './types';
 import { native } from './api';
 import { ProjectLocationSettings } from './ProjectLocation';
@@ -10,7 +9,6 @@ const sizes = {
   mobile: [[390, 844], [414, 896], [360, 800], [384, 832], [393, 873], [360, 780]],
 } as const;
 function message(error: unknown) { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
-function recentPath(path: string, home: string) { return home && (path === home || path.startsWith(`${home}/`) || path.startsWith(`${home}\\`)) ? `~${path.slice(home.length)}` : path; }
 type Props = { importBrand: () => void; busy: boolean; create: (name: string, viewport: Viewport, parentDirectory?: string) => Promise<void>; open: () => Promise<void>; openFolder: () => Promise<void>; location: ProjectLocationView | null; changeLocation: (reset: boolean) => Promise<void>; recentProjects?: { path: string; name: string }[]; openRecent?: (path: string) => Promise<void>; forgetRecent: (path: string) => Promise<void>; settings: AiSettingsView | null; openSettings: () => void };
 
 export function NewProject({ importBrand, busy, create, open, openFolder, location, changeLocation, recentProjects = [], openRecent, forgetRecent, settings, openSettings }: Props) {
@@ -23,8 +21,6 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
   const [error, setError] = useState('');
   const [missingRecent, setMissingRecent] = useState<string | null>(null);
   const [parentDirectory, setParentDirectory] = useState<string>();
-  const [home, setHome] = useState('');
-  useEffect(() => { void homeDir().then(path => setHome(path.replace(/[\\/]+$/, ''))).catch(() => {}); }, []);
   const locked = busy || working;
   const account = settings?.chatgpt.accounts.find(item => item.id === settings.chatgpt.activeAccountId);
   const connected = !settings?.configurationError && (settings?.authentication === 'chatgpt' ? account?.connected && account.planEnabled && !account.storageRepairRequired : settings?.credential.configured);
@@ -44,16 +40,15 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
   return <form className="new-project simple-new-project" onSubmit={submit}>
     <h1>{mode === 'blank' ? 'Start with a blank website' : 'Create your website'}</h1>
     {!mode ? <>
-      <p className="new-project-intro">Place boxes where things go, describe them, and Generate builds the page.</p>
       <div className="project-start-choices">
-        <button type="button" disabled={locked} onClick={() => setMode('blank')}><span className="start-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12" /></svg></span><strong>Blank website</strong><span>Start from an empty page at the size you pick.</span></button>
-        <button type="button" disabled={locked} onClick={importBrand}><strong>Use my existing brand</strong><span>Analyze a website or files and choose brand details for a new project.</span></button>
+        <button type="button" aria-label="Blank website" disabled={locked} onClick={() => setMode('blank')}><span className="start-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12" /></svg></span><strong>Blank website</strong></button>
+        <button type="button" disabled={locked} onClick={importBrand}><strong>Use my existing brand</strong></button>
       </div>
-      {!connected && <p className="start-ai-note">Generate needs an AI provider. <button type="button" className="link-button" onClick={openSettings}>Connect now</button></p>}
+      {!connected && <p className="start-ai-note"><button type="button" className="link-button" onClick={openSettings}>Connect now</button></p>}
       <div className="start-open"><button type="button" className="link-button" onClick={() => { void run(open); }} disabled={locked}>Open project</button><span><button type="button" className="link-button" onClick={() => { void run(openFolder); }} disabled={locked}>Open folder…</button></span></div>
       {recentProjects.length > 0 && openRecent && <section className="recent-projects" aria-label="Recent projects"><h2>Recent projects</h2><ul>{recentProjects.map(project => <li key={project.path}><button className="recent-open" type="button" disabled={locked} title={project.path} onClick={() => { void run(() => openRecent(project.path), project.path); }}>
         <span className="recent-avatar" aria-hidden="true">{project.name.trim().charAt(0).toUpperCase() || '·'}</span>
-        <span className="recent-text"><strong>{project.name}</strong><span>{recentPath(project.path, home)}</span></span>
+        <span className="recent-text"><strong>{project.name}</strong><span>{project.path.split(/[\\/]/).slice(-2, -1)[0] ?? project.path}</span></span>
       </button><button className="recent-remove" type="button" disabled={locked} aria-label={`Remove ${project.name} from recent projects`} title="Remove from recent" onClick={() => { void run(() => forgetRecent(project.path)); }}><span aria-hidden="true">×</span></button></li>)}</ul></section>}
     </> : <>
       <label>Project name<input name="projectName" autoFocus required maxLength={120} value={name} onChange={event => setName(event.target.value)} autoComplete="off" disabled={locked} /></label>

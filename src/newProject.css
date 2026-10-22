@@ -19,11 +19,11 @@
 .new-project > .message.error > button { flex-shrink: 0; white-space: nowrap; }
 .recent-projects .recent-avatar { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 8px; background: var(--selected); color: var(--accent); font-weight: 600; font-size: 16px; }
 .recent-projects .recent-text { display: grid; gap: 3px; min-width: 0; }
-.recent-projects .recent-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-projects .recent-text span { overflow-wrap: anywhere; color: var(--muted); font-weight: 400; font-size: 12px; }
+.recent-projects .recent-text strong, .recent-projects .recent-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-projects .recent-text span { color: var(--muted); font-weight: 400; font-size: 11px; }
 .start-open { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); }
 .start-ai-note { margin: 0; font-size: 13px; color: var(--muted); }
-.link-button { min-height: 24px; padding: 0; border: 0; background: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font: inherit; cursor: pointer; }
+.link-button { min-height: auto; padding: 0; border: 0; background: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font: inherit; cursor: pointer; }
 .simple-new-project > .form-actions { justify-content: flex-end; }
 .identity-import { display: flex; flex-direction: column; gap: 14px; min-width: 0; border-top: 1px solid var(--border-soft); padding-top: 18px; }
 .identity-source-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -43,21 +43,21 @@
 .identity-review-section { min-width: 0; display: grid; gap: 8px; }
 .identity-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .identity-section-heading h3 { margin: 0; font-size: 14px; }
-.identity-section-actions { display: flex; align-items: center; color: var(--muted); font-size: 12px; }
+.identity-section-actions { display: flex; align-items: center; color: var(--muted); font-size: 11px; }
 .identity-section-actions button { min-height: 28px; padding: 3px 6px; border: 0; background: transparent; color: var(--accent); font-size: 12px; }
 .identity-section-actions button:hover:not(:disabled) { background: var(--selected); }
 .identity-review-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 168px), 1fr)); gap: 10px; }
 .identity-card-wrap { position: relative; min-width: 0; display: flex; flex-direction: column; }
-.identity-card { position: relative; flex: 1; min-width: 0; min-height: 86px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 5px; margin: 0; padding: 12px 34px 12px 12px; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--surface-raised); color: var(--text); cursor: pointer; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
+.identity-card { position: relative; flex: 1; min-width: 0; min-height: 86px; display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 5px; margin: 0; padding: 12px 34px 12px 12px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-raised); color: var(--text); cursor: pointer; font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }
 .identity-card:hover { border-color: var(--accent); }
 .identity-card:has(input:checked) { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); background: var(--selected); }
 .identity-card:has(input:focus-visible) { outline: 2px solid var(--focus); outline-offset: 3px; }
 .identity-card:has(input:disabled) { cursor: default; opacity: 0.6; }
 .identity-check { position: absolute; z-index: 1; top: 8px; right: 8px; display: grid; place-items: center; width: 20px; height: 20px; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-raised); color: transparent; font: 650 12px system-ui; }
 .identity-card:has(input:checked) .identity-check { color: var(--accent-text); background: var(--accent); border-color: var(--accent); }
-.identity-card small { color: var(--muted); font-size: 12px; }
+.identity-card small { color: var(--muted); font-size: 11px; }
 .identity-card-info { font-size: 12px; }
-.identity-card-info > summary { position: absolute; right: 6px; top: 34px; width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--border-soft); border-radius: 50%; background: var(--surface-raised); font: 600 12px system-ui, sans-serif; list-style: none; }
+.identity-card-info > summary { position: absolute; right: 7px; top: 34px; width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid var(--border-soft); border-radius: 50%; background: var(--surface-raised); font: 600 12px Georgia, serif; list-style: none; }
 .identity-card-info > summary::-webkit-details-marker { display: none; }
 .identity-card-info > div { margin-top: 6px; padding: 10px; border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface-raised); overflow-wrap: anywhere; }
 .identity-card-info[open] > summary { color: var(--accent); border-color: var(--accent); }
@@ -65,15 +65,15 @@
 .identity-card-info ul { padding-left: 16px; color: var(--muted); }
 .identity-card-wrap:has(.identity-card-info) > .identity-card { padding-bottom: 34px; }
 .identity-card-wrap:has(.identity-card-info[open]) > .identity-card { flex: 0; }
-.identity-swatch-card:has(.identity-card-info) > .identity-card { min-height: 68px; display: grid; grid-template-columns: 32px minmax(0, 1fr); align-content: center; gap: 2px 8px; padding: 8px 38px 8px 8px; }
-.identity-swatch { display: block; grid-row: span 2; width: 32px; height: 32px; border: 1px solid var(--border-soft); border-radius: 3px; }
-.identity-swatch-card .identity-unsure { grid-column: 2; }
+.identity-swatch-card .identity-card { padding: 8px 8px 34px; justify-content: flex-start; }
+.identity-swatch { display: block; width: 100%; height: 76px; border: 1px solid var(--border-soft); border-radius: 4px; }
+.identity-swatch-card strong, .identity-swatch-card small { padding: 0 4px; }
 .identity-swatch-card small { font-family: ui-monospace, monospace; }
 .identity-font-card { grid-column: span 1; }
 .identity-font-specimen { display: grid; gap: 6px; width: 100%; font-size: 18px; line-height: 1.25; }
 .identity-font-specimen > span { font-size: 14px; }
-.identity-pills { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; max-width: 100%; }
-.identity-pill, .identity-kind, .identity-unsure { width: fit-content; max-width: 100%; display: inline-block; border-radius: 4px; padding: 3px 7px; background: var(--surface); border: 1px solid var(--border-soft); font-size: 12px; line-height: 1.3; }
+.identity-pills { display: flex; flex-wrap: wrap; gap: 5px; }
+.identity-pill, .identity-kind, .identity-unsure { width: fit-content; display: inline-block; border-radius: 12px; padding: 3px 7px; background: var(--surface); border: 1px solid var(--border-soft); font-size: 11px; line-height: 1.3; }
 .identity-unsure { color: var(--muted); background: var(--warning-surface); }
 .identity-logo .identity-card, .identity-photo .identity-card { padding: 8px; justify-content: flex-start; }
 .identity-logo img, .identity-photo img { width: 100%; height: 96px; object-fit: contain; border: 1px solid var(--border-soft); border-radius: 4px; background: var(--surface-muted); }
@@ -82,8 +82,8 @@
 .identity-logo .identity-card > span:last-child, .identity-photo .identity-card > span:last-child { width: 100%; padding: 0 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .identity-warnings { margin: 0; color: var(--muted); font-size: 12px; }
 .identity-warnings ul { margin-bottom: 0; padding-left: 20px; }
-.page-appearance { display: flex; align-items: center; gap: 6px; font-size: 12px; }
-.page-appearance select { width: auto; min-height: 28px; padding: 2px 20px 2px 5px; font-size: 12px; }
+.page-appearance { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.page-appearance select { width: auto; min-height: 26px; padding: 2px 20px 2px 5px; font-size: 11px; }
 
 .dossier-identity-logos { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 180px)); gap: 12px; }
 .dossier-identity-logos figure { margin: 0; font-size: 12px; overflow-wrap: anywhere; }

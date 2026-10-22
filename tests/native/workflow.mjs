@@ -23,7 +23,7 @@ export async function assertCanvasOnly(driver) {
 export async function assertGenerationModes(driver) {
   await driver.menu(['AI style']);
   const choices=await driver.execute(()=>[...document.querySelectorAll('[role=menu][aria-label="AI style"] button')].map(b=>({label:b.getAttribute('aria-label'),checked:b.getAttribute('aria-checked')})));
-  assert.deepEqual(choices.map(c=>c.label),['Flexible — interpret and coordinate','Precise — follow descriptions and placement closely']);
+  assert.deepEqual(choices.map(c=>c.label),['Flexible — small adjustments only','Precise — follow placement closely']);
   const mode=(await driver.invoke('get_workspace')).project.generationMode;
   assert.equal(choices[mode==='strict'?1:0].checked,'true');
   await driver.escape();
@@ -86,7 +86,7 @@ export async function reviewRequirements(driver, mode, evidence, name = 'REQUIRE
 
 export async function authorProject(driver, step, evidence) {
   await step('A fresh native app has no inherited project or recovery data', async () => {
-    await driver.ready('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
+    await driver.ready('//button[@aria-label="Blank website"]', 'xpath');
     const state = await driver.invoke('get_workspace');
     assert.equal(state.project, null);
     assert.equal(state.recovery, null);
@@ -97,7 +97,7 @@ export async function authorProject(driver, step, evidence) {
 
   await step('Blank website starts Mobile / Light, then the page dropdown switches to Dark', async () => {
     assert.equal(await driver.execute(() => !!document.querySelector('input[name="projectName"]')), false);
-    await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
+    await driver.button('Blank website');
     await driver.fill('Project name', 'Native Saka website');
     await driver.button('Mobile');
     await driver.button('Create project');
@@ -249,7 +249,6 @@ export async function recoverProject(driver, expected, step) {
       remaining.sort((a, b) => a.projectId.localeCompare(b.projectId)));
     assert.equal(after.recoveryError, null);
     assert.equal(after.dirty, true);
-    await waitFor(() => driver.execute(() => [...document.querySelectorAll('.message.info')].some(item => item.textContent.includes('Recovered unsaved changes from your last session.'))), 'Recovery did not explain that unsaved changes were restored');
     await assert.rejects(driver.invoke('dismiss_recovery', { projectId: expected.id }));
     assert.deepEqual((await driver.invoke('get_workspace')).project, expected, 'Dismissing an open project changed it');
     await assertCanvasOnly(driver);

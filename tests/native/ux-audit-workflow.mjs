@@ -74,7 +74,7 @@ async function clickHeading(driver, physical) {
 }
 
 async function chooseInterpretation(driver, precise) {
-  await driver.menu(['AI style', precise ? 'Precise — follow descriptions and placement closely' : 'Flexible — interpret and coordinate']);
+  await driver.menu(['AI style', precise ? 'Precise — follow placement closely' : 'Flexible — small adjustments only']);
   await waitFor(async () => (await workspace(driver)).project.generationMode === (precise ? 'strict' : 'fuzzy'), 'The global interpretation choice did not persist');
 }
 
@@ -130,11 +130,11 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   const longPrompt = 'Create a welcoming studio homepage with a clear heading and one useful action.\n' + Array.from({ length: 85 }, (_, index) => `Detail ${index + 1}: use clear labels and welcoming, readable content.`).join('\n');
   let projectId, homeId, aboutId, cancelled, applied, savedProject, exportedRoot;
 
-  await step('Fresh onboarding explains the loop and offers labelled choices without sidebars', async () => {
+  await step('Fresh onboarding offers labelled choices without filler or sidebars', async () => {
     assert.equal((await workspace(driver)).project, null);
     await driver.ready('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath');
-    await driver.ready('//button[.//strong[normalize-space(.)="Use my existing brand"]]', 'xpath');
-    assert.equal(await driver.execute(() => document.querySelector('.new-project-intro')?.textContent), 'Place boxes where things go, describe them, and Generate builds the page.');
+    assert.equal(await driver.execute(() => !!document.querySelector('button[aria-label="Use my existing brand"]')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.new-project-intro')), false);
     assert.equal(await driver.execute(() => !!document.querySelector('input[name="projectName"]')), false);
     await assertCanvasOnly(driver); await physical.initialize(output);
     await physical.captureWindow(join(output, '01-onboarding-window.png'));
@@ -147,8 +147,6 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     projectId = value.id; homeId = value.homePageId;
     assert.deepEqual(value.pages[0].viewport, { width: 390, height: 844 }); assert.equal(value.pages[0].appearance, 'light'); assert.equal(value.showGrid, true);
     await driver.ready('[data-testid="canvas"]');
-    await driver.ready('.first-run-tips');
-    assert.match(await driver.execute(() => document.querySelector('.first-run-tips').textContent), /Place a box.*Click Add request/s);
     assert.equal(await driver.execute(() => [...document.querySelectorAll('.shell-primary-actions button')].find(button => button.textContent.trim() === 'Generate')?.disabled), true);
     const fit = await driver.execute(() => { const guide = document.querySelector('[data-testid="screen-guide"]').getBoundingClientRect(), view = document.querySelector('.free-workspace').getBoundingClientRect(); return { top: guide.top, bottom: guide.bottom, viewportTop: view.top, viewportBottom: view.bottom, dockTop: document.querySelector('[aria-label="Canvas tools"]').getBoundingClientRect().top }; });
     assert.ok(fit.top >= fit.viewportTop - 1 && fit.bottom <= fit.viewportBottom + 1 && fit.bottom - fit.top >= (fit.viewportBottom - fit.viewportTop) * 0.75, JSON.stringify(fit));
@@ -174,7 +172,6 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await physical.doubleClick(emptyPoint);
     await waitFor(async () => (await workspace(driver)).project.pages[0].regions.length === 1, 'Double-click did not add exactly one request');
     await openRequest(driver, homeId);
-    await waitFor(() => driver.execute(() => document.querySelector('.first-run-tips strong')?.textContent === 'Describe it'), 'Creating a request did not advance the tips');
     await waitFor(() => driver.execute(() => document.activeElement?.tagName === 'TEXTAREA'), 'An empty request could not be reopened from the overview');
     assert.equal((await workspace(driver)).project.pages[0].regions.length, 1);
     await physical.keys('Escape'); await driver.button('Undo');
@@ -187,7 +184,6 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
       const a=input.getBoundingClientRect(), b=box.getBoundingClientRect();
       return {inside:a.left>=b.left-1&&a.right<=b.right+1&&a.top>=b.top-1&&a.bottom<=b.bottom+1,scrollable:input.scrollHeight>input.clientHeight};
     });
-    await waitFor(() => driver.execute(() => document.querySelector('.first-run-tips strong')?.textContent === 'Generate'), 'Describing a request did not advance the tips');
     assert.equal(promptLayout.inside,true,'Long prompt text must remain within its request');
     assert.equal(promptLayout.scrollable,true,'Long prompts need internal scrolling');
     await driver.button('Fit');
@@ -259,26 +255,17 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     cancelled = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The held generation did not reach the provider');
     await driver.ready('.canvas-pill[aria-label="Generation status"]');
-    assert.equal(await driver.execute(() => !!document.querySelector('.first-run-tips')), false);
-    assert.equal(await driver.execute(() => localStorage.getItem('desegnos.first-run-tips')), 'done');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('header button')].find(button => button.textContent.trim() === 'Generate')?.disabled), true);
-    await driver.click('//div[@role="region" and @aria-label="Generation status"]//button[normalize-space(.)="Stop"]', 'xpath');
+    await driver.click('//header//button[normalize-space(.)="Stop"]', 'xpath');
     await jobAt(driver, projectId, ['cancelled']); provider.release(cancelled.jobId);
     await waitFor(() => driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"] .generation-heading')?.textContent === 'Stopped'), 'Stop did not visibly acknowledge cancellation');
     await driver.ready('//header//button[normalize-space(.)="Generate" and not(@disabled)]', 'xpath');
     assert.deepEqual((await workspace(driver)).project.pages, before.pages);
-    assert.match(await driver.execute(() => document.querySelector('.canvas-pill .generation-feedback-stopped').textContent), /Generation stopped.*Your work is safe\.$/);
-    const requests = requestCount(provider);
-    await driver.button('Try again'); await driver.ready('dialog[open][aria-label="Try the same requests again?"]');
-    assert.match(await driver.execute(() => document.querySelector('dialog[open]').textContent), /original saved request.*OpenAI.*may charge/s);
-    await driver.button('Keep editing'); await closed(driver);
-    assert.equal(requestCount(provider), requests); assert.equal((await driver.invoke('get_generation', { projectId })).jobId, cancelled.jobId);
     await physical.captureWindow(join(output, '07-cancelled-generation-window.png'));
   });
 
   await step('Generation stays in a non-modal strip while real panning works, then applies both pages with the exact instructions', async () => {
-    provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate'); await driver.button('Send paid request');
+    provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     const held = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && value.jobId !== cancelled.jobId && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The second generation did not reach the held provider');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
     assert.match(await driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"]').textContent), /\d+:\d{2}|elapsed/i);
@@ -306,22 +293,10 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     const bar = '//*[@role="region" and @aria-label="Generation status"]';
     for (const label of ['Undo', 'Try again']) await driver.ready(`${bar}//button[normalize-space(.)=${xpathString(label)}]`, 'xpath');
     await physical.captureWindow(join(output, '09-applied-review-window.png'));
-    let requests = requestCount(provider);
-    const before = (await workspace(driver)).project;
-    await driver.click(`${bar}//button[normalize-space(.)="Try again"]`, 'xpath');
-    await driver.ready('dialog[open][aria-label="Build another version?"]');
-    assert.match(await driver.execute(() => document.querySelector('dialog[open]').textContent), /undoes the result.*current boxes and AI settings.*may charge/s);
-    await driver.button('Keep editing'); await closed(driver);
-    assert.equal(requestCount(provider), requests); assert.deepEqual((await workspace(driver)).project, before);
-    provider.setMode('complete', { editorAudit: true });
-    await driver.click(`${bar}//button[normalize-space(.)="Try again"]`, 'xpath'); await driver.button('Send paid request');
-    applied = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.jobId !== applied.jobId && value?.status === 'applied' && value; }, 'The approved result retry did not build another version');
-    assert.equal(requestCount(provider), requests + 1); requests++;
-    await previewReady(driver, 'Generated native preview');
-    await driver.click(`${bar}//button[normalize-space(.)="Undo"]`, 'xpath');
+    const requests = requestCount(provider); await driver.click(`${bar}//button[normalize-space(.)="Undo"]`, 'xpath');
     await waitFor(async () => (await workspace(driver)).project.pages.every(page => !page.content), 'Result Undo did not restore the previous website');
     await driver.button('Redo'); await previewReady(driver, 'Generated native preview'); assert.equal(requestCount(provider), requests);
-    assert.equal(await driver.execute(() => !!document.querySelector('.canvas-pill button[aria-label="Keep changes"]')), false, 'Undo dismisses the result review even after Redo');
+    if (await driver.execute(() => !![...document.querySelectorAll('.canvas-pill[aria-label="Generation status"] button')].find(button=>button.textContent.trim()==='Keep'))) await driver.click(`${bar}//button[normalize-space(.)="Keep"]`, 'xpath');
     await assertCanvasOnly(driver);
   });
 
@@ -342,7 +317,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await previewReady(driver, 'My unfinished edit must survive');
     await physical.captureWindow(join(output, '09b-draft-preserved-window.png'));
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview');
-    provider.setMode('complete', { editorAudit: true }); await driver.button('Generate'); await driver.button('Send paid request'); applied = await jobAt(driver, projectId, ['applied']);
+    provider.setMode('complete', { editorAudit: true }); await driver.button('Generate'); applied = await jobAt(driver, projectId, ['applied']);
     await previewReady(driver, 'Generated native preview');
     await driver.ready('.canvas-pill[aria-label="Generation status"]');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
@@ -375,18 +350,12 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
       await driver.button('Undo'); await previewReady(driver, 'Edited directly on the page');
     }
     assert.equal(requestCount(provider), requests);
-    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar > button')].map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['Edit', 'Ask AI', 'Style', 'Undo changes to this element', 'Delete element']);
+    await clickHeading(driver, physical); assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.element-toolbar > button')].map(button => button.getAttribute('aria-label') || button.textContent.trim())), ['Edit', 'Ask AI', 'Style', 'Undo changes to this element', 'Delete layer']);
     assert.equal(await driver.execute(() => !!document.querySelector('.element-toolbar .style-bar')), false);
     await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
     await driver.ready('.element-toolbar .style-bar [aria-label="Larger text"]');
     await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
-    assert.equal(await driver.execute(() => document.querySelector('.element-toolbar .element-type-tag')?.textContent), 'Heading');
-    assert.equal(await driver.execute(() => !!document.querySelector('.element-selection .element-type-tag')), false);
-    const measurement = await driver.execute(() => document.querySelector('.workspace-measurement')?.textContent ?? null);
-    if (measurement) {
-      assert.match(measurement, /px/);
-      assert.equal(await driver.execute(() => { const a = document.querySelector('.workspace-measurement').getBoundingClientRect(), b = document.querySelector('.element-toolbar').getBoundingClientRect(); return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top; }), false, 'The measurement covers the selection toolbar');
-    }
+    assert.match(await driver.execute(() => document.querySelector('.workspace-measurement').textContent), /px/);
     const overlap = await driver.execute(() => { const a = document.querySelector('.element-toolbar').getBoundingClientRect(), b = document.querySelector('.element-selection').getBoundingClientRect(); return Math.max(0, Math.min(a.right,b.right)-Math.max(a.left,b.left))*Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)); });
     assert.equal(overlap, 0, 'The restored element toolbar hides the selected heading');
     await physical.captureWindow(join(output, '10-inline-edit-selection-window.png'));
@@ -421,7 +390,6 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.equal(applied.usage.inputTokens, 422); assert.equal(applied.usage.outputTokens, 178);
     if (!await driver.execute(() => !!document.querySelector('.generation-log'))) await driver.button('AI log');
     await driver.ready('.generation-log');
-    assert.match(await driver.execute(() => document.querySelector('.generation-log').textContent), /422 tokens sent · 178 received/);
     assert.match(await driver.execute(() => document.querySelector('.generation-log').textContent), /Asked for 1 more element/);
     await driver.click('//aside[@aria-label="AI conversation"]//summary[normalize-space(.)="Context sent"]', 'xpath');
     assert.match(await driver.execute(() => document.querySelector('[aria-label="Context sent"]').textContent), /## Requested context/);
@@ -431,9 +399,6 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.equal(rejected.repairRounds, 1, 'Malformed output gets one automatic validation repair');
     assert.match(rejected.rawReply, /not-complete-json/);
     await waitFor(() => driver.execute(() => !!document.querySelector('[aria-label="Failed raw reply"]')), 'The failed raw reply is absent');
-    assert.match(await driver.execute(() => document.querySelector('.canvas-pill .generation-feedback-error').textContent), /Your work is safe\.$/);
-    assert.equal(await driver.execute(() => document.querySelector('.generation-log [aria-label="AI reply"] details').open), false);
-    await driver.click('//aside[@aria-label="AI conversation"]//section[@aria-label="AI reply"]//summary[normalize-space(.)="Show details"]', 'xpath');
     assert.ok((await driver.execute(() => document.querySelector('.generation-log [aria-label="AI reply"]').innerText)).includes(rejected.candidate.summary));
     const history = await driver.invoke('list_generations', { projectId });
     assert.ok(history.jobs.length >= 3); assert.equal(history.jobs[0].jobId, rejected.jobId);
@@ -466,12 +431,10 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await waitFor(() => driver.execute(() => document.querySelector('.inline-text-editor')?.value === 'Closing preserves this draft'), 'The native typing did not settle before Close');
     assert.equal((await workspace(driver)).dirty, false, 'The regression requires an uncommitted inline draft');
     await physical.raw({ action: 'close' });
-    await driver.ready('dialog[open][aria-label="Close Desegnos?"]');
-    assert.match(await driver.execute(() => document.querySelector('dialog[open]').textContent), /Unsaved changes will be lost/);
-    for (const label of ['Save and close', 'Close without saving', 'Keep editing']) await driver.ready(`//dialog[@open]//button[normalize-space(.)=${xpathString(label)}]`, 'xpath');
+    const dialog = await waitFor(async () => (await physical.inspect()).windows.find(window => window.title === 'Unsaved project changes'), 'Close did not show the native unsaved-changes confirmation');
     assert.equal((await workspace(driver)).dirty, true);
     await physical.captureWindow(join(output, '13b-unsaved-inline-close-window.png'));
-    await physical.keys('Escape'); await closed(driver);
+    await physical.raw({ action: 'key', key: 'Escape', windowId: dialog.id });
     await previewReady(driver, 'Closing preserves this draft');
     await driver.button('Undo'); await previewReady(driver, 'Edited directly on the page');
     await driver.button('Save'); savedProject = (await savedState(driver, projectPath)).project;
@@ -493,7 +456,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     const requests = requestCount(provider);
     await openRequest(driver,homeId);
     await waitFor(() => driver.execute(() => !!document.querySelector('.annotation.selected textarea')), 'The temporary export request was not selected');
-    await driver.click('.element-toolbar [aria-label="Delete request"]');
+    await driver.click('.element-toolbar [aria-label="Delete layer"]');
     if(await driver.execute(()=>!!document.querySelector('dialog[open]'))) { await driver.button('Remove'); await closed(driver); }
     await driver.button('Fit'); await replaceMain(driver, physical, false); await driver.page(aboutId); await replaceMain(driver, physical, true); await driver.page(homeId);
     const value = (await workspace(driver)).project; assert.equal(value.pages.length, 2);

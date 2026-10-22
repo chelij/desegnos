@@ -30,7 +30,7 @@ export async function websiteImportWorkflow(driver, physical, step, evidence) {
   await physical.initialize(evidence);
   let project;
   await step('New project import offers website editing by default without AI', async () => {
-    await driver.click('//button[.//strong[normalize-space(.)="Use my existing brand"]]', 'xpath');
+    await driver.button('Use my existing brand');
     await chooseFolder(physical, () => driver.button('Choose folder'), plain, output, 'plain-folder');
     assert.equal(await driver.execute(() => [...document.querySelectorAll('button')].find(n => n.textContent === 'Edit this website')?.getAttribute('aria-pressed')), 'true');
     await driver.button('Open website for editing');
@@ -57,12 +57,11 @@ export async function websiteImportWorkflow(driver, physical, step, evidence) {
     assert.equal(await readFile(join(plain, 'site.css'), 'utf8'), 'h1{color:rgb(24,55,83);font-size:48px}');
     await physical.captureWindow(join(output, 'edited-heading.png'));
   });
-  await step('Canvas preview executes original modules, shared CSS and relative page links while edit mode keeps scripts inert', async () => {
+  await step('Canvas live mode executes original modules, shared CSS and relative page links while edit mode keeps scripts inert', async () => {
     assert.equal(await driver.execute(() => document.querySelector('.static-preview iframe').contentDocument.body.dataset.scriptRan), null);
     await driver.execute(() => { window.__websiteTestMessages = []; addEventListener('message', event => { if (event.data?.type === 'website-test-page') window.__websiteTestMessages.push(event.data); }); });
-    await driver.button('Preview');
-    await driver.ready('.live-bar[aria-label="Preview"] [aria-label="Preview device"]');
-    await waitFor(() => driver.execute(() => window.__websiteTestMessages.some(m => m.title === 'Plain home' && m.colour === 'rgb(24, 55, 83)')), 'The original module or root stylesheet did not run in preview');
+    await driver.button('Live');
+    await waitFor(() => driver.execute(() => window.__websiteTestMessages.some(m => m.title === 'Plain home' && m.colour === 'rgb(24, 55, 83)')), 'The original module or root stylesheet did not run in live mode');
     const point = await driver.execute(() => {
       const frame = document.querySelector('.live-canvas-page iframe');
       const rect = window.__websiteTestMessages.at(-1).link, outer = frame.getBoundingClientRect();
@@ -71,13 +70,13 @@ export async function websiteImportWorkflow(driver, physical, step, evidence) {
     });
     await physical.click(point);
     await waitFor(() => driver.execute(() => window.__websiteTestMessages.some(m => m.title === 'About')), 'The relative link did not open the other imported page');
-    await driver.button('Exit preview');
+    await driver.click('.live-toggle');
   });
   await step('Build site exposes progress and Stop without installing dependencies', async () => {
     const build = join(output, 'Stopped Astro'); await mkdir(join(build, 'src/pages'), { recursive: true }); await mkdir(join(build, 'node_modules'));
     await writeFile(join(build, 'package.json'), JSON.stringify({ dependencies: { astro: '*' }, scripts: { build: `node -e "console.log('Compiling fixture');setTimeout(()=>{},60000)"` } }));
     await writeFile(join(build, 'src/pages/index.astro'), '<h1>Source</h1>');
-    await driver.button('Use a site or brand…');
+    await driver.button('Import context');
     await chooseFolder(physical, () => driver.button('Choose folder'), build, output, 'stopped-build');
     await driver.button('Build site'); await driver.button('Stop');
     await waitFor(() => driver.execute(() => document.querySelector('.website-choice')?.textContent.includes('Build stopped.')), 'Stopping did not finish the build');

@@ -74,22 +74,6 @@ export class WebDriver {
     return this.executeAsync((name, parameters) => window.__TAURI__.core.invoke(name, parameters), command, args);
   }
 
-  async reload() {
-    const errors = await this.execute(() => window.__desegniTestErrors ?? []);
-    await this.execute(() => { window.__beforeWorkflowReload = true; setTimeout(() => location.reload(), 0); });
-    await waitFor(async () => {
-      try { return await this.execute(() => !window.__beforeWorkflowReload && !!document.querySelector('[data-testid="canvas"]')); }
-      catch { return false; }
-    }, 'The native editor did not reload', 12_000);
-    await this.execute(previous => {
-      window.__desegniTestErrors = previous;
-      window.addEventListener('error', event => window.__desegniTestErrors.push({ kind: 'error', message: event.message }));
-      window.addEventListener('unhandledrejection', event => window.__desegniTestErrors.push({ kind: 'rejection', message: String(event.reason) }));
-      const original = console.error;
-      console.error = (...values) => { window.__desegniTestErrors.push({ kind: 'console', message: values.map(String).join(' ') }); original.apply(console, values); };
-    }, errors);
-  }
-
   async find(value, using = 'css selector') {
     return (await this.command('POST', '/element', { using, value }))[elementKey];
   }
@@ -134,13 +118,14 @@ export class WebDriver {
       return [...document.querySelectorAll('button')].some(button => (button.getAttribute('aria-label') === label || button.textContent.trim() === label)
         && button.getClientRects().length && getComputedStyle(button).visibility === 'visible' && !button.matches(':disabled') && (!top || top.contains(button)));
     }, text);
-    if (text === 'Fuzzy' || text === 'Strict') return this.menu(['AI style', text === 'Strict' ? 'Precise — follow descriptions and placement closely' : 'Flexible — interpret and coordinate']);
+    if (text === 'Fuzzy' || text === 'Strict') return this.menu(['AI style', text === 'Strict' ? 'Precise — follow placement closely' : 'Flexible — small adjustments only']);
     const routes = {
       'Add page': ['Add page'], 'AI settings':['AI settings'],
       'New project': ['New project'], 'Open project': ['Open project'], Save: ['Save'], 'Save as': ['Save as'],
       'Project dossier': ['Project brief'], 'Recover projects': ['Recover unsaved projects'],
 
       'Page settings': ['Page settings'], 'Remove page': ['Remove page'],
+      'Generation status': null,
     };
     if (!visible && routes[text]) return this.menu(routes[text]);
     // Keep the target tied to its accessible name while the UI changes around it.

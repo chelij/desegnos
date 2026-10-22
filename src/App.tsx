@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { native, edit } from './api';
 import { Canvas, type CanvasHandle, type RequestPatch } from './Canvas';
 import { CanvasTools, type CanvasTool, type RequestShapeKind } from './CanvasTools';
@@ -18,7 +19,7 @@ import './shell.css';
 import { editorShortcut, SHORTCUT_HELP } from './shortcuts';
 import { steppedZoom } from './canvasGeometry';
 import { AiSettings } from './AiSettings';
-import { GenerationDialog, GenerationFeedback, RetryConfirmation, providerName, generationNeedsNewRequest } from './Generation';
+import { GenerationDialog, GenerationFeedback } from './Generation';
 import { PagePreview } from './Preview';
 import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from './CodePane';
 import { FirstRunTips } from './Onboarding';
@@ -130,10 +131,6 @@ export default function App() {
   const [replacement, setReplacement] = useState<Replacement | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const closing = useRef(false);
-  const [closeRequest, setCloseRequest] = useState<string | null>(null);
-  const closeChoice = useRef<((choice: 'save' | 'discard' | 'keep') => void) | null>(null);
-  const saveCurrent = useRef<() => Promise<WorkspaceView | null>>(() => Promise.resolve(null));
-  const [retryRequest, setRetryRequest] = useState<'result' | 'frozen' | 'current' | null>(null);
   const [saveConflict, setSaveConflict] = useState<SaveConflict | null>(null);
   const saveChoice = useRef<((choice: SaveChoice) => void) | null>(null);
   const saveFlight = useRef<Promise<WorkspaceView | null> | null>(null);
@@ -227,9 +224,9 @@ export default function App() {
   const settle = useCallback(async () => {
     await tail.current;
   }, []);
-  const synchronize = useCallback(async (requireBounds = false, reportErrors = true) => {
+  const synchronize = useCallback(async (requireBounds = false) => {
     try { await code.current?.synchronize(); await canvas.current?.synchronize(requireBounds); }
-    catch (error) { if (reportErrors) setError(errorMessage(error)); throw error; }
+    catch (error) { setError(errorMessage(error)); throw error; }
   }, []);
   useEffect(() => {
     if (!isTauri()) return;
@@ -250,19 +247,11 @@ export default function App() {
         await synchronize();
         await settle();
         const identity = await native<import('./types').IdentityAnalysis | null>('get_identity_analysis').catch(() => null);
-        const generating = activeGeneration(generationRef.current) || identity?.status === 'analyzing';
+        const generating = generationRef.current?.status === 'generating' || identity?.status === 'analyzing';
         const plan = identity?.status === 'analyzing' ? (identity.authentication ?? aiCurrent.current?.authentication) === 'chatgpt' : generationRef.current?.authentication === 'chatgpt';
-        if (current.current?.anyDirty || current.current?.dirty || generating) {
-          const provider = providerName(identity?.status === 'analyzing' ? aiCurrent.current?.provider ?? 'openai' : generationRef.current?.provider ?? 'openai');
-          const message = `${generating ? `Generation is still running. Closing may interrupt the request, and ${plan ? 'submitted work may still use your ChatGPT plan or credits' : `${provider} may still charge for submitted work`}. Its outcome will be shown as uncertain when you return. ` : ''}${current.current?.anyDirty || current.current?.dirty ? 'Unsaved changes will be lost if you close without saving.' : 'Close Desegnos?'}`;
-          const choice = await new Promise<'save' | 'discard' | 'keep'>(resolve => { closeChoice.current = resolve; setCloseRequest(message); });
-          if (choice === 'keep') return;
-          if (choice === 'save') {
-            const saved = await saveCurrent.current();
-            if (!saved) return;
-            if (saved.anyDirty || saved.dirty) { setNotice('Another open project has unsaved changes. Save it before closing.'); return; }
-          }
-        }
+        if ((current.current?.anyDirty || current.current?.dirty || generating) && !await confirm(`${generating ? `Generation is still running. Closing may interrupt the request, and ${plan ? 'submitted work may still use your ChatGPT plan or credits' : 'OpenAI may still charge for submitted work'}. Its outcome will be shown as uncertain when you return. ` : ''}${current.current?.dirty ? 'This project has changes that have not been saved to its file. ' : ''}Close Desegnos?`, {
+          title: generating ? 'Generation is running' : 'Unsaved project changes', kind: 'warning', okLabel: 'Close Desegnos', cancelLabel: 'Keep editing',
+        })) return;
         await getCurrentWindow().destroy();
       } catch (error) { setError(errorMessage(error)); }
       finally { closing.current = false; }
@@ -289,18 +278,6 @@ export default function App() {
     saveFlight.current = operation().finally(() => { saveFlight.current = null; });
     return saveFlight.current;
   }
-  saveCurrent.current = async () => {
-    let saved = await save();
-    while (saved) {
-      const next = saved.openProjects?.find(project => project.dirty && !project.active);
-      if (!next) return saved;
-      await switchProject(next.id);
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-      saved = await save();
-    }
-    return null;
-  };
-  function chooseClose(choice: 'save' | 'discard' | 'keep') { const resolve = closeChoice.current; closeChoice.current = null; setCloseRequest(null); resolve?.(choice); }
   async function replace(label: string, run: Replacement['run']) {
     await synchronize();
     await settle();
@@ -439,7 +416,7 @@ export default function App() {
     await openAlongside(async discard => {
       await queue(async () => {
         accept(await native<WorkspaceView>('create_project', { name, viewport, parentDirectory: parentDirectory ?? null, appearance: resolvedTheme, discard }));
-        setSelected(null); setShowNew(false); setNotice('');
+        setSelected(null); setShowNew(false); setNotice('Blank project created.');
         setZoom(initialZoom(viewport.width, viewport.height));
         void refreshRecent().catch(() => {});
       });
@@ -452,7 +429,7 @@ export default function App() {
         accept(recovered);
         if (recovered.project) setZoom(initialZoom(recovered.project.viewport.width, recovered.project.viewport.height));
         setSelected(null); setShowRecovery(false);
-        setNotice('Recovered unsaved changes from your last session.');
+        setNotice('Project recovered.');
       });
     });
   }
@@ -561,13 +538,8 @@ export default function App() {
     const timer = setTimeout(() => { void native<{ ranges: SourceMapView['ranges'] }>('get_page_source_map', { projectId, pageId }).then(value => { if (active) setSourceMap({ html, ranges: value.ranges }); }, () => { if (active) setSourceMap(null); }); }, 150);
     return () => { active = false; clearTimeout(timer); };
   }, [mapHtml, project?.id, page?.id]);
-  useEffect(() => {
-    const title = project ? `${project.name} — Desegnos` : 'Desegnos';
-    document.title = title;
-    if (isTauri()) void getCurrentWindow().setTitle(title).catch(() => {});
-  }, [project?.name]);
   const activeProjectId = project?.id ?? null;
-  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' || command === 'generation_draft' && args?.action === 'apply' ? synchronize(command === 'prepare_generation', false) : undefined).then(() => queue(async workspace => {
+  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' || command === 'generation_draft' && args?.action === 'apply' ? synchronize(command === 'prepare_generation') : undefined).then(() => queue(async workspace => {
     signal?.throwIfAborted();
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {
@@ -585,15 +557,15 @@ export default function App() {
     if (command === 'apply_generation' && !signal?.aborted) accept(result as WorkspaceView);
     if (command === 'generation_draft' && (result as import('./types').DraftReview).workspace) accept((result as import('./types').DraftReview).workspace!);
     return result;
-  }, false)), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
-  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
+  })), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
+  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
-  }, false), [queue, accept, activeProjectId]);
+  }), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
-  useEffect(() => { setLive(false); setShowLog(false); setRetryRequest(null); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
+  useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
   async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
   function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
     const host = event.currentTarget.parentElement; if (!host) return;
@@ -621,7 +593,7 @@ export default function App() {
   useEffect(() => {
     if (!generation.canStop) return;
     const stop = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || document.querySelector('dialog[open]') || (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], .cm-editor, [role="textbox"]'))) return;
+      if (event.key !== 'Escape' || event.defaultPrevented || (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], .cm-editor, [role="textbox"]'))) return;
       event.preventDefault();
       event.stopPropagation();
       void generation.cancel();
@@ -631,7 +603,6 @@ export default function App() {
   }, [generation.canStop, generation.cancel]);
   const showGenerationStatus = generation.stopped || working || !!generation.error || !!generation.job && ['prepared', 'blocked', 'failed', 'unknown', 'cancelled'].includes(generation.job.status);
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
-  const composeProvider = providerName(composeJob?.provider ?? aiSettings?.provider ?? 'openai');
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
   const composeAccountId = composeJob ? composeJob.chatgptAccountId : aiSettings?.chatgpt.activeAccountId;
   const composeAccount = aiSettings?.chatgpt.accounts.find(account => account.id === composeAccountId);
@@ -643,7 +614,6 @@ export default function App() {
   }
   function closeGeneration() { generation.close(); }
   function generate() {
-    if (generation.error || generation.stopped || generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status)) { setRetryRequest('current'); return; }
     phoneFix.current = false;
     if (!requestedAreas && pendingImages) {
       void synchronize().then(() => setNotice('Pictures resized and updated.')).catch(() => {});
@@ -875,17 +845,17 @@ export default function App() {
     { id: 'page-settings', label: 'Page settings', disabled: !page, action: () => setPageDialog(page) },
     { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: () => run(removePage) },
     { id: 'page-divider', label: '', separator: true },
-    { id: 'live', label: 'Preview', checked: live, disabled: !page?.content, action: () => setLive(value => !value) },
-    { id: 'preview', label: 'Preview window', disabled: !page?.content, action: () => setShowPreview(true) },
+    { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => setLive(value => !value) },
+    { id: 'preview', label: 'Preview in a window', disabled: !page?.content, action: () => setShowPreview(true) },
     { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
     { id: 'ai-divider', label: '', separator: true },
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
-    { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible — interpret and coordinate' : 'Precise — follow descriptions and placement closely', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
+    { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible — small adjustments only' : 'Precise — follow placement closely', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
     { id: 'page-check', label: fixCount ? `Check page (${fixCount})` : 'Check page', disabled: !project?.pages.some(item => item.content), action: () => setShowCheck(true) },
     { id: 'style-guide', label: 'Style guide', disabled: !project, action: () => setShowStyleGuide(true) },
-    { id: 'import-context', label: 'Use a site or brand…', disabled: !project, action: () => { setImportFolder(null); setImportAsNew(false); setShowImport(true); } },
+    { id: 'import-context', label: 'Import context…', disabled: !project, action: () => { setImportFolder(null); setImportAsNew(false); setShowImport(true); } },
     { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
     { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
@@ -894,39 +864,30 @@ export default function App() {
     { id: 'help', label: 'Keyboard shortcuts', shortcut: 'F1', action: () => setShowShortcuts(true) },
   ];
 
-  const workspaceNotices = <div className="workspace-notices">
+  return <div className="application editor-shell">
+    <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
+      {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot">●</span>}</button>}
+      <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
+      {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
+      <div className="shell-primary-actions">
+        <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
+        {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import context</button>}
+        {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo} onClick={() => run(() => travel('redo_project'))}>Redo</button>
+          <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
+        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live preview'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
+        {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
+        {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
+        {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} onClick={() => setShowLog(value => !value)}>AI log</button>}
+        {project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : generate}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
+      </div>
+    </header>
     {error && <div className="message error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
-    {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span title={exported.path}>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'}{exported.warnings.length > 0 && <> · <button className="export-check" aria-expanded={showCheck} onClick={() => setShowCheck(true)}>{exported.warnings.length} to check</button></>}</span>{exported.warnings.length > 0 && <details><summary>Things to check</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
+    {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span title={exported.path}>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'}{exported.warnings.length > 0 && ` · ${exported.warnings.length} to check`}</span>{exported.warnings.length > 0 && <details><summary>Things to check</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
     {offerRestyle && project && <div className="message info restyle-offer" role="status"><span>{offerRestyle}</span><button className="primary" disabled={pending > 0 || working} onClick={() => run(regenerateWithContext)}>Regenerate pages</button><button onClick={() => setOfferRestyle(false)}>Not now</button></div>}
     {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <div className="message error" role="alert"><span>Recovery could not be loaded: {view.recoveryError}</span><button onClick={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} aria-label="Dismiss recovery error">Dismiss</button></div>}
     {project?.website?.framework && <p className="field-help" role="note">Edits don't change the {project.website.framework} source files.</p>}
     {!!project?.website?.skipped.length && <details className="field-help"><summary>Skipped {project.website.skipped.length} files</summary><p>{project.website.skipped.slice(0, 5).join(", ")}</p></details>}
     {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <div className="message warning migration-notice" role="status"><span>{view.migrationNotice}</span><button onClick={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} aria-label="Dismiss migration notice">Dismiss</button></div>}
-    {!!view?.siteWarnings?.length && dismissedSiteWarnings !== `${project?.id}:${view.siteWarnings.join('\n')}` && <div className="message warning" role="status"><span>Project saved. {view.siteWarnings.join(' ')}</span><button aria-label="Dismiss website warning" onClick={() => setDismissedSiteWarnings(`${project?.id}:${view.siteWarnings?.join('\n')}`)}>Dismiss</button></div>}
-    {notice && <div className="message info" role="status"><span>{notice}</span><button onClick={() => setNotice('')}>Dismiss</button></div>}
-    </div>;
-
-  return <div className="application editor-shell">
-    <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
-      <div className="chrome-cluster"><MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
-      {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span><span aria-label={view?.dirty ? 'Unsaved changes' : undefined} className="dirty-dot">{view?.dirty ? '●' : ' '}</span></button>}
-      </div>
-      {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
-      <div className="shell-primary-actions">
-        {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Use a site or brand…</button>}
-        {project && <div className="chrome-cluster"><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo} onClick={() => run(() => travel('redo_project'))}>Redo</button>
-          <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></div>}
-        <div className="chrome-cluster">{page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Preview'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>Preview</button>}
-        {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
-        </div><div className="chrome-cluster">{!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
-        {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} onClick={() => setShowLog(value => !value)}>AI log</button>}
-        {project && <button className="primary" title={requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={(requestedAreas === 0 && pendingImages === 0) || working} onClick={generate}>Generate</button>}
-        {project && aiConnected && <span className="generation-cost">{composeProvider}{composeUsesChatgpt ? ' · Plan or credits' : composeJob ? ` · ≈$${composeJob.estimateUsd.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}` : ''}</span>}
-        </div>
-        <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Light editor' : 'Dark editor'} title={resolvedTheme === 'dark' ? 'Light editor' : 'Dark editor'} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
-      </div>
-    </header>
-    {!project && workspaceNotices}
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
       <NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} />
     </main> : <>
@@ -946,30 +907,28 @@ export default function App() {
         </div>)}
       </div></div>
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
-      {codeView === 'code' && workspaceNotices}
       <div className="design-pane">
-      {codeView !== 'code' && workspaceNotices}
       {page && <Canvas archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {(showGenerationStatus || resultReview || generation.job?.drafts?.some(draft => !draft.dismissed && !draft.applied && draft.pageId === page?.id)) && <div className="canvas-pill" role="region" aria-label="Generation status">
         {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
-          <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => setRetryRequest('result')}>Try again</button>
+          <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => run(() => rejectResult(true))}>Try again</button>
           <button className="pill-close" aria-label="Keep changes" title="Keep" onClick={() => setResultReview(null)}>×</button>
         </> : <GenerationFeedback controller={generation} compact>
           {generation.canStop && <button onClick={() => { void generation.cancel(); }}>Stop</button>}
-          {!working && (generation.stopped || generation.error || generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status)) && <button className="primary" onClick={() => setRetryRequest(generation.job && !generationNeedsNewRequest(generation.error, generation.job) ? 'frozen' : 'current')}>{generationNeedsNewRequest(generation.error, generation.job) ? 'Generate again' : 'Try again'}</button>}
+          {!working && (generation.stopped || generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status)) && <button className="primary" disabled={requestedAreas === 0 && pendingImages === 0} onClick={generate}>{generation.job?.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
           {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
           {!working && <button onClick={openGeneration}>Details</button>}
         </GenerationFeedback>}
         {generation.job && <GenerationDrafts job={generation.job} project={project} controller={generation} pageId={page?.id} compact />}
       </div>}
-      <FirstRunTips hasBox={project.pages.some(item => item.regions.length > 0)} hasText={project.pages.some(item => item.regions.some(region => !!region.prompt.trim()))} generationStarted={generation.operation === 'Starting generation…' || !!generation.job?.attempts.length || !!project.latestGeneration} hidden={live || showNew || showImport} />
-      {live && page?.content && <div className="live-bar" role="group" aria-label="Preview">
-        <strong>Preview</strong>
-        <div className="segmented" role="group" aria-label="Preview device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
+      <FirstRunTips />
+      {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
+        <strong>Live</strong>
+        <div className="segmented" role="group" aria-label="Live device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
         {liveDevice !== 'desktop' && (liveDevice === 'tablet' ? 768 : 390) !== page.viewport.width && <span className="live-note">Add requests at page width</span>}
         {liveDevice === 'phone' && <button type="button" title="Fix on phones" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
-        <button type="button" onClick={() => setLive(false)}>Exit preview</button>
+        <button type="button" onClick={() => setLive(false)}>Exit live</button>
       </div>}
       {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}
       <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} requestShape={requestShape} setRequestShape={setRequestShape} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
@@ -982,14 +941,13 @@ export default function App() {
       </main>
       <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? requestShape === 'freehand' ? 'Draw around an area; release to close' : requestShape === 'ellipse' ? 'Drag an ellipse · Shift for a circle' : 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
     </>}
-    {closeRequest && <Modal title="Close Desegnos?" close={() => chooseClose('keep')}><div className="dialog-body"><p>{closeRequest}</p><div className="form-actions"><button className="primary" disabled={pending > 0} onClick={() => chooseClose('save')}>Save and close</button><button onClick={() => chooseClose('discard')}>Close without saving</button><button onClick={() => chooseClose('keep')}>Keep editing</button></div></div></Modal>}
-    {retryRequest && <RetryConfirmation job={generation.job} settings={aiSettings} fresh={retryRequest !== 'frozen'} undo={retryRequest === 'result'} busy={working || pending > 0} close={() => setRetryRequest(null)} send={() => { const retry = retryRequest; setRetryRequest(null); setShowLog(true); run(() => retry === 'result' ? rejectResult(true) : retry === 'current' ? generation.prepare() : generation.retry()); }} />}
     {showShortcuts && <Modal title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></Modal>}
     {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} /></Modal>}
+    {!!view?.siteWarnings?.length && dismissedSiteWarnings !== `${project?.id}:${view.siteWarnings.join('\n')}` && <div className="message warning" role="status"><span>Project saved. {view.siteWarnings.join(' ')}</span><button aria-label="Dismiss website warning" onClick={() => setDismissedSiteWarnings(`${project?.id}:${view.siteWarnings?.join('\n')}`)}>Dismiss</button></div>}
     {showProjectLocation && <Modal title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></Modal>}
     {showRecovery && view && <Modal title="Recover unsaved projects" close={() => setShowRecovery(false)}><DialogError error={error} dismiss={() => setError('')} />
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></Modal>}
-    {showImport && <Modal title="Use a site or brand" wide close={() => setShowImport(false)}><ImportContext initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} /></Modal>}
+    {showImport && <Modal title="Import context" wide close={() => setShowImport(false)}><ImportContext initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} /></Modal>}
     {showStyleGuide && project && <Modal title="Style guide" wide close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></Modal>}
     {showNotes && project && <Modal title="Project brief" wide close={() => setShowNotes(null)}><DialogError error={error} dismiss={() => setError('')} /><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} markdown={getNotes} /></Modal>}
     {showGridSettings && project && <Modal title="Grid and rulers" close={() => setShowGridSettings(false)}><DialogError error={error} dismiss={() => setError('')} /><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {

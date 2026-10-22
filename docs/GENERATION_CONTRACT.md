@@ -35,10 +35,11 @@ owns shared CSS/JavaScript and surrounding structure. Apply the local requests
 inside that result from bottom to top, retaining their selected roots/IDs or region
 roots. Where boxes overlap, the higher request wins inside its own box. A below-fold
 page-layout request refines the page-wide layout in this same order. Requirements
-list requests in that order and include `layerOrder`; frozen requirements also hash
-all unfinished request layers, so moving even an unsubmitted layer invalidates a
-snapshot whose base classification could change. Global changes come from the page
-request, never from an area. Element-fix and partial/conflict rules cannot freeze
+list submitted requests in that order and include `layerOrder`. Frozen requirements
+hash submitted order and effective page scope. Adding or restoring an unrelated
+request preserves a snapshot unless it changes a submitted request's page authority;
+moving an unsubmitted layer below a covering base still invalidates that snapshot.
+Global changes come from the page request, never from an area. Element-fix and partial/conflict rules cannot freeze
 the page request's shared code or surrounding structure. When native image editing
 is available, a transparent-image request uses the original asset as the reference;
 it does not conflict merely because the operation needs new pixels. A conflicted page request grants no
