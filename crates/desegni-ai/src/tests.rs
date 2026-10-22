@@ -3413,7 +3413,7 @@ async fn source_and_alpha_mask_route_to_multipart_image_edits() {
                 id: id.into(),
                 name: format!("{id}.png"),
                 kind: AttachmentKind::Image,
-                data_uri: Some(format!("data:image/png;base64,{encoded}")),
+                data_uri: Some(format!("data:image/png;base64,{encoded}").into()),
                 preview: None,
                 text: None,
                 url: None,
