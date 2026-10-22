@@ -842,8 +842,8 @@ export default function App() {
     { id: 'page-settings', label: 'Page settings', disabled: !page, action: () => setPageDialog(page) },
     { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: () => run(removePage) },
     { id: 'page-divider', label: '', separator: true },
-    { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => setLive(value => !value) },
-    { id: 'preview', label: 'Preview in a window', disabled: !page?.content, action: () => setShowPreview(true) },
+    { id: 'live', label: 'Preview', checked: live, disabled: !page?.content, action: () => setLive(value => !value) },
+    { id: 'preview', label: 'Preview window', disabled: !page?.content, action: () => setShowPreview(true) },
     { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
@@ -863,21 +863,25 @@ export default function App() {
 
   return <div className="application editor-shell">
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
-      {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot">●</span>}</button>}
-      <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
+      <div className="chrome-cluster"><MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
+      {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span><span aria-label={view?.dirty ? 'Unsaved changes' : undefined} className="dirty-dot">{view?.dirty ? '●' : ' '}</span></button>}
+      </div>
       {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
-        <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
-        {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import context</button>}
-        {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo} onClick={() => run(() => travel('redo_project'))}>Redo</button>
-          <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
-        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live preview'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
+
+        {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Use a site or brand…</button>}
+        {project && <div className="chrome-cluster"><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo} onClick={() => run(() => travel('redo_project'))}>Redo</button>
+          <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></div>}
+        <div className="chrome-cluster">{page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Preview'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>Preview</button>}
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
-        {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
+        </div><div className="chrome-cluster">{!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} onClick={() => setShowLog(value => !value)}>AI log</button>}
-        {project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : generate}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
+        {project && <button className="primary" title={requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={(requestedAreas === 0 && pendingImages === 0) || working} onClick={generate}>Generate</button>}
+        </div>
+        <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
       </div>
     </header>
+    <div className="workspace-notices">
     {error && <div className="message error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
     {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span title={exported.path}>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'}{exported.warnings.length > 0 && ` · ${exported.warnings.length} to check`}</span>{exported.warnings.length > 0 && <details><summary>Things to check</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
     {offerRestyle && project && <div className="message info restyle-offer" role="status"><span>{offerRestyle}</span><button className="primary" disabled={pending > 0 || working} onClick={() => run(regenerateWithContext)}>Regenerate pages</button><button onClick={() => setOfferRestyle(false)}>Not now</button></div>}
@@ -885,6 +889,8 @@ export default function App() {
     {project?.website?.framework && <p className="field-help" role="note">Edits don't change the {project.website.framework} source files.</p>}
     {!!project?.website?.skipped.length && <details className="field-help"><summary>Skipped {project.website.skipped.length} files</summary><p>{project.website.skipped.slice(0, 5).join(", ")}</p></details>}
     {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <div className="message warning migration-notice" role="status"><span>{view.migrationNotice}</span><button onClick={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} aria-label="Dismiss migration notice">Dismiss</button></div>}
+    {notice && <div className="message info" role="status"><span>{notice}</span><button onClick={() => setNotice('')}>Dismiss</button></div>}
+    </div>
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
       <NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} />
     </main> : <>
@@ -919,12 +925,12 @@ export default function App() {
         </GenerationFeedback>}
       </div>}
       <FirstRunTips />
-      {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
-        <strong>Live</strong>
-        <div className="segmented" role="group" aria-label="Live device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
+      {live && page?.content && <div className="live-bar" role="group" aria-label="Preview">
+        <strong>Preview</strong>
+        <div className="segmented" role="group" aria-label="Preview device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
         {liveDevice !== 'desktop' && (liveDevice === 'tablet' ? 768 : 390) !== page.viewport.width && <span className="live-note">Add requests at page width</span>}
         {liveDevice === 'phone' && <button type="button" title="Fix on phones" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
-        <button type="button" onClick={() => setLive(false)}>Exit live</button>
+        <button type="button" onClick={() => setLive(false)}>Exit preview</button>
       </div>}
       {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}
       <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} requestShape={requestShape} setRequestShape={setRequestShape} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />

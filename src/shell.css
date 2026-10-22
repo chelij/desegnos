@@ -275,3 +275,10 @@
 .live-bar .live-note { color: var(--muted); white-space: nowrap; }
 .live-toggle[aria-pressed="true"] { border-color: #2b8a3e; color: #2b8a3e; }
 .live-bar .segmented button { white-space: nowrap; }
+
+.chrome-cluster { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.shell-primary-actions > .chrome-cluster { padding-left: 10px; border-left: 1px solid var(--border-soft); }
+.editor-shell .dirty-dot { display: inline-block; width: 10px; flex-shrink: 0; }
+.editor-shell { position: relative; }
+.workspace-notices { position: absolute; z-index: 18; top: 100px; right: 14px; display: grid; gap: 8px; width: min(540px, calc(100% - 28px)); max-height: calc(100% - 160px); overflow: auto; pointer-events: none; }
+.workspace-notices > * { pointer-events: auto; margin: 0; background: var(--surface); border: 1px solid var(--border); }

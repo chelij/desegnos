@@ -135,7 +135,6 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   return <>
     <Modal title={title} wide close={close} headerContent={<GenerationFeedback controller={controller}>
         {job?.status === 'prepared' && <button className="primary" disabled={!!operation} onClick={() => { void controller.start().catch(() => {}); }}>Send and generate</button>}
-        {controller.canStop && <button onClick={() => { void controller.cancel().catch(() => {}); }}>Cancel generation</button>}
       </GenerationFeedback>}><div className="generation-dialog">
       {error && <p className="message error" role="alert">{error}</p>}
       {usageError && <p className="message error" role="alert">{usageError}</p>}
