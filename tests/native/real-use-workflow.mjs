@@ -82,7 +82,7 @@ async function closeProject(driver) {
   await driver.menu(['Close project']);
   // Unsaved work asks first; a saved project closes straight away.
   const asked = await waitFor(async () => {
-    if (await driver.execute(() => [...document.querySelectorAll('dialog[open] button')].some(button => button.textContent.trim() === 'Discard and continue'))) return 'asked';
+    if (await driver.execute(() => [...document.querySelectorAll('.workspace-surface button')].some(button => button.textContent.trim() === 'Discard and continue'))) return 'asked';
     const open = (await workspace(driver)).openProjects?.length ?? 0;
     return open < before && 'closed';
   }, 'Close project neither asked nor closed');
@@ -107,11 +107,11 @@ export async function realUseWorkflow(driver, physical, step, evidence, provider
     for (let opened = 0; opened < manifest.recoveries.length; opened++) {
       await driver.menu(['Recover unsaved projects']);
       if (!opened) {
-        const offered = await driver.execute(() => document.querySelectorAll('dialog[open] .recovery-list > section').length);
+        const offered = await driver.execute(() => document.querySelectorAll('.workspace-surface .recovery-list > section').length);
         assert.equal(offered, manifest.recoveries.length);
         await physical.captureWindow(join(evidence, 'real-01-recovery-offered.png'));
       }
-      await driver.click('dialog[open] .recovery-list > section:first-child button');
+      await driver.click('.workspace-surface .recovery-list > section:first-child button');
       await waitFor(async () => ((await workspace(driver)).openProjects?.length ?? 0) === opened + 1, 'A recovery did not open in its own tab group', 15_000);
     }
     await noRecoveryError(driver);

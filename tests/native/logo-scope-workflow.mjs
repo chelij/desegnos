@@ -37,7 +37,7 @@ export async function logoScopeWorkflow(driver, physical, step, evidence, provid
     await driver.ready('section[aria-label="Layers"] .layer-select[data-layer-selector$="img:nth-of-type(2)"]');
     await driver.click('section[aria-label="Layers"] .layer-select[data-layer-selector$="img:nth-of-type(2)"]');
     await driver.button('Close Layers');
-    await driver.execute(()=>document.getElementById('page-canvas').focus({preventScroll:true}));await physical.keys('F2');await driver.ready('dialog[aria-label="Edit element"][open]');
+    await driver.execute(()=>document.getElementById('page-canvas').focus({preventScroll:true}));await physical.keys('F2');await driver.ready('.workspace-surface[aria-label="Edit element"]');
     await driver.select('Project image', asset.id);
     await physical.captureWindow(join(evidence, 'project-image-picker.png'));
     await driver.button('Save changes');

@@ -86,8 +86,7 @@ export class WebDriver {
         : document.querySelector(selector);
       if (!(node instanceof Element) || !node.getClientRects().length || getComputedStyle(node).visibility !== 'visible' || node.matches(':disabled') || node.closest('[inert], dialog:not([open])')) return false;
       if (node instanceof HTMLLabelElement && node.control?.matches(':disabled')) return false;
-      const top = [...document.querySelectorAll('dialog[open]')].at(-1);
-      return !top || top.contains(node);
+      return true;
     }, value, using), `The target did not become visible and enabled: ${value}`, 15_000);
     return this.find(value, using);
   }
@@ -114,10 +113,11 @@ export class WebDriver {
 
   async button(text) {
     const visible = await this.execute(label => {
-      const top = [...document.querySelectorAll('dialog[open]')].at(-1);
       return [...document.querySelectorAll('button')].some(button => (button.getAttribute('aria-label') === label || button.textContent.trim() === label)
-        && button.getClientRects().length && getComputedStyle(button).visibility === 'visible' && !button.matches(':disabled') && (!top || top.contains(button)));
+        && button.getClientRects().length && getComputedStyle(button).visibility === 'visible' && !button.matches(':disabled'));
     }, text);
+    if (text === 'Generation status') return this.button('AI log');
+    if (text === 'Retry same snapshot') return this.menu(['Advanced', 'Retry original request'], 'Generation options');
     if (text === 'Fuzzy' || text === 'Strict') return this.menu(['AI style', text === 'Strict' ? 'Precise — follow placement closely' : 'Flexible — small adjustments only']);
     const routes = {
       'Add page': ['Add page'], 'AI settings':['AI settings'],
@@ -130,9 +130,8 @@ export class WebDriver {
     if (!visible && routes[text]) return this.menu(routes[text]);
     // Keep the target tied to its accessible name while the UI changes around it.
     // A global button ordinal can point elsewhere when selection handles mount/unmount.
-    const modal = await this.execute(() => !!document.querySelector('dialog[open]'));
     const label = xpathString(text);
-    return this.click(`${modal ? '(//dialog[@open])[last()]//' : '//'}button[not(@disabled) and (@aria-label=${label} or normalize-space(.)=${label})]`, 'xpath');
+    return this.click(`//button[not(@disabled) and (@aria-label=${label} or normalize-space(.)=${label})]`, 'xpath');
   }
 
   field(label) {

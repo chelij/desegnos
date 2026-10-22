@@ -13,7 +13,7 @@ async function button(driver, name) {
   if (['Send and generate', 'Apply reviewed changes', 'Retry using ChatGPT plan'].includes(name)) {
     const project = (await driver.invoke('get_workspace')).project;
     const current = await job(driver, project.id);
-    if (name === 'Retry using ChatGPT plan') await driver.click('(//dialog[@open]//button[normalize-space(.)="Keep current job"])[last()]', 'xpath');
+    if (name === 'Retry using ChatGPT plan') await driver.click('(//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Keep current job"])[last()]', 'xpath');
     await driver.invoke(name === 'Send and generate' ? 'start_generation' : name === 'Apply reviewed changes' ? 'apply_generation' : 'retry_generation', {
       jobId: current.jobId, ...(name === 'Apply reviewed changes' ? { acceptedDecisionIndices: [] } : {}),
     });
@@ -26,22 +26,21 @@ async function button(driver, name) {
   if (name === 'Discard request') return driver.menu(['Discard request'], 'Generation options');
   if (name === 'Apply reviewed changes') name = 'Apply changes';
   await waitFor(() => driver.execute(text => {
-    const top = [...document.querySelectorAll('dialog[open]')].at(-1);
+    const top = [...document.querySelectorAll('.workspace-surface')].at(-1);
     const target = [...(top?.querySelectorAll('button') ?? [])].findLast(button => button.textContent.trim() === text);
     if (!target || target.disabled || !target.getClientRects().length) return false;
     target.scrollIntoView({ block: 'center' }); return true;
   }, name), `The visible ${name} control did not become available`, 15_000);
-  await driver.click(`(//dialog[@open]//button[normalize-space(.)=${xpathString(name)}])[last()]`, 'xpath');
+  await driver.click(`(//section[contains(@class,"workspace-surface")]//button[normalize-space(.)=${xpathString(name)}])[last()]`, 'xpath');
 }
 const hash = value => createHash('sha256').update(value).digest('hex');
 async function close(driver) {
-  await driver.execute(() => { [...document.querySelectorAll('dialog[open]')].at(-1).querySelector('button[aria-label^="Close "]').click(); });
-  if (await driver.execute(() => !!document.querySelector('dialog[open].generation-progress-modal') && !document.querySelector('dialog[open] .generation-dialog'))) await driver.execute(() => document.querySelector('dialog[open].generation-progress-modal button[aria-label^="Close "]').click());
+  await driver.execute(() => { [...document.querySelectorAll('.workspace-surface')].at(-1).querySelector('button[aria-label^="Close "]').click(); });
 }
 async function openSettings(driver) {
-  if (await driver.execute(() => !!document.querySelector('dialog[open] .generation-dialog'))) await button(driver, 'AI settings');
+  if (await driver.execute(() => !!document.querySelector('.workspace-surface .generation-dialog'))) await button(driver, 'AI settings');
   else await driver.button('AI settings');
-  await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .ai-settings form')), 'ChatGPT settings did not mount');
+  await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface .ai-settings form')), 'ChatGPT settings did not mount');
 }
 async function selectMethod(driver, value) {
   const provider = value === 'chatgpt' ? 'openai-chatgpt' : 'openai';
@@ -62,7 +61,7 @@ async function sessionStorage(driver) {
 
 async function signedIn(driver, previousActive = null) {
   const view = await waitFor(async () => { const value = await settings(driver); return value.chatgpt.signIn.status === 'complete' && value.chatgpt.activeAccountId !== previousActive && value; }, 'Signed loopback OAuth did not complete', 20_000);
-  await waitFor(() => driver.execute(() => !!document.querySelector('dialog[aria-label="You\'re using your ChatGPT plan"][open]')), 'The first plan-use confirmation did not appear');
+  await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface[aria-label="You\'re using your ChatGPT plan"]')), 'The first plan-use confirmation did not appear');
   await button(driver, 'Got it');
   await waitFor(async () => !(await settings(driver)).chatgpt.showWelcome, 'Welcome acknowledgment was not saved');
   return view;
@@ -70,7 +69,7 @@ async function signedIn(driver, previousActive = null) {
 async function terminal(driver, projectId, expected) {
   const value = await waitFor(async () => { const value = await job(driver, projectId); return value?.status === expected && value; }, `ChatGPT request did not reach ${expected}`, 20_000);
   await button(driver, 'Refresh job');
-  await waitFor(() => driver.execute(status => document.querySelector('dialog[open] .generation-status')?.dataset.jobStatus === status, expected), 'The visible ChatGPT job did not refresh');
+  await waitFor(() => driver.execute(status => document.querySelector('.workspace-surface .generation-status')?.dataset.jobStatus === status, expected), 'The visible ChatGPT job did not refresh');
   return value;
 }
 async function prepare(driver, provider, mode) {
@@ -85,7 +84,7 @@ async function prepare(driver, provider, mode) {
   project = (await driver.invoke('get_workspace')).project;
   await driver.invoke('prepare_generation');
   await driver.button('Generation status'); await driver.button('Details');
-  await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .generation-dialog')), 'The ChatGPT request review did not open');
+  await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface .generation-dialog')), 'The ChatGPT request review did not open');
   const request = await terminal(driver, project.id, 'prepared');
   assert.equal(request.authentication, 'chatgpt'); assert.ok(request.chatgptAccountId);
   assert.equal(request.generationMode, mode); assert.equal(request.attempts.length, 0);
@@ -127,7 +126,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
     assert.equal(first.storage, 'session'); assert.equal(first.connected, true); assert.equal(first.planEnabled, true);
     assert.deepEqual(view.catalogue.map(value => value.id), ['gpt-6.1-sol']);
     assert.deepEqual(view.chatgpt.models.map(value => value.id), ['future-unverified-model', 'gpt-6.1-sol']);
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] input[type="number"]')].length), 0);
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('.workspace-surface input[type="number"]')].length), 0);
     await button(driver, 'Test connection');
     await waitFor(() => driver.execute(() => document.querySelector('.ai-settings .operation-status')?.textContent === 'Connection checked.'), 'ChatGPT Test connection did not finish');
     const authorization = provider.oauth.records().findLast(value => value.path === '/api/accounts/authorize');
@@ -145,12 +144,12 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
         await waitFor(() => driver.execute(value => document.documentElement.dataset.theme === value, selected), 'The ChatGPT theme did not change');
         const point = await driver.execute(() => { const button = document.querySelector('.app-bar button[aria-label="AI settings"]'); const r = button.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
         await physical.click(point);
-        await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .ai-settings form')), 'The physically opened ChatGPT settings did not mount');
+        await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface .ai-settings form')), 'The physically opened ChatGPT settings did not mount');
         await dialogLayout(driver, output, `settings-${selected}-760px`);
         await physical.keys('Tab');
-        assert.equal(await driver.execute(() => !!document.activeElement?.closest('dialog[open]')), true);
+        assert.equal(await driver.execute(() => !!document.activeElement?.closest('.workspace-surface')), true);
         await physical.keys('Escape');
-        await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'Escape did not dismiss ChatGPT settings');
+        await waitFor(() => driver.execute(() => !document.querySelector('.workspace-surface')), 'Escape did not dismiss ChatGPT settings');
         assert.equal(await driver.execute(() => document.activeElement?.getAttribute('aria-label')), 'AI settings');
       }
     } finally { await driver.command('POST', '/window/rect', original); await driver.select('Editor theme', theme); }
@@ -221,7 +220,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
         await close(driver);
       }
     } finally {
-      if (await driver.execute(() => !!document.querySelector('dialog[open]'))) await close(driver);
+      if (await driver.execute(() => !!document.querySelector('.workspace-surface'))) await close(driver);
       await driver.command('POST', '/window/rect', original); await driver.select('Editor theme', theme);
     }
     assert.equal(provider.generationRequests().length, before + 1);
@@ -281,7 +280,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
           await close(driver);
         }
       } finally {
-        if (await driver.execute(() => !!document.querySelector('dialog[open]'))) await close(driver);
+        if (await driver.execute(() => !!document.querySelector('.workspace-surface'))) await close(driver);
         await driver.command('POST', '/window/rect', original); await driver.select('Editor theme', theme);
       }
       assert.equal(provider.generationRequests().length, before + 1, 'Reading diagnostics repeated a provider request');
@@ -327,7 +326,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
           await close(driver);
         }
       } finally {
-        if (await driver.execute(() => !!document.querySelector('dialog[open]'))) await close(driver);
+        if (await driver.execute(() => !!document.querySelector('.workspace-surface'))) await close(driver);
         await driver.command('POST', '/window/rect', original);
         await driver.select('Editor theme', theme);
       }
@@ -386,7 +385,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
     try {
       await button(driver, 'Test connection');
       await waitFor(async () => (await settings(driver)).chatgpt.accounts.find(account => account.id === first.id).storageRepairRequired, 'The rotated bundle was not retained after the controlled secure-write failure');
-      await waitFor(() => driver.execute(() => [...document.querySelectorAll('dialog[open] button')].some(button => button.textContent.trim() === 'Repair secure storage' && !button.disabled)), 'The native storage repair action did not appear');
+      await waitFor(() => driver.execute(() => [...document.querySelectorAll('.workspace-surface button')].some(button => button.textContent.trim() === 'Repair secure storage' && !button.disabled)), 'The native storage repair action did not appear');
       const oauthCount = provider.oauth.records().length;
       const modelCount = provider.modelRequests().length;
       provider.oauth.setRefreshHook(null); await rm(flag);

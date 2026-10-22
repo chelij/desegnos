@@ -147,19 +147,6 @@ p { margin-bottom: 12px; }
 .status-bar { display: flex; justify-content: space-between; gap: 20px; min-height: 30px; padding: 6px 14px; background: var(--surface); border-top: 1px solid var(--border-soft); flex-shrink: 0; color: var(--muted); font-size: 11px; }
 .status-bar > span:first-child { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .status-bar > span:last-child { flex-shrink: 0; }
-.modal { color: var(--text); background: var(--surface); padding: 0; border: 1px solid var(--border); border-radius: 6px; width: min(510px, calc(100vw - 32px)); max-height: calc(100dvh - 48px); box-shadow: 0 14px 70px #00000045; overflow: auto; }
-.modal.wide { width: min(880px, calc(100vw - 40px)); }
-.modal::backdrop { background: #00000078; }
-.modal-header { position: sticky; top: 0; z-index: 2; padding: 14px 20px; border-bottom: 1px solid var(--border-soft); background: var(--surface); }
-.modal-titlebar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.modal-header h2 { margin: 0; font-size: 17px; }
-.modal-header button { font-size: 12px; }
-.modal-header .generation-status { margin: 14px 0 0; padding: 12px; }
-.modal-header .generation-status-actions button { font-size: 13px; }
-.modal > .new-project { margin: 0 auto; padding: 24px; max-width: none; }
-.modal > .new-project > .product-wordmark { display: none; }
-.modal > .new-project h1 { font-size: 22px; }
-.modal > .recovery-list { padding: 20px 22px; }
 .dialog-body { display: flex; flex-direction: column; gap: 16px; padding: 22px; }
 .dialog-body p { margin-bottom: 0; }
 .dialog-body > .field-help, .settings-form > .field-help { margin-top: -9px; }
@@ -289,7 +276,6 @@ p { margin-bottom: 12px; }
   .generation-controls { margin-left: 0; }
   .generation-controls button { font-size: 12px; padding-inline: 8px; }
   .page-picker select { max-width: 43vw; }
-  .modal.wide, .modal { width: calc(100vw - 20px); }
   .notes-section, .requirements-review, .dialog-body { padding: 18px 14px; }
   .generation-dialog, .accepted-preview { padding: 18px 14px; }
   .generation-facts { grid-template-columns: 105px minmax(0, 1fr); gap: 8px; }

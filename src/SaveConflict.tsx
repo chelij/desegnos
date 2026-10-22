@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react';
-import { Modal } from './Modal';
+import { WorkspaceSurface } from './WorkspaceSurface';
 import type { WorkspaceView } from './types';
 
 export type FileStamp = { projectId: string; revision: number; manifestSha256: string };
@@ -12,7 +12,7 @@ export function SaveConflictDialog({ conflict, choose }: { conflict: SaveConflic
   useLayoutEffect(() => { defaultButton.current?.focus(); }, [conflict.token]);
   const different = conflict.kind === 'differentProject';
   const title = conflict.kind === 'changed' ? 'This file changed since you opened it.' : different ? conflict.canReplace ? `${conflict.fileName} is a different project. Replace it?` : 'Save your project with a new name' : 'Choose another file name';
-  return <Modal title={title} close={() => choose('cancel')}>
+  return <WorkspaceSurface place="banner" title={title} close={() => choose('cancel')}>
     <div className="dialog-body save-conflict">
       <p>{conflict.kind === 'changed' ? 'Replacing overwrites the file with your current work.' : different ? conflict.canReplace ? 'Replacing overwrites the other project.' : 'Choose another file name.' : 'This file can’t be replaced. Choose a name ending in .desegnos.'}</p>
       <p className="muted">{conflict.fileName}</p>
@@ -25,5 +25,5 @@ export function SaveConflictDialog({ conflict, choose }: { conflict: SaveConflic
         <button type="button" className={conflict.defaultChoice === 'cancel' ? 'primary' : undefined} ref={conflict.defaultChoice === 'cancel' ? defaultButton : undefined} autoFocus={conflict.defaultChoice === 'cancel'} onClick={() => choose('cancel')}>Cancel</button>
       </div>
     </div>
-  </Modal>;
+  </WorkspaceSurface>;
 }

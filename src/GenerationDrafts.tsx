@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { native } from './api';
-import { Modal } from './Modal';
+import { WorkspaceSurface } from './WorkspaceSurface';
 import { PagePreview } from './Preview';
 import type { DraftReview, GenerationDraft, GenerationJobView, Project } from './types';
 import type { GenerationController } from './useGeneration';
@@ -40,7 +40,7 @@ function Draft({ draft, job, project, controller, compact, changed }: {
     setBusy(true); setError('');
     try {
       const value = await controller.draftAction(job.jobId, draft.id, action, review?.revision);
-      changed?.(value.job); setConfirm(false);
+      changed?.(value.job); setConfirm(false); setPreview(false);
     } catch (error) { setError(String(error)); setConfirm(false); }
     finally { setBusy(false); }
   }
@@ -70,13 +70,15 @@ function Draft({ draft, job, project, controller, compact, changed }: {
       <button type="button" onClick={() => { void copy(); }}>{copied ? 'Copied' : 'Copy code'}</button>
       <button type="button" disabled={busy} onClick={() => { void act('dismiss'); }}>Dismiss</button>
     </div>
-    {confirm && review && <div className="field-help" role="group" aria-label="Confirm draft application">
+    {confirm && !preview && review && <div className="field-help" role="group" aria-label="Confirm draft application">
       <p>{review.confirmation}</p><button type="button" className="primary" disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button>{' '}
       <button type="button" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button>
     </div>}
     {error && <p role="alert">{error}</p>}
     {!compact && <details><summary>Retained code</summary><pre tabIndex={0}>{draft.code}</pre></details>}
-    {preview && page && <Modal title="Draft preview" wide close={() => setPreview(false)}><PagePreview page={page} revision={project.revision} jobId={job.jobId} draftId={draft.id} /></Modal>}
+    {preview && page && <WorkspaceSurface place="canvas" title="Previewing draft" close={() => setPreview(false)} headerActions={<div className="draft-preview-bar"><button type="button" disabled={busy || !!review?.blocked || !!controller.operation || controller.canStop} onClick={() => setConfirm(true)}>Apply anyway</button><button type="button" onClick={() => setPreview(false)}>Back</button></div>}>
+      {confirm && review && <div className="draft-preview-confirm" role="group" aria-label="Confirm draft application"><p>{review.confirmation}</p><button disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button><button onClick={() => setConfirm(false)}>Cancel</button></div>}
+      {error && <p role="alert">{error}</p>}<PagePreview page={page} revision={project.revision} jobId={job.jobId} draftId={draft.id} /></WorkspaceSurface>}
   </section>;
 }
 

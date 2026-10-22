@@ -236,7 +236,7 @@
 .project-tab-group .add-page-tab { align-self: center; }
 .restyle-offer { display: flex; align-items: center; gap: 8px; } .restyle-offer > span { flex: 1; }
 
-/* AI conversation: a read-only right sidebar showing what was sent and what came back. */
+/* Shared right panel, including the AI conversation. */
 .generation-log { display: flex; flex-direction: column; flex: 0 0 min(360px, 40%); min-width: 0; min-height: 0; border-left: 1px solid var(--border); background: var(--surface); color: var(--text); }
 .generation-log > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
 .generation-log > header div { display: grid; gap: 2px; }
@@ -275,3 +275,45 @@
 .live-bar .live-note { color: var(--muted); white-space: nowrap; }
 .live-toggle[aria-pressed="true"] { border-color: #2b8a3e; color: #2b8a3e; }
 .live-bar .segmented button { white-space: nowrap; }
+
+/* The same non-modal surface serves settings, conversation, and element tools. */
+.surface-host:empty { display: none; }
+.surface-host-panel { display: flex; flex: 0 0 min(400px, 40%); min-width: 0; min-height: 0; }
+.surface-host-panel .generation-log { flex: 1; width: 100%; }
+.workspace-surface { min-width: 0; color: var(--text); background: var(--surface); }
+.workspace-surface > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
+.workspace-surface > header button { min-height: 28px; padding: 0 8px; border-color: transparent; background: transparent; font-size: 20px; }
+.surface-content { overflow: auto; min-width: 0; min-height: 0; }
+.surface-content .log-messages { overflow: visible; }
+.workspace-surface .generation-dialog { padding: 12px; }
+.workspace-surface .generation-section { padding: 12px 0; }
+.workspace-surface .generation-facts { grid-template-columns: minmax(80px, auto) minmax(0, 1fr); }
+.workspace-surface .generation-status, .workspace-surface .generation-status-actions { flex-wrap: wrap; }
+.workspace-surface .new-project { padding: 16px; }
+.workspace-surface .product-wordmark { display: none; }
+.workspace-banner { border-bottom: 1px solid var(--border); max-height: 32vh; overflow: auto; }
+.workspace-banner > header { padding-block: 6px; }
+.workspace-banner .dialog-body, .workspace-banner > .surface-content { padding: 8px 12px; }
+.workspace-banner .dialog-body { padding: 0; }
+.workspace-banner p { margin: 4px 0; }
+.workspace-start { width: 100%; max-width: 640px; border-bottom: 1px solid var(--border-soft); }
+.surface-host-start { width: 100%; display: flex; justify-content: center; }
+.surface-host-canvas { position: absolute; inset: 0; z-index: 20; display: flex; }
+.workspace-canvas { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.workspace-canvas > .surface-content { flex: 1; position: relative; }
+.draft-preview-bar { display: flex; gap: 8px; padding: 8px 12px; }
+.draft-preview-confirm { padding: 8px 12px; }
+.workspace-canvas .page-preview { padding: 12px; }
+@media (max-width: 820px) {
+  .surface-host-panel { flex-basis: min(360px, 45%); }
+  .surface-host-panel .generation-log { position: static; width: 100%; box-shadow: none; }
+  .workspace.view-split { flex-direction: row; }
+  .workspace.view-split .code-pane { flex-basis: 30%; }
+}
+
+.workspace-surface .surface-content { flex: 1; }
+.workspace-surface .record-heading, .workspace-surface .ai-account-card { flex-wrap: wrap; }
+.workspace-surface .ai-inline-field, .workspace-surface .ai-model-row .ai-inline-field { grid-template-columns: 72px minmax(0, 1fr); }
+.workspace-surface input, .workspace-surface select, .workspace-surface textarea { min-width: 0; max-width: 100%; }
+.workspace-surface .log-message.from-ai { max-width: 100%; width: 100%; }
+.workspace-surface .generation-dialog { padding-inline: 0; }

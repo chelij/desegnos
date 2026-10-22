@@ -237,7 +237,7 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
     assert.deepEqual(frozen.placementHint, request.rect);
     assert.ok(frozen.placementPercent.x < 0, 'Requirements must express intentional negative percentages');
     await driver.click('.element-toolbar [aria-label="Delete layer"]');
-    await driver.click('//dialog[@open]//button[normalize-space(.)="Remove"]', 'xpath');
+    await driver.click('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Remove"]', 'xpath');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions.length === 2, 'The temporary off-guide request was not removed');
     assert.deepEqual((await driver.invoke('get_workspace')).project.pages, before.pages);
   });
@@ -264,7 +264,7 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
     const moved = await waitFor(async () => { const value = await region(2); return Math.abs(value.rect.x - snapped.rect.x - steps.x) < 0.000001 && value; }, 'The move grip did not use the configured 5% step');
     await writeFile(join(evidence, 'percentage-grid-gesture.json'), JSON.stringify({ settings: { ...before.gridSettings, snap: true }, steps, snapped: snapped.rect, moved: moved.rect }, null, 2));
     await driver.click('.element-toolbar [aria-label="Delete layer"]');
-    await driver.click('//dialog[@open]//button[normalize-space(.)="Remove"]', 'xpath');
+    await driver.click('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Remove"]', 'xpath');
     await waitFor(async () => (await driver.invoke('get_workspace')).project.pages[0].regions.length === 2, 'The temporary snapping request was not removed');
     await driver.button('Grid and rulers');
     await driver.click(driver.field('Show grid'), 'xpath');
@@ -438,11 +438,11 @@ export async function physicalAuthoring(driver, physical, step, evidence) {
       await physical.keys('Right');
       await physical.keys('Down', 5);
       await physical.keys('Return');
-      const modal = await physical.rect('dialog[open]');
+      const modal = await physical.rect('.workspace-surface');
       assert.ok(modal.left >= 0 && modal.right <= layout.width + 1);
       assert.ok(modal.top >= 0 && modal.bottom <= 901);
       await physical.keys('Escape');
-      await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'Native Escape did not close the project dossier dialog');
+      await waitFor(() => driver.execute(() => !document.querySelector('.workspace-surface')), 'Native Escape did not close the project dossier dialog');
       assert.equal(await driver.execute(() => document.activeElement?.getAttribute('aria-label')), 'Editor menu', 'Closing the modal did not restore focus to its persistent opening control');
       assert.deepEqual((await driver.invoke('get_workspace')).project, before);
       await assertCanvasOnly(driver);

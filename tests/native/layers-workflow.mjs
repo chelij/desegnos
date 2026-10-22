@@ -290,7 +290,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     for (const label of ['Add request here', 'Paste', 'Fit to screen', 'Show grid', 'Layers']) await driver.ready(`.editor-menu [aria-label=${JSON.stringify(label)}]`);
     await driver.click('.editor-menu [aria-label="Add request here"]');
     await waitFor(async () => pending((await workspace(driver)).project).length === 1, 'The canvas menu did not create a real request');
-    await driver.ready('.element-toolbar [aria-label="Delete layer"]'); await driver.click('.element-toolbar [aria-label="Delete layer"]'); if(await driver.execute(()=>!!document.querySelector('dialog[open]'))) await driver.button('Remove');
+    await driver.ready('.element-toolbar [aria-label="Delete layer"]'); await driver.click('.element-toolbar [aria-label="Delete layer"]'); if(await driver.execute(()=>!!document.querySelector('.workspace-surface'))) await driver.button('Remove');
     await waitFor(async () => pending((await workspace(driver)).project).length === 0, 'The temporary menu request was not removed');
     assert.equal(provider.generationRequests().length, 1);
   });
@@ -368,7 +368,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
   await step('Paste onto a different blank page keeps the copied appearance without another generation', async () => {
     const home = (await workspace(driver)).project.pages[0].id;
     await closeLayers(driver); await driver.button('Add page'); await driver.fill('Page name', 'Copied page'); await driver.button('Add page');
-    await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'The new destination page did not open');
+    await waitFor(() => driver.execute(() => !document.querySelector('.workspace-surface')), 'The new destination page did not open');
     const destination = await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.name === 'Copied page'), 'The destination page was not persisted');
     await waitFor(() => driver.execute(id => document.getElementById(`page-tab-${id}`)?.getAttribute('aria-selected') === 'true' && !document.querySelector('[data-testid="direct-element-selection"]'), destination.id), 'The blank destination did not own the canvas');
     await physical.keys('V', 1, ['Control']);
@@ -385,7 +385,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
 
   await step('Trusted text Ctrl+C and Ctrl+V stay native and plain-text clipboard data cannot paste a site layer', async () => {
     // The AI conversation opens on Generate; hide it so the canvas has its usual width.
-    if (await driver.execute(() => !!document.querySelector('.generation-log'))) { await driver.click('[aria-label="Hide AI conversation"]'); await settled(driver); }
+    if (await driver.execute(() => !!document.querySelector('.generation-log'))) { await driver.click('[aria-label="Close AI conversation"]'); await settled(driver); }
     await driver.click('[aria-label="Canvas tools"] button[title^="Add request"]');
     const view = await physical.rect('.workspace-scroll'); await physical.click({ x: view.left + 720, y: view.top + 95 });
     await driver.fill('Request 4', 'Ordinary text stays ordinary text.'); await settled(driver);
@@ -454,7 +454,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     assert.match(image.alt, /^Image placeholder:/); assert.equal(image.placeholder, true); assert.equal(image.disabled, true);
     assert.equal(provider.networkProbes().filter(probe => probe.path.startsWith('/images/')).length, 2);
     assert.ok(job.candidate.criticism.some(item => item.suggestion.includes('Clearly labelled image placeholders')));
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface')), false);
     await physical.captureWindow(join(output, 'downloaded-image-labelled-draft.png'));
     if(await driver.execute(()=>!!document.querySelector('button[aria-label="Keep changes"]'))) await driver.button('Keep changes');
     const parent = join(output, 'image-export'); await mkdir(parent, { recursive: true });

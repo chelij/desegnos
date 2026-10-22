@@ -31,7 +31,7 @@ os.chmod(dest,0o600)
 `,path,String(indent),destination,String(different)],{encoding:'utf8',timeout:10000});assert.equal(result.status,0,result.stderr);
 }
 async function conflict(driver,defaultLabel,canReplace=true){
- await driver.ready('dialog[open] .save-conflict');
+ await driver.ready('.workspace-surface .save-conflict');
  await waitFor(()=>driver.execute(label=>document.activeElement?.textContent===label,defaultLabel),'Save conflict did not focus its safe default');
  assert.equal(await driver.execute(()=>[...document.querySelectorAll('.save-conflict button')].some(button=>button.textContent==='Replace it')),canReplace);
 }
@@ -72,7 +72,7 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
   await driver.page(home);await ready(driver);
   await select(driver,physical,'#picture');await select(driver,physical,'#action',true);
   const before=await workspace(driver);await driver.button('Delete selected items');
-  await waitFor(()=>driver.execute(()=>[...document.querySelectorAll('dialog[open] h2')].some(h=>h.textContent==='Delete items')),'The delete confirmation did not appear');
+  await waitFor(()=>driver.execute(()=>[...document.querySelectorAll('.workspace-surface h2')].some(h=>h.textContent==='Delete items')),'The delete confirmation did not appear');
   await physical.captureWindow(join(output,'delete-confirmation.png'));
   await driver.button('Delete 2 items');
   await waitFor(()=>driver.execute(()=>!document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('#action')),'Selected items were not deleted');
@@ -133,7 +133,7 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
  await step('Save as another project needs an in-app confirmation with Cancel as default',async()=>{
   externalArchive(copyPath,2,otherPath,true);const other=await readFile(otherPath);
   await chooseFile(physical,()=>driver.button('Save as'),otherPath,output,'different-project-save-as');
-  await conflict(driver,'Cancel');assert.match(await driver.execute(()=>document.querySelector('dialog[open] h2').textContent),/different project/);
+  await conflict(driver,'Cancel');assert.match(await driver.execute(()=>document.querySelector('.workspace-surface h2').textContent),/different project/);
   await driver.button('Cancel');assert.equal(hash(await readFile(otherPath)),hash(other));assert.equal((await workspace(driver)).path,copyPath);
   await physical.captureWindow(join(output,'safe-save.png'));
  });

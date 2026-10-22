@@ -7,7 +7,7 @@ import { canonicalSelections, regionTargets, sameTarget, unionRect } from './ele
 import { useDraftText } from './DraftText';
 import { escapeHtml, imageFile } from './elementEditing';
 import { StyleBar, type StyleChange } from './StyleBar';
-import { Modal } from './Modal';
+import { WorkspaceSurface } from './WorkspaceSurface';
 import { askBeforeDelete, setAskBeforeDelete } from './deletePreference';
 import { LayersPopover, LayerIcon } from './Layers';
 import type { SiteLayer } from './siteLayers';
@@ -189,7 +189,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
   }
   function browseImage(selection: ElementSelection | null) { browseFor.current = selection; imagePicker.current?.click(); }
   function storeElement(value: ElementSelection | null) { elementRef.current = value; setElement(value); selectionChanged(value?.element ?? null); }
-  function deselectElement() { setExtras([]); setContext(null); inlineTicket.current++; selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; storeElement(null); }
+  function deselectElement() { setElementDialog(null); setConfirmMany(null); setExtras([]); setContext(null); inlineTicket.current++; selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; storeElement(null); }
   useLayoutEffect(() => { deselectElement(); setRepicking(null); setStale(new Set()); setElementDialog(null); setElementError(''); }, [page.id]);
   const zoomIntent = useRef<{ pageId: string; zoom: number; origin: Point } | null>(null);
   const live = useRef({ zoom, changeZoom, pageId: page.id });
@@ -436,17 +436,17 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
     setElementError(''); select(null);
     storeElement(rest[0] ?? null); setExtras(rest.slice(1));
   }
-  const [confirmMany, setConfirmMany] = useState<{ count: number; skip: boolean } | null>(null);
+  const [confirmMany, setConfirmMany] = useState<{ count: number; skip: boolean; targets: ElementTarget[]; pageId: string } | null>(null);
   // Delete the selected element, asking first unless the user chose "Don't ask again".
   function deleteElement() {
     if (!elementRef.current || elementRef.current.element.selector === 'body') return;
     if (askBeforeDelete()) { setElementDialog('remove'); return; }
     void applyElement({ kind: 'remove' }).catch(() => {});
   }
-  async function deleteSelected(confirmed = false) {
-    const all = canonicalSelections([elementRef.current, ...extrasRef.current].flatMap(item => item ? [item] : [])).map(item => item.element);
+  async function deleteSelected(confirmed = false, targets?: ElementTarget[]) {
+    const all = targets ?? canonicalSelections([elementRef.current, ...extrasRef.current].flatMap(item => item ? [item] : [])).map(item => item.element);
     if (all.length < 2 || editingElement) return;
-    if (!confirmed && askBeforeDelete()) { setConfirmMany({ count: all.length, skip: false }); return; }
+    if (!confirmed && askBeforeDelete()) { setConfirmMany({ count: all.length, skip: false, targets: all, pageId: page.id }); return; }
     setEditingElement(true);
     try { await deleteElements(all); deselectElement(); }
     finally { setEditingElement(false); }
@@ -1016,7 +1016,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       return;
     }
     const at = value.position; const visible = scroll.current?.getBoundingClientRect();
-    const allowed = at && visible && at.x >= visible.left && at.x <= visible.right && at.y >= visible.top && at.y <= visible.bottom && !document.querySelector('dialog[open]') && !editBusy;
+    const allowed = at && visible && at.x >= visible.left && at.x <= visible.right && at.y >= visible.top && at.y <= visible.bottom && !editBusy;
     const world = allowed ? point(at) : null;
     const hit = world && page.content ? site.current?.imageAt(world.x, world.y) ?? null : null;
     setDropTarget(hit?.rect ?? null);
@@ -1052,7 +1052,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
     { id: 'layers', label: 'Layers', action: () => setLayersOpen(true) },
   ] : [];
   return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers && !liveView ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''} ${repicking ? 'repicking' : ''} ${liveView ? 'live' : ''}`}
-    onKeyDownCapture={event => { if (event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
+    onKeyDownCapture={event => { if (!(event.target instanceof Element && event.target.closest('.workspace-surface')) && event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
     <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 8 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
     {gridSettings.rulers && !liveView && <><div className="ruler-corner" aria-hidden="true">{rulerUnit === 'percent' ? '%' : 'px'}</div>
       <Ruler axis="x" unit={rulerUnit} start={visible.x} length={measurements.width} reference={page.viewport.width} zoom={zoom} cursor={cursor?.x} selection={selectedRect ? [selectedRect.x, selectedRect.x + selectedRect.width] : undefined} />
@@ -1152,9 +1152,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       arrange={direction => { void arrangeLayer(direction); }} copy={() => { void copyLayer(); }} paste={() => { void pasteLayer(); }} close={() => setLayersOpen(false)} />
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void stageImage(target, file); }} />
     {repicking && <div className="repick-hint" role="status">Click the element this request is for. <button type="button" onClick={() => setRepicking(null)}>Cancel</button></div>}
-    {confirmMany && <Modal title="Delete items" close={() => setConfirmMany(null)}><div className="dialog-body"><p>Delete these {confirmMany.count} items and everything inside them?</p>
+    {confirmMany && <WorkspaceSurface place="banner" title="Delete items" close={() => setConfirmMany(null)}><div className="dialog-body"><p>Delete these {confirmMany.count} items and everything inside them?</p>
       <label className="check-label"><input type="checkbox" checked={confirmMany.skip} onChange={event => setConfirmMany({ ...confirmMany, skip: event.target.checked })} />Don’t ask again</label>
-      <div className="form-actions"><button type="button" onClick={() => setConfirmMany(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void deleteSelected(true).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete {confirmMany.count} items</button></div></div></Modal>}
+      <div className="form-actions"><button type="button" onClick={() => setConfirmMany(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void (confirmMany.pageId === page.id ? deleteSelected(true, confirmMany.targets) : Promise.resolve()).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete {confirmMany.count} items</button></div></div></WorkspaceSurface>}
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
     {selectedRect && coordinate && measurementPosition && gridSettings.rulers && !liveView && <div className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}

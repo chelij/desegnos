@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { native } from './api';
-import { Modal } from './Modal';
 import { MenuButton, type MenuItem } from './Menus';
 import './dialogs.css';
 import type { AiSettingsView, ProviderSettings } from './types';
@@ -226,9 +225,9 @@ export function ChatgptWelcome({ update, manageUsage, dismissed }: { update: AiS
     catch (error) { setError(message(error)); }
     finally { setBusy(false); }
   }
-  return <Modal title="You're using your ChatGPT plan" close={dismissed}><div className="dialog-body">
+  return <section aria-label="You're using your ChatGPT plan" className="dialog-body"><strong>You're using your ChatGPT plan</strong>
     <p>Eligible AI requests in Desegnos use your ChatGPT plan or credits balance. Manage usage in your ChatGPT settings.</p>
     {error && <p className="message error" role="alert">{error}</p>}
     <div className="form-actions"><button disabled={busy} onClick={() => { void manageUsage().catch(error => setError(message(error))); }}>Manage usage</button><button className="primary" disabled={busy} onClick={() => { void acknowledge(); }}>Got it</button>
-    </div></div></Modal>;
+    </div></section>;
 }

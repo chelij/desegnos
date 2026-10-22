@@ -54,7 +54,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
       const missingPath = kind === 'file' ? fixture.path : dirname(fixture.path);
       await rm(missingPath, { recursive: true });
       if (kind === 'folder') await driver.menu(['New project']);
-      const selector = `${kind === 'folder' ? 'dialog[open] ' : ''}.recent-projects button[title=${JSON.stringify(fixture.path)}]`;
+      const selector = `${kind === 'folder' ? '.workspace-surface ' : ''}.recent-projects button[title=${JSON.stringify(fixture.path)}]`;
       await driver.click(selector);
       await driver.ready('.new-project [role="alert"]');
       assert.match(await driver.execute(() => document.querySelector('.new-project [role="alert"]').textContent), /Could not open this recent project/);
@@ -145,7 +145,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
 
   await step('Default location change persists and repeated names reserve numbered folders', async () => {
     await driver.menu(['Default project location']);
-    await driver.click('dialog[open] summary');
+    await driver.click('.workspace-surface summary');
     await chooseFolder(physical, () => driver.button('Change…'), preference, output, 'default-location');
     await waitFor(async () => (await driver.invoke('get_project_location')).path === preference, 'The default preference was not saved');
     await physical.captureWindow(join(output, 'default-setting.png'));
@@ -215,7 +215,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
     assert.deepEqual(state.project, project); assert.equal(state.canUndo, false);
     const recent = await driver.invoke('get_recent_projects');
     assert.equal(recent.projects[0].path, path);
-    await driver.menu(['Default project location']); await driver.click('dialog[open] summary'); await driver.button('Reset');
+    await driver.menu(['Default project location']); await driver.click('.workspace-surface summary'); await driver.button('Reset');
     const location = await waitFor(async () => { const value = await driver.invoke('get_project_location'); return !value.customized && value; }, 'Reset did not restore Documents/Desegnos');
     assert.equal(location.path, location.systemDefault); await driver.button('Close Project location');
   });

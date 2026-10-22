@@ -90,21 +90,21 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await savedState(driver, sourceProjectPath);
     sourceProjectHash = hash(await readFile(sourceProjectPath));
     await driver.button('New project');
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] input[name="projectName"]')), false);
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] button[aria-label="Use my existing brand"]')), false);
-    await driver.click('//dialog[@open]//button[@aria-label="Blank website"]', 'xpath');
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface input[name="projectName"]')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface button[aria-label="Use my existing brand"]')), false);
+    await driver.click('//section[contains(@class,"workspace-surface")]//button[@aria-label="Blank website"]', 'xpath');
     await driver.fill('Project name', 'Imported Northstar website');
     await driver.button('Web');
-    assert.deepEqual(await driver.execute(() => [...document.querySelector('dialog[open] select').options].map(option => option.value)), ['1440x900', '1920x1080', '1536x864', '1366x768', '1280x720', '2560x1440', 'custom']);
+    assert.deepEqual(await driver.execute(() => [...document.querySelector('.workspace-surface select').options].map(option => option.value)), ['1440x900', '1920x1080', '1536x864', '1366x768', '1280x720', '2560x1440', 'custom']);
     await driver.select('Resolution', '1536x864');
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] .appearance-choice')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface .appearance-choice')), false);
     await driver.button('Create project');
     blankProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id !== originalProject.id && value; }, 'The blank project did not open');
     // The source project stays open in its own tab group.
     const openIds = (await workspace(driver)).openProjects.map(open => open.id); assert.ok(openIds.includes(originalProject.id) && openIds.at(-1) === blankProject.id, JSON.stringify(openIds));
     await driver.button('Import context');
-    await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .import-context')), 'Import context did not open');
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] button')].find(button => button.textContent.trim() === 'Add to project')?.disabled), true);
+    await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface .import-context')), 'Import context did not open');
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('.workspace-surface button')].find(button => button.textContent.trim() === 'Add to project')?.disabled), true);
     assert.match(await driver.execute(() => document.querySelector('.import-context').textContent), /1\. Where is your brand\?.*Read your brand first/s);
     await physical.captureWindow(join(output, 'new-project-choice-window.png'));
   });
@@ -197,7 +197,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.ready('.identity-progress[role="status"]');
     assert.equal(await driver.execute(() => document.querySelector('.import-context').textContent.includes('Read your brand first')), false);
     assert.match(await driver.execute(() => document.querySelector('.identity-progress').textContent), /Reading your brand…/);
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open] button[disabled][type="submit"]')), true);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface button[disabled][type="submit"]')), true);
     const before = provider.identityRequests().length;
     await assert.rejects(() => driver.invoke('analyze_identity', { sourceId: cancelled.sourceId, fileIds: cancelled.fileIds }), /already|running|finish|analysis/i);
     assert.equal(provider.identityRequests().length, before);
@@ -214,7 +214,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     const value = await completedAnalysis(driver, ['failed', 'unknown']);
     assert.equal(value.candidate ?? null, null); assert.ok(value.error || value.message);
     await waitFor(() => driver.execute(() => !!document.querySelector('.identity-import [role="alert"]')?.textContent), 'The identity failure was hidden from the user');
-    assert.equal(await driver.execute(() => document.querySelector('dialog[open] button[type="submit"]')?.disabled), true);
+    assert.equal(await driver.execute(() => document.querySelector('.workspace-surface button[type="submit"]')?.disabled), true);
     assert.deepEqual((await workspace(driver)).project, blankProject);
   });
 
@@ -289,17 +289,17 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
   });
 
   await step('Visual brand review fits narrow dialogs in light and dark themes', async () => {
-    const original = await driver.execute(() => ({ theme: document.documentElement.getAttribute('data-theme'), width: document.querySelector('dialog[open]').style.width }));
+    const original = await driver.execute(() => ({ theme: document.documentElement.getAttribute('data-theme'), width: document.querySelector('.workspace-surface').style.width }));
     try {
       for (const theme of ['light', 'dark']) {
         await driver.execute(value => {
           document.documentElement.setAttribute('data-theme', value);
-          const dialog = document.querySelector('dialog[open]');
+          const dialog = document.querySelector('.workspace-surface');
           dialog.style.width = '340px'; dialog.scrollTop = 0;
         }, theme);
         await driver.executeAsync(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true)))));
         const layout = await driver.execute(() => {
-          const dialog = document.querySelector('dialog[open]');
+          const dialog = document.querySelector('.workspace-surface');
           const review = document.querySelector('.identity-result');
           const bounds = review.getBoundingClientRect();
           const cards = [...review.querySelectorAll('.identity-card, .identity-page-card')];
@@ -313,7 +313,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     } finally {
       await driver.execute(value => {
         if (value.theme === null) document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', value.theme);
-        document.querySelector('dialog[open]').style.width = value.width;
+        document.querySelector('.workspace-surface').style.width = value.width;
       }, original);
     }
   });

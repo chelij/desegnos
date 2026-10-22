@@ -221,7 +221,7 @@ export async function authorProject(driver, step, evidence) {
 export async function recoverProject(driver, expected, step) {
   await step('A fresh process restores the exact canvas project and preserves other recoveries', async () => {
     // Recovery is offered from the menu only; the start screen stays clear.
-    const action = `//dialog[@open]//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]//button[normalize-space(.)="Recover project"]`;
+    const action = `//section[contains(@class,"workspace-surface")]//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]//button[normalize-space(.)="Recover project"]`;
     await waitFor(async () => (await driver.invoke('get_workspace')).recoveries?.some(item => item.projectId === expected.id), 'The expected named recovery was not found');
     assert.equal(await driver.execute(() => !!document.querySelector('.recovery-notice')), false, 'The start screen still shows a recovery notice');
     await driver.menu(['Recover unsaved projects']);
@@ -231,13 +231,13 @@ export async function recoverProject(driver, expected, step) {
     assert.equal(before.recovery.projectId, expected.id);
     assert.equal(before.recovery.revision, expected.revision);
     const remaining = before.recoveries.filter(item => item.projectId !== expected.id);
-    const section = `//dialog[@open]//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]`;
+    const section = `//section[contains(@class,"workspace-surface")]//section[@aria-label=${xpathString(`Recover ${expected.name}`)}]`;
     const dismiss = `${section}//button[normalize-space(.)="Dismiss"]`;
     assert.equal((await driver.all(dismiss, 'xpath')).length, 1);
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] button')].some(button => button.textContent === 'Dismiss all')), before.recoveries.length >= 2);
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('.workspace-surface button')].some(button => button.textContent === 'Dismiss all')), before.recoveries.length >= 2);
     if (!before.recoveries.find(item => item.projectId === expected.id).savedPath) {
       await driver.click(dismiss, 'xpath');
-      await waitFor(() => driver.execute(() => document.querySelector('dialog[open] .recovery-list').textContent.includes('Never saved — dismiss anyway?')), 'Never-saved recovery did not ask before dismissal');
+      await waitFor(() => driver.execute(() => document.querySelector('.workspace-surface .recovery-list').textContent.includes('Never saved — dismiss anyway?')), 'Never-saved recovery did not ask before dismissal');
       await driver.click(`${section}//button[normalize-space(.)="Cancel"]`, 'xpath');
       assert.deepEqual((await driver.invoke('get_workspace')).recoveries, before.recoveries, 'Cancel changed recovery data');
     }
