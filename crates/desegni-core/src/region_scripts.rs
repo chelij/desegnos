@@ -346,9 +346,15 @@ fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
                     "localStorage",
                     "Math",
                     "JSON",
+                    "Number",
+                    "String",
+                    "Boolean",
                     "Array",
                     "Date",
                     "console",
+                    "parseInt",
+                    "parseFloat",
+                    "isNaN",
                     "setTimeout",
                 ]
                 .contains(&name)
@@ -368,6 +374,29 @@ fn validate_script_tree(tree: &serde_json::Value) -> Result<()> {
                 }
                 .unwrap_or("");
                 let receiver = value["object"]["value"].as_str().unwrap_or("");
+                let mut base = &value["object"];
+                while base["type"] == "MemberExpression" {
+                    base = &base["object"];
+                }
+                // A chained property still belongs to the shared native object.
+                let native = [
+                    "Math",
+                    "JSON",
+                    "Number",
+                    "String",
+                    "Boolean",
+                    "Array",
+                    "Date",
+                    "console",
+                    "parseInt",
+                    "parseFloat",
+                    "isNaN",
+                ]
+                .contains(&base["value"].as_str().unwrap_or(""));
+                ensure(
+                    !native || called,
+                    "Region script cannot alias or change shared native objects.",
+                )?;
                 ensure(
                     !forbidden.contains(&name),
                     "This script reaches outside its box.",
@@ -658,6 +687,10 @@ mod tests {
             "document.querySelector('body')",
             "const alias = root; const key = 'parentElement'; alias[key]",
             "root.setAttribute('onclick', 'eval(1)')",
+            "Math.random = () => 0",
+            "Math.random.call = () => 0",
+            "const shared = Number; shared.parseInt = () => 0",
+            "parseInt.extra = root",
         ] {
             assert!(check(code).is_err(), "accepted: {code}");
         }

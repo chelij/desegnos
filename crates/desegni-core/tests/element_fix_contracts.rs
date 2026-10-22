@@ -416,10 +416,20 @@ fn local_sorting_is_accepted_and_undo_removes_its_owned_source() {
 }
 
 #[test]
+fn root_queries_without_matching_descendants_are_allowed() {
+    // The page has an outside paragraph, but a root query cannot return it.
+    let (p, s, text) = behavior_fixture("root.querySelector('p')?.remove();");
+    let (candidate, _) = recover_generation_reply(&text, &s, &p).unwrap();
+    assert_eq!(candidate.pages.len(), 1);
+    assert_eq!(candidate.regions[0].status, RegionStatus::Implemented);
+    candidate.validate(&s, &p).unwrap();
+}
+
+#[test]
 fn unsafe_or_outside_region_scripts_are_retained_as_unapplied_drafts() {
     for code in [
         "document.querySelector('p').remove();",
-        "root.querySelector('p').remove();", // The paragraph is outside this shelf.
+        "root.parentNode.querySelector('p').remove();", // Reaches the paragraph outside this shelf.
         "root.parentElement.remove();",
         "root.querySelectorAll('h1').forEach(card => card.ownerDocument.body.remove());",
         "import('https://example.com/remote.js');",
@@ -427,9 +437,14 @@ fn unsafe_or_outside_region_scripts_are_retained_as_unapplied_drafts() {
         "eval('root.remove()');",
         "new Function('root.remove()')();",
         "document.write('outside');",
+        "document.cookie;",
+        "window.top;",
+        "window.parent;",
         "const key = 'constructor'; root[key]('return document')();",
         "Math.random = () => 0;",
+        "Math.random.call = () => 0;",
         "const shared = Math; shared.random = () => 0;",
+        "const shared = Number; shared.parseInt = () => 0;",
         "const globalEvent = event; globalEvent.target.remove();",
     ] {
         let (p, s, text) = behavior_fixture(code);
@@ -471,8 +486,14 @@ fn export_runs_region_functions_after_unchanged_page_script() {
         .find(|(name, _)| name.starts_with("assets/regions-"))
         .unwrap();
     let runtime = std::str::from_utf8(bytes).unwrap();
-    assert!(runtime.contains("function(root, window)") && runtime.contains("block.parentElement"));
-    assert!(runtime.contains("})(root, scopedWindow)") && runtime.contains("catch (error)"));
+    assert!(
+        runtime.contains("function(root, window, document, setTimeout, requestAnimationFrame)")
+            && runtime.contains("block.parentElement")
+    );
+    assert!(
+        runtime.contains("})(root, scopedWindow, scopedDocument, scopedWindow.setTimeout, scopedWindow.requestAnimationFrame)")
+            && runtime.contains("catch (error)")
+    );
     assert!(runtime.contains("root.querySelector('h1')"));
     let page_js = export
         .files
