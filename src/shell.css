@@ -241,7 +241,7 @@
 .generation-log > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
 .generation-log > header div { display: grid; gap: 2px; }
 .generation-log > header span { font-size: 11px; color: var(--muted); }
-.generation-log > header button { min-height: 28px; padding: 0 8px; border-color: transparent; background: transparent; font-size: 20px; }
+.generation-log > header > .surface-close { min-height: 28px; padding: 0 8px; border-color: transparent; background: transparent; font-size: 20px; }
 .log-messages { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px; font-size: 13px; }
 .log-empty { color: var(--muted); }
 .log-message { min-width: 0; max-width: 94%; padding: 10px 12px; border: 1px solid var(--border-soft); border-radius: 12px; }
@@ -282,7 +282,7 @@
 .surface-host-panel .generation-log { flex: 1; width: 100%; }
 .workspace-surface { min-width: 0; color: var(--text); background: var(--surface); }
 .workspace-surface > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
-.workspace-surface > header button { min-height: 28px; padding: 0 8px; border-color: transparent; background: transparent; font-size: 20px; }
+.workspace-surface > header > .surface-close { min-height: 28px; padding: 0 8px; border-color: transparent; background: transparent; font-size: 20px; }
 .surface-content { overflow: auto; min-width: 0; min-height: 0; }
 .surface-content .log-messages { overflow: visible; }
 .workspace-surface .generation-dialog { padding: 12px; }
@@ -321,3 +321,29 @@
 .workspace-surface input, .workspace-surface select, .workspace-surface textarea { min-width: 0; max-width: 100%; }
 .workspace-surface .log-message.from-ai { max-width: 100%; width: 100%; }
 .workspace-surface .generation-dialog { padding-inline: 0; }
+
+/* Keep conversation items and their actions in normal panel flow. */
+.log-messages, .log-message, .log-requests > li, .generation-draft { min-width: 0; overflow-wrap: anywhere; }
+.generation-draft { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; margin-block: 12px; padding-block: 10px; border-top: 1px solid var(--border-soft); }
+.draft-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.draft-actions > button { max-width: 100%; white-space: normal; }
+.workspace-canvas > header { flex-wrap: wrap; }
+.draft-preview-bar { flex-wrap: wrap; margin-left: auto; padding: 0; }
+.draft-preview-bar > button { font-size: 13px; }
+.inline-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; font-size: 13px; }
+.inline-notice > span { min-width: 0; overflow-wrap: anywhere; }
+.inline-notice p { margin: 0; }
+.inline-notice details { min-width: 0; }
+.inline-notice details[open] { flex-basis: 100%; }
+.inline-notice details > p { margin-top: 6px; overflow-wrap: anywhere; }
+.retry-confirmation { display: inline-flex; align-items: center; flex-wrap: nowrap; gap: 6px; white-space: nowrap; }
+.canvas-pill:has(.retry-confirmation) { width: max-content; }
+.dossier-navigation .tabs { flex: 1; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; padding-inline: 8px; }
+.dossier-navigation .tabs > button { flex-shrink: 0; white-space: nowrap; padding-inline: 9px; }
+.dossier-navigation { min-width: 0; padding-right: 8px; }
+.generation-needs-details { margin-block: 12px; }
+.generation-needs-details h3 { margin-bottom: 6px; }
+.conversation-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 12px; }
+.conversation-facts dt { color: var(--muted); }
+.conversation-facts dd { margin: 0; overflow-wrap: anywhere; }
+.token-footer { margin-top: 12px !important; }

@@ -55,10 +55,10 @@ function Draft({ draft, job, project, controller, compact, changed }: {
   const body = <>
     {reasons.map(reason => <p key={reason} className="log-text">{reason}</p>)}
   </>;
-  return <section className={compact ? 'generation-status compact' : 'log-outcomes'} aria-label={`${areas || page?.name || 'Reply'} draft`}>
+  return <section className="generation-draft" aria-label={`${areas || page?.name || 'Reply'} draft`}>
     <span className="log-meta">Draft · {page?.name ?? 'Reply'}{areas && ` · ${areas}`}</span>
     {body}
-    <div className="form-actions">
+    <div className="draft-actions">
       {review?.previewable && page && <button type="button" disabled={busy} onClick={() => setPreview(true)}>Preview</button>}
       {review && !review.blocked && <button type="button" disabled={busy || !!controller.operation || controller.canStop} onClick={() => setConfirm(true)}>Apply anyway</button>}
       <button type="button" disabled={busy || !!controller.operation || controller.canStop} onClick={() => { void repair(); }}>Ask AI to fix</button>
@@ -69,7 +69,7 @@ function Draft({ draft, job, project, controller, compact, changed }: {
       <button type="button" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button>
     </div>}
     {error && <p role="alert">{error}</p>}
-    {preview && page && <WorkspaceSurface place="canvas" title="Previewing draft" close={() => setPreview(false)} headerActions={<div className="draft-preview-bar"><button type="button" disabled={busy || !!review?.blocked || !!controller.operation || controller.canStop} onClick={() => setConfirm(true)}>Apply anyway</button><button type="button" onClick={() => setPreview(false)}>Back</button></div>}>
+    {preview && page && <WorkspaceSurface place="canvas" title="Previewing draft" showClose={false} close={() => setPreview(false)} headerActions={<div className="draft-preview-bar"><button type="button" className="primary" disabled={busy || !!review?.blocked || !!controller.operation || controller.canStop} onClick={() => setConfirm(true)}>Apply anyway</button><button type="button" onClick={() => setPreview(false)}>Back</button></div>}>
       {confirm && review && <div className="draft-preview-confirm" role="group" aria-label="Confirm draft application"><p>Replace this page with the saved draft? You can undo this change.</p><button disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button><button onClick={() => setConfirm(false)}>Cancel</button></div>}
       {error && <p role="alert">{error}</p>}<PagePreview page={page} revision={project.revision} jobId={job.jobId} draftId={draft.id} /></WorkspaceSurface>}
   </section>;

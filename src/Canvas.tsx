@@ -7,7 +7,6 @@ import { canonicalSelections, regionTargets, sameTarget, unionRect } from './ele
 import { useDraftText } from './DraftText';
 import { escapeHtml, imageFile } from './elementEditing';
 import { StyleBar, type StyleChange } from './StyleBar';
-import { WorkspaceSurface } from './WorkspaceSurface';
 import { askBeforeDelete, setAskBeforeDelete } from './deletePreference';
 import { LayersPopover, LayerIcon } from './Layers';
 import type { SiteLayer } from './siteLayers';
@@ -439,6 +438,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
     storeElement(rest[0] ?? null); setExtras(rest.slice(1));
   }
   const [confirmMany, setConfirmMany] = useState<{ count: number; skip: boolean; targets: ElementTarget[]; pageId: string } | null>(null);
+  useEffect(() => { setConfirmMany(null); }, [page.id, element?.element.id, extras.length]);
+  useEffect(() => {
+    if (!confirmMany) return;
+    const cancel = (event: globalThis.KeyboardEvent) => { if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); setConfirmMany(null); } };
+    window.addEventListener('keydown', cancel, true);
+    return () => window.removeEventListener('keydown', cancel, true);
+  }, [!!confirmMany]);
   // Delete the selected element, asking first unless the user chose "Don't ask again".
   function deleteElement() {
     if (!elementRef.current || elementRef.current.element.selector === 'body') return;
@@ -1138,6 +1144,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       </div>
     </div>
     {toolbarRect && !inlineText && !(liveView && element) && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
+      {confirmMany ? <div className="delete-inline" role="group" aria-label="Delete items">
+        <span>Delete {confirmMany.count} items?</span>
+        <button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void (confirmMany.pageId === page.id ? deleteSelected(true, confirmMany.targets) : Promise.resolve()).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete</button>
+        <button type="button" onClick={() => setConfirmMany(null)}>Cancel</button>
+        <details><summary>Options</summary><label className="check-label"><input type="checkbox" checked={confirmMany.skip} onChange={event => setConfirmMany({ ...confirmMany, skip: event.target.checked })} />Don’t ask again</label></details>
+      </div> : <>
       {!element && selectedRequest && <button className="ask-ai" aria-pressed={isWholePage(selectedRequest, page)} disabled={editBusy} title="Allow this request to change the page layout, CSS and JavaScript" onClick={() => { void change(selectedRequest.id, { wholePage: !isWholePage(selectedRequest, page) }).catch(() => {}); }}>Whole page</button>}
       {extras.length > 0 ? <>
         <span className="multi-count">{extras.length + 1} selected</span>
@@ -1157,6 +1169,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
       {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={site.current?.visual(element.element) ?? null} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </>}
+      </>}
     </div>}
     {context && <ContextMenu key={`${context.kind}:${context.point.x}:${context.point.y}`} label={context.kind === 'element' ? 'Element actions' : context.kind === 'request' ? 'Request actions' : 'Canvas actions'} point={context.point} close={closeContext} items={contextItems} />}
     <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element?.element.selector ?? null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady} anchor={toolbarPoint ? { x: toolbarPoint.x, y: toolbarPoint.y, height: toolbarSize.height } : null} contextElement={openElementContext} contextRequest={openRequestContext}
@@ -1164,9 +1177,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       arrange={direction => { void arrangeLayer(direction); }} copy={() => { void copyLayer(); }} paste={() => { void pasteLayer(); }} close={() => setLayersOpen(false)} />
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void stageImage(target, file); }} />
     {repicking && <div className="repick-hint" role="status">Click the element this request is for. <button type="button" onClick={() => setRepicking(null)}>Cancel</button></div>}
-    {confirmMany && <WorkspaceSurface place="banner" title="Delete items" close={() => setConfirmMany(null)}><div className="dialog-body"><p>Delete these {confirmMany.count} items and everything inside them?</p>
-      <label className="check-label"><input type="checkbox" checked={confirmMany.skip} onChange={event => setConfirmMany({ ...confirmMany, skip: event.target.checked })} />Don’t ask again</label>
-      <div className="form-actions"><button type="button" onClick={() => setConfirmMany(null)}>Cancel</button><button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void (confirmMany.pageId === page.id ? deleteSelected(true, confirmMany.targets) : Promise.resolve()).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete {confirmMany.count} items</button></div></div></WorkspaceSurface>}
+
     {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
     {measuring && selectedRect && coordinate && gridSettings.rulers && !liveView && <div ref={measurement} className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
@@ -1267,7 +1278,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     {wholePage && <span className="request-phone-tag" title={region.wholePage ? "Whole page" : "Whole page (automatically detected). Turn off in request controls."}>Whole page</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture…' : target ? 'Describe the change…' : 'Describe what goes here…'}
-      style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, background: 'transparent', outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
+      style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
     {hasMore && <button type="button" className="request-expand" style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom + displayHeight, width: shown.width * zoom }} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
   </div>

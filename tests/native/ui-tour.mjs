@@ -10,7 +10,7 @@ import { waitFor } from './webdriver.mjs';
 export async function uiTour(driver, physical, step, evidence, provider, restart) {
   const output = process.env.DESEGNI_UI_TOUR_OUTPUT ?? '/tmp/claude-1000/-home-cheli-Projects-WebMaker/538ce88b-ecfe-4675-909c-75c49eb385c1/scratchpad/tour';
   await mkdir(output, { recursive: true });
-  const entries = [], failures = [], captures = [];
+  const entries = [], failures = [], captures = [], layoutChecks = [];
   // A focused rerun preserves already verified captures and replaces only chosen surfaces.
   const selected = process.env.DESEGNI_UI_TOUR_SURFACES ? new Set(process.env.DESEGNI_UI_TOUR_SURFACES.split(',').map(Number)) : null;
   if (selected) {
@@ -25,10 +25,12 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
   async function index() {
     await writeFile(join(output, 'index.md'), '# Desegnos UI tour\n\nFull native window captures on guarded Xvfb; real Rust state and synthetic loopback AI.\n' +
       `Default window: ${original.width} × ${original.height}; narrow: 900 × ${original.height}. Both themes at both sizes.\n\n` + entries.join('\n') + '\n\n' +
-      (failures.length ? '## Surfaces not captured\n\n' + failures.map(value => `- ${value}`).join('\n') : 'All requested tour steps captured.') + '\n');
+      (failures.length ? '## Tour issues\n\n' + failures.map(value => `- ${value}`).join('\n') : 'All requested tour steps captured.') + '\n');
   }
   async function close() {
     await driver.execute(() => {
+      document.querySelector('.delete-inline button:last-of-type')?.click();
+      document.querySelector('.draft-preview-bar button:last-child')?.click();
       for (const node of [...document.querySelectorAll('.workspace-surface')].reverse()) node.querySelector('button[aria-label^="Close "]')?.click();
     });
     await physical.keys('Escape');
@@ -49,6 +51,53 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
       await copyFile(join(evidence, file), join(output, file));
       entries.push(`- [${file}](${file}) — ${description} (${theme}, ${narrow ? '900 px' : 'default size'}).`);
       captures.push({ file, ...geometry });
+      const layout = await driver.execute(() => {
+        const issues = [];
+        const rect = node => node.getBoundingClientRect();
+        const inside = (child, parent) => { const a = rect(child), b = rect(parent); return a.left >= b.left - 1 && a.right <= b.right + 1; };
+        const overlap = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+        if (document.documentElement.scrollWidth > innerWidth + 1 || document.body.scrollWidth > innerWidth + 1) issues.push('Horizontal document overflow');
+        for (const row of document.querySelectorAll('.draft-actions')) {
+          const draft = row.closest('.generation-draft'), panel = row.closest('[aria-label="AI conversation"]');
+          if (!draft || !panel || !inside(row, draft) || !inside(row, panel) || ['absolute', 'fixed'].includes(getComputedStyle(row).position)) issues.push('Draft actions escaped their panel item');
+          for (const button of row.children) if (!inside(button, row)) issues.push('Draft action button overflow');
+        }
+        const conversation = document.querySelector('[aria-label="AI conversation"]');
+        if (conversation) {
+          if (conversation.querySelector('.generation-status, .generation-dialog')) issues.push('Old generation details card in conversation');
+          if ([...conversation.querySelectorAll('summary')].filter(node => node.textContent === 'Request details').length !== 1) issues.push('Missing or repeated request details');
+          if (/Copy code|Retained code|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(conversation.textContent)) issues.push('Code action or internal ID in conversation');
+          const tokens = conversation.querySelector('.token-footer');
+          if (tokens && tokens.parentElement.lastElementChild !== tokens) issues.push('Tokens do not end the AI reply');
+        }
+        const preview = document.querySelector('[aria-label="Previewing draft"]');
+        if (preview) {
+          if (preview.querySelector('.surface-close')) issues.push('Redundant preview close button');
+          for (const button of preview.querySelectorAll('.draft-preview-bar button')) if (parseFloat(getComputedStyle(button).fontSize) > 15) issues.push('Preview actions are styled as title text');
+        }
+        const retry = document.querySelector('.retry-confirmation');
+        if (retry) {
+          const buttons = [...retry.querySelectorAll('button')];
+          if (Math.abs(rect(buttons[0]).top - rect(buttons[1]).top) > 1 || getComputedStyle(retry).whiteSpace !== 'nowrap') issues.push('Retry confirmation wraps');
+        }
+        const save = document.querySelector('.save-conflict');
+        if (save && (save.closest('.workspace-surface').querySelector('header') || rect(save).height > 90)) issues.push('Save conflict is not a compact bar');
+        const deletion = document.querySelector('.delete-inline');
+        if (deletion && !deletion.closest('.element-toolbar')) issues.push('Delete confirmation escaped selection toolbar');
+        const accountMenu = document.querySelector('.ai-account-options .editor-menu');
+        const model = document.querySelector('.ai-model-row select');
+        if (accountMenu && model && overlap(rect(accountMenu), rect(model))) issues.push('Account menu covers the model field');
+        const brief = document.querySelector('[aria-label="Project brief"]');
+        if (brief && /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(brief.textContent)) issues.push('Internal ID in project brief');
+        const tabs = [...document.querySelectorAll('.dossier-navigation [role="tab"]')];
+        if (new Set(tabs.map(node => Math.round(rect(node).top))).size > 1) issues.push('Project brief tabs wrap');
+        const prompt = document.querySelector('.annotation textarea');
+        if (prompt && getComputedStyle(prompt).backgroundColor === 'rgba(0, 0, 0, 0)') issues.push('Request text background is transparent');
+        return { issues, width: innerWidth, documentWidth: document.documentElement.scrollWidth };
+      });
+      layoutChecks.push({ file, ...layout });
+      for (const issue of layout.issues) failures.push(`${number}. ${file}: ${issue}`);
+      await writeFile(join(output, 'layout-checks.json'), JSON.stringify(layoutChecks, null, 2));
       await index();
     }
     await driver.command('POST', '/window/rect', original);
@@ -154,11 +203,11 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
       return frame?.getBoundingClientRect().width > 0 && !document.querySelector('[aria-label="Previewing draft"] .preview-status');
     }), 'The inert draft preview did not render');
   });
-  await surface(4, 'delete-many', 'Delete selected items confirmation banner', async () => {
+  await surface(4, 'delete-many', 'Delete selected items confirmation within the selection toolbar', async () => {
     await driver.button('Fit');
     await selectElement('img'); await selectElement('p', true);
     await driver.button('Delete selected items');
-    await driver.ready('.workspace-banner');
+    await driver.ready('.delete-inline');
   });
   await surface(5, 'save-conflict', 'Save conflict banner after a simulated external change to the disposable project', async () => {
     const state = await workspace();
@@ -258,6 +307,6 @@ finally:
   }
   await writeFile(join(evidence, 'ui-tour.json'), JSON.stringify({ captures, failures, output, totalScreenshots: entries.length }, null, 2));
   await index();
-  console.log(`UI TOUR: ${captures.length} new screenshots (${entries.length} total); ${failures.length} surfaces not captured. Index: ${join(output, 'index.md')}`);
+  console.log(`UI TOUR: ${captures.length} new screenshots (${entries.length} total); ${failures.length} tour issues. Index: ${join(output, 'index.md')}`);
   return { captures, failures };
 }

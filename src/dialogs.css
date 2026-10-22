@@ -69,3 +69,12 @@
 .sg-font { display: grid; gap: 6px; }
 .sg-font-sample { padding: 8px 10px; border: 1px dashed var(--border-soft); border-radius: 6px; font-weight: 400; font-size: 16px; }
 .sg-samples { display: block; width: 100%; height: 300px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+
+/* Stacked fields leave the whole panel width available to labels and model names. */
+.workspace-surface .ai-settings .ai-model-row .ai-inline-field,
+.workspace-surface .ai-settings .ai-budget { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
+.ai-model-row { flex-wrap: wrap; min-width: 0; }
+.ai-model-row > label { flex-basis: 100%; }
+.ai-model-row .ai-usage-link { margin-left: auto; }
+.ai-settings .ai-account-card { align-items: flex-start; }
+.ai-account-options { align-self: flex-start; }

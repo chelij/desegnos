@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
-import { GenerationDetails } from './Generation';
 import type { AiSettingsView } from './types';
 import { plainReason, GenerationDrafts } from './GenerationDrafts';
 import type { GenerationController } from './useGeneration';
 import { native } from './api';
+import { scopeLabel } from './Notes';
 import type { GenerationHistory, GenerationJobView, Project } from './types';
 
 // Current and locally saved conversations share the same draft review actions.
@@ -41,54 +41,64 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
     const index = page?.regions.findIndex(region => region.id === area.regionId) ?? -1;
     const region = index >= 0 ? page!.regions[index] : undefined;
     const sent = frozen.find(item => item.regionId === area.regionId);
-    return { key: area.regionId, page: sent?.pageName || page?.name || 'Removed page', box: index + 1, prompt: sent?.prompt || region?.prompt || '', attachments: sent?.attachments ?? (past ? [] : region?.attachments ?? []), phone: !!(sent?.mobileOnly ?? (!past && region?.mobileOnly)) };
+    return { key: area.regionId, completed: region?.completed, page: sent?.pageName || page?.name || 'Removed page', box: index + 1, prompt: sent?.prompt || region?.prompt || '', attachments: sent?.attachments ?? (past ? [] : region?.attachments ?? []), phone: !!(sent?.mobileOnly ?? (!past && region?.mobileOnly)) };
   });
   const working = !past && (!!operation || job?.status === 'prepared' || job?.status === 'generating' || job?.status === 'ready' || job?.status === 'applying');
   const candidate = job?.candidate;
-  const failed = job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status);
+  const needsDetails = candidate?.regions.filter(outcome => outcome.status !== 'implemented') ?? [];
+  const label = (id: string) => {
+    const item = requests.find(request => request.key === id);
+    return item ? `${item.page} · ${item.box > 0 ? `Box ${item.box}` : item.prompt || 'Request'}` : 'Request';
+  };
+  const notes = [...new Set(job?.validationEvents?.filter(event => !job.drafts?.some(draft => !draft.dismissed && !draft.applied && (!event.regionId || draft.regionIds.includes(event.regionId)))).map(event => plainReason(event.message)))];
   return <WorkspaceSurface title="AI conversation" close={close}>
-
     <div className="log-messages">
       {past && <button type="button" onClick={() => { historyEpoch.current += 1; setLoadingPast(false); setPast(null); }}>Back to current generation</button>}
-      {!job && (operation || error) && <GenerationDetails controller={controller} project={project} settings={settings} openSettings={openSettings} manageUsage={manageUsage} editRequest={editRequest} />}
       {!job && !operation && !error && <p className="log-empty">No conversation yet.</p>}
-      {(job || operation) && <section className="log-message from-you" aria-label="Sent to the AI">
-        <p className="log-who">You → {job ? `${SERVICE[job.provider ?? 'openai']} · ${job.settings.model}` : 'AI'}</p>
-        {job ? <>
-          <p>{requests.length} {requests.length === 1 ? 'request' : 'requests'} · {job.generationMode === 'strict' ? 'Precise' : 'Flexible'}</p>
+      {!job && operation && <p role="status">{operation}</p>}
+      {job && <>
+        <section className="log-message from-you" aria-label="Sent to the AI">
+          <p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p>
+          <p>{requests.length} {requests.length === 1 ? 'request' : 'requests'}</p>
           <ol className="log-requests">{requests.map(item => <li key={item.key}>
-            <span className="log-meta">{item.page} · Box {item.box}{item.phone ? ' · Phone fix' : ''}</span>
-            <p className="log-text">{item.prompt || <em>No description</em>}</p>
+            <span className="log-meta">{label(item.key)}{item.phone ? ' · Phone fix' : ''}</span>
+            {item.prompt && <p className="log-text">{item.prompt}</p>}
             {item.attachments.length > 0 && <p className="log-meta">Attached: {item.attachments.map((attachment: { name: string }) => attachment.name).join(', ')}</p>}
           </li>)}</ol>
-        </> : <p>{operation}</p>}
-      </section>}
-      {job?.earlierContexts?.map((_, index) => <section key={index} className="log-message from-you"><p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p><p>Sent additional page context.</p></section>)}
-      {job?.context && (job.repairRounds ?? 0) > 0 && <>
-        <section className="log-message from-ai" aria-label="First AI reply"><p className="log-who">{SERVICE[job.provider ?? 'openai']}</p><p>{humanText(job.firstExchange?.summary ?? '')}</p><ul>{job.firstExchange?.regions.map(region => <li key={region.regionId}>{region.status === 'implemented' ? 'Done' : 'Needs correction'} · {humanText(region.explanation)}</li>)}</ul>{job.firstExchange?.usage && <p className="log-meta">{job.firstExchange.usage.inputTokens.toLocaleString()} tokens sent · {job.firstExchange.usage.outputTokens.toLocaleString()} received</p>}</section>
-        <section className="log-message from-you" aria-label="Repair sent to the AI"><p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p><p>Asked the AI to fix {job.repairAreaCount ?? job.areas.length} areas</p></section>
+        </section>
+        <section className="log-message from-ai" aria-label="AI reply" aria-live="polite">
+          <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
+          {working && !candidate && <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p>}
+          {candidate && <>
+            <p className="log-text">{job.status === 'applied' && needsDetails.length ? `Applied ${candidate.regions.length - needsDetails.length} of ${candidate.regions.length} requests` : humanText(candidate.summary)}</p>
+            <ul className="log-outcomes">{candidate.regions.map(outcome => <li key={outcome.regionId} className={outcome.status}>
+              <span className="log-meta">{label(outcome.regionId)} · {outcome.status === 'implemented' ? 'Done' : 'Needs details'}</span>
+              {outcome.explanation && <p className="log-text">{humanText(outcome.explanation)}</p>}
+            </li>)}</ul>
+          </>}
+          {!working && !candidate && job.status !== 'applied' && <p>{job.status === 'cancelled' ? 'Stopped.' : 'The AI could not finish this request.'}</p>}
+          {needsDetails.length > 0 && <section className="generation-needs-details" aria-label="Finish your draft">
+            <h3>Needs details</h3>
+            <ul className="log-outcomes">{needsDetails.map(outcome => <li key={outcome.regionId}>
+              <span className="log-meta">{label(outcome.regionId)}</span>
+              {!past && requests.some(item => item.key === outcome.regionId && !item.completed) && <button onClick={() => editRequest(outcome.regionId)}>Change request</button>}
+            </li>)}</ul>
+            {!past && <button disabled={working || !!operation} onClick={() => { void controller.prepare().catch(() => {}); }}>Build remaining draft</button>}
+          </section>}
+          <GenerationDrafts job={job} project={project} controller={controller} changed={value => { if (past) setPast(value); }} />
+          {candidate && candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></details>}
+          {candidate && candidate.decisionProposals.length > 0 && <details><summary>Suggested rules ({candidate.decisionProposals.length})</summary><ul>{candidate.decisionProposals.map((proposal, index) => <li key={index}><strong>{humanText(proposal.topic)}</strong><p className="log-text">{humanText(proposal.value)}</p><p className="log-meta">{scopeLabel(project, proposal.scope)}</p></li>)}</ul></details>}
+          {notes.length > 0 && <details><summary>Things to check</summary><ul>{notes.map(reason => <li key={reason}>{reason}</li>)}</ul></details>}
+          <details className="conversation-request-details"><summary>Request details</summary><dl className="conversation-facts">
+            <dt>AI style</dt><dd>{job.generationMode === 'strict' ? 'Precise' : 'Flexible'}</dd>
+            <dt>Model</dt><dd>{settings?.catalogue.find(model => model.id === job.settings.model)?.name ?? job.settings.model}</dd>
+            {job.repairRounds ? <><dt>Automatic corrections</dt><dd>{job.repairRounds}</dd></> : null}
+            {context.length > 0 && <><dt>Additional context</dt><dd>{context.length} page elements</dd></>}
+          </dl></details>
+          {!past && !working && !candidate && ['failed', 'unknown', 'cancelled'].includes(job.status) && <div className="form-actions"><button disabled={!!operation} onClick={() => { void controller.prepare().catch(() => {}); }}>Try again</button><button onClick={openSettings}>AI settings</button></div>}
+          {job.usage && <p className="log-meta token-footer">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
+        </section>
       </>}
-      {job?.context && !(job.repairRounds ?? 0) && <>
-        <section className="log-message from-ai" aria-label="AI context request"><p className="log-who">{SERVICE[job.provider ?? 'openai']}</p><p>Asked for {context.length} more {context.length === 1 ? 'element' : 'elements'}</p><ul>{context.map(item => <li key={item.id}><span>Page element</span>{item.missing ? ' · unavailable' : ''}</li>)}</ul></section>
-        <section className="log-message from-you" aria-label="Context sent to the AI"><p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p><p>Sent the requested page context.</p></section>
-      </>}
-      {job && <section className={`log-message from-ai${failed ? ' failed' : ''}`} aria-label="AI reply" aria-live="polite">
-        <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
-        {working && !candidate ? <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p> : null}
-        {candidate && <>
-          <p className="log-text">{job.status === 'applied' && candidate.regions.some(region => region.status === 'conflict') ? `Applied ${candidate.regions.filter(region => region.status === 'implemented').length} of ${candidate.regions.length} areas` : humanText(candidate.summary)}</p>
-          <ul className="log-outcomes">{candidate.regions.filter(outcome => !job.drafts?.some(draft => !draft.dismissed && !draft.applied && draft.regionIds.includes(outcome.regionId))).map(outcome => { const item = requests.find(request => request.key === outcome.regionId); return <li key={outcome.regionId} className={outcome.status}>
-            <span className="log-meta">{item ? `${item.page} · Box ${item.box}` : 'Request'} · {outcome.status === 'implemented' ? 'Done' : 'Needs a decision'}</span>
-            <p className="log-text">{humanText(outcome.explanation)}</p>
-          </li>; })}</ul>
-          {candidate.criticism.length > 0 && <details><summary>Design feedback ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></details>}
-        </>}
-        {failed && <p className="log-text">{job.status === 'cancelled' ? 'Stopped.' : 'The AI could not finish this request. Your draft is saved.'}{job.providerError?.responseFormat?.providerMessage ? ` ${job.providerError.responseFormat.providerMessage}` : ''}</p>}
-        {!!job.validationEvents?.length && <details><summary>Validation notes</summary><ul>{[...new Set(job.validationEvents.filter(event => !job.drafts?.some(draft => !draft.dismissed && !draft.applied && (!event.regionId || draft.regionIds.includes(event.regionId)))).map(event => plainReason(event.message)))].map(reason => <li key={reason}>{reason}</li>)}</ul></details>}
-        {!past && failed && !controller.canStop && <div className="form-actions"><button disabled={!!operation} onClick={() => { void controller.prepare().catch(() => {}); }}>Try again</button><button onClick={openSettings}>AI settings</button></div>}
-        <GenerationDrafts job={job} project={project} controller={controller} changed={value => { if (past) setPast(value); }} />
-        {job.usage && <p className="log-meta">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
-      </section>}
       <details className="log-message" aria-label="Past generations"><summary>Past generations · {history?.jobs.length ?? 0}</summary>
         {history?.jobs.map(item => <p key={item.jobId}><button type="button" disabled={loadingPast} aria-pressed={past?.jobId === item.jobId} onClick={() => { void showPast(item.jobId); }}>
           <span className="log-meta">{item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Earlier generation'} · {statusLabel(item.status)}</span><br />
