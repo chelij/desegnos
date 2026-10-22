@@ -81,14 +81,15 @@ export function GenerationFeedback({ controller, compact = false, children }: {
   const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your page…' : 'Building your page…',
     ready: 'Updating your page…', blocked: 'Couldn’t update the page', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your page…', applied: 'Page updated' };
-  const failed = !!error || !!job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status);
+  const failed = !!error || !!job && ['failed', 'unknown', 'blocked'].includes(job.status);
+  const stopped = controller.stopped || job?.status === 'cancelled';
   const heading = operation === 'Stopping…' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
   return <section className={`generation-status${compact ? ' compact' : ''}`} data-job-status={job?.status} aria-label="Generation status">
     <div className="generation-status-copy"><p className="generation-heading" role="status" aria-atomic="true"><strong>{heading}</strong></p>
       {elapsedSeconds !== null && (!compact || job?.status === 'generating' || !!operation) && <p className="generation-activity" aria-live="off">
         <span role="timer" aria-live="off">{Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}</span>
       </p>}
-      {compact && failed && <p className="generation-feedback-error" role="alert">{generationMessage(error, job)}</p>}
+      {compact && (failed || stopped) && <p className={failed ? 'generation-feedback-error' : 'generation-feedback-stopped'} role={failed ? 'alert' : undefined}>{controller.stopped && !job && !error ? 'Generation stopped. Your work is safe.' : generationMessage(error, job)}</p>}
     </div>{children && <div className="generation-status-actions">{children}</div>}
   </section>;
 }
