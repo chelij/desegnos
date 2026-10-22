@@ -5,6 +5,8 @@ import { completeLaunchPaths, prepareLaunchPaths, restoreLaunchPaths } from './l
 
 const args = process.argv.slice(2);
 const env = toolchainEnvironment();
+// Clap expects a boolean string, while CI providers commonly export CI=1.
+if (env.CI === '1') env.CI = 'true';
 const builds = ['build', 'dev'].includes(args[0]) && !args.some(argument => ['--help', '-h'].includes(argument));
 let plan;
 try {

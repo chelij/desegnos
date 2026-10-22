@@ -34,9 +34,9 @@ Projects save their website source, brief, and approved choices. Existing `.dese
 
 ## Run and build
 
-Run `./scripts/build-release.sh` to typecheck and rebuild the frontend, then build `target/release/desegnos` in release mode with the default portal dialogs and embedded UI, skipping installer bundles. It uses npm (no pnpm required), finds Node through mise when needed, prints the binary's size and timestamp, and runs a five-second startup check on guarded Xvfb. The check uses private temporary app data and saves its screenshot and logs under `test-results/startup/`.
+Run `npm run release:local` to typecheck and rebuild the frontend, then build the release executable with embedded UI and the default dialog features, skipping installer bundles. The Linux shell entry point `./scripts/build-release.sh` calls the same Node script and can find Node through mise when needed. The script prints the binary's path, size and timestamp. On Linux it also runs a five-second startup check on guarded Xvfb with private temporary app data, saving its screenshot and logs under `test-results/startup/`. Windows and macOS skip that Linux-only check and need manual startup verification.
 
-From the WebMaker folder, launch `target/release/desegnos` after a release build. Development commands:
+The default executable is `target/release/desegnos` (`target/release/desegnos.exe` on Windows); the script also respects Cargo's target directory and `CARGO_BUILD_TARGET`. Development commands:
 
 ```sh
 pnpm install --frozen-lockfile

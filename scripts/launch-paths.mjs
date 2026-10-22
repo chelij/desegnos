@@ -1,11 +1,19 @@
 import { constants } from 'node:fs';
 import { copyFile, lstat, readFile, readlink, rename, symlink, unlink, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { basename, join } from 'node:path';
+import { basename, dirname, join, resolve, win32 } from 'node:path';
 
 const fingerprint = async path => createHash('sha256').update(await readFile(path)).digest('hex');
 const information = path => lstat(path).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
 const receipt = path => readFile(`${path}.sha256`, 'utf8').catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+
+// Compare the resolved target, including absolute Windows links and case differences.
+async function linksTo(link, target, windows) {
+  const destination = await readlink(link);
+  return windows
+    ? win32.resolve(dirname(link), destination).toLowerCase() === win32.resolve(target).toLowerCase()
+    : resolve(dirname(link), destination) === resolve(target);
+}
 
 // Remove the old product-name alias before Cargo can follow it into the old
 // executable. A recognized reverse link or matching generated-copy receipt
@@ -16,11 +24,11 @@ export async function prepareLaunchPaths(directory, windows = process.platform =
   const plan = { canonical, legacy, windows, removedOldLink: false, restoreLegacyLink: false, legacySha256: null };
   const current = await information(canonical), old = await information(legacy);
   if (current?.isSymbolicLink()) {
-    if (await readlink(canonical) !== basename(legacy) || !old?.isFile() || old.isSymbolicLink()) throw new Error(`Refusing to replace an unrelated launch link at ${canonical}.`);
+    if (!await linksTo(canonical, legacy, windows) || !old?.isFile() || old.isSymbolicLink()) throw new Error(`Refusing to replace an unrelated launch link at ${canonical}.`);
     plan.legacySha256 = await fingerprint(legacy);
   }
   if (old?.isSymbolicLink()) {
-    if (await readlink(legacy) !== basename(canonical)) throw new Error(`Refusing to replace an unrelated launch link at ${legacy}.`);
+    if (!await linksTo(legacy, canonical, windows)) throw new Error(`Refusing to replace an unrelated launch link at ${legacy}.`);
   } else if (old) {
     if (!old.isFile()) throw new Error(`Refusing to replace an unrelated path at ${legacy}.`);
     const hash = await fingerprint(legacy);
@@ -39,7 +47,10 @@ export async function prepareLaunchPaths(directory, windows = process.platform =
 }
 
 export async function restoreLaunchPaths(plan) {
-  if ((plan?.removedOldLink || plan?.restoreLegacyLink) && !await information(plan.canonical) && await fingerprint(plan.legacy) === plan.legacySha256) await symlink(basename(plan.legacy), plan.canonical);
+  if ((plan?.removedOldLink || plan?.restoreLegacyLink) && !await information(plan.canonical) && await fingerprint(plan.legacy) === plan.legacySha256) {
+    if (plan.windows) await copyFile(plan.legacy, plan.canonical, constants.COPYFILE_EXCL);
+    else await symlink(basename(plan.legacy), plan.canonical);
+  }
 }
 
 export async function completeLaunchPaths(plan) {
@@ -47,7 +58,7 @@ export async function completeLaunchPaths(plan) {
   if (!current?.isFile() || current.isSymbolicLink()) throw new Error(`The build did not produce the canonical executable ${plan.canonical}.`);
   const old = await information(plan.legacy);
   if (old?.isSymbolicLink()) {
-    if (await readlink(plan.legacy) !== basename(plan.canonical)) throw new Error(`The compatibility link changed during the build: ${plan.legacy}.`);
+    if (!await linksTo(plan.legacy, plan.canonical, plan.windows)) throw new Error(`The compatibility link changed during the build: ${plan.legacy}.`);
     return { path: plan.canonical, backup: null };
   }
   let backup = null;

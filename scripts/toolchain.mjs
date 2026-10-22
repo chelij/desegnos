@@ -14,7 +14,8 @@ export function toolchainEnvironment() {
   const environment = { ...process.env };
   if (existsSync(cargoHome)) environment.CARGO_HOME = cargoHome;
   if (existsSync(rustc)) {
-    environment.PATH = systemBin + delimiter + process.env.PATH;
+    const pathKey = Object.keys(environment).find(key => key.toLowerCase() === 'path') ?? 'PATH';
+    environment[pathKey] = systemBin + delimiter + (environment[pathKey] ?? '');
     const candidate = { ...environment, RUSTUP_TOOLCHAIN: 'stable' };
     const version = spawnSync(rustc, ['--version'], { env: candidate, encoding: 'utf8' });
     if (version.status === 0 && version.stdout.split(' ')[1] === pinned) {

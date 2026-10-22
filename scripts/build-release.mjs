@@ -1,0 +1,40 @@
+import { spawn } from 'node:child_process';
+import { stat } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { toolchainEnvironment } from './toolchain.mjs';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+
+async function runCommand(program, args, { env, capture = false }) {
+  const child = spawn(program, args, { cwd: root, env, stdio: ['inherit', capture ? 'pipe' : 'inherit', 'inherit'] });
+  let output = '';
+  if (capture) child.stdout.setEncoding('utf8').on('data', chunk => { output += chunk; });
+  await new Promise((accept, reject) => {
+    child.once('error', reject);
+    child.once('close', (code, signal) => code === 0 ? accept() : reject(new Error(`${program} failed (${signal ?? code}).`)));
+  });
+  return output;
+}
+
+export async function buildRelease({ run = runCommand, inspect = stat, env = toolchainEnvironment(), platform = process.platform } = {}) {
+  // Tauri runs the frontend build before embedding it. Keep default dialog features.
+  await run(process.execPath, [join(root, 'scripts/tauri.mjs'), 'build', '--no-bundle', '--features', 'custom-protocol',
+    '--config', JSON.stringify({ build: { beforeBuildCommand: 'npm run build' } })], { env });
+  const metadata = JSON.parse(await run('cargo', ['metadata', '--offline', '--no-deps', '--format-version', '1'], { env, capture: true }));
+  const target = env.CARGO_BUILD_TARGET;
+  const windows = target ? target.includes('windows') : platform === 'win32';
+  const binary = join(metadata.target_directory, ...(target ? [target] : []), 'release', windows ? 'desegnos.exe' : 'desegnos');
+  const information = await inspect(binary);
+  console.log(`${binary}: ${information.size} bytes; modified ${information.mtime.toISOString()}`);
+  if (platform === 'linux' && (!target || target.includes('linux'))) {
+    await run(process.execPath, [join(root, 'scripts/startup-test.mjs'), '--binary', binary], { env });
+  } else console.log('Skipping guarded Xvfb startup check: it requires a Linux host and Linux executable.');
+}
+
+const entry = process.argv[1] && resolve(process.argv[1]);
+const script = fileURLToPath(import.meta.url);
+if (entry && (process.platform === 'win32' ? entry.toLowerCase() === script.toLowerCase() : entry === script)) {
+  try { await buildRelease(); }
+  catch (error) { console.error(`Desegnos release: ${error.message}`); process.exitCode = 1; }
+}
