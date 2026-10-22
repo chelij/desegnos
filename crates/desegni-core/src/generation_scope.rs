@@ -139,6 +139,25 @@ fn outside_difference(before: NodeRef<'_>, after: NodeRef<'_>) -> Option<String>
 }
 
 impl GenerationCandidate {
+    /// Only an implemented, frozen page request can authorize shared-code changes.
+    pub(crate) fn implemented_whole_page(
+        &self,
+        snapshot: &RequirementsSnapshot,
+        page: &crate::Page,
+    ) -> bool {
+        snapshot.format_version().is_ok_and(|v| v >= 18)
+            && snapshot.target_ids().is_ok_and(|targets| {
+                page.regions.iter().any(|region| {
+                    targets.contains(&(page.id, region.id))
+                        && region.is_whole_page(page)
+                        && self.regions.iter().any(|outcome| {
+                            outcome.region_id == region.id
+                                && outcome.status == crate::RegionStatus::Implemented
+                        })
+                })
+            })
+    }
+
     pub(crate) fn validate_conflicting_regions(
         &self,
         snapshot: &RequirementsSnapshot,
@@ -151,14 +170,17 @@ impl GenerationCandidate {
         }
         for generated in &self.pages {
             let page = project.page(generated.page_id)?;
+            let whole_page = self.implemented_whole_page(snapshot, page);
             let conflicts: Vec<_> = page
                 .regions
                 .iter()
                 .filter(|region| {
-                    self.regions.iter().any(|outcome| {
-                        outcome.region_id == region.id
-                            && outcome.status == crate::RegionStatus::Conflict
-                    })
+                    !(snapshot.format_version().is_ok_and(|v| v >= 18)
+                        && region.is_whole_page(page))
+                        && self.regions.iter().any(|outcome| {
+                            outcome.region_id == region.id
+                                && outcome.status == crate::RegionStatus::Conflict
+                        })
                 })
                 .collect();
             if conflicts.is_empty() {
@@ -169,15 +191,16 @@ impl GenerationCandidate {
             if let Some(source) = &page.content {
                 let source = crate::compact_site_content(source);
                 ensure(
-                    (source.css == after_content.css
-                        || crate::generation_recovery::validate_region_css(
-                            &source.css,
-                            &after_content.css,
-                            self,
-                            page,
-                        )
-                        .is_ok())
-                        && source.javascript == after_content.javascript,
+                    whole_page
+                        || (source.css == after_content.css
+                            || crate::generation_recovery::validate_region_css(
+                                &source.css,
+                                &after_content.css,
+                                self,
+                                page,
+                            )
+                            .is_ok())
+                            && source.javascript == after_content.javascript,
                     "A partial page must preserve shared CSS and JavaScript; use inline styles in ready regions.",
                 )?;
                 let before = crate::editing::parse(&source.html)?;
@@ -211,7 +234,7 @@ impl GenerationCandidate {
                         }
                     }
                 }
-                if unbound_conflict {
+                if unbound_conflict && !whole_page {
                     // No old DOM target maps to this rectangle. Preserve all existing content
                     // outside ready roots; only additive new areas or mapped replacements are safe.
                     for (_, id) in snapshot
@@ -325,6 +348,27 @@ impl GenerationCandidate {
                 .regions
                 .iter()
                 .filter(|region| targets.contains(&(page.page_id, region.id)))
+                .collect();
+            if self.implemented_whole_page(snapshot, original) {
+                let implemented: Vec<_> = regions
+                    .iter()
+                    .copied()
+                    .filter(|region| {
+                        self.regions.iter().any(|outcome| {
+                            outcome.region_id == region.id
+                                && outcome.status == crate::RegionStatus::Implemented
+                        })
+                    })
+                    .collect();
+                validate_whole_page(project, original, &page.content, &implemented)?;
+                continue;
+            }
+            let regions: Vec<_> = regions
+                .into_iter()
+                .filter(|region| {
+                    snapshot.format_version().is_ok_and(|v| v < 18)
+                        || !region.is_whole_page(original)
+                })
                 .collect();
             if !regions.is_empty() && regions.iter().all(|region| region.mobile_only) {
                 validate_phone_scope(original, &page.content)?;
@@ -467,6 +511,123 @@ impl GenerationCandidate {
         }
         Ok(())
     }
+}
+
+/// Full-page authority permits layout/code changes, never silent identity/content loss.
+fn validate_whole_page(
+    project: &Project,
+    page: &crate::Page,
+    content: &crate::SiteContent,
+    regions: &[&crate::Region],
+) -> Result<()> {
+    let after = crate::editing::parse(&content.html)?;
+    for region in regions.iter().filter(|region| !region.is_whole_page(page)) {
+        if region.has_targets() {
+            for target in region.targets() {
+                ensure(
+                    region.allow_target_removal || crate::editing::locate(&after, target).is_ok(),
+                    "The AI removed a selected element without removal permission.",
+                )?;
+            }
+        } else {
+            ensure(
+                after
+                    .select(&format!("[{MARKER}=\"{}\"]", region.id))
+                    .nodes()
+                    .len()
+                    == 1,
+                "The AI did not identify each requested area. Your page is unchanged.",
+            )?;
+        }
+    }
+    let Some(source) = &page.content else {
+        return Ok(());
+    };
+    let before = crate::editing::parse(&source.html)?;
+    let removable = |node: NodeRef<'_>, id: &str| -> bool {
+        regions.iter().any(|region| {
+            (region.allow_target_removal
+                && region.targets().iter().any(|target| {
+                    crate::editing::locate(&before, target)
+                        .is_ok_and(|root| crate::stable_targets::contains(root, node))
+                }))
+                || (region.is_whole_page(page) && {
+                    // Do not guess which content a broad phrase such as "shorten the page" removes.
+                    let prompt = region.prompt.to_lowercase();
+                    prompt.split(['.', ';', '\n']).any(|instruction| {
+                        let mut words = instruction.split_whitespace();
+                        if !matches!(words.next(), Some("remove" | "delete")) {
+                            return false;
+                        }
+                        let named = match words.next() {
+                            Some("element") => words.next(),
+                            named => named,
+                        };
+                        named.is_some_and(|named| named.trim_matches(['\"', '\'', '`', ',']) == id)
+                    })
+                })
+        })
+    };
+    for node in before
+        .select(&format!("[{}]", crate::ELEMENT_ID_ATTRIBUTE))
+        .nodes()
+    {
+        let id = node.attr(crate::ELEMENT_ID_ATTRIBUTE).expect("selected ID");
+        let retained = after.select(&format!("[{}=\"{}\"]", crate::ELEMENT_ID_ATTRIBUTE, id));
+        ensure(
+            !retained.nodes().is_empty() || removable(*node, &id),
+            format!(
+                "The AI removed editor element ID {id} without removal permission. Your page is unchanged."
+            ),
+        )?;
+    }
+    for decision in project.decisions.iter().filter(|d| d.protected) {
+        match &decision.scope {
+            crate::Scope::Region(id) => {
+                let Some(region) = page.regions.iter().find(|r| r.id == *id) else {
+                    continue;
+                };
+                let mut roots = before
+                    .select(&format!("[{MARKER}=\"{id}\"]"))
+                    .nodes()
+                    .to_vec();
+                for target in region.targets() {
+                    if let Ok(root) = crate::editing::locate(&before, target) {
+                        roots.push(root);
+                    }
+                }
+                for root in roots {
+                    let retained = if let Some(id) = root.attr(crate::ELEMENT_ID_ATTRIBUTE) {
+                        after
+                            .select(&format!("[{}=\"{}\"]", crate::ELEMENT_ID_ATTRIBUTE, id))
+                            .nodes()
+                            .to_vec()
+                    } else {
+                        after
+                            .select(&format!("[{MARKER}=\"{id}\"]"))
+                            .nodes()
+                            .to_vec()
+                    };
+                    ensure(
+                        retained.len() == 1 && canonical(root) == canonical(retained[0]),
+                        "The AI changed protected content. Your page is unchanged.",
+                    )?;
+                }
+            }
+            crate::Scope::Page(id) if *id != page.id => continue,
+            _ => {}
+        }
+        if !decision.value.is_empty() && source.html.contains(&decision.value) {
+            ensure(
+                content.html.contains(&decision.value),
+                "The AI removed protected content. Your page is unchanged.",
+            )?;
+        }
+    }
+    // Decisions are structured authority. Region protection preserves that region's content;
+    // page/project protected literal values already present in the source must remain present.
+    // Semantic design decisions continue to be supplied to the model as accepted requirements.
+    Ok(())
 }
 
 fn validate_shaped_scope(

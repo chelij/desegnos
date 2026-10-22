@@ -210,7 +210,7 @@ impl Project {
             Uuid::new_v4(),
             self.revision,
             &targets,
-            17,
+            18,
             dossier_context,
             Some(capabilities),
         )
@@ -233,8 +233,23 @@ impl Project {
             format >= 6 || self.imported_identity.is_none(),
             "Imported identity requires new generation requirements.",
         )?;
+        // The newest contract composes requests in the same order as the Layers list.
+        // Keep older document ordering byte-for-byte unchanged.
+        let mut layered_targets = targets.to_vec();
+        if format >= 18 {
+            layered_targets.sort_by_key(|(page, region)| {
+                (
+                    self.pages.iter().position(|p| p.id == page.id),
+                    region.z_index,
+                    page.regions.iter().position(|r| r.id == region.id),
+                )
+            });
+        }
+        let targets = layered_targets.as_slice();
         let element_fix = format == crate::ELEMENT_FIX_FORMAT
-            || (format >= 12 && crate::element_fix::eligible(targets));
+            || (format >= 12
+                && crate::element_fix::eligible(targets)
+                && (format < 18 || !targets.iter().any(|(p, r)| r.is_whole_page(p))));
         // From format 14 page sources are sent without the layout whitespace added after a
         // generation; hashes and dependencies still describe the stored source.
         let compacted = (format >= 14).then(|| self.compact_pages());
@@ -359,7 +374,18 @@ impl Project {
             md.push_str("\n## Requested areas\n\nThe canvas extends in every direction. The reference viewport is a screen-size guide with origin (0, 0), not a placement boundary or a clipping box for generated output. Placement hints are signed CSS pixels relative to that origin: negative x is left of the guide, negative y is above it, and coordinates beyond its width or height are to its right or below. Percentage hints use the guide width for x and width, and guide height for y and height; negative values and values above 100 percent are intentional. Include every off-guide request. Use relative placement, grouping, and reading order to coordinate the actual responsive website dimensions; do not force the site or its contents into the guide. Areas on one page share its pageId and route, while separate pages have their own pageId and route. Preserve intentional overlays and responsive readability.\n\n");
         }
         if format >= 10 {
-            md.push_str("Image pixels cannot be edited. When a request targets an image and asks about its background, frame, border, shadow, colour or shape, change the CSS of that element or its own wrapper; return a conflict only when the request truly needs new pixels, such as cutting a subject out of a photo.\n\n");
+            if format >= 18
+                && capabilities
+                    .as_ref()
+                    .is_some_and(|c| c.image_generation.is_some())
+            {
+                md.push_str("Image frame, border, shadow and wrapper styling are local CSS changes. When a request needs new image pixels, including replacing an image with a transparent-background version, use the Native image generation contract below with the original project's asset URL as data-desegnos-source and data-desegnos-background=\"transparent\" when requested. Do not report a pixel-edit conflict merely because HTML/CSS cannot edit pixels: native image editing is available.\n\n");
+            } else {
+                md.push_str("Image pixels cannot be edited. When a request targets an image and asks about its background, frame, border, shadow, colour or shape, change the CSS of that element or its own wrapper; return a conflict only when the request truly needs new pixels, such as cutting a subject out of a photo.\n\n");
+            }
+            if format >= 18 {
+                md.push_str("The element-fix and area-only rules below constrain local requests, not page-scoped requests or their shared CSS/JavaScript and surrounding structure. Use the whole-page precedence rules for pages containing a page-scoped request.\n\n");
+            }
             let selection_instructions_1 = "Each retained element carries data-desegnos-id. Preserve every existing ID on its original element, including outside the request; never duplicate or move an unrelated ID into a selected subtree. Leave IDs off new elements; Desegnos assigns them after validation. For an existing targeted request, elements[] lists one to eight selected roots on the same page. Resolve by ID; selector and label are hints only. allowTargetRemoval is explicit user permission to remove selected roots; without it every selected root and its ID must remain. Change only inside those roots, keep each selected root and its ID unless allowTargetRemoval is true, and preserve all other DOM, global CSS and JavaScript exactly. Put local styling in inline style attributes of selected elements. Preserve embedded style/script/link nodes and do not introduce event handlers or other shared styling/script hooks; these can change unrelated content. A missing target is a removed item, never permission to substitute another. New-area requests still need exactly one data-desegnos-region root per request and may not add unrelated content.\n\n";
             if format >= 12 {
                 md.push_str(&selection_instructions_1.replace("preserve all other DOM, global CSS and JavaScript exactly.", "preserve all other DOM and JavaScript exactly, and keep existing CSS unchanged; only the selected-root CSS additions below are permitted."));
@@ -473,6 +499,19 @@ impl Project {
                     value
                 }).collect());
             }
+            if format >= 18 {
+                area["layerOrder"] = serde_json::json!(
+                    targets
+                        .iter()
+                        .filter(|(p, _)| p.id == page.id)
+                        .position(|(_, r)| r.id == region.id)
+                );
+                area["scope"] = serde_json::json!(if region.is_whole_page(page) {
+                    "page"
+                } else {
+                    "area"
+                });
+            }
             md.push_str(&fenced_json(&area)?);
             md.push('\n');
         }
@@ -548,12 +587,15 @@ impl Project {
             }
         }
         md.push('\n');
+        if format >= 18 {
+            md.push_str("## Whole-page requests and precedence\n\nFor each request with scope=page, change the whole page to satisfy this request; keep content and IDs unless asked. Its complete page source is listed above. The rectangle describes page intent, not a region root or fixed output size. You may restructure that page's HTML and change its shared CSS and JavaScript. Preserve existing data-desegnos-id elements and their IDs; leave new elements without IDs. Removal needs allowTargetRemoval for selected roots (and their descendants), or an explicit removal request naming the editor ID. Protected content and accepted project decisions remain authoritative; other pages cannot change. No remote code.\n\nThese page-scope rules override the area-only restrictions above only for page-scoped requests. When page and area requests share a page, the page-scoped request owns shared CSS/JavaScript and the surrounding layout. Compose requests from bottom to top by layerOrder (ascending zIndex, with original request order breaking ties). Apply areas layered above the base inside its result, in that order; where boxes overlap, the higher layer wins for its own box only. Full-width page-layout requests (including below-fold one-screen requests) are page-scoped too and refine the page layout in this same order. Element-fix rules and partial-page/conflict rules constrain only their own local regions; they must never freeze the page-scoped request's shared CSS/JavaScript or surrounding structure. Area requests do not independently authorize global changes. Page-scoped requests need no data-desegnos-region wrapper. Conflicted page requests grant no page-wide authority; preserve conflicted local targets/roots even when a page request is implemented.\n\n");
+        }
         md.push_str("## Acceptance and review\n\nAccount for every target. Preserve scope, accepted identity, protected content, deliberate exceptions, and the selected generation setting. Coordinate the requested content and placement intent into a complete responsive layout. Implement actual browser behavior; disclose missing configuration. Preview and exported behavior must agree. Describe component choices, proposed identity/decision changes, and concrete design criticism. Never silently apply a new project-wide rule or replace an intentional style solely to follow a convention.\n");
         let mut dependencies = BTreeMap::new();
         for (page, region) in targets {
             dependencies.insert(
                 format!("region:{}:{}", page.id, region.id),
-                digest(json(&(page.id, page.viewport, page.appearance, region))?.as_bytes()),
+                region_digest(page, region, format)?,
             );
             dependencies.insert(format!("source:{}", page.id), page_source_digest(page)?);
         }
@@ -565,6 +607,7 @@ impl Project {
                     .map(|(p, r)| (p.id, r.id))
                     .collect::<Vec<_>>(),
                 dossier_context.as_ref(),
+                format,
             )?,
         );
         ensure(
@@ -665,6 +708,7 @@ impl Project {
         &self,
         targets: &[(Uuid, Uuid)],
         dossier_context: Option<&GenerationDossierContext>,
+        format: u8,
     ) -> Result<String> {
         let relevant = |scope: &Scope| match scope {
             Scope::Project => true,
@@ -675,6 +719,24 @@ impl Project {
             "decisions":self.decisions.iter().filter(|d|relevant(&d.scope)).collect::<Vec<_>>(),
             "exceptions":self.exceptions.iter().filter(|e|relevant(&e.scope)).collect::<Vec<_>>(),
             "routes":self.pages.iter().map(|p|(&p.id,&p.name,&p.path,p.included)).collect::<Vec<_>>() });
+        if format >= 18 {
+            // Freeze submitted order and effective authority, not unrelated pending state.
+            // An unsubmitted layer matters only when it changes a submitted request's scope.
+            context["requestLayers"] = serde_json::json!(
+                self.pages
+                    .iter()
+                    .filter(|p| targets.iter().any(|(id, _)| *id == p.id))
+                    .map(|p| (
+                        p.id,
+                        p.request_layers()
+                            .iter()
+                            .filter(|r| targets.contains(&(p.id, r.id)))
+                            .map(|r| (r.id, r.z_index, r.is_whole_page(p)))
+                            .collect::<Vec<_>>()
+                    ))
+                    .collect::<Vec<_>>()
+            );
+        }
         if let Some(identity) = &self.imported_identity {
             context["importedIdentity"] =
                 serde_json::to_value(identity).map_err(|error| Error(error.to_string()))?;
@@ -689,7 +751,7 @@ impl Project {
 
 impl RequirementsSnapshot {
     pub fn format_version(&self) -> Result<u8> {
-        (3..=17)
+        (3..=18)
             .find(|format| {
                 self.markdown.starts_with(&format!(
                     "# Generation requirements\n\nRequirements format: {format}\n\n"
@@ -780,8 +842,7 @@ impl RequirementsSnapshot {
                 "A requested area no longer has a description. Generate new requirements.",
             )?;
             ensure(
-                *expected
-                    == digest(json(&(page.id, page.viewport, page.appearance, region))?.as_bytes()),
+                *expected == region_digest(page, region, format)?,
                 "A requested area changed. Generate new requirements.",
             )?;
             targets.push((page_id, region_id));
@@ -803,8 +864,12 @@ impl RequirementsSnapshot {
         }
         ensure(
             self.dependencies.get("context")
-                == Some(&project.context_digest(&targets, self.dossier_context.as_ref())?),
-            "Relevant project decisions or routes changed. Generate new requirements.",
+                == Some(&project.context_digest(
+                    &targets,
+                    self.dossier_context.as_ref(),
+                    format,
+                )?),
+            "Relevant project decisions, routes or request layers changed. Generate new requirements.",
         )?;
         let ordered: Vec<_> = project
             .pages
@@ -829,6 +894,17 @@ impl RequirementsSnapshot {
             "The requirements document or its target metadata disagrees with the project snapshot.",
         )
     }
+}
+
+fn region_digest(page: &Page, region: &Region, format: u8) -> Result<String> {
+    let mut frozen = region.clone();
+    if format < 18 {
+        frozen.whole_page = false;
+        frozen.whole_page_disabled = false;
+    }
+    Ok(digest(
+        json(&(page.id, page.viewport, page.appearance, &frozen))?.as_bytes(),
+    ))
 }
 
 fn page_source_digest(page: &Page) -> Result<String> {
@@ -1008,6 +1084,67 @@ mod transparency_tests {
                 serde_json::to_value(snapshot).unwrap(),
                 value["requirements"]
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod whole_page_legacy_tests {
+    use super::*;
+
+    #[test]
+    fn formats_3_through_17_ignore_whole_page_fields_byte_for_byte() {
+        let mut project = Project::new(
+            "Legacy scope".into(),
+            crate::Viewport {
+                width: 1440,
+                height: 900,
+            },
+            crate::Appearance::Light,
+        )
+        .unwrap();
+        project = project
+            .apply(
+                project.revision,
+                crate::Command::AddRegion {
+                    page_id: project.home_page_id,
+                    rect: crate::Rect {
+                        x: 0.,
+                        y: -8.,
+                        width: 1440.,
+                        height: 912.,
+                    },
+                },
+            )
+            .unwrap();
+        project.pages[0].regions[0].prompt = "make it grayscale, no green".into();
+        project.pages[0].content = Some(crate::SiteContent {
+            html: "<main data-desegnos-id=\"main0001\">Keep</main>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        });
+        for format in 3..=17 {
+            let render = |p: &Project| {
+                p.requirements_for(
+                    Uuid::from_u128(42),
+                    p.revision,
+                    &[(&p.pages[0], &p.pages[0].regions[0])],
+                    format,
+                    None,
+                    (format >= 9).then(GenerationCapabilities::default),
+                )
+                .unwrap()
+            };
+            let before = render(&project);
+            let mut overridden = project.clone();
+            overridden.pages[0].regions[0].whole_page = true;
+            assert_eq!(before, render(&overridden), "format {format}");
+            overridden.pages[0].regions[0].whole_page = false;
+            overridden.pages[0].regions[0].whole_page_disabled = true;
+            assert_eq!(before, render(&overridden), "format {format}");
+            before.validate_current(&project).unwrap();
+            assert!(!before.markdown.contains("Whole-page requests"));
+            assert!(!before.markdown.contains("\"scope\": \"page\""));
         }
     }
 }

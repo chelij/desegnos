@@ -119,6 +119,8 @@ fn request(
         elements: vec![],
         allow_target_removal: false,
         mobile_only: false,
+        whole_page: false,
+        whole_page_disabled: false,
         attachments: vec![],
         completed,
     });

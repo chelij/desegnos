@@ -79,6 +79,18 @@ pub fn recover_generation_reply(
         "The reply must be a JSON object matching the supplied result schema.",
     )?;
     let mut events = vec![];
+    let targets = snapshot.target_ids()?;
+    let value_regions_implemented: std::collections::BTreeSet<_> = value["regions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["status"] == "implemented")
+        .filter_map(|r| {
+            r["regionId"]
+                .as_str()
+                .and_then(|id| Uuid::parse_str(id).ok())
+        })
+        .collect();
     if !snapshot.is_element_fix()
         && let Some(pages) = value["pages"].as_array_mut()
     {
@@ -90,6 +102,12 @@ pub fn recover_generation_reply(
             else {
                 continue;
             };
+            let whole_page = snapshot.format_version()? >= 18
+                && page.regions.iter().any(|region| {
+                    targets.contains(&(page.id, region.id))
+                        && region.is_whole_page(page)
+                        && value_regions_implemented.contains(&region.id)
+                });
             if generated["content"].is_null() {
                 generated["content"] = serde_json::json!({});
             }
@@ -104,7 +122,7 @@ pub fn recover_generation_reply(
                 ] {
                     if !old.is_empty()
                         && (generated["content"][field].is_null()
-                            || generated["content"][field].as_str() == Some(""))
+                            || (!whole_page && generated["content"][field].as_str() == Some("")))
                     {
                         generated["content"][field] = old.clone().into();
                         event(
@@ -128,7 +146,6 @@ pub fn recover_generation_reply(
         }
     }
     // Omitted outcomes and pages mean unchanged, not permission to invent a replacement.
-    let targets = snapshot.target_ids()?;
     if let Some(regions) = value["regions"].as_array_mut() {
         for (_, id) in &targets {
             if !regions
@@ -226,7 +243,7 @@ pub fn recover_generation_reply(
     // Filter shared code even when HTML already validates. A model cannot authorize a
     // global rule by returning all requested regions as implemented.
     let original_candidate = candidate.clone();
-    for (id, reason) in shared_dependencies(&candidate, project)? {
+    for (id, reason) in shared_dependencies(&candidate, snapshot, project)? {
         if let Some(region) = candidate
             .regions
             .iter_mut()
@@ -244,6 +261,9 @@ pub fn recover_generation_reply(
         }
     }
     for generated in &mut candidate.pages {
+        if original_candidate.implemented_whole_page(snapshot, project.page(generated.page_id)?) {
+            continue;
+        }
         let old = page_source(project, generated.page_id);
         let (css, dropped) = scoped_stylesheet(
             &old.css,
@@ -307,6 +327,14 @@ pub fn recover_generation_reply(
             None,
             error.to_string(),
         );
+    }
+    if candidate.pages.iter().any(|p| {
+        project
+            .page(p.page_id)
+            .is_ok_and(|page| candidate.implemented_whole_page(snapshot, page))
+    }) {
+        candidate.validate(snapshot, project)?;
+        return Ok((candidate, events));
     }
     salvage(candidate, snapshot, project, events)
 }
@@ -985,6 +1013,7 @@ pub fn conflicted_generation(
 // required by that area. Keeping styled markup while discarding its dependencies is not salvage.
 fn shared_dependencies(
     candidate: &GenerationCandidate,
+    snapshot: &RequirementsSnapshot,
     project: &Project,
 ) -> Result<Vec<(Uuid, String)>> {
     use lightningcss::{
@@ -995,6 +1024,9 @@ fn shared_dependencies(
     let mut failures = vec![];
     for page in &candidate.pages {
         let original = project.page(page.page_id)?;
+        if candidate.implemented_whole_page(snapshot, original) {
+            continue;
+        }
         let old = page_source(project, page.page_id);
         let doc = crate::editing::parse(&page.content.html)?;
         let old_doc = crate::editing::parse(&old.html)?;

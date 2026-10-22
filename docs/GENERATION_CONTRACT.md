@@ -1,7 +1,52 @@
 # OpenAI generation contract
 
-New requests use **format 17**, including rectangle, element, shaped and imported-page requests.
-Formats 3–16 retain their frozen Markdown, schemas and application behavior.
+New requests use **format 18**, including rectangle, element, shaped and imported-page requests.
+Formats 3–17 retain their frozen Markdown, schemas and application behavior.
+
+Format 18 uses the request layers shown on the canvas: ascending `zIndex`, with
+original request order breaking ties. The bottom-most unfinished request is the
+base layer. It becomes page-scoped when its rectangle covers at least 95% of measured
+page width (viewport fallback) and either 90% of the reference viewport near the top
+(within 10% of viewport height), or 90% of measured content height (viewport fallback).
+Full-width rectangles with explicit page-layout intent also become page-scoped,
+even below the fold or above the base: phrases include “one page one screen”,
+“one screen only”, “single screen”, “fit on/in one screen”, “fit the/this page to”,
+“page height”, “page layout”, and “viewport height”. This bounded phrase recognizer
+is not a semantic classifier; unrecognized wording can use the explicit toggle.
+Coverage uses intersection, so a displaced box does not gain authority merely by
+being large. Element selections, shaped areas and phone fixes do not auto-expand.
+The request's **Whole page** control forces page scope; turning it off persists
+`wholePageDisabled`, preventing auto-detection from turning it back on. Both fields
+default false and are omitted when false. Rectangular requests now receive the same
+validated element measurements as shaped requests before generation.
+
+Page requests receive complete source and may restructure HTML and change shared
+CSS/JavaScript. Existing IDs remain unless selected-root `allowTargetRemoval`
+authorizes removal of that subtree, or a removal prompt explicitly names the ID.
+Broad layout prompts such as “one screen only” do not authorize guessing which
+content to delete. Protected region content and protected literal decision values
+already present in the source remain protected; semantic design decisions remain
+model instructions. Source syntax, IDs, assets, remote-code and page ownership checks
+still apply. Failed whole-page validation rejects the result instead of attempting
+to reconstruct it as independent area roots.
+
+When a page request and ordinary areas share a page, the implemented page request
+owns shared CSS/JavaScript and surrounding structure. Apply the local requests
+inside that result from bottom to top, retaining their selected roots/IDs or region
+roots. Where boxes overlap, the higher request wins inside its own box. A below-fold
+page-layout request refines the page-wide layout in this same order. Requirements
+list submitted requests in that order and include `layerOrder`. Frozen requirements
+hash submitted order and effective page scope. Adding or restoring an unrelated
+request preserves a snapshot unless it changes a submitted request's page authority;
+moving an unsubmitted layer below a covering base still invalidates that snapshot.
+Global changes come from the page request, never from an area. Element-fix and partial/conflict rules cannot freeze
+the page request's shared code or surrounding structure. When native image editing
+is available, a transparent-image request uses the original asset as the reference;
+it does not conflict merely because the operation needs new pixels. A conflicted page request grants no
+page authority; conflicted local targets/roots remain unchanged. Other pages keep
+their own scope rules. A single combined page reply cannot attribute each HTML change
+to an individual prompt; validation checks the combined authorized page scope and
+local root/ID requirements, while requirements instruct the model on precedence.
 
 Format 17 delivers regions independently: return pages containing implemented regions even
 when another region conflicts. Apply completes only implemented requests, leaves conflicts

@@ -286,7 +286,7 @@ impl Project {
                 .iter()
                 .find(|r| r.id == entry.region_id && !r.completed)
                 .ok_or_else(|| Error("This request no longer exists.".into()))?;
-            if !region.has_targets() && !region.shape.is_rect() {
+            if !region.has_targets() {
                 ensure(
                     entry.bounds.len() <= 10_000,
                     "An area supports at most 10,000 measured elements.",
