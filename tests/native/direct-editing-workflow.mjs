@@ -143,7 +143,7 @@ export async function directEditingWorkflow(driver, physical, step, output, prov
     const before = (await workspace()).project;
     await driver.execute(() => document.querySelector('[data-corner="se"]').focus());
     await physical.resetEvents(); await physical.keys('space');
-    await waitFor(() => driver.execute(() => !!document.querySelector('dialog[aria-label="Edit element"][open]')), 'Space on the resize corner did not open local editing');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface[aria-label="Edit element"]')), 'Space on the resize corner did not open local editing');
     assert.ok((await physical.events()).some(event => event.type === 'keydown' && event.trusted && event.key === ' '));
     assert.deepEqual((await workspace()).project, before);
     await driver.button('Cancel');
@@ -216,7 +216,7 @@ export async function directEditingWorkflow(driver, physical, step, output, prov
     const imagePath = join(output, 'local-direct-image.svg');
     await writeFile(imagePath, '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="42"><rect width="240" height="42" fill="#007acc"/></svg>');
     await driver.button('Replace'); await driver.select('Replace with', 'img');
-    await chooseFile(physical, () => driver.click('dialog[open] input[type=file]'), imagePath, output, 'direct-image-picker');
+    await chooseFile(physical, () => driver.click('.workspace-surface input[type=file]'), imagePath, output, 'direct-image-picker');
     await driver.fill('Image description','A locally chosen blue rectangle'); await driver.button('Replace element');
     await waitFor(async () => (await layout())?.tag === 'img', 'The chosen image was not inserted'); await ready();
     assert.equal(await driver.execute(() => { const image = document.querySelector('.static-preview iframe').contentDocument.querySelector('#fixture-action'); return image.naturalWidth; }),240);

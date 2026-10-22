@@ -65,7 +65,7 @@ export async function interactionWorkflow(driver, physical, step, evidence) {
     await physical.keys('F1'); await waitFor(() => driver.execute(() => !!document.querySelector('.shortcut-help')), 'F1 did not show shortcut help');
     assert.ok(await driver.execute(() => document.querySelector('.shortcut-help').textContent.includes('Ctrl/Cmd+Shift+Z')));
     await physical.captureWindow(join(evidence, 'desegnos-shortcuts-window.png'));
-    await physical.keys('Escape'); await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'Escape did not close help');
+    await physical.keys('Escape'); await waitFor(() => driver.execute(() => !document.querySelector('.workspace-surface')), 'Escape did not close help');
     assert.deepEqual((await project()).pages, original.pages);
     await driver.select('Zoom', '0.75'); await driver.press('[data-testid="canvas"]', '\uE011');
   });

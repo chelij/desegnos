@@ -12,12 +12,12 @@ import {assertCanvasOnly} from './workflow.mjs';
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGOwaQoAIgYIBQAdRgQ5DejjuQAAAABJRU5ErkJggg==';
 const pngOther = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQCi3/DwADeQHuOPZfDAAAAABJRU5ErkJggg==';
 const workspace = driver => driver.invoke('get_workspace');
-async function closed(driver) { await waitFor(()=>driver.execute(()=>!document.querySelector('dialog[open]')),'Dialog did not close'); }
-async function closeDialog(driver) { await driver.click('(//dialog[@open])[last()]//button[starts-with(@aria-label,"Close ")]','xpath'); await closed(driver); }
+async function closed(driver) { await waitFor(()=>driver.execute(()=>!document.querySelector('.workspace-surface')),'Dialog did not close'); }
+async function closeDialog(driver) { await driver.execute(() => (document.querySelector('.workspace-banner:last-child') ?? [...document.querySelectorAll('.workspace-surface')].at(-1))?.querySelector('button[aria-label^="Close "]').click()); }
 // The page-check fix request stays waiting, so a picture Generate also asks for an AI key once the pictures apply.
 async function dismissKeyPrompt(driver) {
-  if(await driver.execute(()=>!!document.querySelector('dialog[open]')))await closeDialog(driver);
-  if(await driver.execute(()=>!!document.querySelector('.generation-log')))await driver.button('Hide AI conversation');
+  if(await driver.execute(()=>!!document.querySelector('.workspace-surface')))await closeDialog(driver);
+  if(await driver.execute(()=>!!document.querySelector('.generation-log')))await driver.button('Close AI conversation');
 }
 async function pointFor(driver, selector) {
   return driver.execute(query=>{
@@ -148,22 +148,21 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
   });
   await step('Device preview uses real layout widths, runs enabled interactions and leaves authored source unchanged',async()=>{
     const before=(await workspace(driver)).project;
-    await driver.menu(['Preview in a window']);await driver.ready('.device-stage iframe');
-    await driver.execute(()=>{window.__deviceMessages=[];window.addEventListener('message',event=>{if(event.source===document.querySelector('.device-stage iframe')?.contentWindow&&event.data?.type?.startsWith('native-device-'))window.__deviceMessages.push(event.data);});});
-    await driver.click('//label[contains(.,"Try buttons and links")]/input','xpath');
-    for(const [name,width] of [['Desktop',1440],['Tablet',768],['Phone',390]]){
-      await driver.click(`//div[@aria-label="Preview device"]/button[normalize-space(.)=${xpathString(name)}]`,'xpath');
+    await driver.menu(['Live preview']);await driver.ready('.live-canvas-page iframe');
+    await driver.execute(()=>{window.__deviceMessages=[];window.addEventListener('message',event=>{if(event.source===document.querySelector('.live-canvas-page iframe')?.contentWindow&&event.data?.type?.startsWith('native-device-'))window.__deviceMessages.push(event.data);});});
+    for(const [name,width] of [['Desktop',before.pages.find(page=>page.id===before.homePageId).viewport.width],['Tablet',768],['Phone',390]]){
+      await driver.click(`//div[@aria-label="Live device"]/button[normalize-space(.)=${xpathString(name)}]`,'xpath');
       await waitFor(()=>driver.execute(value=>window.__deviceMessages.some(message=>message.type==='native-device-check'&&message.width===value),width),`${name} did not lay out at ${width}px`);
     }
     const at=await driver.execute(()=>{
-      const frame=document.querySelector('.device-stage iframe'),rect=frame.getBoundingClientRect();
+      const frame=document.querySelector('.live-canvas-page iframe'),rect=frame.getBoundingClientRect();
       const scale=rect.width/frame.offsetWidth;
       const action=window.__deviceMessages.filter(message=>message.type==='native-device-check'&&message.width===390).at(-1).action;
       return{x:rect.left+(action.x+action.width/2)*scale,y:rect.top+(action.y+action.height/2)*scale};
     });
     await physical.click(at);
     await waitFor(()=>driver.execute(()=>window.__deviceMessages.some(message=>message.type==='native-device-action')),'Enabled preview button did not run');
-    assert.ok(Number.isFinite(at.x));await physical.captureWindow(join(output,'device-preview.png'));await closeDialog(driver);
+    assert.ok(Number.isFinite(at.x));await physical.captureWindow(join(output,'device-preview.png'));await driver.button('Exit live');
     assert.deepEqual((await workspace(driver)).project,before);
   });
   await step('Split and Code views search, select, validate and save through the real source editor',async()=>{

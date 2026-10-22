@@ -58,7 +58,7 @@
 .free-workspace .alignment-x { top: 0; bottom: 0; border-left: 1px dashed var(--alignment-color); }
 .free-workspace .alignment-y { left: 0; right: 0; border-top: 1px dashed var(--alignment-color); }
 .free-workspace .workspace-measurement, .free-workspace .workspace-edge { position: absolute; bottom: 20px; margin: 0; padding: 4px 7px; background: var(--surface); border: 1px solid var(--border); border-radius: 3px; color: var(--text); font-size: 11px; line-height: 1.4; font-variant-numeric: tabular-nums; pointer-events: none; }
-.free-workspace .workspace-measurement { bottom: auto; white-space: nowrap; pointer-events: auto; z-index: 11; }
+.free-workspace .workspace-measurement { bottom: auto; white-space: nowrap; pointer-events: none; z-index: 11; }
 .free-workspace .workspace-measurement span { margin-left: 10px; }
 .free-workspace .workspace-edge { left: 40px; }
 @media (prefers-reduced-motion: reduce) { .free-workspace *, .free-workspace *::before, .free-workspace *::after { scroll-behavior: auto; transition: none; animation: none; } }

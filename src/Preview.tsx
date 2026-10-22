@@ -309,8 +309,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   return <div data-source-hash={descriptor?.sourceSha256 ?? undefined} data-preview-ready={staticView && !loading && !error && registeredVersion.current?.revision === revision && mounted.current?.session === descriptor?.sessionId ? 'true' : undefined} className={staticView ? 'preview-frame static-preview' : 'preview-frame'}>
     {loading && !staticView && <p role="status" className="preview-status">Preparing preview…</p>}
     {error && <div className="preview-error"><p role="alert">{error}</p>{!staticView && <button onClick={() => setRetry(value => value + 1)}>Retry preview</button>}</div>}
-    {descriptor && <iframe key={`${descriptor.sessionId}:${runScripts}`} ref={frame} inert={staticView || undefined} src={sourceDocument ? undefined : descriptor.url} srcDoc={sourceDocument} sandbox={sourceDocument ? 'allow-same-origin' : runScripts ? 'allow-scripts' : ''} referrerPolicy="no-referrer" title={title}
-      style={sourceDocument ? { height: extent } : undefined} tabIndex={staticView ? -1 : undefined} aria-hidden={staticView || undefined} onLoad={event => {
+    {descriptor && <iframe key={`${descriptor.sessionId}:${runScripts}`} ref={frame} inert={staticView || !!draftId || undefined} src={sourceDocument ? undefined : descriptor.url} srcDoc={sourceDocument} sandbox={sourceDocument ? 'allow-same-origin' : runScripts ? 'allow-scripts' : ''} referrerPolicy="no-referrer" title={title}
+      style={sourceDocument ? { height: extent } : undefined} tabIndex={staticView || draftId ? -1 : undefined} aria-hidden={staticView || undefined} onLoad={event => {
         if (event.currentTarget !== frame.current) return;
         setLoading(false);
         if (!sourceDocument || !previewSource) return;

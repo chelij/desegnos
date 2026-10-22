@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
+import { WorkspaceSurface } from './WorkspaceSurface';
+import { GenerationDetails } from './Generation';
+import type { AiSettingsView } from './types';
 import { GenerationDrafts } from './GenerationDrafts';
 import type { GenerationController } from './useGeneration';
 import { native } from './api';
@@ -8,7 +11,8 @@ import type { GenerationHistory, GenerationJobView, Project } from './types';
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
-export function GenerationLog({ job: currentJob, operation, error, project, controller, close }: {
+export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, manageUsage, editRequest }: {
+  settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
   job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; controller: GenerationController; close: () => void;
 }) {
   const [history, setHistory] = useState<GenerationHistory | null>(null);
@@ -43,10 +47,11 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
   const candidate = job?.candidate;
   const failed = job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status);
   const raw = candidate ? JSON.stringify({ ...candidate, pages: candidate.pages.map(page => ({ pageId: page.pageId, html: `${page.content.html.length} characters`, css: `${page.content.css.length} characters`, javascript: `${page.content.javascript.length} characters` })) }, null, 2) : '';
-  return <aside className="generation-log" aria-label="AI conversation">
-    <header><div><strong>AI conversation</strong><span>{past ? 'past generation' : 'this generation'}</span></div><button type="button" aria-label="Hide AI conversation" title="Hide" onClick={close}>×</button></header>
+  return <WorkspaceSurface title="AI conversation" close={close}>
+
     <div className="log-messages">
       {past && <button type="button" onClick={() => { historyEpoch.current += 1; setLoadingPast(false); setPast(null); }}>Back to current generation</button>}
+      {!job && (operation || error) && <GenerationDetails controller={controller} project={project} settings={settings} openSettings={openSettings} manageUsage={manageUsage} editRequest={editRequest} />}
       {!job && !operation && !error && <p className="log-empty">No conversation yet.</p>}
       {(job || operation) && <section className="log-message from-you" aria-label="Sent to the AI">
         <p className="log-who">You → {job ? `${SERVICE[job.provider ?? 'openai']} · ${job.settings.model}` : 'AI'}</p>
@@ -78,12 +83,13 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             <span className="log-meta">{item ? `${item.page} · Box ${item.box}` : 'Request'} · {outcome.status === 'implemented' ? 'Done' : 'Needs a decision'}</span>
             <p className="log-text">{outcome.explanation}</p>
           </li>; })}</ul>
-          {candidate.criticism.length > 0 && <details><summary>Suggestions ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{item.message}</p><p className="log-meta">{item.suggestion}</p></li>)}</ul></details>}
+          {past && candidate.criticism.length > 0 && <details><summary>Design feedback ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{item.message}</p><p className="log-meta">{item.suggestion}</p></li>)}</ul></details>}
           <details><summary>Raw reply</summary><pre tabIndex={0} aria-label="Raw reply">{raw}</pre></details>
         </>}
         {failed && <p className="log-text">{job.status === 'cancelled' ? 'Stopped.' : job.message || 'The AI could not finish this request.'}{job.providerError?.responseFormat?.providerMessage ? ` ${job.providerError.responseFormat.providerMessage}` : ''}</p>}
         {failed && job.rawReply && <details><summary>Raw reply</summary><pre tabIndex={0} aria-label="Failed raw reply">{job.rawReply}</pre></details>}
         {!!job.validationEvents?.length && <details><summary>Validation notes</summary><ul>{job.validationEvents.map((event, index) => <li key={index}>{event.message}</li>)}</ul></details>}
+        {!past && <GenerationDetails controller={controller} project={project} settings={settings} openSettings={openSettings} manageUsage={manageUsage} editRequest={editRequest} />}
         <GenerationDrafts job={job} project={project} controller={controller} changed={value => { if (past) setPast(value); }} />
         {job.usage && <p className="log-meta">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
       </section>}
@@ -98,7 +104,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
       </details>
       {error && <section className="log-message from-ai failed" role="alert"><p className="log-who">Desegnos</p><p className="log-text">{error}</p></section>}
     </div>
-  </aside>;
+  </WorkspaceSurface>;
 }
 
 function statusLabel(status: string) {

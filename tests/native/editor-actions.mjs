@@ -4,10 +4,10 @@ import { assertCanvasOnly } from './workflow.mjs';
 
 async function project(driver) { return (await driver.invoke('get_workspace')).project; }
 async function modalButton(driver, text) {
-  await driver.click(`//dialog[@open]//button[normalize-space(.)=${xpathString(text)}]`, 'xpath');
+  await driver.click(`//section[contains(@class,"workspace-surface")]//button[normalize-space(.)=${xpathString(text)}]`, 'xpath');
 }
 async function closed(driver) {
-  await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'The editor dialog did not close');
+  await waitFor(() => driver.execute(() => !document.querySelector('.workspace-surface')), 'The editor dialog did not close');
 }
 async function undo(driver, matches) {
   await driver.button('Undo');
@@ -35,7 +35,7 @@ export async function editorActions(driver, physical, step) {
   await step('Add page and page settings preserve routes, appearance, dimensions and draft status', async () => {
     await driver.button('Add page');
     await driver.fill('Page name', 'About the studio');
-    await driver.click('dialog[open] .page-address summary');
+    await driver.click('.workspace-surface .page-address summary');
     await driver.fill('Page path', '/about');
     await modalButton(driver, 'Add page');
     await closed(driver);
@@ -48,9 +48,9 @@ export async function editorActions(driver, physical, step) {
     assert.equal(added.appearance, original.appearance);
     await driver.button('Page settings');
     await driver.fill('Page name', 'Studio');
-    await driver.click('dialog[open] .page-address summary');
+    await driver.click('.workspace-surface .page-address summary');
     await driver.fill('Page path', '/studio');
-    await driver.click('dialog[open] .custom-screen summary');
+    await driver.click('.workspace-surface .custom-screen summary');
     await driver.fill('Screen width', 640);
     await driver.fill('Screen height', 720);
     await driver.select('Website appearance', 'light');
@@ -98,12 +98,12 @@ export async function editorActions(driver, physical, step) {
     const before = await project(driver);
     await driver.button('Add page');
     await driver.fill('Page name', 'Duplicate route');
-    await driver.click('dialog[open] .page-address summary');
+    await driver.click('.workspace-surface .page-address summary');
     await driver.fill('Page path', '/STUDIO');
     await modalButton(driver, 'Add page');
-    await waitFor(() => driver.execute(() => document.querySelector('dialog[open] [role="alert"]')?.textContent.includes('same public path')), 'Route validation was not visible in the active dialog');
+    await waitFor(() => driver.execute(() => document.querySelector('.workspace-surface [role="alert"]')?.textContent.includes('same public path')), 'Route validation was not visible in the active dialog');
     assert.deepEqual(await project(driver), before);
-    await driver.click('dialog[open] button[aria-label="Dismiss dialog error"]');
+    await driver.click('.workspace-surface button[aria-label="Dismiss dialog error"]');
     await driver.click('button[aria-label="Close Add page"]');
     await closed(driver);
   });
@@ -196,13 +196,13 @@ export async function editorActions(driver, physical, step) {
     await physical.keys('Right');
     await waitFor(() => driver.execute(() => document.activeElement?.getAttribute('aria-label') === 'New project'), 'The Project submenu did not focus New project');
     await physical.keys('Return');
-    await waitFor(() => driver.execute(() => !!document.querySelector('dialog[aria-label="New project"][open]')), 'Keyboard activation did not open New project');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface[aria-label="New project"]')), 'Keyboard activation did not open New project');
     await driver.button('New blank page');
     await driver.fill('Project name', 'Cancelled nested project');
-    await physicalClick('dialog[open] .new-project .form-actions .primary');
+    await physicalClick('.workspace-surface .new-project .form-actions .primary');
     await physical.keys('Escape');
-    await waitFor(() => driver.execute(() => document.querySelectorAll('dialog[open]').length === 1
-      && document.activeElement?.closest('dialog')?.getAttribute('aria-label') === 'New project'), 'Escape did not restore focus within the remaining parent dialog');
+    await waitFor(() => driver.execute(() => document.querySelectorAll('.workspace-surface').length === 1
+      && document.activeElement?.closest('.workspace-surface')?.getAttribute('aria-label') === 'New project'), 'Escape did not restore focus within the remaining parent dialog');
     await physical.keys('Escape');
     await closed(driver);
     assert.equal(await driver.execute(() => document.activeElement?.getAttribute('aria-label')), 'Editor menu');

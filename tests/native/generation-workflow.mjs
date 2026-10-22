@@ -9,8 +9,8 @@ import { assertCanvasOnly, dataBlocks } from './workflow.mjs';
 import { verifyArchive } from './file-dialog-workflow.mjs';
 export { assertNoSyntheticKeys } from './provider-server.mjs';
 
-const previewFrame = 'dialog[open] .page-preview iframe';
-const generationDialog = 'dialog[open] .generation-dialog';
+const previewFrame = '.live-canvas-page iframe';
+const generationDialog = '.workspace-surface .generation-dialog';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 
 function dialogButton(driver, text) {
@@ -20,18 +20,18 @@ function dialogButton(driver, text) {
   if (text === 'Discard candidate') return driver.menu(['Discard result'], 'Generation options');
   if (text === 'Discard request') return driver.menu(['Discard request'], 'Generation options');
   if (text === 'Apply reviewed changes') text = 'Apply changes';
-  return driver.click(`(//dialog[@open]//button[normalize-space(.)=${xpathString(text)}])[last()]`, 'xpath');
+  return driver.click(`(//section[contains(@class,"workspace-surface")]//button[normalize-space(.)=${xpathString(text)}])[last()]`, 'xpath');
 }
 
 async function closeDialog(driver) {
   const remaining = await driver.execute(() => {
-    const dialogs = [...document.querySelectorAll('dialog[open]')];
-    const close = dialogs.at(-1)?.querySelector('button[aria-label^="Close "]');
+    const dialogs = [...document.querySelectorAll('.workspace-surface')];
+    const close = (document.querySelector('.workspace-banner:last-child') ?? dialogs.at(-1))?.querySelector('button[aria-label^="Close "]');
     if (!close) throw new Error('No open native editor dialog to close');
     close.click();
     return dialogs.length - 1;
   });
-  await waitFor(() => driver.execute(count => document.querySelectorAll('dialog[open]').length === count, remaining), 'The top editor dialog did not close');
+  await waitFor(() => driver.execute(count => document.querySelectorAll('.workspace-surface').length === count, remaining), 'The top editor dialog did not close');
 }
 
 async function latest(driver, projectId) { return driver.invoke('get_generation', { projectId }); }
@@ -39,9 +39,9 @@ async function latest(driver, projectId) { return driver.invoke('get_generation'
 async function waitJob(driver, projectId, status, timeout = 20_000) {
   const expected = Array.isArray(status) ? status : [status];
   const job = await waitFor(async () => { const value = await latest(driver, projectId); return expected.includes(value?.status) && value; }, `Generation did not reach ${expected.join(' or ')}`, timeout);
-  if (await driver.execute(() => !!document.querySelector('dialog[open] .generation-dialog'))) {
+  if (await driver.execute(() => !!document.querySelector('.workspace-surface .generation-dialog'))) {
     if (!expected.includes('prepared')) await dialogButton(driver, 'Refresh job');
-    await waitFor(() => driver.execute(states => states.includes(document.querySelector('dialog[open] .generation-status')?.dataset.jobStatus), expected), 'The native generation status did not reach its visible review');
+    await waitFor(() => driver.execute(states => states.includes(document.querySelector('.workspace-surface .generation-status')?.dataset.jobStatus), expected), 'The native generation status did not reach its visible review');
   }
   return job;
 }
@@ -87,15 +87,11 @@ async function frameState(driver) {
 }
 
 async function setScripts(driver, physical, enabled) {
-  const checked = await driver.execute(() => document.querySelector('dialog[open] .page-preview input[type="checkbox"]')?.checked);
-  if (checked !== enabled) {
-    await driver.execute(() => document.querySelector('dialog[open] .page-preview input[type="checkbox"]').scrollIntoView({ block: 'center' }));
-    await physical.click(await physical.center('dialog[open] .page-preview input[type="checkbox"]'));
+  if (enabled) {
+    if (!await driver.execute(() => !!document.querySelector('.live-canvas-page'))) await driver.menu(['Live preview']);
+    return frameState(driver);
   }
-  return waitFor(async () => {
-    const frame = await frameState(driver);
-    return frame.sandbox === (enabled ? 'allow-scripts' : '') && frame;
-  }, 'The iframe did not adopt the requested native script permission');
+  if (await driver.execute(() => !!document.querySelector('.live-canvas-page'))) await driver.button('Exit live');
 }
 
 async function clickChild(driver, physical, rect) {
@@ -108,7 +104,7 @@ async function clickChild(driver, physical, rect) {
 
 export async function dialogLayout(driver, output, name) {
   const result = await driver.execute(() => {
-    const dialog = [...document.querySelectorAll('dialog[open]')].at(-1);
+    const dialog = [...document.querySelectorAll('.workspace-surface')].at(-1);
     const bounds = dialog.getBoundingClientRect();
     const style = getComputedStyle(document.documentElement);
     const palette = Object.fromEntries(['text', 'muted', 'background', 'canvas-bed', 'border', 'surface', 'surface-raised', 'surface-muted', 'selected', 'accent', 'accent-text', 'danger', 'error-surface', 'warning-surface', 'focus'].map(key => [key, style.getPropertyValue('--' + key).trim()]));
@@ -159,13 +155,13 @@ async function settingsLayout(driver, physical, step, output) {
         await waitFor(() => driver.execute(() => !!document.querySelector('.ai-settings form')), 'AI settings did not finish loading');
         await dialogLayout(driver, output, `settings-${selected}-760px`);
         await physical.keys('Tab');
-        assert.equal(await driver.execute(() => !!document.activeElement?.closest('dialog[open]')), true);
+        assert.equal(await driver.execute(() => !!document.activeElement?.closest('.workspace-surface')), true);
         await physical.keys('Escape');
-        await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'Escape did not close AI settings');
+        await waitFor(() => driver.execute(() => !document.querySelector('.workspace-surface')), 'Escape did not close AI settings');
         assert.equal(await driver.execute(() => document.activeElement?.getAttribute('aria-label')), 'AI settings');
       }
     } finally {
-      if (await driver.execute(() => !!document.querySelector('dialog[open]'))) await closeDialog(driver);
+      if (await driver.execute(() => !!document.querySelector('.workspace-surface'))) await closeDialog(driver);
       await driver.command('POST', '/window/rect', original); await driver.select('Editor theme', theme);
     }
   });
@@ -174,7 +170,7 @@ async function settingsLayout(driver, physical, step, output) {
 async function credentialWorkflow(driver, provider, step) {
   await step('AI settings expose verified model capabilities and persist the selected native limits', async () => {
     await driver.button('AI settings');
-    await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .ai-settings input[type="number"]')), 'The native AI settings form did not load');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface .ai-settings input[type="number"]')), 'The native AI settings form did not load');
     const initial = await driver.invoke('get_ai_settings');
     assert.equal(initial.credential.storage, 'none'); assert.equal(initial.credential.configured, false);
     const model = initial.catalogue.find(value => value.id === 'gpt-6.1-sol');
@@ -192,10 +188,10 @@ async function credentialWorkflow(driver, provider, step) {
   await step('An unavailable system vault requires an explicit session choice and clears the submitted key', async () => {
     await driver.fill('OpenAI API key', provider.key());
     await dialogButton(driver, 'Connect');
-    await waitFor(() => driver.execute(() => /System credential storage is unavailable/i.test([...document.querySelectorAll('dialog[open] .ai-settings [role="alert"]')].map(element => element.textContent).join(' '))), 'The isolated vault failure was not exposed in the key form');
+    await waitFor(() => driver.execute(() => /System credential storage is unavailable/i.test([...document.querySelectorAll('.workspace-surface .ai-settings [role="alert"]')].map(element => element.textContent).join(' '))), 'The isolated vault failure was not exposed in the key form');
     const failed = await driver.invoke('get_ai_settings');
     assert.equal(failed.credential.configured, false); assert.equal(failed.credential.storage, 'none');
-    assert.equal(await driver.execute(() => document.querySelector('dialog[open] input[type="password"]')?.value ?? ''), '');
+    assert.equal(await driver.execute(() => document.querySelector('.workspace-surface input[type="password"]')?.value ?? ''), '');
     await driver.menu(['Where to keep the key', 'Current session only'], 'Account options');
     await driver.fill('OpenAI API key', provider.key());
     await dialogButton(driver, 'Connect');
@@ -203,7 +199,7 @@ async function credentialWorkflow(driver, provider, step) {
     const view = await driver.invoke('get_ai_settings');
     assert.equal(view.credential.configured, true); assert.equal(view.credential.maskedIdentifier.endsWith('A001'), true);
     assert.equal(JSON.stringify(view).includes(provider.key()), false);
-    assert.equal(await driver.execute(() => document.querySelector('dialog[open] input[type="password"]')?.value ?? ''), '');
+    assert.equal(await driver.execute(() => document.querySelector('.workspace-surface input[type="password"]')?.value ?? ''), '');
   });
   await step('Test connection, replace and remove use the real provider transport without generation or secret views', async () => {
     await dialogButton(driver, 'Test connection');
@@ -236,7 +232,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   const job = async () => latest(driver, (await workspace()).project.id);
   const marker = `canvas-${randomUUID()}`;
   let initial; let applied; let first; let target; let revised; let retained;
-  const clearDialogs = async () => { while (await driver.execute(() => !!document.querySelector('dialog[open]'))) await closeDialog(driver); };
+  const clearDialogs = async () => { while (await driver.execute(() => !!document.querySelector('.workspace-surface'))) await closeDialog(driver); };
   const request = async text => {
     await clearDialogs();
     const project = (await workspace()).project;
@@ -254,7 +250,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   };
   const completed = async () => {
     const value = await waitFor(async () => { const value = await job(); return value?.status === 'applied' && value; }, 'The result did not appear automatically', 25000);
-    await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'The progress window did not close after updating the canvas');
+    await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'Generation opened a modal');
     return job();
   };
   await step('One Generate click freezes the exact requirements and global mode, sends once and blurs only submitted areas', async () => {
@@ -264,16 +260,16 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     await driver.button('Strict');
     await driver.click('.shell-primary-actions button.primary');
     first = await waitFor(async () => { const value = await job(); return value?.status === 'generating' && value; }, 'One Generate click did not start generation');
-    await waitFor(() => driver.execute(() => !!document.querySelector('[data-testid="generation-progress"]')), 'The progress window did not open');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.generation-log .generation-status')), 'The progress window did not open');
     await waitFor(() => provider.generationRequests().length === count + 1, 'The native request did not reach the provider');
     assertAttachment(provider.generationRequests().at(-1), first);
     assert.equal(first.generationMode, 'strict');
     const state = await driver.execute(() => {
-      const dialog = document.querySelector('dialog[open]');
+      const dialog = document.querySelector('.workspace-surface');
       const masks = [...document.querySelectorAll('[data-testid="generation-blur"]')];
       return { maskCount: masks.length, masks: masks.map(mask => getComputedStyle(mask).backdropFilter),
         workspaceFilter: getComputedStyle(document.querySelector('.workspace')).filter,
-        backdropFilter: getComputedStyle(dialog, '::backdrop').backdropFilter,
+        backdropFilter: document.querySelector('dialog[open]') ? 'modal' : 'none',
         applyButton: [...dialog.querySelectorAll('button')].some(button => /Apply|Send and generate/.test(button.textContent)) };
     });
     assert.equal(state.maskCount, first.requirements.regionCount);
@@ -480,17 +476,16 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     assert.deepEqual((await workspace()).project, before); assert.deepEqual(provider.networkProbes(), []);
   });
   await step('Explicit interactive preview stays opaque and denies parent DOM, native IPC and network', async () => {
-    await driver.menu(['Preview in a window']); await installPreviewObserver(driver); await setScripts(driver, physical, true);
+    await driver.menu(['Live preview']); await installPreviewObserver(driver); await setScripts(driver, physical, true);
     const ready = await waitFor(async () => (await messages(driver)).find(value => value.event === 'ready'), 'The explicit interactive preview did not execute');
     assert.equal(ready.origin, 'null'); assert.equal(ready.detail.parentDenied, true);
     assert.equal(ready.detail.tauriAbsent, true); assert.equal(ready.detail.internalsAbsent, true); assert.equal(ready.detail.ipcAbsent, true);
     await clickChild(driver, physical, ready.detail.action);
     await waitFor(async () => (await messages(driver)).find(value => value.event === 'interaction'), 'The preview interaction did not run');
-    await setScripts(driver, physical, false); await installPreviewObserver(driver);
-    await driver.execute(selector => document.querySelector(selector).addEventListener('load', () => { window.__desegniFixtureLoads += 1; }), previewFrame);
-    await clickChild(driver, physical, ready.detail.retained);
-    await waitFor(() => driver.execute(() => window.__desegniFixtureLoads > 0), 'The paused iframe did not navigate to the retained package');
-    await delay(300); assert.deepEqual(await messages(driver), []); assert.deepEqual(provider.networkProbes(), []);
+    await setScripts(driver, physical, false);
+    await waitFor(() => driver.execute(() => !document.querySelector('.live-canvas-page') && !!document.querySelector('.static-preview iframe')), 'Exit live did not restore the static canvas');
+    assert.equal(await driver.execute(() => document.querySelector('.static-preview iframe').getAttribute('sandbox')), 'allow-same-origin');
+    await delay(300); assert.deepEqual(provider.networkProbes(), []);
     await clearDialogs(); await driver.invoke('release_preview', { sessionId: retained.sessionId });
   });
   await step('Save preserves the generated site and automatic dossier in the real project archive', async () => {

@@ -15,11 +15,11 @@ const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJA
 const png2 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR4nGNQCi3/D8IMMAYAP/QHtZw6VX0AAAAASUVORK5CYII=';
 
 async function closed(driver) {
-  await waitFor(() => driver.execute(() => !document.querySelector('dialog[open]')), 'The dialog did not close');
+  await waitFor(() => driver.execute(() => !document.querySelector('.workspace-surface')), 'The dialog did not close');
 }
 
 async function closeDialog(driver) {
-  await driver.click('(//dialog[@open])[last()]//button[starts-with(@aria-label,"Close ")]', 'xpath');
+  await driver.click('(//section[contains(@class,"workspace-surface")])[last()]//button[starts-with(@aria-label,"Close ")]', 'xpath');
   await closed(driver);
 }
 
@@ -163,7 +163,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await waitFor(() => driver.execute(() => !!document.querySelector('.free-workspace.tool-pan')), 'Visible Pan did not select its tool');
     await driver.click(`${tools} button[aria-label="Select"], ${tools} button[title^="Select"]`);
     await driver.button('Grid and rulers');
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('dialog[open] select')].find(select => [...select.options].some(option => option.value === 'pixels'))?.value), 'pixels');
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('.workspace-surface select')].find(select => [...select.options].some(option => option.value === 'pixels'))?.value), 'pixels');
     await closeDialog(driver); await physical.captureWindow(join(output, '03-visible-tools-window.png'));
   });
 
@@ -194,7 +194,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
 
   await step('Browser-style tabs and Layers expose each page’s pending requests', async () => {
     await driver.button('Add page'); await driver.fill('Page name', 'About');
-    await driver.click('dialog[open] .page-address summary'); await driver.fill('Page path', '/about'); await driver.button('Add page'); await closed(driver);
+    await driver.click('.workspace-surface .page-address summary'); await driver.fill('Page path', '/about'); await driver.button('Add page'); await closed(driver);
     aboutId = await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.path === '/about')?.id, 'The About page did not open');
     await driver.click('.canvas-empty-hint button'); await driver.fill('Request 1', 'Create a clear About page for the same studio.');
     await waitFor(async () => (await workspace(driver)).project.pages.find(page => page.id === aboutId).regions[0]?.prompt.includes('About page'), 'The second page request did not persist');
@@ -236,7 +236,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
           && document.activeElement === menu.querySelector('button:not(:disabled)');
       }), `${label} did not open account options and focus its first enabled item`);
       await physical.keys('Escape');
-      await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .ai-settings') && document.querySelector('.ai-account-options > button')?.getAttribute('aria-expanded') === 'false' && !document.querySelector('.ai-account-options [role="menu"]') && document.activeElement === document.querySelector('.ai-account-options > button')), 'Escape did not close only account options and restore focus');
+      await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface .ai-settings') && document.querySelector('.ai-account-options > button')?.getAttribute('aria-expanded') === 'false' && !document.querySelector('.ai-account-options [role="menu"]') && document.activeElement === document.querySelector('.ai-account-options > button')), 'Escape did not close only account options and restore focus');
       const events = await physical.events();
       for (const expected of [domKey, 'Escape']) {
         for (const type of ['keydown', 'keyup']) assert.ok(events.some(event => event.type === type && event.key === expected && event.trusted), `${label}: missing trusted ${expected} ${type}`);
@@ -255,7 +255,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     cancelled = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The held generation did not reach the provider');
     await driver.ready('.canvas-pill[aria-label="Generation status"]');
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface')), false);
     await driver.click('//header//button[normalize-space(.)="Stop"]', 'xpath');
     await jobAt(driver, projectId, ['cancelled']); provider.release(cancelled.jobId);
     await waitFor(() => driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"] .generation-heading')?.textContent === 'Stopped'), 'Stop did not visibly acknowledge cancellation');
@@ -267,7 +267,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
   await step('Generation stays in a non-modal strip while real panning works, then applies both pages with the exact instructions', async () => {
     provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     const held = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && value.jobId !== cancelled.jobId && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The second generation did not reach the held provider');
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface')), false);
     assert.match(await driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"]').textContent), /\d+:\d{2}|elapsed/i);
     await driver.click('[role="toolbar"][aria-label="Canvas tools"] button[aria-label="Pan"], [role="toolbar"][aria-label="Canvas tools"] button[title^="Pan"]');
     const view = await physical.rect('.free-workspace'); const start = { x: view.left + 80, y: view.top + 120 };
@@ -331,7 +331,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
 
   await step('Double-click edits actual heading text inline, Enter commits and Escape cancels without an AI request', async () => {
     const requests = requestCount(provider); await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('[data-testid="inline-text-editor"], .inline-text-editor[role="textbox"]');
-    assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface')), false);
     await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Edited directly on the page' }); await physical.keys('Return');
     await previewReady(driver, 'Edited directly on the page');
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview'); await driver.button('Redo'); await previewReady(driver, 'Edited directly on the page');
@@ -355,7 +355,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
     await driver.ready('.element-toolbar .style-bar [aria-label="Larger text"]');
     await driver.click('//div[contains(@class,"element-toolbar")]/button[normalize-space(.)="Style"]', 'xpath');
-    assert.match(await driver.execute(() => document.querySelector('.workspace-measurement').textContent), /px/);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-measurement')), false, 'An idle selection must not show a size label');
     const overlap = await driver.execute(() => { const a = document.querySelector('.element-toolbar').getBoundingClientRect(), b = document.querySelector('.element-selection').getBoundingClientRect(); return Math.max(0, Math.min(a.right,b.right)-Math.max(a.left,b.left))*Math.max(0,Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top)); });
     assert.equal(overlap, 0, 'The restored element toolbar hides the selected heading');
     await physical.captureWindow(join(output, '10-inline-edit-selection-window.png'));
@@ -409,7 +409,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.equal((await driver.invoke('get_generation', { projectId })).jobId, rejected.jobId);
     assert.equal(await driver.execute(() => { const node = document.querySelector('.log-messages'); return node.scrollWidth <= node.clientWidth + 1; }), true, 'The conversation or history row overflows the sidebar');
     await physical.captureWindow(join(output, '11b-generation-history.png'));
-    await driver.button('Back to current generation'); await driver.button('Hide AI conversation');
+    await driver.button('Back to current generation'); await driver.button('Close AI conversation');
     provider.setMode('complete', { editorAudit: true, chunkDelayMs: 2, chunkSize: 1024 });
   });
 
@@ -446,8 +446,8 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await waitFor(async () => (await workspace(driver)).project.id !== projectId, 'The temporary project did not open');
     await driver.menu(['New project']);
     await driver.click(`//section[contains(@class,"recent-projects")]//button[@title=${xpathString(projectPath)}]`, 'xpath');
-    await waitFor(async () => (await workspace(driver)).project.id === projectId || driver.execute(() => !!document.querySelector('dialog[aria-label="Save your changes?"][open]')), 'The recent project neither opened nor requested its explicit discard choice');
-    if (await driver.execute(() => !!document.querySelector('dialog[aria-label="Save your changes?"][open]'))) await driver.button('Discard and continue');
+    await waitFor(async () => (await workspace(driver)).project.id === projectId || driver.execute(() => !!document.querySelector('.workspace-surface[aria-label="Save your changes?"]')), 'The recent project neither opened nor requested its explicit discard choice');
+    if (await driver.execute(() => !!document.querySelector('.workspace-surface[aria-label="Save your changes?"]'))) await driver.button('Discard and continue');
     await closed(driver); await waitFor(async () => (await workspace(driver)).project.id === projectId, 'The actual recent project did not reopen');
     assert.deepEqual((await workspace(driver)).project, savedProject); await driver.page(homeId); await previewReady(driver, 'Edited directly on the page');
   });
@@ -457,7 +457,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await openRequest(driver,homeId);
     await waitFor(() => driver.execute(() => !!document.querySelector('.annotation.selected textarea')), 'The temporary export request was not selected');
     await driver.click('.element-toolbar [aria-label="Delete layer"]');
-    if(await driver.execute(()=>!!document.querySelector('dialog[open]'))) { await driver.button('Remove'); await closed(driver); }
+    if(await driver.execute(()=>!!document.querySelector('.workspace-surface'))) { await driver.button('Remove'); await closed(driver); }
     await driver.button('Fit'); await replaceMain(driver, physical, false); await driver.page(aboutId); await replaceMain(driver, physical, true); await driver.page(homeId);
     const value = (await workspace(driver)).project; assert.equal(value.pages.length, 2);
     for (const page of value.pages) { assert.ok(page.content.html.includes('srcset=')); assert.ok(page.content.html.includes('background-image:')); assert.ok(page.content.html.includes('Local click script works')); }
