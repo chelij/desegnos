@@ -2,7 +2,7 @@ import { forwardRef, lazy, Suspense, useImperativeHandle, useEffect, useMemo, us
 import { synchronizeCodeDrafts, type PendingCodeDraft } from './codeDraftLifecycle';
 import type { CodeEditorHandle, CodeLineMark } from './CodeEditor';
 const CodeEditor = lazy(() => import('./CodeEditor').then(module => ({ default: module.CodeEditor })));
-import { projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition, type HtmlProjection } from './editorHtml';
+import { projectCodeSource, projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition, type HtmlProjection } from './editorHtml';
 import type { ElementTarget, SiteContent } from './types';
 
 export type CodeView = 'design' | 'split' | 'code';
@@ -14,7 +14,7 @@ export type SourceMapView = { html: string; ranges: SourceRange[] };
 type SaveError = { message?: string; diagnostics?: SourceDiagnostic[]; conflict?: boolean };
 type Status = { kind: 'idle' | 'saving' | 'saved' | 'invalid' | 'conflict' | 'error'; message?: string; diagnostics?: SourceDiagnostic[] };
 type Draft = { text: string; base: string; projection: HtmlProjection };
-const plain = (text: string): HtmlProjection => ({ text, anchors: [], rawToVisible: offset => offset });
+const plain = projectCodeSource;
 
 export type CodePaneHandle = { synchronize: () => Promise<void> };
 export const CodePane = forwardRef<CodePaneHandle, {
@@ -39,13 +39,13 @@ export const CodePane = forwardRef<CodePaneHandle, {
   const queued = useRef(new Set<Tab>());
   const searchInput = useRef<HTMLInputElement>(null);
   const status = statuses[tab] ?? { kind: 'idle' };
-  const projectText = (language: Tab, raw: string) => language === 'html' && !current.current.showMeta ? projectEditorHtml(raw) : plain(raw);
-  const projections = useMemo(() => ({ html: showMeta ? plain(content?.html ?? '') : projectEditorHtml(content?.html ?? ''), css: plain(content?.css ?? ''), javascript: plain(content?.javascript ?? '') }), [content, showMeta]);
+  const projectText = (language: Tab, raw: string) => language === 'html' ? projectEditorHtml(raw, current.current.showMeta) : plain(raw);
+  const projections = useMemo(() => ({ html: projectEditorHtml(content?.html ?? '', showMeta), css: plain(content?.css ?? ''), javascript: plain(content?.javascript ?? '') }), [content, showMeta]);
   const text = drafts[tab]?.text ?? projections[tab].text;
   const exact = !drafts.html || drafts.html.text === projections.html.text && drafts.html.base === content?.html;
   const mapped = useMemo(() => {
     if (!exact || !map || map.html !== content?.html) return null;
-    if (showMeta) return map;
+    if (projections.html.text === map.html) return map;
     return { ...map, ranges: map.ranges.map(item => {
       const start = sourcePosition(projections.html.text, projections.html.rawToVisible(sourceOffset(map.html, item.startLine, item.startColumn)));
       const end = sourcePosition(projections.html.text, projections.html.rawToVisible(sourceOffset(map.html, item.endLine, item.endColumn)));
@@ -97,7 +97,7 @@ export const CodePane = forwardRef<CodePaneHandle, {
     const editor = editors.current[language]; if (!editor) return;
     const snapshot = editor.snapshot();
     const hidden = language === 'html' && !current.current.showMeta;
-    const rawValue = hidden ? restoreEditorHtml(snapshot.projection) : snapshot.text;
+    const rawValue = restoreEditorHtml(snapshot.projection);
     setStatus(language, { kind: 'saving' });
     const operation = async () => {
       try {
@@ -112,9 +112,9 @@ export const CodePane = forwardRef<CodePaneHandle, {
         const error = (raw ?? {}) as SaveError;
         if (error.conflict) setStatus(language, { kind: 'conflict', message: error.message });
         else if (error.diagnostics?.length) {
-          const projection = hidden ? projectEditorHtml(rawValue) : null;
+          const projection = language === 'html' ? projectEditorHtml(rawValue, !hidden) : projectCodeSource(rawValue);
           const diagnostics = error.diagnostics.map(item => {
-            if (!projection || item.language !== 'html') return item;
+            if (item.language !== language) return item;
             const start = sourcePosition(snapshot.text, projection.rawToVisible(sourceOffset(rawValue, item.line, item.column)));
             const end = sourcePosition(snapshot.text, projection.rawToVisible(sourceOffset(rawValue, item.endLine, item.endColumn)));
             return { ...item, line: start.line, column: start.column, endLine: end.line, endColumn: end.column };
@@ -190,9 +190,9 @@ export const CodePane = forwardRef<CodePaneHandle, {
       const value = drafts[language]?.text ?? projections[language].text;
       const marks = new Map<number, CodeLineMark>();
       const mark = (line: number, className: string, title?: string) => { const old = marks.get(line); marks.set(line, { line, className: [old?.className, className].filter(Boolean).join(' '), title: title ?? old?.title }); };
-      if (language === 'html' && range) for (let line = range.startLine; line <= range.endLine - (range.endColumn === 1 && range.endLine > range.startLine ? 1 : 0); line++) mark(line, 'selected');
+      if (language === 'html' && range) for (let line = range.startLine; line < range.startLine + 2000 && line <= range.endLine - (range.endColumn === 1 && range.endLine > range.startLine ? 1 : 0); line++) mark(line, 'selected');
       if (language === tab) {
-        for (const match of matches) mark(match.line, 'match');
+        for (const match of matches.slice(0, 2000)) mark(match.line, 'match');
         if (matches.length) mark(matches[hit % matches.length].line, 'current');
       }
       for (const error of statuses[language]?.diagnostics ?? []) if (error.language === language) mark(error.line, 'error', error.message);

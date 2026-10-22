@@ -8,7 +8,7 @@ import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';
 import { javascript } from '@codemirror/lang-javascript';
 import { tags } from '@lezer/highlight';
-import { htmlMetadata, mapHtmlMetadata, metadataEcho, metadataHistory, replaceMetadata } from './codeMirrorMetadata';
+import { htmlMetadata, metadataChanges, mapHtmlMetadata, metadataEcho, metadataHistory, replaceMetadata } from './codeMirrorMetadata';
 import type { HtmlProjection } from './editorHtml';
 import type { SiteContent } from './types';
 
@@ -24,7 +24,7 @@ const lineMarks = StateField.define<DecorationSet>({
     const effect = transaction.effects.find(effect => effect.is(setLineMarks));
     if (!effect) return value.map(transaction.changes);
     const ranges: Range<Decoration>[] = [];
-    for (const mark of effect.value as CodeLineMark[]) {
+    for (const mark of (effect.value as CodeLineMark[]).slice(0, 2000)) {
       if (mark.line < 1 || mark.line > transaction.newDoc.lines) continue;
       ranges.push(Decoration.line({ attributes: { class: `code-line ${mark.className}`, ...(mark.title ? { title: mark.title } : {}) } }).range(transaction.newDoc.line(mark.line).from));
     }
@@ -49,12 +49,13 @@ export const CodeEditor = forwardRef<CodeEditorHandle, {
   const latest = useRef(props); latest.current = props;
   const snapshots = useRef(new Set<CodeSaveSnapshot>());
   const editable = useRef(new Compartment());
+  const undoHistory = useRef(new Compartment());
   const representation = useRef(props.hiddenMetadata);
   const cachedMarks = useRef('');
   function makeState(projection = latest.current.projection) {
     const current = latest.current;
     return EditorState.create({ doc: projection.text, extensions: [
-      htmlMetadata.init(() => projection), metadataHistory, history(), lineMarks,
+      htmlMetadata.init(() => projection), undoHistory.current.of([metadataHistory, history()]), lineMarks,
       current.language === 'html' ? html() : current.language === 'css' ? css() : javascript(),
       lineNumbers(), highlightActiveLineGutter(), drawSelection(), bracketMatching(), indentOnInput(), indentUnit.of('  '), syntaxHighlighting(colours), search(),
       editable.current.of([EditorState.readOnly.of(current.readOnly), EditorView.editable.of(!current.readOnly)]),
@@ -83,7 +84,12 @@ export const CodeEditor = forwardRef<CodeEditorHandle, {
     const changedRepresentation = representation.current !== props.hiddenMetadata;
     if (changedRepresentation) {
       snapshots.current.clear();
-      view.setState(makeState()); representation.current = props.hiddenMetadata; cachedMarks.current = '';
+      const changes = metadataChanges(view.state.field(htmlMetadata), props.projection);
+      // Reset representation-specific undo effects without replacing the view or
+      // destroying its content DOM. CodeMirror maps selection and scroll anchors.
+      view.dispatch({ effects: undoHistory.current.reconfigure([]), annotations: externalUpdate.of(true) });
+      view.dispatch({ changes, effects: [replaceMetadata.of(props.projection), undoHistory.current.reconfigure([metadataHistory, history()])], annotations: [Transaction.addToHistory.of(false), externalUpdate.of(true)] });
+      representation.current = props.hiddenMetadata; cachedMarks.current = '';
     } else if (!snapshots.current.size) {
       // A React echo can lag behind newer native input. Only acknowledge matching
       // text; authoritative source replacement is explicit below.

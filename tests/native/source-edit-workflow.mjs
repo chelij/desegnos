@@ -1,3 +1,4 @@
+import { codeMetaWorkflow } from './code-meta-workflow.mjs';
 import assert from 'node:assert/strict';
 import {mkdir, readFile, writeFile, readdir} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -55,5 +56,5 @@ export async function sourceEditWorkflow(driver,physical,step,evidence) {
     assert.ok((await readFile(join(directory,'styles.css'),'utf8')).includes('#245583'));
     return project;
   });
-  return project;
+  return codeMetaWorkflow(driver, physical, step, evidence);
 }

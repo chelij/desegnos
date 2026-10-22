@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { codeMetaFixture } from './native/code-meta-fixture.mjs';
 import { ChangeSet, EditorState } from '@codemirror/state';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -13,8 +14,8 @@ try {
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/elementTargets.ts', 'src/editorHtml.ts', 'src/codeMirrorMetadata.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { canonicalSelections, sameTarget, sameTargets, regionTargets, unionRect } = await import(pathToFileURL(join(temporary, 'elementTargets.js')).href);
-  const { projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition } = await import(pathToFileURL(join(temporary, 'editorHtml.js')).href);
-  const { mapHtmlMetadata } = await import(pathToFileURL(join(temporary, 'codeMirrorMetadata.js')).href);
+  const { projectCodeSource, projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition } = await import(pathToFileURL(join(temporary, 'editorHtml.js')).href);
+  const { metadataChanges, mapHtmlMetadata } = await import(pathToFileURL(join(temporary, 'codeMirrorMetadata.js')).href);
   const updateProjection = (projection, from, to, insert = '') => { const change = ChangeSet.of({ from, to, insert }, projection.text.length); return mapHtmlMetadata(projection, change, change.apply(EditorState.create({ doc: projection.text }).doc).toString()); };
   const target = (id, selector = 'body > div:nth-of-type(1)') => ({ id, selector, tag: 'div', label: '' });
   const select = (id, selector, x = 0, y = 0) => ({ element: target(id, selector), rect: { x, y, width: 100, height: 60 } });
@@ -67,6 +68,37 @@ try {
     assert.ok(projection.text.includes('title="A > B data-desegnos-id=example"'));
     assert.ok(!projection.text.includes('data-desegnos-id="image"'));
     assert.equal((restoreEditorHtml(projection).match(/data-desegnos-id="image"/g) ?? []).length, 1);
+  });
+  await test('six large inline pictures never enter either editor projection and survive edits', () => {
+    const { html, pictures } = codeMetaFixture();
+    assert.ok(html.length > 2_000_000);
+    for (const shown of [true, false]) {
+      const projection = projectEditorHtml(html, shown);
+      assert.ok(projection.text.length < 22_000);
+      assert.doesNotMatch(projection.text, /data:image\//);
+      for (const picture of pictures) assert.ok(restoreEditorHtml(projection).includes(picture));
+      const edited = updateProjection(projection, 0, 0, '<!-- edit -->\n');
+      for (const picture of pictures) assert.ok(restoreEditorHtml(edited).includes(picture));
+    }
+    const script = 'const payload = {data:123, metadata:456};';
+    assert.equal(projectCodeSource(script).text, script);
+    const css = `img{background:url(${pictures[0]})}`;
+    const projection = projectCodeSource(css);
+    assert.doesNotMatch(projection.text, /data:image\//);
+    assert.equal(restoreEditorHtml(projection), css);
+  });
+  await test('metadata swaps use small edits and map selection through both projections', () => {
+    const raw = '<main class="site" data-desegnos-id="main0001">\n<p title="Copy" data-desegnos-id="copy0001">A😀B</p>\n</main>';
+    for (const source of [raw, codeMetaFixture().html, '<img data-desegnos-found="data:image/png;base64,' + 'A'.repeat(100_000) + '" src="desegnos-asset:picture">']) {
+      const shown = projectEditorHtml(source, true), hidden = projectEditorHtml(source);
+      for (const [before, after] of [[shown, hidden], [hidden, shown]]) {
+        const changes = metadataChanges(before, after);
+        assert.equal(changes.apply(EditorState.create({ doc: before.text }).doc).toString(), after.text);
+        const position = before.text.indexOf('A😀B');
+        if (position >= 0) assert.equal(changes.mapPos(position), after.text.indexOf('A😀B'));
+        changes.iterChanges((from, to) => assert.ok(to - from < 100, 'Must not replace the document'));
+      }
+    }
   });
   await test('native source positions translate to visible UTF-16 positions with hidden multiline metadata', () => {
     const raw = '<div\n data-desegnos-id="outer">\n  <p data-desegnos-id="inner">A😀B</p>\n</div>';

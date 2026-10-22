@@ -21,6 +21,7 @@ import { logoScopeWorkflow } from '../tests/native/logo-scope-workflow.mjs';
 import { layersWorkflow } from '../tests/native/layers-workflow.mjs';
 import { imageResizeWorkflow } from '../tests/native/image-resize-workflow.mjs';
 import { cleanupExtrasWorkflow } from '../tests/native/cleanup-extras-workflow.mjs';
+import { codeMetaWorkflow } from '../tests/native/code-meta-workflow.mjs';
 import { sourceEditWorkflow } from '../tests/native/source-edit-workflow.mjs';
 import { realUseWorkflow } from '../tests/native/real-use-workflow.mjs';
 import { seedRealUse } from '../tests/native/real-use-fixtures.mjs';
@@ -193,7 +194,15 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'website-import') {
+    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'code-meta') {
+      report.scope = 'Focused mounted HTML metadata toggle with six stored pictures.';
+      project = await codeMetaWorkflow(driver, physical, step, evidence);
+      const errors = await driver.execute(() => window.__desegniTestErrors);
+      await writeFile(join(evidence, 'browser-errors.json'), JSON.stringify(errors, null, 2));
+      assert.deepEqual(errors, []);
+      report.passed = true;
+      return;
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'website-import') {
       report.scope = 'As-is website import, native heading editing and read-only chelib Astro import.';
       project = await websiteImportWorkflow(driver, physical, step, evidence);
     } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'project-folders') {
@@ -315,21 +324,22 @@ async function runIsolated() {
     report.oauth = provider.oauth.records();
     report.finishedAt = new Date().toISOString();
     await writeFile(join(evidence, 'report.json'), JSON.stringify(report, null, 2));
+    process.exitCode = report.passed ? 0 : 1;
   }
-  process.exitCode = report.passed ? 0 : 1;
 }
 
 async function main() {
   if (args.includes('--help')) {
-    console.log('node scripts/native-test.mjs [--skip-build] [--project-folders-only|--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only|--real-use-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
+    console.log('node scripts/native-test.mjs [--skip-build] [--code-meta-only|--project-folders-only|--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only|--real-use-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
     return;
   }
   if (process.platform !== 'linux') throw new Error('This runner requires the guarded Linux Xvfb route. Native Windows/macOS isolation must be configured on those runners.');
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--website-import-only', '--project-folders-only', '--image-resize-only', '--real-use-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--code-meta-only', '--website-import-only', '--project-folders-only', '--image-resize-only', '--real-use-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
+  if (args.includes('--code-meta-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'code-meta';
   if (args.includes('--website-import-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'website-import';
   if (args.includes('--project-folders-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'project-folders';
   if (args.includes('--image-resize-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'image-resize';
