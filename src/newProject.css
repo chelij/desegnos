@@ -19,8 +19,8 @@
 .new-project > .message.error > button { flex-shrink: 0; white-space: nowrap; }
 .recent-projects .recent-avatar { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 8px; background: var(--selected); color: var(--accent); font-weight: 600; font-size: 16px; }
 .recent-projects .recent-text { display: grid; gap: 3px; min-width: 0; }
-.recent-projects .recent-text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.recent-projects .recent-text span { overflow-wrap: anywhere; color: var(--muted); font-weight: 400; font-size: 11px; }
+.recent-projects .recent-text strong, .recent-projects .recent-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recent-projects .recent-text span { color: var(--muted); font-weight: 400; font-size: 11px; }
 .start-open { display: flex; align-items: baseline; gap: 6px; font-size: 13px; color: var(--muted); }
 .start-ai-note { margin: 0; font-size: 13px; color: var(--muted); }
 .link-button { min-height: auto; padding: 0; border: 0; background: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font: inherit; cursor: pointer; }

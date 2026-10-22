@@ -921,7 +921,7 @@ export default function App() {
         </GenerationFeedback>}
         {generation.job && <GenerationDrafts job={generation.job} project={project} controller={generation} pageId={page?.id} compact />}
       </div>}
-      <FirstRunTips hasBox={project.pages.some(item => item.regions.length > 0)} hasText={project.pages.some(item => item.regions.some(region => !!region.prompt.trim()))} generationStarted={generation.operation === 'Starting generation…' || !!generation.job?.attempts.length || !!project.latestGeneration} hidden={live || showNew || showImport} />
+      <FirstRunTips />
       {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
         <strong>Live</strong>
         <div className="segmented" role="group" aria-label="Live device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
