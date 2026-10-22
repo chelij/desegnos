@@ -184,6 +184,32 @@ impl Project {
         Ok(result)
     }
 
+    /// Images actually referenced by the affected pages, including inline and stored pictures.
+    pub(crate) fn generation_picture_catalogue(&self, page_ids: &[Uuid]) -> serde_json::Value {
+        let mut urls = BTreeSet::new();
+        for page in self.pages.iter().filter(|page| page_ids.contains(&page.id)) {
+            if let Some(content) = &page.content {
+                let content = self.all_asset_references(content);
+                for source in [&content.html, &content.css, &content.javascript] {
+                    for (start, _) in source.match_indices(PROJECT_ASSET_SCHEME) {
+                        let start = start + PROJECT_ASSET_SCHEME.len();
+                        if let Some(id) = source
+                            .get(start..start + 36)
+                            .and_then(|id| Uuid::parse_str(id).ok())
+                        {
+                            urls.insert(project_asset_reference(id));
+                        }
+                    }
+                }
+            }
+        }
+        serde_json::json!(
+            urls.into_iter()
+                .map(|url| serde_json::json!({"url":url}))
+                .collect::<Vec<_>>()
+        )
+    }
+
     pub fn generation_asset_catalogue(&self) -> Option<serde_json::Value> {
         self.imported_identity.as_ref().map(|identity| serde_json::json!({
             "sourceName":identity.source_name,"sourceSha256":identity.source_sha256,"summary":identity.summary,

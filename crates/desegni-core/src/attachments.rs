@@ -26,7 +26,7 @@ pub struct RequestAttachment {
     pub kind: AttachmentKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_uri: Option<std::sync::Arc<str>>,
-    /// The small JPEG the AI sees, made once when the picture is attached (format 13).
+    /// The small JPEG or alpha-preserving PNG the AI sees, made once when attached (format 13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<std::sync::Arc<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -87,7 +87,8 @@ impl RequestAttachment {
                     && self.url.is_none()
                     && self.data_uri.as_deref().is_some_and(valid_image)
                     && self.preview.as_deref().is_none_or(|preview| {
-                        preview.starts_with("data:image/jpeg;base64,")
+                        (preview.starts_with("data:image/jpeg;base64,")
+                            || preview.starts_with("data:image/png;base64,"))
                             && preview.len() <= crate::AI_PREVIEW_BYTES.div_ceil(3) * 4 + 32
                             && valid_image(preview)
                     }),

@@ -67,10 +67,70 @@ fn flattened(picture: &DynamicImage) -> DynamicImage {
     DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(flat).to_rgb8())
 }
 
+/// Share of pixels with visible transparency (alpha below 250).
+fn transparent_share(picture: &DynamicImage) -> f64 {
+    if !picture.color().has_alpha() {
+        return 0.0;
+    }
+    let pixels = picture.to_rgba8();
+    let count = pixels.pixels().filter(|pixel| pixel[3] < 250).count();
+    count as f64 / (u64::from(picture.width()) * u64::from(picture.height())) as f64
+}
+
+/// Describe the stored image, rather than its downscaled preview.
+pub(crate) fn image_metadata(data_uri: &str) -> serde_json::Value {
+    let mut metadata = serde_json::json!({});
+    if let Some((mime, _)) = data_uri
+        .strip_prefix("data:")
+        .and_then(|s| s.split_once(";base64,"))
+    {
+        metadata["storedFormat"] = serde_json::json!(mime);
+    }
+    if let Some(picture) = decode(data_uri) {
+        let share = transparent_share(&picture);
+        if share > 0.005 {
+            metadata["transparent"] = serde_json::json!(true);
+            metadata["transparentPercent"] = serde_json::json!((share * 100.0).round() as u8);
+        }
+    }
+    metadata
+}
+
+/// A bounded preview for the AI. Meaningfully transparent pictures retain alpha as PNG;
+/// opaque pictures use JPEG. Undecodable pictures (GIF) travel by name only.
+pub fn ai_preview(data_uri: &str) -> Option<String> {
+    let picture = decode(data_uri)?;
+    preview(picture)
+}
+
+fn preview(picture: DynamicImage) -> Option<String> {
+    let mut picture = if transparent_share(&picture) > 0.005 {
+        picture
+    } else {
+        flattened(&picture)
+    };
+    loop {
+        let edge = picture.width().max(picture.height());
+        if edge > AI_PREVIEW_EDGE {
+            let next = (edge * 3 / 4).max(AI_PREVIEW_EDGE);
+            picture = picture.resize(next, next, FilterType::Triangle);
+            continue;
+        }
+        let (bytes, mime) = encode(&picture, 75)?;
+        if bytes.len() <= AI_PREVIEW_BYTES {
+            return Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)));
+        }
+        // PNG cannot trade quality for size; keep shrinking until it fits.
+        let next = (edge * 3 / 4).max(1);
+        picture = picture.resize(next, next, FilterType::Triangle);
+    }
+}
+
+// Frozen formats 13–16 must reconstruct the exact JPEG bytes originally sent.
 /// The JPEG the AI sees: shrunk by a quarter at a time until it is at most
 /// `AI_PREVIEW_EDGE` pixels on its longest side and `AI_PREVIEW_BYTES` in size.
 /// None for pictures that cannot be decoded here (GIF); those travel by name only.
-pub fn ai_preview(data_uri: &str) -> Option<String> {
+pub(crate) fn legacy_ai_preview(data_uri: &str) -> Option<String> {
     let mut picture = flattened(&decode(data_uri)?);
     loop {
         let edge = picture.width().max(picture.height());
@@ -140,6 +200,92 @@ mod tests {
         assert!(bytes <= AI_PREVIEW_BYTES);
         assert_eq!(width, 2 * height);
         assert!(ai_preview("data:image/gif;base64,R0lGODlhAQABAAAAACw=").is_none());
+    }
+
+    #[test]
+    fn transparent_png_and_webp_previews_preserve_alpha_within_budget() {
+        let mut pixels = image::RgbaImage::new(1024, 512);
+        let mut seed = 7_u32;
+        for (x, _, pixel) in pixels.enumerate_pixels_mut() {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            *pixel = image::Rgba([
+                seed as u8,
+                (seed >> 8) as u8,
+                (seed >> 16) as u8,
+                if x < 512 { 0 } else { 128 },
+            ]);
+        }
+        for (format, mime) in [
+            (image::ImageFormat::Png, "image/png"),
+            (image::ImageFormat::WebP, "image/webp"),
+        ] {
+            let mut bytes = Vec::new();
+            DynamicImage::ImageRgba8(pixels.clone())
+                .write_to(&mut std::io::Cursor::new(&mut bytes), format)
+                .unwrap();
+            let uri = format!("data:{mime};base64,{}", STANDARD.encode(bytes));
+            let preview = ai_preview(&uri).unwrap();
+            assert!(preview.starts_with("data:image/png;base64,"));
+            let (width, height, bytes) = size(&preview);
+            assert!(width <= AI_PREVIEW_EDGE && height <= AI_PREVIEW_EDGE);
+            assert!(
+                width < AI_PREVIEW_EDGE,
+                "noisy PNG must shrink further to fit"
+            );
+            assert!(bytes <= AI_PREVIEW_BYTES);
+            let decoded = decode(&preview).unwrap().to_rgba8();
+            assert_eq!(decoded.get_pixel(0, 0)[3], 0);
+            assert_eq!(decoded.get_pixel(width - 1, 0)[3], 128);
+            assert_eq!(
+                image_metadata(&uri),
+                serde_json::json!({
+                    "storedFormat": mime, "transparent": true, "transparentPercent": 100
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn transparency_requires_more_than_half_a_percent_below_alpha_250() {
+        let mut pixels = image::RgbaImage::from_pixel(100, 100, image::Rgba([10, 20, 30, 250]));
+        for pixel in pixels.pixels_mut().take(50) {
+            pixel[3] = 0;
+        }
+        let picture = DynamicImage::ImageRgba8(pixels.clone());
+        assert_eq!(transparent_share(&picture), 0.005);
+        assert!(
+            preview(picture)
+                .unwrap()
+                .starts_with("data:image/jpeg;base64,")
+        );
+        pixels.get_pixel_mut(50, 0)[3] = 249;
+        assert!(
+            preview(DynamicImage::ImageRgba8(pixels))
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+    }
+
+    #[test]
+    fn opaque_rgba_keeps_the_legacy_jpeg_bytes() {
+        let picture = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            32,
+            16,
+            image::Rgba([10, 20, 30, 255]),
+        ));
+        let mut bytes = Vec::new();
+        picture
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let uri = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
+        assert_eq!(ai_preview(&uri), legacy_ai_preview(&uri));
+        assert_eq!(
+            image_metadata(&uri),
+            serde_json::json!({"storedFormat":"image/png"})
+        );
     }
 
     #[test]
