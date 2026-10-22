@@ -95,10 +95,7 @@ export function parseTone(value: string): string[] {
     return match && !/\b(?:not|no|avoid|without)\s+(?:a\s+)?$/i.test(value.slice(0, match.index)) ? [{ label, index: match.index }] : [];
   }).sort((a, b) => a.index - b.index).map(item => item.label);
   if (labels.length) return [...new Set(labels)];
-  return [...new Set(value.split(/[,;.!\n]|\s+and\s+/i).map(part => part.trim().replace(/^(?:use|keep|a|an|the)\s+/i, '')).filter(Boolean).map(part => {
-    const short = part.split(/\s+/).slice(0, 5).join(' ');
-    return short[0].toUpperCase() + (short.length > 38 ? short.slice(1, 35) + '…' : short.slice(1)) + (part !== short && short.length <= 38 ? '…' : '');
-  }))];
+  return [...new Set(value.split(/[,;.!\n]|\s+and\s+/i).map(part => part.trim().replace(/^(?:use|keep|a|an|the)\s+/i, '')).filter(Boolean).map(part => part[0].toUpperCase() + part.slice(1)))];
 }
 
 export function findingSection(finding: IdentityFinding): ReviewSection {
