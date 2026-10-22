@@ -156,6 +156,21 @@ impl OpenAiClient {
         self
     }
 
+    /// Shared wire contract for Responses generation and capability probes.
+    pub(crate) fn responses_request(
+        &self,
+        key: &ApiKey,
+        body: Vec<u8>,
+    ) -> Result<reqwest::RequestBuilder> {
+        Ok(self
+            .client
+            .post(format!("{}/responses", self.endpoint))
+            .header(AUTHORIZATION, authorization(key)?)
+            .header(CONTENT_TYPE, "application/json")
+            .header(ACCEPT, "text/event-stream")
+            .body(body))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn generate(
         &self,
@@ -279,13 +294,7 @@ impl OpenAiClient {
             return Err(ProviderError::before(ErrorKind::Cancelled));
         }
         let deadline = Instant::now() + self.deadline;
-        let request = self
-            .client
-            .post(format!("{}/responses", self.endpoint))
-            .header(AUTHORIZATION, authorization(key)?)
-            .header(CONTENT_TYPE, "application/json")
-            .header(ACCEPT, "text/event-stream")
-            .body(body);
+        let request = self.responses_request(key, body)?;
         progress(ProviderProgress {
             received_bytes: 0,
             response_id: None,
