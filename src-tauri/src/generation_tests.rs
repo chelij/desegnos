@@ -1885,3 +1885,54 @@ fn a_finish_record_error_does_not_replace_stopped_with_unknown() {
     assert!(service.jobs[&prepared.job_id].view.candidate.is_none());
     assert!(service.active.is_empty());
 }
+
+#[test]
+fn runtime_image_rejection_is_persisted_per_account_and_credential_without_secrets() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    service
+        .credentials
+        .set_key("sk-first-image-account".into(), CredentialStorage::Session)
+        .unwrap();
+    let first = service.image_cache_id(None).unwrap();
+    service
+        .store_image_access(
+            first.clone(),
+            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "image_tool_rejected"),
+        )
+        .unwrap();
+    service
+        .credentials
+        .set_key("sk-second-image-account".into(), CredentialStorage::Session)
+        .unwrap();
+    let second = service.image_cache_id(None).unwrap();
+    assert_ne!(first, second);
+    assert!(!service.image_access.contains_key(&second));
+    let account = Uuid::new_v4();
+    service.authentication = AuthenticationMethod::Chatgpt;
+    let chatgpt = service.image_cache_id(Some(account)).unwrap();
+    service
+        .store_image_access(
+            chatgpt.clone(),
+            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "image_tool_rejected"),
+        )
+        .unwrap();
+    let saved = fs::read_to_string(service.directory.join("image-access.json")).unwrap();
+    assert!(!saved.contains("sk-first") && !saved.contains("sk-second"));
+    let mut reopened = GenerationService::from_directory(service.directory.clone()).unwrap();
+    assert_eq!(
+        reopened.image_access[&first].available,
+        desegni_ai::ImageAvailability::No
+    );
+    assert_eq!(
+        reopened.image_access[&chatgpt].available,
+        desegni_ai::ImageAvailability::No
+    );
+    reopened
+        .image_access_checking
+        .insert(chatgpt.clone(), Uuid::new_v4());
+    reopened.invalidate_image_account(account).unwrap();
+    assert!(!reopened.image_access_checking.contains_key(&chatgpt));
+    assert!(!reopened.image_access.contains_key(&chatgpt));
+    assert!(reopened.image_access.contains_key(&first));
+}

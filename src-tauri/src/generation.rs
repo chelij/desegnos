@@ -188,6 +188,8 @@ struct AuthenticationPreference {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiSettingsView {
+    image_access: Option<desegni_ai::ImageAccess>,
+    image_access_checking: bool,
     provider: ProviderId,
     providers: Vec<ProviderDescriptor>,
     settings: ProviderSettings,
@@ -211,6 +213,8 @@ impl AiSettingsView {
 }
 
 pub struct GenerationService {
+    image_access: BTreeMap<String, desegni_ai::ImageAccess>,
+    image_access_checking: BTreeMap<String, Uuid>,
     provider: ProviderId,
     provider_credentials: BTreeMap<ProviderId, Arc<CredentialManager>>,
     directory: PathBuf,
@@ -317,6 +321,40 @@ fn write_json(path: &Path, value: &impl Serialize) -> NativeResult<()> {
 }
 
 impl GenerationService {
+    fn image_cache_id(&self, account: Option<Uuid>) -> Option<String> {
+        if self.provider != ProviderId::Openai {
+            return None;
+        }
+        match self.authentication {
+            AuthenticationMethod::Chatgpt => account.map(|id| format!("chatgpt:{id}")),
+            AuthenticationMethod::ApiKey => self
+                .credentials
+                .key()
+                .ok()
+                .map(|key| key.image_access_cache_key()),
+        }
+    }
+    fn store_image_access(
+        &mut self,
+        id: String,
+        access: desegni_ai::ImageAccess,
+    ) -> NativeResult<()> {
+        self.image_access.insert(id, access);
+        write_json(
+            &self.directory.join("image-access.json"),
+            &self.image_access,
+        )
+    }
+    pub(super) fn invalidate_image_account(&mut self, account: Uuid) -> NativeResult<()> {
+        let id = format!("chatgpt:{account}");
+        self.image_access.remove(&id);
+        // A reconnect invalidates any outstanding probe for the previous session.
+        self.image_access_checking.remove(&id);
+        write_json(
+            &self.directory.join("image-access.json"),
+            &self.image_access,
+        )
+    }
     pub fn initialize(app: &AppHandle) -> NativeResult<Self> {
         Self::from_directory(
             app.path()
@@ -395,7 +433,15 @@ impl GenerationService {
             } else {
                 (credentials, client)
             };
+        let image_cache_path = directory.join("image-access.json");
+        let image_access = if image_cache_path.exists() {
+            read_json(&image_cache_path, 1024 * 1024)?
+        } else {
+            BTreeMap::new()
+        };
         let mut service = Self {
+            image_access,
+            image_access_checking: BTreeMap::new(),
             provider: ProviderId::Openai,
             provider_credentials: BTreeMap::new(),
             directory,
@@ -951,8 +997,13 @@ impl GenerationService {
         }
         let requirements = project
             .prepare_requirements_with_capabilities(
-                self.provider
-                    .capabilities_for(self.authentication, &self.settings),
+                self.provider.capabilities_for(
+                    self.authentication,
+                    &self.settings,
+                    self.image_cache_id(account_id)
+                        .as_ref()
+                        .and_then(|id| self.image_access.get(id)),
+                ),
             )
             .map_err(message)?;
         let estimate = self
@@ -1446,10 +1497,99 @@ async fn credential_key(state: &AiState<'_>, provider: ProviderId) -> NativeResu
         .map_err(message)
 }
 
+/// No lock is held across network I/O. The cache key binds results to the captured credential/account.
+pub(super) async fn refresh_image_access(
+    state: &Mutex<GenerationService>,
+    chatgpt: &ChatgptState,
+    force: bool,
+) -> NativeResult<()> {
+    let view = chatgpt.view().await;
+    if view.sign_in.status == desegni_ai::ChatgptSignInStatus::AwaitingBrowser {
+        return Ok(());
+    }
+    let (id, auth, settings, client, credentials, prior_access) = {
+        let service = state.lock().map_err(message)?;
+        let Some(id) = service.image_cache_id(view.active_account_id) else {
+            return Ok(());
+        };
+        if service.image_access_checking.contains_key(&id)
+            || (!force
+                && service
+                    .image_access
+                    .get(&id)
+                    .is_some_and(|access| !access.expired(desegni_ai::image_access_now())))
+        {
+            return Ok(());
+        }
+        if service.authentication == AuthenticationMethod::Chatgpt
+            && !view.accounts.iter().any(|account| {
+                Some(account.id) == view.active_account_id
+                    && account.connected
+                    && account.plan_enabled
+                    && !account.storage_repair_required
+            })
+        {
+            return Ok(());
+        }
+        (
+            id.clone(),
+            service.authentication,
+            service.settings.clone(),
+            service.client.clone()?,
+            service.credentials.clone(),
+            service.image_access.get(&id).cloned(),
+        )
+    };
+    let key = if auth == AuthenticationMethod::Chatgpt {
+        let Some(account) = view.active_account_id else {
+            return Ok(());
+        };
+        match chatgpt
+            .manager()?
+            .bearer(account, &CancellationToken::new())
+            .await
+        {
+            Ok(key) => key,
+            Err(_) => return Ok(()),
+        }
+    } else {
+        match tauri::async_runtime::spawn_blocking(move || credentials.key())
+            .await
+            .map_err(message)?
+        {
+            Ok(key) => key,
+            Err(_) => return Ok(()),
+        }
+    };
+    if auth == AuthenticationMethod::ApiKey && key.image_access_cache_key() != id {
+        return Ok(());
+    }
+    let probe_id = Uuid::new_v4();
+    {
+        let mut service = state.lock().map_err(message)?;
+        if service.image_access_checking.contains_key(&id) {
+            return Ok(());
+        }
+        service.image_access_checking.insert(id.clone(), probe_id);
+    }
+    let access = client.probe_image_access(auth, &settings, &key).await;
+    let mut service = state.lock().map_err(message)?;
+    if service.image_access_checking.get(&id) != Some(&probe_id) {
+        return Ok(());
+    }
+    service.image_access_checking.remove(&id);
+    // A runtime rejection or reconnect during this probe takes precedence over its late answer.
+    if service.image_access.get(&id) != prior_access.as_ref() {
+        return Ok(());
+    }
+    service.store_image_access(id, access)
+}
+
 pub(super) async fn settings_view(
     state: &AiState<'_>,
     chatgpt_state: &ChatgptState,
 ) -> NativeResult<AiSettingsView> {
+    refresh_image_access(state, chatgpt_state, false).await?;
     let (settings, credentials, configuration_error, authentication, provider) = {
         let service = state.lock().map_err(message)?;
         (
@@ -1496,7 +1636,20 @@ pub(super) async fn settings_view(
     } else {
         provider.catalogue()
     };
+    let (image_access, image_access_checking) = {
+        let service = state.lock().map_err(message)?;
+        let id = service.image_cache_id(chatgpt.active_account_id);
+        (
+            id.as_ref()
+                .and_then(|id| service.image_access.get(id))
+                .cloned(),
+            id.as_ref()
+                .is_some_and(|id| service.image_access_checking.contains_key(id)),
+        )
+    };
     Ok(AiSettingsView {
+        image_access,
+        image_access_checking,
         provider,
         providers: provider_catalogue(),
         settings,
@@ -1571,6 +1724,7 @@ pub async fn set_ai_key(
         .await
         .map_err(message)?
         .map_err(message)?;
+    refresh_image_access(&state, &chatgpt, true).await?;
     settings_view(&state, &chatgpt).await
 }
 
@@ -1601,6 +1755,7 @@ pub async fn test_ai_access(
     chatgpt: State<'_, ChatgptState>,
 ) -> NativeResult<AccessResult> {
     trusted(&window)?;
+    refresh_image_access(&state, &chatgpt, true).await?;
     let (client, settings, authentication, provider) = {
         let service = state.lock().map_err(message)?;
         (
@@ -1654,6 +1809,7 @@ pub async fn prepare_generation(
     chatgpt: State<'_, ChatgptState>,
 ) -> NativeResult<GenerationJobView> {
     trusted(&window)?;
+    refresh_image_access(&state, &chatgpt, false).await?;
     let (authentication, provider) = {
         let service = state.lock().map_err(message)?;
         (service.authentication, service.provider)
@@ -1852,6 +2008,7 @@ async fn submit(
     let request = view.clone();
     tauri::async_runtime::spawn(async move {
         let ordinal = request.attempts.len();
+        let mut image_notice = None;
         let result = async {
             // Keep preparation local. All credential refresh/model discovery belongs to
             // the registered, cancellable attempt, before any paid generation submission.
@@ -1958,17 +2115,21 @@ async fn submit(
                     let response = client
                         .download_images(response, &request.requirements, &original, &cancellation)
                         .await;
-                    Ok(client
-                        .generate_images(
-                            response,
-                            request.authentication,
-                            &request.settings,
-                            &request.requirements,
-                            &original,
-                            &key,
-                            &cancellation,
-                        )
-                        .await)
+                    let (response, unavailable) = client
+                        .generate_images_with_status(
+                            response, request.authentication, &request.settings,
+                            &request.requirements, &original, &key, &cancellation,
+                        ).await;
+                    if unavailable {
+                        let id = account_id.map(|id| format!("chatgpt:{id}"))
+                            .unwrap_or_else(|| key.image_access_cache_key());
+                        let stored = app.state::<Mutex<GenerationService>>().lock().map_err(message)
+                            .and_then(|mut service| service.store_image_access(id, desegni_ai::ImageAccess::new(
+                                desegni_ai::ImageAvailability::No, "image_tool_rejected")));
+                        image_notice = Some(if stored.is_ok() { "Image generation is not available for this account; placeholders were kept.".to_owned() }
+                            else { "Image generation is not available for this account; placeholders were kept. The access status could not be saved.".to_owned() });
+                    }
+                    Ok(response)
                 }
                 Err(error) => Err(error),
             }
@@ -1995,6 +2156,13 @@ async fn submit(
                         "The result is preserved, but its project dossier could not be saved: {error}"
                     ));
                 }
+            }
+            if let Some(notice) = image_notice
+                && let Some(mut record) = service.jobs.get(&job_id).cloned()
+            {
+                record.view.message.push(' ');
+                record.view.message.push_str(&notice);
+                let _ = service.persist_retaining(record);
             }
         }
     });

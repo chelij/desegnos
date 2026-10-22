@@ -213,6 +213,7 @@ export async function startProviderServer() {
   const keys = { primary: `sk-desegni-native-synthetic-${randomUUID().replaceAll('-', '')}-A001`, replacement: `sk-desegni-native-synthetic-${randomUUID().replaceAll('-', '')}-B002` };
   Object.values(keys).forEach(key => syntheticKeys.add(key));
   let expectedKey = keys.primary;
+  const imageAccessProbes = [];
   let mode = { kind: 'complete', options: {} };
   let endpoint;
   const records = []; const errors = []; const probes = []; const sockets = new Set(); const timers = new Set(); const pending = new Map();
@@ -244,20 +245,35 @@ export async function startProviderServer() {
       records.push({ method: 'GET', path, authenticated, at: new Date().toISOString() });
       response.writeHead(200, { 'content-type': 'application/json' }).end('{"id":"gpt-6.1-sol","object":"model"}'); return;
     }
-    if (request.method === 'GET' && path === '/v1/models' && account) {
-      records.push({ method: 'GET', path, authenticated, authentication, clientId: account.clientId, at: new Date().toISOString() });
-      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ models: [
+    if (request.method === 'GET' && path === '/v1/models') {
+      (account ? records : imageAccessProbes).push({ method: 'GET', path, authenticated, authentication, clientId: account?.clientId, at: new Date().toISOString() });
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(account ? { models: [
         { slug: 'future-unverified-model', display_name: 'Unverified model', visibility: 'list' },
         { slug: 'gpt-6.1-sol', display_name: 'GPT-6.1 Sol', visibility: 'list' },
         { slug: 'hidden-model', display_name: 'Hidden model', visibility: 'hidden' },
-      ] })); return;
+      ] } : { data: [{ id: 'gpt-image-1.5' }, { id: 'gpt-6.1-sol' }] })); return;
     }
     if (request.method !== 'POST' || path !== '/v1/responses') { errors.push(`Unexpected provider route ${request.method} ${path}`); response.writeHead(404).end(); return; }
     const selected = clone(mode);
     try {
       const chunks = []; let total = 0;
       for await (const chunk of request) { total += chunk.length; assert.ok(total <= 16 * 1024 * 1024, 'Provider request exceeds its 16 MiB boundary'); chunks.push(chunk); }
-      const record = readRequest(Buffer.concat(chunks), records.filter(value => value.method === 'POST').length + 1, selected.kind, authentication);
+      const bytes = Buffer.concat(chunks);
+      const imageBody = JSON.parse(bytes.toString('utf8'));
+      if (imageBody.tools?.some(tool => tool.type === 'image_generation')) {
+        const probe = imageBody.tool_choice === 'none';
+        if (probe) {
+          assert.equal(imageBody.input, 'ok'); assert.equal(imageBody.store, false);
+          assert.equal(imageBody.stream, true); assert.equal(imageBody.model, 'gpt-6.1-sol');
+          imageAccessProbes.push({ method: 'POST', path, authentication, imageAccess: true });
+        }
+        if (selected.kind === 'image-tool-rejected') {
+          response.writeHead(400, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { code: 'unsupported_tool', param: 'tools', message: 'image_generation is not available for this account' } })); return;
+        }
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.end(`data: ${JSON.stringify({ type: probe ? 'response.created' : 'response.completed', response: { id: 'resp_image_fixture', status: 'completed', output: [] } })}\n\n`); return;
+      }
+      const record = readRequest(bytes, records.filter(value => value.method === 'POST').length + 1, selected.kind, authentication);
       if (account) record.clientId = account.clientId;
       record.candidate = record.purpose === 'identityAnalysis' ? identityCandidateFor(record) : candidateFor(record, endpoint, selected.options);
       if (selected.options.needsOnce && record.purpose === 'generation' && record.markdown.includes('\n## Selected elements\n') && !record.markdown.includes('\n## Requested context\n')) {
@@ -374,10 +390,11 @@ export async function startProviderServer() {
     endpoint,
     key(which = 'primary') { assert.ok(keys[which]); return keys[which]; },
     expectKey(which) { assert.ok(keys[which]); expectedKey = keys[which]; },
-    setMode(kind, options = {}) { assert.ok(['complete', 'waiting', 'slow', 'malformed', 'refusal', 'truncated', 'auth', 'quota', 'rate-limit', 'conflict', 'plan-limit', 'plan-stream-limit', 'non-stream-error', 'non-stream-html'].includes(kind)); mode = { kind, options: { ...options, conflict: kind === 'conflict' || options.conflict === true } }; },
+    setMode(kind, options = {}) { assert.ok(['image-tool-rejected', 'complete', 'waiting', 'slow', 'malformed', 'refusal', 'truncated', 'auth', 'quota', 'rate-limit', 'conflict', 'plan-limit', 'plan-stream-limit', 'non-stream-error', 'non-stream-html'].includes(kind)); mode = { kind, options: { ...options, conflict: kind === 'conflict' || options.conflict === true } }; },
     oauth,
     requests: () => clone(records), generationRequests: () => clone(records.filter(value => value.method === 'POST' && value.purpose === 'generation')),
     identityRequests: () => clone(records.filter(value => value.method === 'POST' && value.purpose === 'identityAnalysis')),
+    imageAccessProbes: () => clone(imageAccessProbes),
     modelRequests: () => clone(records.filter(value => value.method === 'GET')), networkProbes: () => clone(probes), errors: () => [...errors],
     release(jobId) { const pump = pending.get(jobId); pending.delete(jobId); pump?.(); },
     async close() { await oauth.settle(); timers.forEach(clearTimeout); timers.clear(); pending.clear(); sockets.forEach(socket => socket.destroy()); await new Promise(accept => server.close(accept)); },

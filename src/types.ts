@@ -64,7 +64,8 @@ export type ChatgptView = { accounts: ChatgptAccount[]; activeAccountId: string 
   signIn: { status: 'idle' | 'awaitingBrowser' | 'complete' | 'cancelled' | 'failed'; message: string | null };
   models: { id: string; name: string }[]; modelsError: string | null; storageError: string | null; showWelcome: boolean; message: string | null };
 export type ModelInfo = { id: string; name: string; inputUsdPerMillion: number; outputUsdPerMillion: number; verifiedAt: string; sourceUrl: string; reasoningEfforts: string[] };
-export type AiSettingsView = { provider: ProviderId; providers: ProviderDescriptor[]; settings: ProviderSettings; credential: CredentialInfo; catalogue: ModelInfo[]; configurationError: string | null;
+export type ImageAccess = { available: 'yes' | 'no' | 'unknown'; checkedAt: number; reason: string };
+export type AiSettingsView = { imageAccess: ImageAccess | null; imageAccessChecking: boolean; provider: ProviderId; providers: ProviderDescriptor[]; settings: ProviderSettings; credential: CredentialInfo; catalogue: ModelInfo[]; configurationError: string | null;
   authentication: AuthenticationMethod; chatgpt: ChatgptView };
 export type TokenUsage = { inputTokens: number; outputTokens: number; totalTokens: number };
 export type GenerationStatus = 'prepared' | 'generating' | 'ready' | 'blocked' | 'failed' | 'unknown' | 'cancelled' | 'discarded' | 'applying' | 'applied';

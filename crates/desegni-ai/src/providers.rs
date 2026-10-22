@@ -45,11 +45,17 @@ impl ProviderId {
     }
     pub fn capabilities_for(
         self,
-        auth: AuthenticationMethod,
+        _auth: AuthenticationMethod,
         settings: &ProviderSettings,
+        access: Option<&crate::ImageAccess>,
     ) -> GenerationCapabilities {
         let mut capabilities = self.capabilities();
-        if auth != AuthenticationMethod::ApiKey || !settings.image_generation {
+        if !settings.image_generation
+            || !access.is_some_and(|access| {
+                access.available == crate::ImageAvailability::Yes
+                    && !access.expired(crate::image_access_now())
+            })
+        {
             capabilities.image_generation = None;
         }
         capabilities
@@ -326,6 +332,24 @@ impl ProviderClient {
         }
         self.openai
             .generate_images(response, auth, settings, snapshot, project, key, cancel)
+            .await
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub async fn generate_images_with_status(
+        &self,
+        response: ProviderResponse,
+        auth: AuthenticationMethod,
+        settings: &ProviderSettings,
+        snapshot: &RequirementsSnapshot,
+        project: &desegni_core::Project,
+        key: &ApiKey,
+        cancel: &CancellationToken,
+    ) -> (ProviderResponse, bool) {
+        if self.id != ProviderId::Openai {
+            return (response, false);
+        }
+        self.openai
+            .generate_images_with_status(response, auth, settings, snapshot, project, key, cancel)
             .await
     }
     pub async fn download_images(

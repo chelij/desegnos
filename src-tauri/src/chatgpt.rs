@@ -179,6 +179,12 @@ pub async fn begin_chatgpt_sign_in(
         .lock()
         .map_err(|_| "AI settings are unavailable.")?
         .set_authentication(AuthenticationMethod::Chatgpt)?;
+    if let Some(account) = account_id {
+        state
+            .lock()
+            .map_err(|_| "AI settings are unavailable.")?
+            .invalidate_image_account(account)?;
+    }
     let authorization = manager
         .begin_sign_in(storage, account_id)
         .await
@@ -230,6 +236,7 @@ pub async fn select_chatgpt_account(
                 .await;
         }
     }
+    crate::generation::refresh_image_access(&state, &chatgpt, true).await?;
     settings_view(&state, &chatgpt).await
 }
 
