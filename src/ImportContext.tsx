@@ -254,7 +254,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
   const aiNeedsFixing = !connected || selection?.needsSettings || (analysis?.status === 'failed' && /settings|sign in|connect|account|spending|key|model access|permission/i.test(analysis.error ?? ''));
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
       {folder?.website && <WebsiteChoice folder={folder} brand={brand} disabled={!!locked} update={setFolder}
-        chooseBrand={() => { void readBrand(folder); }} edit={async () => { setBrand(false); if (folder.website?.fresh) await run(async () => { await editWebsite(folder.id); close(); }); }} /> }
+        chooseBrand={() => { void readBrand(folder); }} edit={async () => { setBrand(false); if (folder.website && (folder.website.fresh || (folder.website.output && folder.website.buildUnavailable))) await run(async () => { await editWebsite(folder.id); close(); }); }} /> }
       <section className="identity-import" aria-label="Use my existing brand">
         {!candidate && !editMode && <>
         <h2>1. Where is your brand?</h2>

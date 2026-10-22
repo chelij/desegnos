@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     io::{BufRead, BufReader, Read},
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Stdio,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -126,6 +126,9 @@ pub fn website_build(
         let detected = detect_website_folder(&selected.path)
             .map_err(|e| e.to_string())?
             .ok_or("No website found.")?;
+        if let Some(reason) = &detected.build_unavailable {
+            return Err(reason.clone());
+        }
         if let Some(command) = &detected.install_command {
             return Err(format!(
                 "Run {command} in this folder first: {}",
@@ -162,9 +165,9 @@ fn run_build(
     stop: Arc<AtomicBool>,
 ) {
     let result = (|| -> Result<(), String> {
-        let mut command = Command::new(&args[0]);
+        let mut command =
+            desegni_storage::system_tools::ToolSearch::default().build_command(&path, &args)?;
         command
-            .args(&args[1..])
             .current_dir(&path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -179,7 +182,7 @@ fn run_build(
         }
         let mut child = command
             .spawn()
-            .map_err(|e| format!("Couldn't run {}: {e}", args.join(" ")))?;
+            .map_err(|e| desegni_storage::system_tools::spawn_message(&args[0], &e))?;
         let readers: Vec<Box<dyn Read + Send>> = vec![
             Box::new(child.stdout.take().expect("stdout")),
             Box::new(child.stderr.take().expect("stderr")),
@@ -214,16 +217,11 @@ fn run_build(
             if stop.load(Ordering::Relaxed) || start.elapsed() >= Duration::from_secs(300) {
                 #[cfg(unix)]
                 {
-                    let _ = Command::new("kill")
-                        .args(["-KILL", "--", &format!("-{}", child.id())])
-                        .status();
+                    use rustix::process::{Pid, Signal, kill_process_group};
+                    // The unreaped child owns this process group; no external kill program.
+                    let _ = kill_process_group(Pid::from_child(&child), Signal::KILL);
                 }
-                #[cfg(windows)]
-                {
-                    let _ = Command::new("taskkill")
-                        .args(["/T", "/F", "/PID", &child.id().to_string()])
-                        .status();
-                }
+                // Uses the native process handle on Windows, even with no taskkill/PATH.
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err(if stop.load(Ordering::Relaxed) {
@@ -233,7 +231,10 @@ fn run_build(
                 }
                 .into());
             }
-            if let Some(exit) = child.try_wait().map_err(|e| e.to_string())? {
+            if let Some(exit) = child
+                .try_wait()
+                .map_err(|_| "Couldn't read the build status.")?
+            {
                 if !exit.success() {
                     return Err(format!("Build failed ({exit})."));
                 }

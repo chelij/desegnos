@@ -3,6 +3,9 @@
 #[cfg(all(feature = "native-tests", not(debug_assertions)))]
 compile_error!("Native test automation must not be compiled into release artifacts.");
 
+#[cfg(all(not(debug_assertions), dev))]
+compile_error!("Release builds must embed the frontend: enable the custom-protocol feature.");
+
 mod chatgpt;
 mod clipboard;
 mod export;
@@ -15,6 +18,7 @@ mod preview;
 mod preview_health;
 mod project_location;
 mod recent;
+mod system_open;
 mod usage;
 mod workspace;
 mod website_import;

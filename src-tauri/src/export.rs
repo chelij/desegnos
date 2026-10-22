@@ -136,5 +136,5 @@ pub async fn open_export_folder(
         return Err("That folder is not the most recent website export.".into());
     }
     written.verify().map_err(|e| e.to_string())?;
-    open::that_detached(&written.path).map_err(|_| "The export is complete, but the system could not open its folder. Use the displayed path in your file manager.".into())
+    crate::system_open::open(&written.path).map_err(|_| "The export is complete, but the system could not open its folder. Use the displayed path in your file manager.".into())
 }

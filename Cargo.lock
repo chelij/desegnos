@@ -1118,6 +1118,7 @@ dependencies = [
  "desegni-core",
  "desegni-storage",
  "open",
+ "rustix",
  "serde",
  "serde_json",
  "tauri",
