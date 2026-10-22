@@ -1210,6 +1210,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
   const [draft, changeDraft] = useDraftText(region.prompt, (_value, latest) => change({ prompt: latest }).then(updated => updated.prompt));
   const [expanded, setExpanded] = useState(false);
   const [dropping, setDropping] = useState(false);
+  const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
   const attachInput = useRef<HTMLInputElement>(null);
   const [naturalHeight, setNaturalHeight] = useState(0);
   const focusedToken = useRef(0);
@@ -1218,10 +1219,11 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     if (!requested) return;
     text.current?.focus({ preventScroll: true });
   }, [focus, focusToken]);
+  const attachments = region.attachments ?? [];
   const targets = regionTargets(region);
   const target = targets.length > 0;
   const shaped = !target && !!region.shape && region.shape.kind !== 'rect';
-  const promptRect = target || shaped ? requestPromptRect(rect, zoom) : rect;
+  const promptRect = requestPlacement(target || shaped ? requestPromptRect(rect, zoom) : rect, zoom);
   useLayoutEffect(() => {
     const node = text.current; if (!node) return;
     const old = node.style.height; node.style.height = '0px'; const style = getComputedStyle(node);
@@ -1229,15 +1231,15 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     setNaturalHeight(current => current === height ? current : height);
   }, [draft, promptRect.width, zoom]);
   const minimumHeight = promptRect.height * zoom;
-  // Keep the box at its placement size; long text scrolls inside it instead of spilling over the page.
+  // Text keeps its own height; attachments and actions add normal-flow rows below it.
   const collapseHeight = target || shaped ? Math.max(minimumHeight, maxHeight) : minimumHeight;
   const fullHeight = Math.max(minimumHeight, naturalHeight);
   const hasMore = fullHeight > collapseHeight;
   useLayoutEffect(() => { if (target && hasMore && document.activeElement === text.current) setExpanded(true); }, [target, hasMore, draft]);
   const displayHeight = expanded ? fullHeight : Math.min(collapseHeight, fullHeight);
   const shown = { ...promptRect, height: (displayHeight + (hasMore ? 30 : 0)) / zoom };
-  // Bound the painted area while keeping the text and grips anchored to their
-  // original world positions. Expanding text never changes placement intent.
+  // Only placement controls are clipped to the workspace. The card grows below
+  // its text without changing the area's geometry or clipping wrapped attachments.
   const painted = clipToWorkspace(shown, bounds);
   const at = (x: number, y: number) => x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
   const moveVisible = at(rect.x, rect.y);
@@ -1246,7 +1248,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
   {shaped && <RegionOutline shape={region.shape!} rect={rect} bounds={bounds} zoom={zoom} layer={layer} selected={selected} regionId={region.id} onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); select(); }} />}
   {selected && !target && !shaped && <div className="element-selection request-placement" style={{ ...paintStyle(rect, bounds, zoom), zIndex: controlsLayer }} aria-hidden="true" />}
   {target && <div className="element-selection" data-testid="element-selection" style={{ ...paintStyle(rect, bounds, zoom), zIndex: layer }} aria-hidden="true" />}
-  <div data-region-id={region.id} className={`annotation ${target || shaped ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...paintStyle(shown, bounds, zoom), zIndex: layer }}
+  <div data-region-id={region.id} className={`annotation ${target || shaped ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...windowStyle(shown, bounds, zoom), height: 'auto', zIndex: layer }}
     onPointerDown={event => { if (event.target === event.currentTarget) { event.preventDefault(); event.stopPropagation(); text.current?.focus({ preventScroll: true }); } }}
     onFocusCapture={select}
     onDragOver={event => { if (!attach || !(event.dataTransfer.types.includes('Files') || event.dataTransfer.types.includes('text/uri-list'))) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; setDropping(true); }}
@@ -1259,28 +1261,30 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     }}>
     <div className="request-frame" aria-hidden="true" />
     {dropping && <div className="request-drop-hint" aria-hidden="true">Drop to attach to this request</div>}
-    <div className="request-attachment-group">
-    {!!region.attachments?.length && <ul className="request-attachments" aria-label="Attachments" onPointerDown={event => event.stopPropagation()}>{region.attachments.map(item => <li key={item.id} title={item.kind === 'link' ? item.url : item.name}>
-      {item.kind === 'image' && item.dataUri ? <img src={item.preview ?? item.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true">{item.kind === 'link' ? '🔗' : '¶'}</span>}
-      <span className="attachment-name">{item.name}</span>{detach && <button type="button" aria-label={`Remove ${item.name}`} onClick={() => detach(item.id)}>×</button>}
-    </li>)}</ul>}
-    {reports.map((report, index) => <details className="request-archive-report" key={index} onPointerDown={event => event.stopPropagation()}>
-      <summary>From {report.name}: {report.added} added, {report.skipped.length} skipped{report.skipped.length ? ` (${new Set(report.skipped.map(item => item.reason)).size === 1 ? report.skipped[0].reason : 'multiple reasons'})` : ''}</summary>
-      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: {item.reason}</li>)}</ul>}
-    </details>)}
-    </div>
-    {selected && attach && <>
-      <button type="button" className="request-attach" title="Attach pictures, text files or ZIPs (or drop them on the box)" aria-label={`Attach files to request ${number}`} onPointerDown={event => event.stopPropagation()} onClick={() => attachInput.current?.click()}>📎</button>
-      <input ref={attachInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html,.zip,application/zip,text/plain" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) attach(files, []); }} />
-    </>}
     {stale && <div className="request-stale" role="alert" onPointerDown={event => event.stopPropagation()}><span>This element was removed.</span><button type="button" onClick={repickNow}>Pick again</button><button type="button" onClick={removeNow}>Remove request</button></div>}
     {!target && <span className="request-number" aria-hidden="true">{number}</span>}
     {wholePage && <span className="request-phone-tag" title={region.wholePage ? "Whole page" : "Whole page (automatically detected). Turn off in request controls."}>Whole page</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture…' : target ? 'Describe the change…' : 'Describe what goes here…'}
-      style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
+      style={{ height: displayHeight, borderWidth: 0, outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
-    {hasMore && <button type="button" className="request-expand" style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom + displayHeight, width: shown.width * zoom }} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
+    {hasMore && <button type="button" className="request-expand" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
+    {(attachments.length > 0 || reports.length > 0) && <div className="request-attachment-group">
+    {attachments.length > 0 && <ul className="request-attachments" aria-label="Attachments" onPointerDown={event => event.stopPropagation()}>{(attachmentsExpanded ? attachments : attachments.slice(0, 3)).map(item => <li key={item.id} title={item.kind === 'link' ? item.url : item.name}>
+      {item.kind === 'image' && item.dataUri ? <img src={item.preview ?? item.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true">{item.kind === 'link' ? '🔗' : '¶'}</span>}
+      <span className="attachment-name">{item.name}</span>{detach && <button type="button" aria-label={`Remove ${item.name}`} onClick={() => detach(item.id)}>×</button>}
+    </li>)}
+      {attachments.length > 3 && <li><button type="button" aria-expanded={attachmentsExpanded} aria-label={attachmentsExpanded ? 'Show fewer attachments' : `Show ${attachments.length - 3} more attachments`} onClick={() => setAttachmentsExpanded(value => !value)}>{attachmentsExpanded ? 'Less' : `+${attachments.length - 3}`}</button></li>}
+    </ul>}
+    {reports.map((report, index) => <details className="request-archive-report" key={index} onPointerDown={event => event.stopPropagation()}>
+      <summary>From {report.name}: {report.added} added, {report.skipped.length} skipped{report.skipped.length ? ` (${new Set(report.skipped.map(item => item.reason)).size === 1 ? report.skipped[0].reason : 'multiple reasons'})` : ''}</summary>
+      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: {item.reason}</li>)}</ul>}
+    </details>)}
+    </div>}
+    {selected && attach && <div className="request-attach-row">
+      <button type="button" className="request-attach" title="Attach pictures, text files or ZIPs (or drop them on the box)" aria-label={`Attach files to request ${number}`} onPointerDown={event => event.stopPropagation()} onClick={() => attachInput.current?.click()}>📎</button>
+      <input ref={attachInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html,.zip,application/zip,text/plain" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) attach(files, []); }} />
+    </div>}
   </div>
     {selected && !target && <div className="request-controls" data-region-id={region.id} style={{ ...paintStyle(shown, bounds, zoom), zIndex: controlsLayer }} onFocusCapture={select}><button ref={move} className="annotation-grip move-grip" aria-label={`Move request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag to move. Arrow keys change placement."
       style={{ visibility: moveVisible ? undefined : 'hidden', left: (rect.x - (painted?.x ?? rect.x)) * zoom - 28, top: (rect.y - (painted?.y ?? rect.y)) * zoom }}
