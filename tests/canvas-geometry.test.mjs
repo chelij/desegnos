@@ -10,12 +10,34 @@ const temporary = await mkdtemp(join(root, '.canvas-geometry-'));
 try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--jsx', 'react-jsx', '--module', 'esnext',
-    '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts', 'src/layerOrder.ts'], { cwd: root, encoding: 'utf8' });
+    '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts', 'src/layerOrder.ts', 'src/wholePageScope.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { pointInEllipse, pointInPolygon, pointInRegion, absolutePoints, relativePoints, simplifyFreehand, freehandArea, resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
     workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
   const { reorderedLayers } = await import(pathToFileURL(join(temporary, 'layerOrder.js')).href);
+  const { isWholePage } = await import(pathToFileURL(join(temporary, 'wholePageScope.js')).href);
+  await test('whole-page badges follow base layers, tie order, layout intent and opt-out', () => {
+    const base = { id: 'base', zIndex: 0, prompt: 'make it greyscale, not green', rect: { x: 0, y: -8, width: 1440, height: 912 } };
+    const tail = { id: 'tail', zIndex: 1, prompt: 'too long tail, I want one page one screen only', rect: { x: 0, y: 964, width: 1440, height: 140 } };
+    const image = { id: 'image', zIndex: 2, prompt: 'replace with transparent background version', elements: [{ id: 'image001' }], rect: { x: 60, y: 100, width: 200, height: 200 } };
+    const page = { viewport: { width: 1440, height: 900 }, regions: [base, tail, image] };
+    assert.equal(isWholePage(base, page), true);
+    assert.equal(isWholePage(tail, page), true);
+    assert.equal(isWholePage(image, page), false);
+    base.zIndex = 3;
+    assert.equal(isWholePage(base, page), false);
+    assert.equal(isWholePage({ ...base, wholePage: true }, page), true);
+    assert.equal(isWholePage({ ...tail, wholePageDisabled: true }, page), false);
+    assert.equal(isWholePage({ ...tail, rect: { ...tail.rect, width: 300 } }, page), false);
+    assert.equal(isWholePage({ ...tail, prompt: 'Add a footer note' }, page), false);
+    base.zIndex = 0; tail.zIndex = 0;
+    assert.equal(isWholePage(base, page), true);
+    page.regions = [tail, base, image];
+    assert.equal(isWholePage(base, page), false);
+    tail.completed = true;
+    assert.equal(isWholePage(base, page), true);
+  });
   await test('canvas tool shortcuts never interrupt text input and AI stays explicit', () => {
     const event = key => ({ key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false });
     for (const [key, action] of [['v','selectTool'], ['r','requestTool'], ['h','panTool'], ['c','circleTool'], ['l','freehandTool']]) {

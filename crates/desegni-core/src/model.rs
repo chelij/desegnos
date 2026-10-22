@@ -253,7 +253,8 @@ pub struct Region {
 }
 
 impl Region {
-    /// Rectangular page coverage uses measured page extents, falling back to the guide.
+    /// A covering base layer, or full-width page-layout intent, grants automatic page scope.
+    /// Coverage uses measured page extents, falling back to the guide.
     /// Phone fixes and element selections stay local unless explicitly overridden.
     pub fn is_whole_page(&self, page: &Page) -> bool {
         self.whole_page || (!self.whole_page_disabled && self.auto_whole_page(page))
@@ -277,14 +278,46 @@ impl Region {
         let overlap = |start: f64, length: f64, extent: f64| {
             ((start + length).min(extent) - start.max(0.0)).max(0.0)
         };
+        let base_layer = page
+            .request_layers()
+            .first()
+            .is_some_and(|region| region.id == self.id);
         overlap(self.rect.x, self.rect.width, width) >= width * 0.95
-            && ((self.rect.y.abs() <= f64::from(page.viewport.height) * 0.1
-                && overlap(
-                    self.rect.y,
-                    self.rect.height,
-                    f64::from(page.viewport.height),
-                ) >= f64::from(page.viewport.height) * 0.9)
-                || overlap(self.rect.y, self.rect.height, height) >= height * 0.9)
+            && (self.has_page_layout_intent()
+                || base_layer
+                    && ((self.rect.y.abs() <= f64::from(page.viewport.height) * 0.1
+                        && overlap(
+                            self.rect.y,
+                            self.rect.height,
+                            f64::from(page.viewport.height),
+                        ) >= f64::from(page.viewport.height) * 0.9)
+                        || overlap(self.rect.y, self.rect.height, height) >= height * 0.9))
+    }
+
+    /// Deliberately narrow page-layout phrases, never a general keyword like "background".
+    /// A full-width request may carry this intent even when drawn below the viewport.
+    fn has_page_layout_intent(&self) -> bool {
+        let prompt = self
+            .prompt
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        [
+            "one page one screen",
+            "one screen only",
+            "single screen",
+            "fit the page to",
+            "fit this page to",
+            "fit on one screen",
+            "fit in one screen",
+            "page height",
+            "page layout",
+            "viewport height",
+        ]
+        .iter()
+        .any(|phrase| format!(" {prompt} ").contains(&format!(" {phrase} ")))
     }
 
     pub fn targets(&self) -> Vec<&ElementTarget> {
@@ -311,6 +344,19 @@ pub struct Page {
     pub regions: Vec<Region>,
     #[serde(deserialize_with = "crate::required_nullable")]
     pub content: Option<SiteContent>,
+}
+
+impl Page {
+    /// Bottom to top, matching the canvas and Layers list. Stable sort retains array-order ties.
+    pub fn request_layers(&self) -> Vec<&Region> {
+        let mut layers: Vec<_> = self
+            .regions
+            .iter()
+            .filter(|region| !region.completed)
+            .collect();
+        layers.sort_by_key(|region| region.z_index);
+        layers
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]

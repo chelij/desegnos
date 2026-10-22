@@ -418,3 +418,223 @@ fn protected_selected_content_survives_whole_page_structure_authority() {
             .contains("protected")
     );
 }
+
+#[test]
+fn covering_base_follows_request_layer_order_and_array_order_ties() {
+    let mut p = add(fixture(), rect(30., 40., 200., 100.), "Local overlay");
+    let base = p.pages[0].regions[0].id;
+    let overlay = p.pages[0].regions[1].id;
+    assert!(p.pages[0].regions[0].is_whole_page(&p.pages[0]));
+    // Actual layer commands must change scope, not merely the order of prompt text.
+    p = p
+        .apply(
+            p.revision,
+            Command::ArrangeRegion {
+                page_id: p.home_page_id,
+                region_id: base,
+                direction: LayerDirection::Front,
+            },
+        )
+        .unwrap();
+    assert!(!p.pages[0].regions[0].is_whole_page(&p.pages[0]));
+    assert_eq!(p.pages[0].request_layers()[0].id, overlay);
+    p = p
+        .apply(
+            p.revision,
+            Command::ArrangeRegion {
+                page_id: p.home_page_id,
+                region_id: base,
+                direction: LayerDirection::Back,
+            },
+        )
+        .unwrap();
+    assert!(p.pages[0].regions[0].is_whole_page(&p.pages[0]));
+    p.pages[0].regions[1].z_index = p.pages[0].regions[0].z_index;
+    assert_eq!(p.pages[0].request_layers()[0].id, base);
+    p.pages[0].regions.swap(0, 1);
+    assert_eq!(p.pages[0].request_layers()[0].id, overlay);
+    assert!(!p.pages[0].regions[1].is_whole_page(&p.pages[0]));
+    // Explicit permission still overrides layer placement.
+    p.pages[0].regions[1].whole_page = true;
+    assert!(p.pages[0].regions[1].is_whole_page(&p.pages[0]));
+}
+
+#[test]
+fn overlapping_requests_are_presented_bottom_to_top_with_local_higher_layer_precedence() {
+    let mut p = add(fixture(), rect(10., 20., 200., 100.), "Make this box red");
+    p = add(p, rect(100., 20., 200., 100.), "Make this box blue");
+    p.pages[0].regions[0].z_index = -4;
+    p.pages[0].regions[1].z_index = 8;
+    p.pages[0].regions[2].z_index = 2;
+    let bottom = p.pages[0].regions[0].id;
+    let top = p.pages[0].regions[1].id;
+    let middle = p.pages[0].regions[2].id;
+    let s = p.prepare_requirements().unwrap();
+    let heading = |id| s.markdown.find(&format!("### Area {id}\n")).unwrap();
+    assert!(heading(bottom) < heading(middle) && heading(middle) < heading(top));
+    assert!(
+        s.markdown
+            .contains("where boxes overlap, the higher layer wins for its own box only")
+    );
+    assert!(s.markdown.contains("\"layerOrder\": 0"));
+    assert!(s.markdown.contains("\"layerOrder\": 2"));
+    s.validate_current(&p).unwrap();
+}
+
+#[test]
+fn below_fold_layout_intent_needs_full_width_and_respects_opt_out() {
+    let mut p = add(
+        fixture(),
+        rect(0., 964., 1440., 140.),
+        "too long tail, I want one page one screen only",
+    );
+    assert!(p.pages[0].regions[1].is_whole_page(&p.pages[0]));
+    p.pages[0].regions[1].rect.width = 300.;
+    assert!(!p.pages[0].regions[1].is_whole_page(&p.pages[0]));
+    p.pages[0].regions[1].rect.width = 1440.;
+    p.pages[0].regions[1].prompt = "Add a note below the page".into();
+    assert!(!p.pages[0].regions[1].is_whole_page(&p.pages[0]));
+    p.pages[0].regions[1].prompt = "too long tail, one page, one screen only".into();
+    assert!(p.pages[0].regions[1].is_whole_page(&p.pages[0]));
+    p.pages[0].regions[1].whole_page_disabled = true;
+    assert!(!p.pages[0].regions[1].is_whole_page(&p.pages[0]));
+}
+
+fn real_layered_case() -> Project {
+    let mut p = fixture();
+    p.pages[0].regions[0].prompt = "make it greyscale, not green".into();
+    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGOwaQoAIgYIBQAdRgQ5DejjuQAAAABJRU5ErkJggg==";
+    p.pages[0].content.as_mut().unwrap().html = p.pages[0].content.as_ref().unwrap().html.replace(
+        "</main>",
+        &format!("<img data-desegnos-id=\"image001\" src=\"{png}\" alt=\"Product\"></main>"),
+    );
+    p.store_inline_images().unwrap();
+    p = add(
+        p,
+        rect(0., 964., 1440., 140.),
+        "too long tail, I want one page one screen only",
+    );
+    p = p
+        .apply(
+            p.revision,
+            Command::AddElementRegion {
+                page_id: p.home_page_id,
+                rect: rect(60., 100., 200., 200.),
+                element: ElementTarget {
+                    id: "image001".into(),
+                    selector: "body > main:nth-of-type(1) > img:nth-of-type(1)".into(),
+                    tag: "img".into(),
+                    label: "Product".into(),
+                    source_sha256: String::new(),
+                },
+            },
+        )
+        .unwrap();
+    p.pages[0].regions[2].prompt = "replace with transparent background version".into();
+    p
+}
+
+#[test]
+fn real_case_combines_base_layout_and_image_edit_without_frozen_stylesheets() {
+    let p = real_layered_case();
+    assert!(p.pages[0].regions[0].is_whole_page(&p.pages[0]));
+    assert!(p.pages[0].regions[1].is_whole_page(&p.pages[0]));
+    assert!(!p.pages[0].regions[2].is_whole_page(&p.pages[0]));
+    let s = p
+        .prepare_requirements_with_capabilities(GenerationCapabilities {
+            image_generation: Some(ImageGenerationCapability::default()),
+            ..Default::default()
+        })
+        .unwrap();
+    assert!(!s.is_element_fix());
+    assert!(s.markdown.contains(
+        "Element-fix rules and partial-page/conflict rules constrain only their own local regions"
+    ));
+    assert!(!s.markdown.contains("Image pixels cannot be edited"));
+    assert!(s.markdown.contains("native image editing is available"));
+    let mut c = candidate(&p, &s);
+    let source = p.pages[0]
+        .content
+        .as_ref()
+        .unwrap()
+        .html
+        .split("src=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    assert!(source.starts_with(PROJECT_ASSET_SCHEME));
+    c.pages[0].content.html = c.pages[0].content.html.replace(&format!("src=\"{source}\""), &format!("src=\"#\" data-desegnos-generate=\"Replace the product background with transparency\" data-desegnos-source=\"{source}\" data-desegnos-background=\"transparent\""));
+    c.pages[0].content.css = "article { color: gray; height: 100vh; display: grid; grid-template-rows: 1fr auto; } img { max-height: 40vh; }".into();
+    c.validate(&s, &p).unwrap();
+    let image_requests = c.image_generation_requests().unwrap();
+    assert_eq!(image_requests.len(), 1);
+    assert!(image_requests[0].transparent);
+    assert!(image_requests[0].reference_image(&s, &p).unwrap().is_some());
+    let (recovered, events) =
+        recover_generation_reply(&serde_json::to_string(&c).unwrap(), &s, &p).unwrap();
+    assert_eq!(recovered.pages[0].content, c.pages[0].content);
+    assert!(events.is_empty());
+    assert!(
+        recovered
+            .regions
+            .iter()
+            .all(|r| r.status == RegionStatus::Implemented)
+    );
+}
+
+#[test]
+fn conflicted_image_freezes_only_its_element_not_page_styles_or_structure() {
+    let p = real_layered_case();
+    let s = p.prepare_requirements().unwrap();
+    let mut c = candidate(&p, &s);
+    c.regions[2].status = RegionStatus::Conflict;
+    c.regions[2].explanation = "No transparent replacement is available".into();
+    // The image is unchanged, while its ancestor's tag, global CSS and JavaScript change.
+    c.validate(&s, &p).unwrap();
+    let (recovered, _) =
+        recover_generation_reply(&serde_json::to_string(&c).unwrap(), &s, &p).unwrap();
+    assert_eq!(recovered.pages[0].content, c.pages[0].content);
+    assert_eq!(recovered.regions[0].status, RegionStatus::Implemented);
+    assert_eq!(recovered.regions[1].status, RegionStatus::Implemented);
+    assert_eq!(recovered.regions[2].status, RegionStatus::Conflict);
+    c.pages[0].content.html = c.pages[0]
+        .content
+        .html
+        .replace("alt=\"Product\"", "alt=\"Changed\"");
+    assert!(c.validate(&s, &p).is_err());
+}
+
+#[test]
+fn changing_an_unsubmitted_lower_layer_invalidates_frozen_scope() {
+    let mut p = fixture();
+    // An empty request is visible in Layers but absent from this generation's targets.
+    let mut empty = p.pages[0].regions[0].clone();
+    empty.id = Uuid::new_v4();
+    empty.prompt.clear();
+    empty.z_index = 2;
+    p.pages[0].regions.push(empty);
+    let s = p.prepare_requirements().unwrap();
+    s.validate_current(&p).unwrap();
+    p.pages[0].regions[1].z_index = -1;
+    assert!(!p.pages[0].regions[0].is_whole_page(&p.pages[0]));
+    assert!(s.validate_current(&p).is_err());
+}
+
+#[test]
+fn unmapped_local_conflict_does_not_freeze_page_layout() {
+    let p = add(
+        fixture(),
+        rect(40., 100., 200., 100.),
+        "Needs an unavailable service",
+    );
+    let s = p.prepare_requirements().unwrap();
+    let mut c = candidate(&p, &s);
+    c.regions[1].status = RegionStatus::Conflict;
+    c.pages[0].content.html.push_str(&format!("<section data-desegnos-region=\"{}\" data-desegnos-placeholder=\"conflict\">Needs service access</section>", p.pages[0].regions[1].id));
+    c.validate(&s, &p).unwrap();
+    let (recovered, _) =
+        recover_generation_reply(&serde_json::to_string(&c).unwrap(), &s, &p).unwrap();
+    assert_eq!(recovered.pages[0].content, c.pages[0].content);
+}
