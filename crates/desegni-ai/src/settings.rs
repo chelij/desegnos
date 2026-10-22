@@ -351,6 +351,22 @@ pub(crate) fn estimate_body_with_reserve(
     })
 }
 
+/// Reserve $0.50 per bounded low-quality image call, including reference and orchestration.
+/// An estimate allowance, not a guaranteed provider billing cap.
+pub(crate) fn image_generation_reserve(
+    auth: AuthenticationMethod,
+    snapshot: &RequirementsSnapshot,
+) -> f64 {
+    if auth != AuthenticationMethod::ApiKey || snapshot.format_version().unwrap_or(0) < 17 {
+        return 0.0;
+    }
+    snapshot
+        .capabilities
+        .as_ref()
+        .and_then(|c| c.image_generation.as_ref())
+        .map_or(0.0, |images| f64::from(images.max_images) * 0.50)
+}
+
 #[cfg(test)]
 mod web_search_tests {
     use super::*;
@@ -413,20 +429,4 @@ mod web_search_tests {
             assert_eq!(body["tool_choice"], "none");
         }
     }
-}
-
-/// Reserve $0.50 per bounded low-quality image call, including reference and orchestration.
-/// An estimate allowance, not a guaranteed provider billing cap.
-pub(crate) fn image_generation_reserve(
-    auth: AuthenticationMethod,
-    snapshot: &RequirementsSnapshot,
-) -> f64 {
-    if auth != AuthenticationMethod::ApiKey || snapshot.format_version().unwrap_or(0) < 17 {
-        return 0.0;
-    }
-    snapshot
-        .capabilities
-        .as_ref()
-        .and_then(|c| c.image_generation.as_ref())
-        .map_or(0.0, |images| f64::from(images.max_images) * 0.50)
 }

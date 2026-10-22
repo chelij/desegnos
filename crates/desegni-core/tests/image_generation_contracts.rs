@@ -193,13 +193,15 @@ fn partial_apply_finishes_ready_region_and_retains_conflict_and_explanation() {
     let snapshot = project.prepare_requirements().unwrap();
     candidate.job_id = snapshot.job_id;
     candidate.requirements_sha256 = snapshot.sha256.clone();
-    candidate.embed_generated_images(&BTreeMap::new()).unwrap();
     candidate.regions.push(RegionOutcome {
         region_id: region.id,
         status: RegionStatus::Conflict,
         explanation: "Which account should this use?".into(),
     });
     candidate.pages[0].content.html.push_str(&format!("<section data-desegnos-region='{}' data-desegnos-placeholder='conflict'>Account details needed</section>",region.id));
+    validate_page_source(&candidate.pages[0].content).unwrap();
+    // Finish the candidate before image embedding serializes it as a complete document.
+    candidate.embed_generated_images(&BTreeMap::new()).unwrap();
     candidate.validate(&snapshot, &project).unwrap();
     assert!(!candidate.is_ready());
     assert!(candidate.can_apply(&snapshot));
