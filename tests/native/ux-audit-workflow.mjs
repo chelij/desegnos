@@ -220,14 +220,16 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.equal((await driver.invoke('get_ai_settings')).credential.configured,true);
   });
 
-  await step('Cancel stops a held generation visibly and preserves the current website and requests', async () => {
+  await step('Stop cancels a held generation visibly and preserves the current website and requests', async () => {
     const before = (await workspace(driver)).project;
     provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     cancelled = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The held generation did not reach the provider');
     await driver.ready('.canvas-pill[aria-label="Generation status"]');
     assert.equal(await driver.execute(() => !!document.querySelector('dialog[open]')), false);
-    await driver.click('//*[@role="region" and @aria-label="Generation status"]//button[starts-with(normalize-space(.),"Cancel")]', 'xpath');
+    await driver.click('//header//button[normalize-space(.)="Stop"]', 'xpath');
     await jobAt(driver, projectId, ['cancelled']); provider.release(cancelled.jobId);
+    await waitFor(() => driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"] .generation-heading')?.textContent === 'Stopped'), 'Stop did not visibly acknowledge cancellation');
+    await driver.ready('//header//button[normalize-space(.)="Generate" and not(@disabled)]', 'xpath');
     assert.deepEqual((await workspace(driver)).project.pages, before.pages);
     await physical.captureWindow(join(output, '07-cancelled-generation-window.png'));
   });

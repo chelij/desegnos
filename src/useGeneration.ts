@@ -133,7 +133,13 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     try {
       const value = await call<WorkspaceView>('apply_generation', { ...args(), acceptedDecisionIndices: indices }, flow.current?.controller.signal);
       if (!flow.current?.controller.signal.aborted && context.current === id) { applied(value); await refresh(); setVisible(!!job?.candidate?.regions.some(region => region.status === 'conflict')); }
-    } catch (error) { if (!flow.current?.controller.signal.aborted && context.current === id) setError(describe(error)); throw error; }
+    } catch (error) {
+      if (!flow.current?.controller.signal.aborted && context.current === id) {
+        await refresh();
+        if (context.current === id) setError(describe(error));
+      }
+      throw error;
+    }
     finally { if (context.current === id && token === action.current) setOperation(null); }
   }
   const appliedAttempts = useRef(new Set<string>());

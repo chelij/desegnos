@@ -358,7 +358,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.fill('Request 1', 'Create a welcoming homepage using the imported Northstar identity and its approved logo.');
     await waitFor(async () => (await workspace(driver)).project.pages[0].regions[0]?.prompt.includes('Northstar'), 'The future-generation identity request did not persist');
     const frozen = await driver.invoke('prepare_requirements');
-    assert.match(frozen.markdown, /^Requirements format: 16$/m);
+    assert.match(frozen.markdown, /^Requirements format: 17$/m);
     const catalogue = blocks(frozen.markdown).find(block => block?.assets && block?.pages);
     assert.equal(catalogue.photos.length, 0); assert.equal(catalogue.pages[0].path, '/'); assert.equal(catalogue.pages[0].photos.length, 1); assert.equal(catalogue.pages[0].photos[0].name, 'work/photo-a.png');
     assert.ok(frozen.markdown.includes('#225577')); assert.ok(frozen.markdown.includes('Clear, warm and confident.'));
