@@ -243,6 +243,21 @@ impl Session {
         Ok(())
     }
 
+    pub fn apply_generation_draft(
+        &mut self,
+        snapshot: &RequirementsSnapshot,
+        draft: &crate::GenerationDraft,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<()> {
+        let next = self.project.apply_generation_draft(snapshot, draft)?;
+        if next.revision == self.project.revision {
+            return Ok(());
+        }
+        durable(&next)?;
+        self.commit(next);
+        Ok(())
+    }
+
     pub fn record_generation(
         &mut self,
         snapshot: &RequirementsSnapshot,

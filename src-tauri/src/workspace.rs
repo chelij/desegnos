@@ -226,6 +226,22 @@ impl Workspace {
             .map_err(message)
     }
 
+    pub(super) fn apply_draft(
+        &mut self,
+        snapshot: &RequirementsSnapshot,
+        draft: &desegni_core::GenerationDraft,
+    ) -> NativeResult<()> {
+        let journal = self
+            .journal
+            .as_ref()
+            .ok_or("Recovery is unavailable. Nothing was applied.")?;
+        self.session
+            .as_mut()
+            .ok_or("Create or open a project first.")?
+            .apply_generation_draft(snapshot, draft, |project| journal.append(project))
+            .map_err(message)
+    }
+
     pub(super) fn record_generated(
         &mut self,
         snapshot: &RequirementsSnapshot,
@@ -692,7 +708,8 @@ impl Workspace {
                 }
                 return self.open_file_tab(&file_path);
             }
-            let file = desegni_storage::import_detected_website(path, &self.project_location()?).map_err(message)?;
+            let file = desegni_storage::import_detected_website(path, &self.project_location()?)
+                .map_err(message)?;
             let document = file.load_document().map_err(message)?;
             return self.open_tab(|state| state.open_document(file, document));
         }
@@ -1444,7 +1461,9 @@ pub fn open_found_source(
             .map_err(message)?
             .ok_or("This item has no online source.")?
     };
-    crate::system_open::open(url).map_err(|_| "Couldn't open a browser. Copy the source address and open it manually.".into())
+    crate::system_open::open(url).map_err(|_| {
+        "Couldn't open a browser. Copy the source address and open it manually.".into()
+    })
 }
 
 /// A web link the user clicked in a preview, opened in their browser after they confirm it.
@@ -1774,21 +1793,36 @@ pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
 #[serde(untagged)]
 pub enum OpenProjectResult {
     Workspace(Box<WorkspaceView>),
-    Website { website: Box<crate::website_import::FolderSelection> },
+    Website {
+        website: Box<crate::website_import::FolderSelection>,
+    },
 }
 #[tauri::command]
-pub async fn edit_website_folder(app: AppHandle, generation: State<'_, Mutex<crate::generation::GenerationService>>, imports: State<'_, Mutex<crate::website_import::WebsiteImports>>, folder_id: Uuid) -> NativeResult<WorkspaceView> {
-    generation.lock().map_err(message)?.ensure_switch_allowed()?;
+pub async fn edit_website_folder(
+    app: AppHandle,
+    generation: State<'_, Mutex<crate::generation::GenerationService>>,
+    imports: State<'_, Mutex<crate::website_import::WebsiteImports>>,
+    folder_id: Uuid,
+) -> NativeResult<WorkspaceView> {
+    generation
+        .lock()
+        .map_err(message)?
+        .ensure_switch_allowed()?;
     let path = imports.lock().map_err(message)?.path(folder_id)?;
     // Snapshotting pictures and writing the initial archive can take seconds. Keep the UI
     // event loop responsive while the worker owns the workspace transaction.
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<Mutex<Workspace>>();
         let mut state = state.lock().map_err(message)?;
-        app.state::<Mutex<crate::generation::GenerationService>>().lock().map_err(message)?.ensure_switch_allowed()?;
+        app.state::<Mutex<crate::generation::GenerationService>>()
+            .lock()
+            .map_err(message)?
+            .ensure_switch_allowed()?;
         state.open_file_tab(&path)?;
         Ok(state.view())
-    }).await.map_err(message)?
+    })
+    .await
+    .map_err(message)?
 }
 #[tauri::command]
 pub async fn open_project(
@@ -1841,9 +1875,15 @@ pub async fn open_project(
             "A project was opened while the dialog was active. Open the file again.".into(),
         );
     }
-    if path.is_dir() && desegni_storage::project_in_folder(&path).map_err(message)?.is_none() {
+    if path.is_dir()
+        && desegni_storage::project_in_folder(&path)
+            .map_err(message)?
+            .is_none()
+    {
         let website = imports.lock().map_err(message)?.select(path)?;
-        return Ok(Some(OpenProjectResult::Website { website: Box::new(website) }));
+        return Ok(Some(OpenProjectResult::Website {
+            website: Box::new(website),
+        }));
     }
     state.open_file_tab(&path)?;
     Ok(Some(OpenProjectResult::Workspace(Box::new(state.view()))))

@@ -73,6 +73,7 @@ fn main() {
             "cancel_generation",
             "discard_generation",
             "apply_generation",
+            "generation_draft",
             "create_preview",
             "release_preview",
             "editor_heartbeat",

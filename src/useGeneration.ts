@@ -150,7 +150,16 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     appliedAttempts.current.add(key);
     void apply([]).catch(() => {});
   }, [job?.jobId, job?.status, job?.attempts.length, operation]);
-  return { job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
+  async function draftAction(jobId: string, draftId: string, action: string, confirmedRevision?: number) {
+    const id = projectId;
+    const value = await call<import('./types').DraftReview>('generation_draft', { jobId, draftId, action, confirmedRevision });
+    if (context.current === id) {
+      if (value.workspace) applied(value.workspace);
+      if (jobId === job?.jobId) setJob(value.job);
+    }
+    return value;
+  }
+  return { draftAction, job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
     start: () => launch('start_generation', 'Starting generation…'),
     cancel,
     discard: () => perform('discard_generation', 'Discarding result…', args()),

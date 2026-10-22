@@ -15,7 +15,7 @@
     "allow-set-ai-authentication", "allow-begin-chatgpt-sign-in", "allow-cancel-chatgpt-sign-in", "allow-select-chatgpt-account",
     "allow-sign-out-chatgpt", "allow-acknowledge-chatgpt-welcome", "allow-open-chatgpt-usage", "allow-retry-chatgpt-secure-storage",
     "allow-prepare-generation", "allow-get-generation", "allow-list-generations", "allow-record-usage", "allow-open-preview-link", "allow-get-past-generation", "allow-start-generation", "allow-retry-generation", "allow-cancel-generation",
-    "allow-discard-generation", "allow-apply-generation", "allow-create-preview", "allow-release-preview", "allow-editor-heartbeat", "allow-reload-workspace"
+    "allow-discard-generation", "allow-apply-generation", "allow-generation-draft", "allow-create-preview", "allow-release-preview", "allow-editor-heartbeat", "allow-reload-workspace"
   ]
 }
 

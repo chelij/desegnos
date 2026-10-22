@@ -26,13 +26,23 @@ pub fn compile_website(project: &Project) -> Result<WebsiteExport> {
     project.validate()?;
     if let Some(mut files) = project.website_files()? {
         for page in project.pages.iter().filter(|p| p.included) {
-            let path = project.website.as_ref().and_then(|s| s.page_files.get(&page.id)).cloned().unwrap_or_else(|| output_path(&page.path));
+            let path = project
+                .website
+                .as_ref()
+                .and_then(|s| s.page_files.get(&page.id))
+                .cloned()
+                .unwrap_or_else(|| output_path(&page.path));
             if let Some(bytes) = files.get_mut(&path) {
-                let source = String::from_utf8(bytes.clone()).map_err(|_| Error("Invalid website HTML.".into()))?;
+                let source = String::from_utf8(bytes.clone())
+                    .map_err(|_| Error("Invalid website HTML.".into()))?;
                 *bytes = crate::source::strip_editor_ids(&source).into_bytes();
             }
         }
-        return Ok(WebsiteExport { files, page_count: project.pages.iter().filter(|p| p.included).count(), warnings: vec![] });
+        return Ok(WebsiteExport {
+            files,
+            page_count: project.pages.iter().filter(|p| p.included).count(),
+            warnings: vec![],
+        });
     }
     ensure(
         project

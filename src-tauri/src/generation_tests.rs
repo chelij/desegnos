@@ -2218,3 +2218,51 @@ fn validation_notes_and_content_free_counters_survive_reopening() {
         "A repeated completion must not count failures twice"
     );
 }
+
+#[test]
+fn retained_drafts_survive_restart_past_history_and_dismissal() {
+    let temp = Temp::new();
+    let project = project();
+    let mut service = temp.service();
+    let prepared = service.prepare(&project).unwrap();
+    let mut record = service.jobs[&prepared.job_id].clone();
+    let drafts = desegni_core::retain_generation_drafts(
+        "{\"pages\":[{\"pageId\":\"bad-id\",\"content\":{\"html\":\"<p>Paid work</p>\",\"css\":\"\",\"javascript\":\"\"}}]}",
+        &record.view.requirements,
+        &project,
+        None,
+        &[],
+    );
+    record.view.drafts = drafts.clone();
+    service.persist(record).unwrap();
+    drop(service);
+    let mut restarted = temp.service();
+    let loaded = restarted.saved_job(project.id, prepared.job_id).unwrap();
+    assert_eq!(loaded.drafts[0].code, drafts[0].code);
+    assert!(
+        restarted
+            .past_jobs(project.id)
+            .unwrap()
+            .jobs
+            .iter()
+            .any(|job| job.job_id == prepared.job_id)
+    );
+    let mut record = restarted
+        .jobs
+        .get(&prepared.job_id)
+        .cloned()
+        .unwrap_or(JobRecord {
+            version: 1,
+            view: loaded,
+            error: None,
+        });
+    record.view.drafts[0].dismissed = true;
+    restarted.persist(record).unwrap();
+    drop(restarted);
+    let loaded = temp
+        .service()
+        .saved_job(project.id, prepared.job_id)
+        .unwrap();
+    assert!(loaded.drafts[0].dismissed);
+    assert_eq!(loaded.drafts[0].code, drafts[0].code);
+}

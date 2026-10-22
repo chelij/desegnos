@@ -26,7 +26,8 @@ use uuid::Uuid;
 type NativeResult<T> = Result<T, String>;
 type AiState<'a> = State<'a, Mutex<GenerationService>>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
-const MAX_JOB_BYTES: u64 = 24 * 1024 * 1024;
+// At most 20 attempts, two bounded 8 MiB replies each, plus reconstructed page source.
+const MAX_JOB_BYTES: u64 = 768 * 1024 * 1024;
 const MAX_CACHED_JOBS: usize = 16;
 const MAX_ATTEMPTS: usize = 20;
 
@@ -131,6 +132,8 @@ pub struct GenerationJobView {
     raw_reply: Option<String>,
     #[serde(default)]
     validation_events: Vec<desegni_core::ValidationEvent>,
+    #[serde(default)]
+    drafts: Vec<desegni_core::GenerationDraft>,
     #[serde(default)]
     validation_counts_recorded: bool,
     #[serde(default)]
@@ -1074,6 +1077,7 @@ impl GenerationService {
                 context: None,
                 earlier_contexts: vec![],
                 validation_events: vec![],
+                drafts: vec![],
                 validation_counts_recorded: false,
                 repair_rounds: 0,
                 first_exchange: None,
@@ -2388,6 +2392,13 @@ async fn submit(
                             kind: "replyStructure".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string(),
                         }]),
                     };
+                    let retained = desegni_core::retain_generation_drafts(&first_response.text, &request.requirements, &original, first_candidate.as_ref(), &events);
+                    // Save rejected source before submitting repair: interruption must not lose it.
+                    if let Ok(mut service) = shared_app.state::<Mutex<GenerationService>>().lock()
+                        && let Some(mut record) = service.jobs.get(&job_id).cloned() {
+                        record.view.drafts.extend(retained);
+                        service.persist_retaining(record).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
+                    }
                     let initial_reply_diagnostic = first_candidate.is_none().then(|| desegni_ai::scrub_diagnostic_reply(&first_response.text, None));
                     let follow_up = request.requirements.validation_repair(&events).ok().flatten();
                     if let Some(follow_up) = follow_up.filter(|_| !cancel_ref.is_cancelled()) {
@@ -2441,8 +2452,19 @@ async fn submit(
                                 match ask(&follow_up).await {
                                     Ok(second) => {
                                         first_response.usage = total_usage(first_usage, second.usage);
-                                        let corrected = request.requirements.adopt_follow_up_reply(&follow_up, &second.text)
-                                            .and_then(|text| desegni_core::recover_generation_reply(&text, &request.requirements, &original));
+                                        let adopted = request.requirements.adopt_follow_up_reply(&follow_up, &second.text);
+                                        let corrected = adopted.as_ref().map_err(Clone::clone)
+                                            .and_then(|text| desegni_core::recover_generation_reply(text, &request.requirements, &original));
+                                        let (kept, notes) = match &corrected {
+                                            Ok((candidate, notes)) => (Some(candidate), notes.clone()),
+                                            Err(error) => (None, vec![desegni_core::ValidationEvent { kind: "repairValidation".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() }]),
+                                        };
+                                        let retained = desegni_core::retain_generation_drafts(adopted.as_deref().unwrap_or(&second.text), &request.requirements, &original, kept, &notes);
+                                        if let Ok(mut service) = shared_app.state::<Mutex<GenerationService>>().lock()
+                                            && let Some(mut record) = service.jobs.get(&job_id).cloned() {
+                                            record.view.drafts.extend(retained);
+                                            service.persist_retaining(record).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
+                                        }
                                         match corrected {
                                             Ok((candidate, more)) => {
                                                 events.extend(more);
@@ -2691,6 +2713,9 @@ pub fn apply_generation(
         let _ = service.persist(record);
         return Err(error);
     }
+    for draft in &mut record.view.drafts {
+        draft.rebase_after_apply(workspace.project()?);
+    }
     record.view.status = JobStatus::Applied;
     let total = record
         .view
@@ -2725,28 +2750,57 @@ pub fn create_preview(
     previews: State<'_, Mutex<PreviewRegistry>>,
     page_id: Uuid,
     job_id: Option<Uuid>,
+    draft_id: Option<Uuid>,
     run_scripts: bool,
 ) -> NativeResult<PreviewDescriptor> {
     trusted(&window)?;
     let workspace = workspace.lock().map_err(message)?;
     let project = workspace.project()?;
     let candidate = if let Some(job_id) = job_id {
-        state
+        let view = state
             .lock()
             .map_err(message)?
-            .record(project, job_id)?
-            .view
-            .candidate
+            .saved_job(project.id, job_id)?;
+        if let Some(draft_id) = draft_id {
+            let draft = view
+                .drafts
+                .iter()
+                .find(|d| d.id == draft_id && !d.dismissed && !d.applied)
+                .ok_or("The draft is unavailable.")?;
+            // Security failures are copy-only. Stale drafts can preview immutable retained bytes.
+            draft.check_source(project).map_err(message)?;
+            let content = draft
+                .content
+                .clone()
+                .ok_or("The draft has no previewable source.")?;
+            if draft.page_id != Some(page_id) {
+                return Err("The draft belongs to another page.".into());
+            }
+            Some(GenerationCandidate {
+                job_id,
+                requirements_sha256: view.requirements.sha256,
+                summary: "Draft preview".into(),
+                regions: vec![],
+                pages: vec![desegni_core::GeneratedPage { page_id, content }],
+                component_requests: vec![],
+                decision_proposals: vec![],
+                criticism: vec![],
+            })
+        } else {
+            view.candidate
+        }
     } else {
         None
     };
     if job_id.is_some() && candidate.is_none() {
         return Err("There is no generated source to preview for this job.".into());
     }
-    previews
-        .lock()
-        .map_err(message)?
-        .register(project, candidate.as_ref(), page_id, run_scripts)
+    previews.lock().map_err(message)?.register(
+        project,
+        candidate.as_ref(),
+        page_id,
+        run_scripts && draft_id.is_none(),
+    )
 }
 
 #[tauri::command]
@@ -2897,4 +2951,94 @@ fn validate_identity_account(
         return Err("The selected ChatGPT account, its plan permission, secure storage, or model changed while checking access. Review AI settings and explicitly analyze again.".into());
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftReview {
+    job: GenerationJobView,
+    workspace: Option<WorkspaceView>,
+    revision: u64,
+    blocked: Option<String>,
+    previewable: bool,
+    confirmation: String,
+}
+
+#[tauri::command]
+pub fn generation_draft(
+    window: WebviewWindow,
+    workspace: WorkspaceState<'_>,
+    state: AiState<'_>,
+    job_id: Uuid,
+    draft_id: Uuid,
+    action: String,
+    confirmed_revision: Option<u64>,
+) -> NativeResult<DraftReview> {
+    trusted(&window)?;
+    let mut workspace = workspace.lock().map_err(message)?;
+    let mut service = state.lock().map_err(message)?;
+    let mut view = service.saved_job(workspace.project()?.id, job_id)?;
+    let index = view
+        .drafts
+        .iter()
+        .position(|d| d.id == draft_id)
+        .ok_or("The draft is unavailable.")?;
+    let draft = view.drafts[index].clone();
+    let revision = workspace.project()?.revision;
+    let blocked = draft.check(workspace.project()?).err().map(message);
+    let previewable = draft.check_source(workspace.project()?).is_ok();
+    let confirmation = draft.confirmation(workspace.project()?);
+    let changed = match action.as_str() {
+        "inspect" => false,
+        "dismiss" => {
+            view.drafts[index].dismissed = true;
+            true
+        }
+        "apply" => {
+            if confirmed_revision != Some(revision) {
+                return Err("The page changed. Review the draft again before applying.".into());
+            }
+            if let Some(reason) = &blocked {
+                return Err(reason.clone());
+            }
+            let checkpoint = service
+                .job_directory(view.project_id, job_id)
+                .join(format!("before-draft-{}-{revision}.desegni", draft.id));
+            let file = ProjectFile::acquire(&checkpoint).map_err(message)?;
+            if checkpoint.exists() {
+                if file.load().map_err(message)? != *workspace.project()? {
+                    return Err("An existing draft safety checkpoint differs from the current project. It was preserved.".into());
+                }
+            } else {
+                file.save(workspace.project()?).map_err(message)?;
+            }
+            drop(file);
+            workspace.apply_draft(&view.requirements, &draft)?;
+            view.drafts[index].applied = true;
+            true
+        }
+        _ => return Err("Unknown draft action.".into()),
+    };
+    if changed {
+        // A past-job edit must never move the project's latest-job pointer.
+        if let Err(error) = service.persist_retaining(JobRecord {
+            version: 1,
+            view: view.clone(),
+            error: None,
+        }) {
+            if action != "apply" {
+                return Err(error);
+            }
+            view.message =
+                format!("Draft applied; its history update needs another local save: {error}");
+        }
+    }
+    Ok(DraftReview {
+        job: view,
+        workspace: (action == "apply").then(|| workspace.view()),
+        revision,
+        blocked,
+        previewable,
+        confirmation,
+    })
 }

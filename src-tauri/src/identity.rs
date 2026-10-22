@@ -1672,9 +1672,18 @@ pub fn analyze_identity(
 mod tests;
 
 #[tauri::command]
-pub async fn website_brand_source(window: WebviewWindow, imports: State<'_, Mutex<crate::website_import::WebsiteImports>>, state: IdentityState<'_>, folder_id: Uuid) -> NativeResult<IdentitySourceManifest> {
+pub async fn website_brand_source(
+    window: WebviewWindow,
+    imports: State<'_, Mutex<crate::website_import::WebsiteImports>>,
+    state: IdentityState<'_>,
+    folder_id: Uuid,
+) -> NativeResult<IdentitySourceManifest> {
     trusted(&window)?;
     let path = imports.lock().map_err(error)?.path(folder_id)?;
-    let source = tauri::async_runtime::spawn_blocking(move || normalize_source(collect_identity_source(&path).map_err(error)?)).await.map_err(error)??;
+    let source = tauri::async_runtime::spawn_blocking(move || {
+        normalize_source(collect_identity_source(&path).map_err(error)?)
+    })
+    .await
+    .map_err(error)??;
     state.lock().map_err(error)?.retain_source(source)
 }

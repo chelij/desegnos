@@ -285,7 +285,10 @@ fn import_plain_folder_preserves_original_bytes_pages_styles_scripts_and_picture
     assert!(home.html.contains("src=\"main.js\""));
     assert!(home.javascript.is_empty());
     assert_eq!(compile_website(&project).unwrap().files, originals);
-    let rendered = project.website_canvas_content(project.page(project.home_page_id).unwrap()).unwrap().unwrap();
+    let rendered = project
+        .website_canvas_content(project.page(project.home_page_id).unwrap())
+        .unwrap()
+        .unwrap();
     assert!(rendered.html.contains("color: purple"));
     assert!(rendered.html.contains("data:image/png;base64,"));
     assert!(rendered.html.contains("/about#team"));
