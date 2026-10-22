@@ -99,7 +99,7 @@
 .free-workspace .corner-ne::after { left: -4px; bottom: -4px; }
 .free-workspace .corner-sw::after { right: -4px; top: -4px; }
 .free-workspace .corner-se::after { left: -4px; top: -4px; }
-.free-workspace .element-type-tag { position: absolute; right: 0; top: -21px; padding: 2px 5px; color: var(--text); background: var(--surface); border: 1px solid var(--annotation-focus); border-radius: 2px; font-size: 10px; line-height: 14px; white-space: nowrap; }
+.free-workspace .element-type-tag { align-self: center; padding: 0 6px; color: var(--muted); font-size: 11px; line-height: 16px; white-space: nowrap; }
 .free-workspace .canvas-empty-hint { position: absolute; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 24px; text-align: center; pointer-events: none; z-index: 2; color: var(--muted); font-size: 14px; }
 .free-workspace .canvas-empty-hint p { margin: 0; max-width: 320px; }
 .free-workspace .canvas-empty-hint strong { font-size: 17px; color: var(--text); }
@@ -112,7 +112,7 @@
 .free-workspace.pan-ready .canvas, .free-workspace.pan-ready .canvas.element-hover { cursor: grab; }
 .free-workspace.panning .canvas, .free-workspace.panning .canvas.element-hover { cursor: grabbing; }
 .free-workspace .annotation textarea { overflow: hidden; }
-.free-workspace .annotation:focus-within textarea { overflow-y: auto; }
+.free-workspace .annotation.selected textarea, .free-workspace .annotation.expanded textarea, .free-workspace .annotation:focus-within textarea { overflow-y: auto; }
 .free-workspace .request-number { position: absolute; right: -1px; top: -20px; min-width: 18px; padding: 1px 5px; border-radius: 3px 3px 0 0; background: var(--annotation-border); color: var(--surface); font-size: 11px; line-height: 16px; text-align: center; pointer-events: none; }
 .free-workspace .annotation.selected .request-number { background: var(--annotation-focus); }
 .free-workspace .request-expand { display: block; width: 100%; min-height: 30px; height: 30px; padding: 3px 10px; text-align: left; border-top: 0; border-radius: 0 0 3px 3px; background: var(--annotation-surface); color: var(--annotation-text); border-color: var(--annotation-border); }
@@ -137,9 +137,6 @@
 .free-workspace .image-drop-target:hover { background: color-mix(in srgb, var(--selected) 85%, transparent); }
 .free-workspace .image-drop-highlight { position: absolute; display: grid; place-items: center; pointer-events: none; outline: 3px solid var(--annotation-focus); outline-offset: -3px; background: color-mix(in srgb, var(--annotation-focus) 22%, transparent); }
 .free-workspace .image-drop-highlight span { padding: 4px 10px; border-radius: 999px; background: var(--annotation-focus); color: #fff; font-size: 12px; }
-.free-workspace .element-type-tag .found-tag { color: #1a7f37; font-weight: 600; white-space: nowrap; }
-:root[data-theme="dark"] .free-workspace .element-type-tag .found-tag { color: #7ee787; }
-.free-workspace .element-type-tag { white-space: nowrap; }
 
 /* Multi-select: each extra element gets its own outline; the toolbar shows the count. */
 .free-workspace .multi-selection { outline: 2px dashed var(--annotation-focus); outline-offset: -1px; }
@@ -175,10 +172,10 @@
 /* Unselected request boxes are see-through so the grid and page show behind them;
    selecting or typing in one makes it solid again for easy reading. */
 .free-workspace .annotation { background: color-mix(in srgb, var(--annotation-surface) 28%, transparent); transition: background-color .12s; }
-.free-workspace .annotation textarea { text-shadow: 0 0 4px var(--annotation-surface), 0 0 2px var(--annotation-surface), 0 0 1px var(--annotation-surface); }
+.free-workspace .annotation textarea { background: transparent; text-shadow: 0 0 4px var(--annotation-surface), 0 0 2px var(--annotation-surface), 0 0 1px var(--annotation-surface); }
 .free-workspace .annotation:hover { background: color-mix(in srgb, var(--annotation-surface) 55%, transparent); }
-.free-workspace .annotation.selected, .free-workspace .annotation:focus-within, .free-workspace .annotation.expanded { background: var(--annotation-surface); }
-.free-workspace .annotation.selected textarea, .free-workspace .annotation:focus-within textarea { text-shadow: none; }
+.free-workspace .annotation.selected, .free-workspace .annotation:focus-within, .free-workspace .annotation.expanded, .free-workspace .annotation.element-prompt { background: var(--annotation-surface); }
+.free-workspace .annotation.selected textarea, .free-workspace .annotation:focus-within textarea, .free-workspace .annotation.expanded textarea, .free-workspace .annotation.element-prompt textarea { background: var(--annotation-surface); text-shadow: none; }
 
 /* Request attachments: chips along the bottom of the box, a paperclip on the selected box,
    and a hint while dragging files over it. */

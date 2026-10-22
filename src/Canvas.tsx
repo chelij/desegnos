@@ -61,6 +61,7 @@ export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: 
 export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ archiveReports = {}, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const toolbar = useRef<HTMLDivElement>(null);
   const [toolbarSize, setToolbarSize] = useState({ width: 160, height: 40 });
+  const [requestBounds, setRequestBounds] = useState<{ id: string; rect: Rect } | null>(null);
   const [context, setContext] = useState<CanvasContext | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const site = useRef<CanvasPreviewHandle>(null);
@@ -973,19 +974,22 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
   const occupied = useMemo(() => element ? site.current?.occupied(element.element) ?? [] : [], [element, acceptedVersion]);
   const inViewport = (rect: Rect): Rect => ({ x: (rect.x - bounds.left) * zoom - measurements.left + inset.x, y: (rect.y - bounds.top) * zoom - measurements.top + inset.y, width: rect.width * zoom, height: rect.height * zoom });
   const selectedRequest = page.regions.find(item => item.id === selected && !item.completed);
-  const shapedPrompt = selectedRequest?.shape && selectedRequest.shape.kind !== 'rect' ? inViewport({ ...requestPromptRect(preview ?? selectedRequest.rect, zoom), height: Math.max(160, measurements.height * .55) / zoom }) : null;
-  const occupiedInViewport = [...occupied.map(inViewport), ...(shapedPrompt ? [shapedPrompt] : [])];
+  const openPrompt = selectedRequest ? inViewport(requestBounds?.id === selectedRequest.id ? requestBounds.rect
+    : regionTargets(selectedRequest).length || selectedRequest.shape && selectedRequest.shape.kind !== 'rect' ? requestPromptRect(preview ?? selectedRequest.rect, zoom) : preview ?? selectedRequest.rect) : null;
+  const occupiedInViewport = [...occupied.map(inViewport), ...(openPrompt ? [openPrompt] : [])];
   const toolbarRect = element ? unionRect([element.rect, ...extras.map(item => item.rect)]) : selectedRequest?.rect;
   const toolbarPoint = toolbarRect ? elementToolbarPosition(inViewport(toolbarRect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupiedInViewport) : null;
   const toolbarPosition = toolbarPoint ? { left: toolbarPoint.x, top: toolbarPoint.y } : {};
+  const toolbarOverlay = toolbarPoint && !inlineText ? { x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height } : null;
   const measurementRect = coordinate ? inViewport(selectedRect ?? { ...coordinate, width: 0, height: 0 }) : null;
   // The size label sits beside the selection. Near the view's edges it would cover the box (and
   // the request text being typed), so it is left out until there is room again.
   const measurementPosition = (() => {
     if (!measurementRect) return null;
     const size = { x: 245, y: 28 };
-    const position = elementToolbarPosition(measurementRect, size, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, [...occupiedInViewport, ...(toolbarPoint ? [{ x: toolbarPoint.x, y: toolbarPoint.y, width: toolbarSize.width, height: toolbarSize.height }] : [])]);
-    const covers = [measurementRect, ...(shapedPrompt ? [shapedPrompt] : [])].some(rect => position.x < rect.x + rect.width && position.x + size.x > rect.x && position.y < rect.y + rect.height && position.y + size.y > rect.y);
+    const occupied = [...occupiedInViewport, ...(toolbarOverlay ? [toolbarOverlay] : [])];
+    const position = elementToolbarPosition(measurementRect, size, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupied);
+    const covers = [measurementRect, ...(openPrompt ? [openPrompt] : []), ...(toolbarOverlay ? [toolbarOverlay] : [])].some(rect => position.x < rect.x + rect.width && position.x + size.x > rect.x && position.y < rect.y + rect.height && position.y + size.y > rect.y);
     return covers ? null : position;
   })();
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
@@ -1102,11 +1106,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
           {liveRequests && page.regions.map((region, index) => {
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
-            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
+            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0} shownChanged={setRequestBounds}
               layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => change(region.id, patch)} />;
           })}
           {element && !liveView && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
-            <span className="element-type-tag">{elementName(element.element.tag)}{foundUrl && <span className="found-tag" title={foundUrl}> · Found online · {foundHost}</span>}</span>
             {!extras.length && element.element.selector !== 'body' && (['nw','ne','sw','se'] as const).map(corner => <button key={corner} type="button" className={`element-resize-corner corner-${corner}`} data-corner={corner} aria-label={`Resize ${corner.includes('n') ? 'top' : 'bottom'}-${corner.includes('w') ? 'left' : 'right'}`} title="Drag to resize; press Enter for size settings" disabled={editingElement || nudging} onPointerDown={event => beginElementGesture(event, corner)} onClick={event => { if (event.detail === 0) setElementDialog('edit'); }} />)}
           </div>}
           {extras.map(item => <div key={item.element.id ?? item.element.selector} data-testid="multi-element-selection" data-element-id={item.element.id} className="element-selection multi-selection" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }} aria-hidden="true" />)}
@@ -1124,6 +1127,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       </div>
     </div>
     {toolbarRect && !inlineText && !(liveView && element) && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
+      {element && <span className="element-type-tag">{elementName(element.element.tag)}{foundUrl && !openSource && <span title={foundUrl}> · Found online{foundHost ? ` · ${foundHost}` : ''}</span>}</span>}
       {extras.length > 0 ? <>
         <span className="multi-count">{extras.length + 1} selected</span>
         <button className="ask-ai" disabled={editBusy} onClick={askAI}>Ask AI</button>
@@ -1139,7 +1143,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
       </>}
       {element && foundUrl && openSource && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
       {element && undoElement && element.element.selector !== 'body' && <button aria-label="Undo changes to this element" title="Step this element back to its previous version · Alt+Z" disabled={editBusy} onClick={() => { void stepBackElement(); }}><QuickIcon name="undo" /></button>}
-      <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
+      <button aria-label={element ? 'Delete element' : 'Delete request'} title={element ? 'Delete element' : 'Delete request'} disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
       {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={site.current?.visual(element.element) ?? null} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </>}
     </div>}
@@ -1172,10 +1176,10 @@ function Ruler({ axis, unit, start, length, reference, zoom, cursor, selection }
   </div>;
 }
 
-function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
+function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, shownChanged, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
   reports: import('./types').ArchiveReport[];
   stale?: boolean; repickNow?: () => void; removeNow?: () => void; attach?: (files: File[], links: string[]) => void; detach?: (attachmentId: string) => void;
-  region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; controlsLayer: number; select: () => void;
+  region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; controlsLayer: number; select: () => void; shownChanged: (value: { id: string; rect: Rect }) => void;
   begin: (event: PointerEvent, kind: Gesture['kind'], region?: Region) => void;
   keyboard: (event: KeyboardEvent, region?: Region, resize?: boolean) => void; change: (patch: RequestPatch) => Promise<Region>;
 }) {
@@ -1203,13 +1207,14 @@ function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, se
     setNaturalHeight(current => current === height ? current : height);
   }, [draft, promptRect.width, zoom]);
   const minimumHeight = promptRect.height * zoom;
-  // Keep the box at its placement size; long text scrolls inside it instead of spilling over the page.
+  // Reading long text never changes the placement hint; cap the editor and scroll inside it.
   const collapseHeight = target || shaped ? Math.max(minimumHeight, maxHeight) : minimumHeight;
   const fullHeight = Math.max(minimumHeight, naturalHeight);
   const hasMore = fullHeight > collapseHeight;
-  useLayoutEffect(() => { if (target && hasMore && document.activeElement === text.current) setExpanded(true); }, [target, hasMore, draft]);
-  const displayHeight = expanded ? fullHeight : Math.min(collapseHeight, fullHeight);
-  const shown = { ...promptRect, height: (displayHeight + (hasMore ? 30 : 0)) / zoom };
+  const displayHeight = selected || expanded ? Math.min(fullHeight, maxHeight) : Math.min(collapseHeight, fullHeight);
+  const showExpand = hasMore && !selected;
+  const shown = { ...promptRect, height: (displayHeight + (showExpand ? 30 : 0)) / zoom };
+  useLayoutEffect(() => { if (selected) shownChanged({ id: region.id, rect: shown }); }, [selected, region.id, shown.x, shown.y, shown.width, shown.height, shownChanged]);
   // Bound the painted area while keeping the text and grips anchored to their
   // original world positions. Expanding text never changes placement intent.
   const painted = clipToWorkspace(shown, bounds);
@@ -1251,9 +1256,9 @@ function RequestBox({ reports, region, number, rect, bounds, zoom, maxHeight, se
     {!target && <span className="request-number" aria-hidden="true">{number}</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture…' : target ? 'Describe the change…' : 'Describe what goes here…'}
-      style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, background: 'transparent', outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
+      style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom, width: shown.width * zoom, height: displayHeight, borderWidth: 0, outline: 'none' }} onChange={event => changeDraft(event.target.value)} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
-    {hasMore && <button type="button" className="request-expand" style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom + displayHeight, width: shown.width * zoom }} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
+    {showExpand && <button type="button" className="request-expand" style={{ position: 'absolute', left: (shown.x - (painted?.x ?? shown.x)) * zoom, top: (shown.y - (painted?.y ?? shown.y)) * zoom + displayHeight, width: shown.width * zoom }} aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
   </div>
     {selected && !target && <div className="request-controls" data-region-id={region.id} style={{ ...paintStyle(shown, bounds, zoom), zIndex: controlsLayer }} onFocusCapture={select}><button ref={move} className="annotation-grip move-grip" aria-label={`Move request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag to move. Arrow keys change placement."
       style={{ visibility: moveVisible ? undefined : 'hidden', left: (rect.x - (painted?.x ?? rect.x)) * zoom - 28, top: (rect.y - (painted?.y ?? rect.y)) * zoom }}
