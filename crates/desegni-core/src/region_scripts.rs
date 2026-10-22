@@ -5,6 +5,8 @@ use dom_query::NodeRef;
 use std::collections::BTreeMap;
 
 pub(crate) const SCRIPT_TYPE: &str = "application/x-desegnos-region";
+pub(crate) const SHARED_JAVASCRIPT_REASON: &str =
+    "Local requests must preserve shared JavaScript byte-for-byte.";
 const SELECTOR: &str = "script[data-desegnos-script]";
 
 fn blocks(html: &str) -> Result<BTreeMap<String, (String, String)>> {
@@ -64,7 +66,7 @@ pub(crate) fn validate(
             ensure(
                 generated.content.javascript
                     == page.content.as_ref().map_or("", |c| c.javascript.as_str()),
-                "Local requests must preserve shared JavaScript byte-for-byte.",
+                SHARED_JAVASCRIPT_REASON,
             )?;
             let before =
                 crate::editing::parse(page.content.as_ref().map_or("", |c| c.html.as_str()))?;

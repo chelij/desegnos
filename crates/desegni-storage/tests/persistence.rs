@@ -888,7 +888,10 @@ fn real_schema_three_preserves_all_original_data_notes_and_backup_before_explici
     assert_eq!(reopened.project, document.project);
     assert!(frozen.validate_current(&reopened.project).is_err());
     let new_request = reopened.project.prepare_requirements().unwrap();
-    assert_eq!(new_request.format_version().unwrap(), 17);
+    assert_eq!(
+        new_request.format_version().unwrap(),
+        CURRENT_REQUIREMENTS_FORMAT
+    );
     new_request.validate_current(&reopened.project).unwrap();
 }
 
@@ -1075,6 +1078,7 @@ fn signed_placements_grid_settings_and_generated_dossier_round_trip_through_real
     );
 }
 
+// Current local requests own their behavior inside the region root; shared JS stays unchanged.
 fn generation_fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
     let mut p = project();
     p = p
@@ -1124,12 +1128,11 @@ fn generation_fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) 
             page_id: p.home_page_id,
             content: SiteContent {
                 html: format!(
-                    "<details data-desegnos-region=\"{}\"><summary>About this project</summary><p>Saved generated source.</p></details>",
-                    p.pages[0].regions[0].id
+                    "<details data-desegnos-region=\"{}\"><summary>About this project</summary><p>Saved generated source.</p><script type=\"application/x-desegnos-region\" data-desegnos-script=\"{}\">root.addEventListener('toggle', () => {{}});</script></details>",
+                    p.pages[0].regions[0].id, p.pages[0].regions[0].id
                 ),
                 css: "details { padding: 1rem; }".into(),
-                javascript:
-                    "document.querySelector('details').addEventListener('toggle', () => {});".into(),
+                javascript: String::new(),
             },
         }],
         component_requests: vec![],
@@ -1475,7 +1478,10 @@ fn schema_five_integrity_notes_frozen_requirements_and_exact_backup_are_preserve
     };
     project.pages[0].regions[0].element = Some(target);
     let frozen = project.prepare_requirements().unwrap();
-    assert_eq!(frozen.format_version().unwrap(), 17);
+    assert_eq!(
+        frozen.format_version().unwrap(),
+        CURRENT_REQUIREMENTS_FORMAT
+    );
     let path = temp.0.join("schema-five.desegni");
     let file = ProjectFile::acquire(&path).unwrap();
     file.save(&project).unwrap();

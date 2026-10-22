@@ -1098,7 +1098,10 @@ fn shared_dependencies(
             }
             roots.push((region.id, nodes));
             if page.content.javascript != old.javascript {
-                failures.push((region.id, "The changed shared JavaScript cannot be confined to this area. Keep it unchanged and return self-contained area markup.".into()));
+                failures.push((
+                    region.id,
+                    crate::region_scripts::SHARED_JAVASCRIPT_REASON.into(),
+                ));
             }
         }
         if page.content.css == old.css {

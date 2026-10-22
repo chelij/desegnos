@@ -1,3 +1,6 @@
+/// Requirements contract used for newly prepared requests.
+pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 18;
+
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
     MAX_GENERATION_REGIONS, MAX_REQUIREMENTS_BYTES, Page, Project, Region, Result, Scope,
@@ -210,7 +213,7 @@ impl Project {
             Uuid::new_v4(),
             self.revision,
             &targets,
-            18,
+            CURRENT_REQUIREMENTS_FORMAT,
             dossier_context,
             Some(capabilities),
         )
@@ -779,7 +782,7 @@ impl Project {
 
 impl RequirementsSnapshot {
     pub fn format_version(&self) -> Result<u8> {
-        (3..=18)
+        (3..=CURRENT_REQUIREMENTS_FORMAT)
             .find(|format| {
                 self.markdown.starts_with(&format!(
                     "# Generation requirements\n\nRequirements format: {format}\n\n"

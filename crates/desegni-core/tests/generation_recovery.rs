@@ -559,3 +559,122 @@ fn local_dom_javascript_is_overridable_but_code_loaders_are_copy_only() {
         assert!(project.apply_generation_draft(&snapshot, &blocked).is_err());
     }
 }
+
+#[test]
+fn local_shared_javascript_change_is_retained_as_draft_while_other_pages_apply() {
+    let (mut project, _, mut candidate) = fixture(true);
+    let mut other = project.pages[0].clone();
+    other.id = Uuid::new_v4();
+    other.name = "Other".into();
+    other.path = "/other".into();
+    other.regions.truncate(1);
+    other.regions[0].id = Uuid::new_v4();
+    let id = other.regions[0].id;
+    other.content.as_mut().unwrap().html =
+        format!("<section data-desegnos-region='{id}'>Original</section>");
+    project.pages.push(other.clone());
+    let snapshot = project.prepare_requirements().unwrap();
+    candidate.job_id = snapshot.job_id;
+    candidate.requirements_sha256 = snapshot.sha256.clone();
+    candidate.regions.push(RegionOutcome {
+        region_id: id,
+        status: RegionStatus::Implemented,
+        explanation: "Added local behavior".into(),
+    });
+    candidate.pages.push(GeneratedPage {
+        page_id: other.id,
+        content: SiteContent {
+            html: format!("<section data-desegnos-region='{id}'>Updated</section>"),
+            javascript: "document.body.dataset.ready='changed';".into(),
+            ..other.content.clone().unwrap()
+        },
+    });
+    assert!(
+        candidate
+            .validate(&snapshot, &project)
+            .unwrap_err()
+            .to_string()
+            .contains("Local requests must preserve shared JavaScript byte-for-byte.")
+    );
+    let reply = serde_json::to_string(&candidate).unwrap();
+    let (safe, events) = recover_generation_reply(&reply, &snapshot, &project).unwrap();
+    safe.validate(&snapshot, &project).unwrap();
+    assert_eq!(
+        safe.regions
+            .iter()
+            .filter(|r| r.status == RegionStatus::Implemented)
+            .count(),
+        3
+    );
+    assert_eq!(safe.regions.last().unwrap().status, RegionStatus::Conflict);
+    assert!(events.iter().any(|e| {
+        e.region_id == Some(id)
+            && e.kind == "scriptScope"
+            && e.disposition == "conflicted"
+            && e.message
+                .contains("Local requests must preserve shared JavaScript byte-for-byte.")
+    }));
+    let drafts = retain_generation_drafts(&reply, &snapshot, &project, Some(&safe), &events);
+    let draft = drafts
+        .iter()
+        .find(|draft| draft.page_id == Some(other.id))
+        .unwrap();
+    assert_eq!(draft.region_ids, vec![id]);
+    assert!(
+        draft
+            .reason
+            .contains("Local requests must preserve shared JavaScript byte-for-byte.")
+    );
+    assert_eq!(draft.content.as_ref().unwrap(), &candidate.pages[1].content);
+    let applied = project.apply_generation(&snapshot, &safe, &[]).unwrap();
+    assert_eq!(applied.pages[1].content, other.content);
+    assert!(
+        applied.pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .contains("Updated")
+    );
+    assert_eq!(
+        applied.pages[0].content.as_ref().unwrap().javascript,
+        project.pages[0].content.as_ref().unwrap().javascript
+    );
+}
+
+#[test]
+fn omitted_javascript_is_normalised_but_reformatted_javascript_stays_a_draft() {
+    let (project, snapshot, mut candidate) = fixture(true);
+    let original = project.pages[0].content.as_ref().unwrap();
+    for omitted in [Value::Null, json!("")] {
+        let mut raw = serde_json::to_value(&candidate).unwrap();
+        raw["pages"][0]["content"]["javascript"] = omitted;
+        let reply = raw.to_string();
+        let (safe, events) = recover_generation_reply(&reply, &snapshot, &project).unwrap();
+        assert!(safe.is_ready());
+        assert_eq!(safe.pages[0].content.javascript, original.javascript);
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == "omittedField" && e.disposition == "normalised")
+        );
+        assert!(
+            retain_generation_drafts(&reply, &snapshot, &project, Some(&safe), &events).is_empty()
+        );
+    }
+    candidate.pages[0].content.javascript = "document.body.dataset.ready = '1';\n".into();
+    let reply = serde_json::to_string(&candidate).unwrap();
+    let (safe, events) = recover_generation_reply(&reply, &snapshot, &project).unwrap();
+    assert!(safe.pages.is_empty());
+    assert!(
+        safe.regions
+            .iter()
+            .all(|r| r.status == RegionStatus::Conflict)
+    );
+    let drafts = retain_generation_drafts(&reply, &snapshot, &project, Some(&safe), &events);
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(
+        drafts[0].content.as_ref().unwrap().javascript,
+        candidate.pages[0].content.javascript
+    );
+}
