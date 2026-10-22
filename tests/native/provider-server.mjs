@@ -263,7 +263,7 @@ export async function startProviderServer() {
       if (imageBody.tools?.some(tool => tool.type === 'image_generation')) {
         const probe = imageBody.tool_choice === 'none';
         if (probe) {
-          assert.equal(imageBody.input, 'ok'); assert.equal(imageBody.store, false);
+          assert.deepEqual(imageBody.input, [{ role: 'user', content: [{ type: 'input_text', text: 'ok' }] }]); assert.equal(imageBody.store, false);
           assert.equal(imageBody.stream, true); assert.equal(imageBody.model, 'gpt-6.1-sol');
           imageAccessProbes.push({ method: 'POST', path, authentication, imageAccess: true });
         }

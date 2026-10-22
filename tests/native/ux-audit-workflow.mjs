@@ -222,14 +222,27 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.equal(feature.role, 'switch'); assert.equal(feature.label, 'Image generation'); assert.ok(feature.right <= 1);
     assert.ok(['Available', 'Not available', 'Checking…', "Couldn't check"].includes(feature.status));
     if (feature.status !== 'Available') assert.equal(feature.disabled, true);
-    // Native keyboard events: open with Enter, then Escape closes only the menu and restores focus.
+    // This WebDriver's key actions are untrusted and do not activate native buttons.
+    // Use the same trusted X11 input as the other native keyboard checks.
     await driver.execute(() => document.querySelector('.ai-account-options > button').focus());
-    await driver.command('POST', '/actions', { actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value: '\uE007' }, { type: 'keyUp', value: '\uE007' }] }] });
-    await driver.command('DELETE', '/actions');
-    await waitFor(() => driver.execute(() => document.querySelector('.ai-account-options > button')?.getAttribute('aria-expanded') === 'true'), 'Enter did not open account options');
-    await driver.command('POST', '/actions', { actions: [{ type: 'key', id: 'keyboard', actions: [{ type: 'keyDown', value: '\uE00C' }, { type: 'keyUp', value: '\uE00C' }] }] });
-    await driver.command('DELETE', '/actions');
-    await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .ai-settings') && document.querySelector('.ai-account-options > button')?.getAttribute('aria-expanded') === 'false' && document.activeElement?.getAttribute('aria-label') === 'Account options'), 'Escape did not close only account options and restore focus');
+    for (const [key, label, domKey] of [['Return', 'Enter', 'Enter'], ['space', 'Space', ' ']]) {
+      await physical.resetEvents();
+      assert.equal(await driver.execute(() => document.activeElement === document.querySelector('.ai-account-options > button')), true);
+      await physical.keys(key);
+      await waitFor(() => driver.execute(() => {
+        const trigger = document.querySelector('.ai-account-options > button');
+        const menu = document.getElementById(trigger?.getAttribute('aria-controls'));
+        return trigger?.getAttribute('aria-expanded') === 'true' && menu?.matches(':popover-open')
+          && document.activeElement === menu.querySelector('button:not(:disabled)');
+      }), `${label} did not open account options and focus its first enabled item`);
+      await physical.keys('Escape');
+      await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .ai-settings') && document.querySelector('.ai-account-options > button')?.getAttribute('aria-expanded') === 'false' && !document.querySelector('.ai-account-options [role="menu"]') && document.activeElement === document.querySelector('.ai-account-options > button')), 'Escape did not close only account options and restore focus');
+      const events = await physical.events();
+      for (const expected of [domKey, 'Escape']) {
+        for (const type of ['keydown', 'keyup']) assert.ok(events.some(event => event.type === type && event.key === expected && event.trusted), `${label}: missing trusted ${expected} ${type}`);
+      }
+      await writeFile(join(output, `account-options-${label.toLowerCase()}-events.json`), JSON.stringify(events, null, 2));
+    }
     await driver.fill('API budget per generation (USD)', '10'); await driver.button('Save AI settings');
     await waitFor(() => driver.execute(() => document.querySelector('.ai-settings .ai-save-actions [role="status"]')?.textContent.includes('saved')), 'The bottom save did not acknowledge AI settings');
     assert.match(await driver.execute(() => document.querySelector('.generation-settings-form').textContent), /not a guaranteed billing cap/);
