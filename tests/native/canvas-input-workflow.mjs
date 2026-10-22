@@ -28,7 +28,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
   const output = join(evidence, 'canvas-input'); await mkdir(output, { recursive:true });
   let id;
   await step('Create a real canvas and generated action for pointer accuracy checks', async () => {
-    await driver.button('Blank website'); await driver.fill('Project name', 'Canvas pointer and size'); await driver.button('Create project');
+    await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name', 'Canvas pointer and size'); await driver.button('Create project');
     id = await waitFor(async () => (await workspace(driver)).project?.id, 'The canvas project did not open');
     await physical.initialize(evidence); await driver.click('.canvas-empty-hint button'); await driver.fill('Request 1', 'Make a clear page with an interactive action.');
     await driver.invoke('set_ai_key', { key:provider.key(), storage:'session' }); provider.setMode('complete', { editorAudit:true }); await driver.button('Generate');
@@ -76,17 +76,18 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     const actual=await driver.execute(id=>{const box=document.querySelector(`[data-region-id="${id}"]`).getBoundingClientRect();return {x:box.x,y:box.y};},region.id);
     await writeFile(join(output,'edge-placement.json'),JSON.stringify({point,actual},null,2));
     assert.ok(Math.abs(actual.x-point.x)<8 && Math.abs(actual.y-point.y)<8,JSON.stringify({point,actual}));
-    await physical.keys('Escape'); await driver.click('.element-toolbar [aria-label="Delete layer"]'); await driver.button('Remove');
+    await physical.keys('Escape'); await driver.click('.element-toolbar [aria-label="Delete request"]'); await driver.button('Remove');
   });
-  await step('A drawn request keeps the full height the user dragged instead of stopping at half the view', async () => {
+  await step('A drawn request keeps its full placement outline while its text editor fits the view', async () => {
     await driver.button('Fit'); await driver.button('Grid and rulers'); await driver.click(driver.field('Snap requests to the grid'),'xpath'); await driver.button('Save grid settings');
     await driver.click('[aria-label="Canvas tools"] button[title^="Add request"]');
     const view=await physical.rect('.workspace-scroll'), from={x:view.left+80,y:view.top+45},to={x:view.left+410,y:view.bottom-90};
     await physical.drag(from,to); await driver.fill('Request 2','Preserve the full area I marked.'); await settled(driver);
     const region=await waitFor(async () => (await workspace(driver)).project.pages[0].regions.find(region=>!region.completed),'The drawn request did not persist');
-    const drawn=await driver.execute(id=>{ const node=document.querySelector(`[data-region-id="${id}"]`),rect=node.getBoundingClientRect();return {height:rect.height,zoom:Number(document.querySelector('[data-testid="canvas"]').dataset.zoom)}; },region.id);
+    const drawn=await driver.execute(id=>{ const node=document.querySelector('.request-placement'),rect=node.getBoundingClientRect(),input=document.querySelector(`.annotation[data-region-id="${id}"] textarea`);return {height:rect.height,editorHeight:input.getBoundingClientRect().height,viewHeight:document.querySelector('.workspace-scroll').clientHeight,zoom:Number(document.querySelector('[data-testid="canvas"]').dataset.zoom)}; },region.id);
     await writeFile(join(output,'drawn-height.json'),JSON.stringify({region,drawn,from,to},null,2));
     assert.ok(Math.abs(drawn.height-region.rect.height*drawn.zoom)<2,JSON.stringify({region,drawn}));
+    assert.ok(drawn.editorHeight<=Math.max(160,drawn.viewHeight*.55)+1,JSON.stringify(drawn));
   });
   await step('Large request boxes pass the former coordinate and dimension limits through real drawing and local history', async () => {
     for (let index=0; index<4; index++) await driver.button('Zoom out');
@@ -96,7 +97,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     await driver.fill('Request 3','A large area that must keep its complete placement.'); await settled(driver);
     const before=(await workspace(driver)).project,region=before.pages[0].regions.at(-1);
     assert.ok(region.rect.width>500000 && region.rect.height>300000,JSON.stringify(region));
-    const drawn=await physical.rect(`[data-region-id="${region.id}"]`); assert.ok(Math.abs(drawn.width-region.rect.width*.001)<2 && Math.abs(drawn.height-region.rect.height*.001)<2);
+    const drawn=await physical.rect('.request-placement'); assert.ok(Math.abs(drawn.width-region.rect.width*.001)<2 && Math.abs(drawn.height-region.rect.height*.001)<2);
     // Move a real grip, without changing its intended dimensions.
     const grip=await physical.rect('[aria-label="Move request 3"]'),start={x:grip.left+grip.width/2,y:grip.top+grip.height/2}; await physical.drag(start,{x:start.x+45,y:start.y+30}); await settled(driver);
     const moved=await waitFor(async()=>{const project=(await workspace(driver)).project; return project.revision>before.revision && project;},'Moving the large request was not saved');
@@ -173,7 +174,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     const destination=(await driver.invoke('get_workspace')).path;
     await driver.button('Save');
     const saved=await savedState(driver,destination); await verifyArchive(destination,saved.project,await driver.invoke('get_project_notes'));
-    await driver.menu(['New project']); await driver.button('Blank website'); await driver.fill('Project name','Temporary reopen check'); await driver.button('Create project');
+    await driver.menu(['New project']); await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name','Temporary reopen check'); await driver.button('Create project');
     await waitFor(async()=>(await workspace(driver)).project.id!==saved.project.id,'The temporary project did not replace the saved one');
     const unsaved=(await workspace(driver)).dirty;
     await chooseFile(physical,async()=>{await driver.menu(['Open project']);},destination,evidence,'canvas-open');

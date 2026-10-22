@@ -10,7 +10,7 @@ export async function imageResizeWorkflow(driver, physical, step, output, provid
   let project, original, pageId, originalData;
   const picture = join(output, 'large-original.png');
   await step('Create a picture slot and a decodable PNG larger than the former 32 MB limit', async () => {
-    await driver.button('Blank website'); await driver.fill('Project name', 'Large picture'); await driver.button('Create project');
+    await driver.click('//button[.//strong[normalize-space(.)="Blank website"]]', 'xpath'); await driver.fill('Project name', 'Large picture'); await driver.button('Create project');
     await driver.button('Skip tips'); await physical.initialize(output);
     project = (await driver.invoke('get_workspace')).project; pageId = project.homePageId;
     await driver.invoke('edit_page_source', { projectId: project.id, pageId, revision: project.revision, html: '<main><p>Keep this text</p><img id="picture" width="240" height="120" alt="Image placeholder: Studio" data-desegnos-placeholder="image" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNQCi3/DwADeQHuOPZfDAAAAABJRU5ErkJggg=="></main>', css: 'body{margin:0}main{padding:24px}img{display:block;object-fit:cover}', javascript: '' });

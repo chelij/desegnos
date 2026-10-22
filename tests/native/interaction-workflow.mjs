@@ -20,7 +20,7 @@ export async function interactionWorkflow(driver, physical, step, evidence) {
   await physical.initialize(evidence);
   await step('Desegnos appears in the actual native window, page title and editor wordmark', async () => {
     assert.equal((await physical.inspect()).window.title, 'Desegnos');
-    assert.equal(await driver.execute(() => document.title), 'Desegnos');
+    assert.equal(await driver.execute(() => document.title), `${original.name} — Desegnos`);
     assert.equal(await driver.execute(() => document.querySelector('.wordmark').textContent), 'Desegnos');
   });
   await step('Left-button dragging pans the workspace without creating or editing requests', async () => {

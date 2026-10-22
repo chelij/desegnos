@@ -10,10 +10,15 @@ const settings = driver => driver.invoke('get_ai_settings');
 const job = (driver, projectId) => driver.invoke('get_generation', { projectId });
 async function button(driver, name) {
   // Account/transport cases deliberately drive the native coordinator; the canvas suite covers user one-click sending/application.
-  if (['Send and generate', 'Apply reviewed changes', 'Retry using ChatGPT plan'].includes(name)) {
+  if (['Send and generate', 'Apply reviewed changes', 'Send using plan or credits'].includes(name)) {
     const project = (await driver.invoke('get_workspace')).project;
     const current = await job(driver, project.id);
-    if (name === 'Retry using ChatGPT plan') await driver.click('(//dialog[@open]//button[normalize-space(.)="Keep current job"])[last()]', 'xpath');
+    if (name === 'Send using plan or credits') {
+      await driver.ready('dialog[open][aria-label="Try the same requests again?"]');
+      await driver.ready('//dialog[@open]//button[normalize-space(.)="Send using plan or credits"]', 'xpath');
+      assert.match(await driver.execute(() => [...document.querySelectorAll('dialog[open]')].at(-1).textContent), /original saved request.*plan or credits/s);
+      await driver.click('(//dialog[@open]//button[normalize-space(.)="Keep editing"])[last()]', 'xpath');
+    }
     await driver.invoke(name === 'Send and generate' ? 'start_generation' : name === 'Apply reviewed changes' ? 'apply_generation' : 'retry_generation', {
       jobId: current.jobId, ...(name === 'Apply reviewed changes' ? { acceptedDecisionIndices: [] } : {}),
     });
@@ -36,7 +41,6 @@ async function button(driver, name) {
 const hash = value => createHash('sha256').update(value).digest('hex');
 async function close(driver) {
   await driver.execute(() => { [...document.querySelectorAll('dialog[open]')].at(-1).querySelector('button[aria-label^="Close "]').click(); });
-  if (await driver.execute(() => !!document.querySelector('dialog[open].generation-progress-modal') && !document.querySelector('dialog[open] .generation-dialog'))) await driver.execute(() => document.querySelector('dialog[open].generation-progress-modal button[aria-label^="Close "]').click());
 }
 async function openSettings(driver) {
   if (await driver.execute(() => !!document.querySelector('dialog[open] .generation-dialog'))) await button(driver, 'AI settings');
@@ -84,15 +88,17 @@ async function prepare(driver, provider, mode) {
   }
   project = (await driver.invoke('get_workspace')).project;
   await driver.invoke('prepare_generation');
-  await driver.button('Generation status'); await driver.button('Details');
+  // Read the native-prepared job without using the one-click Generate path.
+  await driver.reload();
+  await driver.button('Details');
   await waitFor(() => driver.execute(() => !!document.querySelector('dialog[open] .generation-dialog')), 'The ChatGPT request review did not open');
   const request = await terminal(driver, project.id, 'prepared');
   assert.equal(request.authentication, 'chatgpt'); assert.ok(request.chatgptAccountId);
   assert.equal(request.generationMode, mode); assert.equal(request.attempts.length, 0);
   assert.equal(provider.generationRequests().length, before);
-  assert.equal(await driver.source('Generation REQUIREMENTS.md source'), null);
+  assert.equal(await driver.source('AI instructions source'), null);
   await driver.menu(['Advanced', 'What will be sent'], 'Generation options');
-  assert.equal(await driver.source('Generation REQUIREMENTS.md source'), request.requirements.markdown);
+  assert.equal(await driver.source('AI instructions source'), request.requirements.markdown);
   assert.equal(hash(request.requirements.markdown), request.requirements.sha256);
   await driver.menu(['Advanced', 'Request details'], 'Generation options');
   assert.equal(await driver.execute(() => document.querySelector('.generation-facts').textContent.includes('Estimated job cost')), false);
@@ -209,7 +215,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
     await close(driver); await driver.command('POST', '/window/rect', { width: 760, height: 900 });
     try {
       for (const selected of ['light', 'dark']) {
-        await driver.select('Editor theme', selected); await driver.button('Generation status'); await driver.button('Details');
+        await driver.select('Editor theme', selected); await driver.button('Details');
         await driver.menu(['Advanced', 'Request details'], 'Generation options');
         const details = await waitFor(() => driver.execute(() => document.querySelector('[aria-label="Provider response details"]')?.textContent), 'Stream matching details did not appear');
         assert.match(details, /contentPartAbsent/); assert.match(details, /Output 9 · Content 7/);
@@ -225,7 +231,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
       await driver.command('POST', '/window/rect', original); await driver.select('Editor theme', theme);
     }
     assert.equal(provider.generationRequests().length, before + 1);
-    await driver.button('Generation status'); await driver.button('Details'); await driver.menu(['Overview'], 'Generation options');
+    await driver.button('Details'); await driver.menu(['Overview'], 'Generation options');
     await button(driver, 'Discard candidate'); await terminal(driver, prepared.project.id, 'discarded'); await close(driver);
   });
   await step('Non-stream replies preserve safe diagnostics, show the actual failure, and retry only on explicit approval', async () => {
@@ -262,7 +268,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
       await close(driver); await driver.command('POST', '/window/rect', { width: 760, height: 900 });
       try {
         for (const selected of ['light', 'dark']) {
-          await driver.select('Editor theme', selected); await driver.button('Generation status'); await driver.button('Details');
+          await driver.select('Editor theme', selected); await driver.button('Details');
           await terminal(driver, prepared.project.id, expected);
           await driver.menu(['Advanced', 'Request details'], 'Generation options');
           const details = await waitFor(() => driver.execute(() => document.querySelector('[aria-label="Provider response details"]')?.textContent), 'The response diagnostics did not appear');
@@ -285,11 +291,11 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
         await driver.command('POST', '/window/rect', original); await driver.select('Editor theme', theme);
       }
       assert.equal(provider.generationRequests().length, before + 1, 'Reading diagnostics repeated a provider request');
-      await driver.button('Generation status'); await driver.button('Details'); await terminal(driver, prepared.project.id, expected);
+      await driver.button('Details'); await terminal(driver, prepared.project.id, expected);
       if (kind === 'non-stream-html') {
-        await button(driver, 'Retry same snapshot');
+        await driver.menu(['Advanced', 'Retry original request'], 'Generation options');
         assert.equal(provider.generationRequests().length, before + 1, 'Opening retry confirmation submitted a request');
-        provider.setMode('complete'); await button(driver, 'Retry using ChatGPT plan');
+        provider.setMode('complete'); await button(driver, 'Send using plan or credits');
         const ready = await terminal(driver, prepared.project.id, 'ready');
         assert.equal(ready.attempts.length, 2); assert.equal(ready.attempts[0].status, 'unknown');
         assert.equal(ready.providerError, null);
@@ -321,7 +327,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
         for (const selected of ['light', 'dark']) {
           await driver.select('Editor theme', selected);
           await waitFor(() => driver.execute(value => document.documentElement.dataset.theme === value, selected), 'The plan-limit theme did not change');
-          await driver.button('Generation status'); await driver.button('Details');
+          await driver.button('Details');
           await terminal(driver, prepared.project.id, 'failed');
           await dialogLayout(driver, output, `${kind}-${selected}-760px`);
           await close(driver);
@@ -331,7 +337,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
         await driver.command('POST', '/window/rect', original);
         await driver.select('Editor theme', theme);
       }
-      await driver.button('Generation status'); await driver.button('Details');
+      await driver.button('Details');
       await terminal(driver, prepared.project.id, 'failed');
       await button(driver, 'Discard candidate'); await terminal(driver, prepared.project.id, 'discarded'); await close(driver);
     }
