@@ -898,3 +898,34 @@ fn large_attached_pictures_are_previewed_small_and_kept_at_display_size() {
     assert_eq!((kept.width(), kept.height()), (640, 320));
     assert_eq!(applied.pictures.len(), 1);
 }
+
+#[test]
+fn requests_reject_new_attachments_beyond_the_count_cap() {
+    let p = project();
+    let a = target(&p, "article:nth-of-type(1)");
+    let mut p = describe(p, &[a]);
+    let region_id = p.pages[0].regions.last().unwrap().id;
+    let command = Command::AddRegionAttachment {
+        page_id: p.home_page_id,
+        region_id,
+        attachment: RequestAttachment {
+            id: "new".into(),
+            name: "note.txt".into(),
+            kind: AttachmentKind::Text,
+            data_uri: None,
+            preview: None,
+            text: Some("note".into()),
+            url: None,
+        },
+    };
+    for _ in 0..16 {
+        p = p.apply(p.revision, command.clone()).unwrap();
+    }
+    assert_eq!(p.pages[0].regions.last().unwrap().attachments.len(), 16);
+    assert!(
+        p.apply(p.revision, command)
+            .unwrap_err()
+            .to_string()
+            .contains("16 attachments")
+    );
+}

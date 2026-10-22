@@ -713,7 +713,7 @@ fn portable_name(path: &Path) -> Option<String> {
     (name.len() <= 1024 && !name.is_empty()).then_some(name)
 }
 
-fn safe_archive_name(name: &str) -> Option<String> {
+pub(crate) fn safe_archive_name(name: &str) -> Option<String> {
     if name.contains(['\\', ':']) || name.chars().any(char::is_control) {
         return None;
     }

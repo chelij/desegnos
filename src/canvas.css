@@ -182,7 +182,9 @@
 
 /* Request attachments: chips along the bottom of the box, a paperclip on the selected box,
    and a hint while dragging files over it. */
-.free-workspace .request-attachments { position: absolute; left: 6px; right: 34px; bottom: 6px; z-index: 2; display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; pointer-events: auto; }
+.free-workspace .request-attachment-group { position: absolute; left: 6px; right: 34px; bottom: 6px; z-index: 2; max-height: 50%; overflow: auto; pointer-events: auto; }
+.free-workspace .request-archive-report { color: var(--annotation-text); background: var(--annotation-surface); font-size: 11px; }
+.free-workspace .request-attachments { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; pointer-events: auto; }
 .free-workspace .request-attachments li { display: flex; align-items: center; gap: 4px; max-width: 160px; padding: 2px 4px 2px 3px; border: 1px solid var(--annotation-border); border-radius: 4px; background: var(--annotation-surface); color: var(--annotation-text); font-size: 11px; }
 .free-workspace .request-attachments img { width: 18px; height: 18px; object-fit: cover; border-radius: 2px; }
 .free-workspace .request-attachments .attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
