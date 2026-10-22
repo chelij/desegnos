@@ -68,6 +68,21 @@ export function GenerationFeedback({ controller, compact = false, children }: {
   </section>;
 }
 
+export function RetryConfirmation({ job, settings, fresh = false, undo = false, busy, send, close }: {
+  job: GenerationJobView | null; settings: AiSettingsView | null; fresh?: boolean; undo?: boolean; busy: boolean; send: () => void; close: () => void;
+}) {
+  const plan = (fresh ? settings?.authentication : job?.authentication) === 'chatgpt';
+  const provider = (fresh ? settings?.provider : job?.provider) ?? settings?.provider ?? 'openai';
+  const service = providerName(provider);
+  return <Modal title={fresh ? 'Build another version?' : 'Try the same requests again?'} close={close}><div className="dialog-body">
+    <p>{fresh ? `${undo ? 'This undoes the result and sends' : 'This sends'} a new request using your current boxes and AI settings.` : 'This sends the original saved request to the same AI account again.'}</p>
+    <p>{plan ? 'This counts toward your ChatGPT plan or credits. Earlier attempts may also have used your plan or credits.' : `${service} may charge for another request.${!fresh && job ? ` Estimated job cost: ${money(job.estimateUsd)}.` : ''} Earlier attempts may also have been charged.`}</p>
+    <div className="form-actions"><button className="primary" disabled={busy} onClick={send}>{plan ? 'Send using plan or credits' : 'Send paid request'}</button><button onClick={close}>Keep editing</button></div>
+  </div></Modal>;
+}
+
+export const providerName = (provider: string) => ({ openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as Record<string, string>)[provider] ?? 'AI provider';
+
 function GenerationDetails({ controller, project, settings, openSettings, manageUsage, editRequest, close }: {
   controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void; close: () => void;
 }) {
@@ -100,7 +115,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
   });
   const source = candidate?.pages.find(page => page.pageId === pageId) ?? candidate?.pages[0];
   const page = project.pages.find(page => page.id === source?.pageId);
-  const canRetry = !!job && (['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status) || (job.status === 'applied' && conflicts.length > 0));
+  const canRetry = !!job && (['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status));
   const canDiscard = !!job && ['prepared', 'ready', 'blocked', 'failed', 'unknown', 'cancelled'].includes(job.status);
   const alreadyApplied = !!job && project.appliedJobIds.includes(job.jobId);
   const title = job?.status === 'prepared' ? 'Generation details' : job?.status === 'ready' ? 'Generation details' : 'Generation';
@@ -140,7 +155,7 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
       {usageError && <p className="message error" role="alert">{usageError}</p>}
       {job?.dossierError && <p className="message warning" role="alert">Your result is saved, but the project brief needs attention: {job.dossierError}</p>}
       {!job ? <><p>{operation ? 'Preparing…' : 'No generation request is prepared.'}</p><div className="form-actions">
-        <button onClick={openSettings}>AI settings</button>{!operation && <button onClick={() => { void controller.prepare().catch(() => {}); }}>Prepare request again</button>}
+        <button onClick={openSettings}>AI settings</button>
       </div></> : <>
         {job.status === 'unknown' && <p className="message warning">The AI may have finished this request, but the result didn’t arrive. Trying again {usesChatgpt ? 'uses your plan again' : 'may cost again'}.</p>}
         {job.status === 'cancelled' && <p className="small muted">{usesChatgpt ? 'Submitted work may still count toward your plan.' : 'Submitted work may still be charged.'}</p>}
@@ -204,14 +219,11 @@ function GenerationDetails({ controller, project, settings, openSettings, manage
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
           {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready regions' : 'Apply changes'}</button>}
-          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>{conflicts.length > 0 ? 'Build remaining draft' : job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
+          {canRetry && <button className="primary" disabled={!!operation} onClick={() => setConfirmRetry(true)}>{conflicts.length > 0 ? 'Build remaining draft' : job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
         </div>
       </>}
     </div></Modal>
-    {confirmRetry && job && <Modal title="Try the same requests again?" close={() => setConfirmRetry(false)}><div className="dialog-body"><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
-      <p>{usesChatgpt ? 'The retry counts toward that account’s ChatGPT plan or credits balance. Earlier attempts may also have used your plan or credits.' : `Estimated job cost: ${money(job.estimateUsd)}. Earlier attempts may also have been charged.`}</p>
-      {usageError && <p className="message error" role="alert">{usageError}</p>}
-      <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { setConfirmRetry(false); void controller.retry().catch(() => {}); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={() => setConfirmRetry(false)}>Keep current job</button></div></div></Modal>}
+    {confirmRetry && job && <RetryConfirmation job={job} settings={settings} busy={!!operation} close={() => setConfirmRetry(false)} send={() => { setConfirmRetry(false); void controller.retry().catch(() => {}); }} />}
   </>;
 }
 

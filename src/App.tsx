@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { confirm } from '@tauri-apps/plugin-dialog';
 import { native, edit } from './api';
 import { Canvas, type CanvasHandle, type RequestPatch } from './Canvas';
 import { CanvasTools, type CanvasTool, type RequestShapeKind } from './CanvasTools';
@@ -19,7 +18,7 @@ import './shell.css';
 import { editorShortcut, SHORTCUT_HELP } from './shortcuts';
 import { steppedZoom } from './canvasGeometry';
 import { AiSettings } from './AiSettings';
-import { GenerationDialog, GenerationFeedback } from './Generation';
+import { GenerationDialog, GenerationFeedback, RetryConfirmation, providerName } from './Generation';
 import { PagePreview } from './Preview';
 import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from './CodePane';
 import { FirstRunTips } from './Onboarding';
@@ -130,6 +129,10 @@ export default function App() {
   const [replacement, setReplacement] = useState<Replacement | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const closing = useRef(false);
+  const [closeRequest, setCloseRequest] = useState<string | null>(null);
+  const closeChoice = useRef<((choice: 'save' | 'discard' | 'keep') => void) | null>(null);
+  const saveCurrent = useRef<() => Promise<WorkspaceView | null>>(() => Promise.resolve(null));
+  const [retryRequest, setRetryRequest] = useState<'result' | 'frozen' | 'current' | null>(null);
   const [saveConflict, setSaveConflict] = useState<SaveConflict | null>(null);
   const saveChoice = useRef<((choice: SaveChoice) => void) | null>(null);
   const saveFlight = useRef<Promise<WorkspaceView | null> | null>(null);
@@ -248,9 +251,17 @@ export default function App() {
         const identity = await native<import('./types').IdentityAnalysis | null>('get_identity_analysis').catch(() => null);
         const generating = generationRef.current?.status === 'generating' || identity?.status === 'analyzing';
         const plan = identity?.status === 'analyzing' ? (identity.authentication ?? aiCurrent.current?.authentication) === 'chatgpt' : generationRef.current?.authentication === 'chatgpt';
-        if ((current.current?.anyDirty || current.current?.dirty || generating) && !await confirm(`${generating ? `Generation is still running. Closing may interrupt the request, and ${plan ? 'submitted work may still use your ChatGPT plan or credits' : 'OpenAI may still charge for submitted work'}. Its outcome will be shown as uncertain when you return. ` : ''}${current.current?.dirty ? 'This project has changes that have not been saved to its file. ' : ''}Close Desegnos?`, {
-          title: generating ? 'Generation is running' : 'Unsaved project changes', kind: 'warning', okLabel: 'Close Desegnos', cancelLabel: 'Keep editing',
-        })) return;
+        if (current.current?.anyDirty || current.current?.dirty || generating) {
+          const provider = providerName(identity?.status === 'analyzing' ? aiCurrent.current?.provider ?? 'openai' : generationRef.current?.provider ?? 'openai');
+          const message = `${generating ? `Generation is still running. Closing may interrupt the request, and ${plan ? 'submitted work may still use your ChatGPT plan or credits' : `${provider} may still charge for submitted work`}. Its outcome will be shown as uncertain when you return. ` : ''}Unsaved changes will be lost if you close without saving.`;
+          const choice = await new Promise<'save' | 'discard' | 'keep'>(resolve => { closeChoice.current = resolve; setCloseRequest(message); });
+          if (choice === 'keep') return;
+          if (choice === 'save') {
+            const saved = await saveCurrent.current();
+            if (!saved) return;
+            if (saved.anyDirty || saved.dirty) { setNotice('Another open project has unsaved changes. Save it before closing.'); return; }
+          }
+        }
         await getCurrentWindow().destroy();
       } catch (error) { setError(errorMessage(error)); }
       finally { closing.current = false; }
@@ -277,6 +288,18 @@ export default function App() {
     saveFlight.current = operation().finally(() => { saveFlight.current = null; });
     return saveFlight.current;
   }
+  saveCurrent.current = async () => {
+    let saved = await save();
+    while (saved) {
+      const next = saved.openProjects?.find(project => project.dirty && !project.active);
+      if (!next) return saved;
+      await switchProject(next.id);
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      saved = await save();
+    }
+    return null;
+  };
+  function chooseClose(choice: 'save' | 'discard' | 'keep') { const resolve = closeChoice.current; closeChoice.current = null; setCloseRequest(null); resolve?.(choice); }
   async function replace(label: string, run: Replacement['run']) {
     await synchronize();
     await settle();
@@ -428,7 +451,7 @@ export default function App() {
         accept(recovered);
         if (recovered.project) setZoom(initialZoom(recovered.project.viewport.width, recovered.project.viewport.height));
         setSelected(null); setShowRecovery(false);
-        setNotice('Project recovered.');
+        setNotice('Recovered unsaved changes from your last session.');
       });
     });
   }
@@ -563,7 +586,7 @@ export default function App() {
   }), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
-  useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
+  useEffect(() => { setLive(false); setShowLog(false); setRetryRequest(null); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
   async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
   function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
     const host = event.currentTarget.parentElement; if (!host) return;
@@ -601,6 +624,7 @@ export default function App() {
   }, [generation.canStop, generation.cancel]);
   const showGenerationStatus = generation.stopped || working || !!generation.error || !!generation.job && ['prepared', 'blocked', 'failed', 'unknown', 'cancelled'].includes(generation.job.status);
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
+  const composeProvider = providerName(composeJob?.provider ?? aiSettings?.provider ?? 'openai');
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
   const composeAccountId = composeJob ? composeJob.chatgptAccountId : aiSettings?.chatgpt.activeAccountId;
   const composeAccount = aiSettings?.chatgpt.accounts.find(account => account.id === composeAccountId);
@@ -877,6 +901,7 @@ export default function App() {
         </div><div className="chrome-cluster">{!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} onClick={() => setShowLog(value => !value)}>AI log</button>}
         {project && <button className="primary" title={requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={(requestedAreas === 0 && pendingImages === 0) || working} onClick={generate}>Generate</button>}
+        {project && aiConnected && <span className="generation-cost">{composeProvider}{composeUsesChatgpt ? ' · Plan or credits' : composeJob ? ` · ≈$${composeJob.estimateUsd.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}` : ''}</span>}
         </div>
         <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
       </div>
@@ -915,11 +940,11 @@ export default function App() {
       {(showGenerationStatus || resultReview) && <div className="canvas-pill" role="region" aria-label="Generation status">
         {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
-          <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => run(() => rejectResult(true))}>Try again</button>
+          <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => setRetryRequest('result')}>Try again</button>
           <button className="pill-close" aria-label="Keep changes" title="Keep" onClick={() => setResultReview(null)}>×</button>
         </> : <GenerationFeedback controller={generation} compact>
           {generation.canStop && <button onClick={() => { void generation.cancel(); }}>Stop</button>}
-          {!working && (generation.stopped || generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status)) && <button className="primary" disabled={requestedAreas === 0 && pendingImages === 0} onClick={generate}>{generation.job?.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
+          {!working && (generation.stopped || generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status)) && <button className="primary" onClick={() => setRetryRequest(generation.job ? 'frozen' : 'current')}>{generation.job?.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
           {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
           {!working && <button onClick={openGeneration}>Details</button>}
         </GenerationFeedback>}
@@ -943,6 +968,8 @@ export default function App() {
       </main>
       <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? requestShape === 'freehand' ? 'Draw around an area; release to close' : requestShape === 'ellipse' ? 'Drag an ellipse · Shift for a circle' : 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
     </>}
+    {closeRequest && <Modal title="Close Desegnos?" close={() => chooseClose('keep')}><div className="dialog-body"><p>{closeRequest}</p><div className="form-actions"><button className="primary" disabled={pending > 0} onClick={() => chooseClose('save')}>Save and close</button><button onClick={() => chooseClose('discard')}>Close without saving</button><button onClick={() => chooseClose('keep')}>Keep editing</button></div></div></Modal>}
+    {retryRequest && <RetryConfirmation job={generation.job} settings={aiSettings} fresh={retryRequest !== 'frozen'} undo={retryRequest === 'result'} busy={working || pending > 0} close={() => setRetryRequest(null)} send={() => { const retry = retryRequest; setRetryRequest(null); setShowLog(true); run(() => retry === 'result' ? rejectResult(true) : retry === 'current' ? generation.prepare() : generation.retry()); }} />}
     {showShortcuts && <Modal title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></Modal>}
     {showNew && <Modal title="New project" close={() => setShowNew(false)}><DialogError error={error} dismiss={() => setError('')} /><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} /></Modal>}
     {!!view?.siteWarnings?.length && dismissedSiteWarnings !== `${project?.id}:${view.siteWarnings.join('\n')}` && <div className="message warning" role="status"><span>Project saved. {view.siteWarnings.join(' ')}</span><button aria-label="Dismiss website warning" onClick={() => setDismissedSiteWarnings(`${project?.id}:${view.siteWarnings?.join('\n')}`)}>Dismiss</button></div>}

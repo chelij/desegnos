@@ -137,12 +137,12 @@
 @media (max-width: 760px) { .layers-popover { max-height: 65%; } }
 
 /* One floating status pill above the canvas tools: progress, failure and result never move the canvas. */
-.canvas-pill { position: absolute; z-index: 7; bottom: 72px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; max-width: calc(100% - 24px); padding: 6px 6px 6px 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); box-shadow: 0 3px 12px #00000028; font-size: 13px; }
+.canvas-pill { position: absolute; z-index: 7; bottom: 72px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; flex-wrap: wrap; gap: 8px; width: max-content; max-width: calc(100% - 24px); padding: 6px 6px 6px 14px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); box-shadow: 0 3px 12px #00000028; font-size: 13px; }
 .canvas-pill > strong { white-space: nowrap; }
-.canvas-pill button { min-height: 30px; padding: 3px 12px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+.canvas-pill button { min-height: 32px; padding: 3px 12px; border-radius: 4px; font-size: 13px; white-space: nowrap; }
 .canvas-pill .pill-close { border-color: transparent; background: transparent; font-size: 18px; padding-inline: 8px; }
-.canvas-pill .generation-status.compact { display: flex; align-items: center; flex-wrap: nowrap; gap: 10px; padding: 0; margin: 0; border: 0; background: transparent; }
-.canvas-pill .generation-status-copy { display: flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; }
+.canvas-pill .generation-status.compact { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; max-width: 100%; gap: 10px; padding: 0; margin: 0; border: 0; background: transparent; }
+.canvas-pill .generation-status-copy { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; min-width: 0; flex: 0 1 auto; }
 .canvas-pill .generation-status-copy p { margin: 0; white-space: nowrap; }
 .canvas-pill .generation-detail, .canvas-pill .generation-activity { color: var(--muted); font-size: 12px; }
 .canvas-pill .generation-feedback-error { white-space: normal !important; max-width: 340px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 12px; }
@@ -282,3 +282,5 @@
 .editor-shell { position: relative; }
 .workspace-notices { position: absolute; z-index: 18; top: 100px; right: 14px; display: grid; gap: 8px; width: min(540px, calc(100% - 28px)); max-height: calc(100% - 160px); overflow: auto; pointer-events: none; }
 .workspace-notices > * { pointer-events: auto; margin: 0; background: var(--surface); border: 1px solid var(--border); }
+
+.generation-cost { color: var(--muted); font-size: 11px; white-space: nowrap; }
