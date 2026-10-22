@@ -118,7 +118,7 @@ async function replaceMain(driver, physical, about) {
   await previewReady(driver);
   const current=(await workspace(driver)).project;
   const active=await driver.execute(()=>document.querySelector('[role=tab][aria-selected=true]').id.replace('page-tab-',''));
-  await driver.invoke('edit_page_source',{projectId:current.id,pageId:active,revision:current.revision,html:exportBody(about)});
+  await driver.invoke('edit_page_source',{projectId:current.id,pageId:active,revision:current.revision,html:exportBody(about),css:'body{margin:0;background:#162329;color:#f4f0e8;font:16px system-ui}'});
   // Save returns the real native workspace to the UI; tab changes alone do not read Rust state.
   await driver.button('Save');
   await previewReady(driver, about ? 'About our standalone website' : 'Our standalone website');
@@ -293,6 +293,8 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await waitFor(async () => (await driver.invoke('get_generation', { projectId }))?.receivedBytes > 0, 'The held reply did not start streaming');
     provider.release(held.jobId);
     applied = await jobAt(driver, projectId, ['applied']);
+    assert.equal(applied.repairRounds, 0, 'The scoped fixture must apply without a validation repair');
+    assert.deepEqual(applied.drafts, [], 'The scoped fixture must not leave rejected output');
     const record = provider.generationRequests().find(item => item.metadata.jobId === applied.jobId);
     assert.equal(record.markdown, applied.requirements.markdown); assert.equal(hash(record.markdown), applied.requirements.sha256); assert.equal(record.metadata.generationMode, 'strict');
     assert.equal(applied.requirements.pageCount, 2); assert.equal((await workspace(driver)).project.pages.every(page => page.content?.html.includes('Generated native preview')), true);
@@ -425,20 +427,21 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     assert.match(await driver.execute(() => document.querySelector('[aria-label="Context sent"]').textContent), /## Requested context/);
     await driver.button('Undo'); await previewReady(driver, 'Edited directly on the page');
     provider.setMode('malformed'); await driver.button('Generate');
-    const failed = await jobAt(driver, projectId, ['failed']);
-    assert.match(failed.rawReply, /not-complete-json/);
+    const rejected = await jobAt(driver, projectId, ['blocked']);
+    assert.equal(rejected.repairRounds, 1, 'Malformed output gets one automatic validation repair');
+    assert.match(rejected.rawReply, /not-complete-json/);
     await waitFor(() => driver.execute(() => !!document.querySelector('[aria-label="Failed raw reply"]')), 'The failed raw reply is absent');
     assert.match(await driver.execute(() => document.querySelector('.canvas-pill .generation-feedback-error').textContent), /Your work is safe\.$/);
     assert.equal(await driver.execute(() => document.querySelector('.generation-log [aria-label="AI reply"] details').open), false);
     await driver.click('//aside[@aria-label="AI conversation"]//section[@aria-label="AI reply"]//summary[normalize-space(.)="Show details"]', 'xpath');
-    assert.ok((await driver.execute(() => document.querySelector('.generation-log [aria-label="AI reply"]').innerText)).includes(failed.message));
+    assert.ok((await driver.execute(() => document.querySelector('.generation-log [aria-label="AI reply"]').innerText)).includes(rejected.candidate.summary));
     const history = await driver.invoke('list_generations', { projectId });
-    assert.ok(history.jobs.length >= 3); assert.equal(history.jobs[0].jobId, failed.jobId);
+    assert.ok(history.jobs.length >= 3); assert.equal(history.jobs[0].jobId, rejected.jobId);
     await driver.click('.generation-log details[aria-label="Past generations"] > summary');
     await driver.click('.generation-log details[aria-label="Past generations"] p:nth-of-type(2) button');
     await waitFor(() => driver.execute(() => !![...document.querySelectorAll('.generation-log button')].find(node => node.textContent === 'Back to current generation')), 'The historical conversation did not open');
     assert.ok(await driver.execute(() => !!document.querySelector('[aria-label="Context sent"]')));
-    assert.equal((await driver.invoke('get_generation', { projectId })).jobId, failed.jobId);
+    assert.equal((await driver.invoke('get_generation', { projectId })).jobId, rejected.jobId);
     assert.equal(await driver.execute(() => { const node = document.querySelector('.log-messages'); return node.scrollWidth <= node.clientWidth + 1; }), true, 'The conversation or history row overflows the sidebar');
     await physical.captureWindow(join(output, '11b-generation-history.png'));
     await driver.button('Back to current generation'); await driver.button('Hide AI conversation');
