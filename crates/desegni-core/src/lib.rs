@@ -20,6 +20,7 @@ mod picture_scaling;
 mod project_assets;
 mod provenance;
 mod region_scripts;
+mod request_history;
 mod requirements;
 mod session;
 mod source;
@@ -49,6 +50,7 @@ pub use picture_scaling::{
 pub use project_assets::*;
 pub use provenance::*;
 pub use region_scripts::region_script_runtime;
+pub use request_history::*;
 pub use requirements::*;
 pub use session::*;
 pub use source::*;

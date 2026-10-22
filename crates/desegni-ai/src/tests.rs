@@ -216,6 +216,7 @@ fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
         page_count: 1,
         dependencies: BTreeMap::new(),
         dossier_context: None,
+        request_history: String::new(),
         capabilities: None,
         images: vec![],
     }
