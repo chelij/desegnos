@@ -4,6 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, us
 import { native } from './api';
 import { siteLayerTree, siteLayerStyles, siteCopyStyles, type SiteLayer } from './siteLayers';
 import { translatedStyle } from './elementEditing';
+import { measurableDocument } from './previewMeasurement';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
 import type { ElementSelection, ElementTarget, ElementStyleEdit, LayerDirection, ElementVisual, Page, PreviewDescriptor, Rect, SiteContent } from './types';
 
@@ -51,13 +52,20 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   const [retry, setRetry] = useState(0);
   const picked = useRef<Element | null>(null);
   const mounted = useRef<{ document: Document; session: string } | null>(null);
+  // The frame the canvas shows, recorded when it is promoted. Every measurement reads
+  // this document and nothing else: the hidden pending frame and a replaced frame hold
+  // layouts that are not on screen.
+  const shown = useRef<{ pageId: string; revision: number | string; session: string; document: Document } | null>(null);
   const invalidated = useRef(false);
   const registeredVersion = useRef<{ pageId: string; revision: number | string } | null>(null);
   // Canvas documents share DOM access only while all scripts remain forbidden by sandbox.
   // Interactive previews keep their separate opaque-origin, explicitly enabled sandbox.
+  function measurable(): Document | null {
+    return measurableDocument(shown.current, { pageId, revision, session: descriptor?.sessionId ?? '', document: frame.current?.contentDocument ?? null, invalidated: invalidated.current });
+  }
   function identify(node: Element | null, exact = true): { node: Element; target: ElementTarget } | null {
-    const doc = frame.current?.contentDocument;
-    if (registeredVersion.current?.pageId !== pageId || registeredVersion.current?.revision !== revision || !doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || !node || !descriptor?.sourceSha256 || !doc.body.contains(node)) return null;
+    const doc = measurable();
+    if (!doc || doc.URL !== 'about:srcdoc' || !node || !descriptor?.sourceSha256 || !doc.body.contains(node)) return null;
     if (!exact) node = Element.prototype.closest.call(node, 'button, a, input, select, textarea, label, summary') ?? node;
     if (!/^[A-Za-z][A-Za-z0-9-]{0,79}$/.test(node.localName)) return null;
     const parts: string[] = [];
@@ -86,8 +94,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   }
 
   function findNode(target: ElementTarget): Element | null {
-    const doc = frame.current?.contentDocument;
-    if (registeredVersion.current?.pageId !== pageId || registeredVersion.current?.revision !== revision || !doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || (!target.id && target.sourceSha256 !== descriptor?.sourceSha256)) return null;
+    const doc = measurable();
+    if (!doc || doc.URL !== 'about:srcdoc' || (!target.id && target.sourceSha256 !== descriptor?.sourceSha256)) return null;
     try { const node = Document.prototype.querySelector.call(doc, target.id ? `[data-desegnos-id="${CSS.escape(target.id)}"]` : target.selector); return node && (target.id || node.localName === target.tag) ? node : null; } catch { return null; }
   }
   function visual(target: ElementTarget): ElementVisual | null {
@@ -106,7 +114,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     return result;
   }
   function textAt(x: number, y: number): InlineText | null {
-    const doc = frame.current?.contentDocument;
+    const doc = measurable();
     const selection = selected(doc?.elementFromPoint(x, y) ?? null, true);
     if (!doc || !selection || ['input', 'textarea', 'select', 'svg', 'body'].includes(selection.element.tag)) return null;
     const node = findNode(selection.element); if (!node) return null;
@@ -130,7 +138,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     return null;
   }
   function occupied(target: ElementTarget): Rect[] {
-    const doc = frame.current?.contentDocument; const node = findNode(target); if (!doc || !node) return [];
+    const doc = measurable(); const node = findNode(target); if (!doc || !node) return [];
     const result: Rect[] = [];
     // Text and replaced controls represent content, rather than their large
     // layout containers. Ignore the selected subtree and its own ancestor text.
@@ -176,12 +184,12 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       node.removeAttribute('srcset'); node.removeAttribute('sizes'); node.setAttribute('src', src);
       return true;
     },
-    source() { return registeredVersion.current?.pageId === pageId && registeredVersion.current.revision === revision && mounted.current?.session === descriptor?.sessionId && mounted.current?.document === frame.current?.contentDocument && !invalidated.current ? descriptor?.sourceSha256 ?? null : null; },
+    source() { return measurable() ? descriptor?.sourceSha256 ?? null : null; },
     find(target) { return selected(findNode(target), false, true); },
     contains(target) { return !!findNode(target); },
-    layers() { const doc = frame.current?.contentDocument; return doc && identify(doc.body) ? siteLayerTree(doc, node => selected(node, false, true)) : []; },
+    layers() { const doc = measurable(); return doc && identify(doc.body) ? siteLayerTree(doc, node => selected(node, false, true)) : []; },
     measuredElements() {
-      const doc = frame.current?.contentDocument;
+      const doc = measurable();
       if (!doc || !identify(doc.body)) return [];
       const nodes = Array.from(doc.querySelectorAll('[data-desegnos-id]'));
       if (nodes.length > 10_000) throw new Error('This page has more than 10,000 elements. Select individual elements for this request.');
@@ -240,11 +248,11 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       };
       return { style, cancel:restore, preview(rect) { if (!findNode(target)) return null; set(style(rect)); return selected(node, false, true); } };
     },
-    pick(x, y) { try { return selected(frame.current?.contentDocument?.elementFromPoint(x, y) ?? null, true); } catch { return null; } },
+    pick(x, y) { try { return selected(measurable()?.elementFromPoint(x, y) ?? null, true); } catch { return null; } },
     // The picture under a point, even inside a link or button, for dropping image files.
     imageAt(x, y) {
       try {
-        const node = frame.current?.contentDocument?.elementFromPoint(x, y) ?? null;
+        const node = measurable()?.elementFromPoint(x, y) ?? null;
         const image = node?.closest('img') ?? (node && node.querySelectorAll('img').length === 1 ? node.querySelector('img') : null);
         return image ? selected(image, false, true) : null;
       } catch { return null; }
@@ -252,16 +260,16 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     // Content the AI found online carries its source URL (editor metadata, removed on export).
     foundSource(target) { return findNode(target)?.getAttribute('data-desegnos-found') ?? null; },
     found() {
-      const doc = frame.current?.contentDocument; if (!doc) return [];
+      const doc = measurable(); if (!doc) return [];
       return Array.from(doc.querySelectorAll('[data-desegnos-found]')).flatMap(node => { const hit = selected(node, false, true); return hit ? [hit] : []; });
     },
     placeholders() {
-      const doc = frame.current?.contentDocument; if (!doc) return [];
+      const doc = measurable(); if (!doc) return [];
       return Array.from(doc.querySelectorAll('img[data-desegnos-placeholder]')).flatMap(node => { const found = selected(node, false, true); return found ? [found] : []; });
     },
     next(parent = false, target) {
       try {
-        const doc = frame.current?.contentDocument;
+        const doc = measurable();
         if (!doc) return null;
         const current = target ? findNode(target) : picked.current;
         if (parent && current) return selected(current.parentElement, true);
@@ -309,8 +317,18 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     registeredVersion.current = { pageId: visible.pageId, revision: visible.revision };
     mounted.current = readyDocument.current;
     picked.current = null; invalidated.current = false;
-    if (staticView && readyDocument.current) { setExtent(readyDocument.current.height); onHeight?.(readyDocument.current.height); }
+    // Record the frame the canvas now shows before anything measures it. Measuring
+    // after the promotion (not before it) keeps the box, handles and toolbar on the
+    // element rather than on the pending frame's layout.
+    shown.current = readyDocument.current && readyDocument.current.session === visible.descriptor.sessionId ? { pageId: visible.pageId, revision: visible.revision, session: visible.descriptor.sessionId, document: readyDocument.current.document } : null;
+    if (staticView && readyDocument.current) { onHeight?.(readyDocument.current.height); }
     onReady?.();
+    // Viewport-relative layout (for example 100vh) can settle one paint after the
+    // promoted frame gets its own size, so measure again once that layout is final.
+    // Skip it when a newer revision is already loading: that frame owns the selection.
+    let active = true;
+    const settled = requestAnimationFrame(() => requestAnimationFrame(() => { if (active && measurable()) onReady?.(); }));
+    return () => { active = false; cancelAnimationFrame(settled); };
   }, [visible]);
   useEffect(() => {
     if (!descriptor || staticView) return;
@@ -383,6 +401,9 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
             await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
             if (pendingRef.current !== candidate) return;
             readyDocument.current = prepared;
+            // The promoted frame must keep its own height from the promotion commit on,
+            // otherwise it is measured in a layout the canvas is not showing.
+            if (prepared) setExtent(prepared.height);
             setVisible(candidate); setPending(null); setLoading(false);
           } catch (error) { if (pendingRef.current === candidate) { setError(error instanceof Error ? error.message : String(error)); setLoading(false); } }
         }} onError={() => { if (pendingRef.current === candidate) { setError('The preview document could not be loaded.'); setLoading(false); } }} />;
