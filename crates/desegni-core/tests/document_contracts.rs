@@ -460,3 +460,48 @@ fn precise_framed_generation_rejects_host_page_changes() {
         "Apply must reject the same host change"
     );
 }
+
+#[test]
+fn an_authored_iframe_can_gain_its_editor_identity_for_a_framed_request() {
+    let mut project = project(GenerationMode::Strict, &[], true, false);
+    project.pages[0].content = Some(SiteContent {
+        html: format!("<!doctype html>\n<html><body><iframe src=\"{SITE}\"></iframe></body></html>"),
+        css: String::new(),
+        javascript: String::new(),
+    });
+    let home = project.home_page_id;
+    let hash = project
+        .page(home)
+        .unwrap()
+        .content
+        .as_ref()
+        .unwrap()
+        .sha256()
+        .unwrap();
+    let target = ElementTarget {
+        id: String::new(),
+        selector: "body > iframe:nth-of-type(1)".into(),
+        tag: "iframe".into(),
+        label: String::new(),
+        source_sha256: hash,
+    };
+    let (identified, element) = project
+        .ensure_element_id_in(&DocumentTarget::Page { page_id: home }, project.revision, &target)
+        .unwrap();
+    let element = element.expect("identified iframe");
+    assert!(!element.id.is_empty(), "the iframe gains an editor ID");
+    assert_eq!(element.tag, "iframe");
+    let content = identified.pages[0].content.as_ref().unwrap();
+    assert!(content.html.contains("data-desegnos-id="));
+    // The bytes change only by editor metadata; a second call is a no-op.
+    let (same, again) = identified
+        .ensure_element_id_in(
+            &DocumentTarget::Page { page_id: home },
+            identified.revision,
+            &element,
+        )
+        .unwrap();
+    assert_eq!(again, Some(element));
+    assert_eq!(same.revision, identified.revision);
+    assert_eq!(same.pages[0].content, identified.pages[0].content);
+}

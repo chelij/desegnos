@@ -1709,6 +1709,99 @@ pub fn inspect_element(
         .map_err(message)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FrameDocumentView {
+    iframe_id: String,
+    src: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
+    document: desegni_core::DocumentTarget,
+    source_sha256: String,
+    content: desegni_core::SiteContent,
+}
+
+/// Framed documents rendered statically and edited on the canvas.
+#[tauri::command]
+pub fn get_frame_documents(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+) -> NativeResult<Vec<FrameDocumentView>> {
+    let state = state.lock().map_err(message)?;
+    let project = state.project()?;
+    if project.id != project_id {
+        return Err("Return to the project that owns this page.".into());
+    }
+    let targets = project.frame_targets(page_id).map_err(message)?;
+    let mut documents = Vec::new();
+    for target in targets {
+        let Some(document) = target.document else {
+            continue;
+        };
+        // A page that frames itself has no editable inner document.
+        if document == desegni_core::DocumentTarget::page(page_id) {
+            continue;
+        }
+        let Ok(content) = project.document_content(&document) else {
+            continue;
+        };
+        let Ok(content) = project.resolve_site_content(&content) else {
+            continue;
+        };
+        let Some(source_sha256) = target.source_sha256 else {
+            continue;
+        };
+        let path = match &document {
+            desegni_core::DocumentTarget::SiteFile { path } => Some(path.clone()),
+            desegni_core::DocumentTarget::Page { page_id } => project
+                .website
+                .as_ref()
+                .and_then(|site| site.page_files.get(page_id).cloned()),
+        };
+        documents.push(FrameDocumentView {
+            iframe_id: target.iframe_id,
+            src: target.src,
+            path,
+            document,
+            source_sha256,
+            content,
+        });
+    }
+    Ok(documents)
+}
+
+/// Give one element its editor ID, so a framed request can name its host iframe.
+#[tauri::command]
+pub fn ensure_element_id(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    target: desegni_core::ElementTarget,
+    document: Option<desegni_core::DocumentTarget>,
+) -> NativeResult<ElementEditView> {
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let session = session.as_mut().ok_or("Open a project first.")?;
+    if session.project().id != project_id {
+        return Err("Return to the project that owns this element.".into());
+    }
+    let journal = journal.as_ref().ok_or("Open a project first.")?;
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let element = session
+        .ensure_element_id_document(revision, &document, &target, |next| {
+            journal.append(next)
+        })
+        .map_err(message)?;
+    Ok(ElementEditView {
+        workspace: state.view(),
+        element,
+    })
+}
+
 #[tauri::command]
 pub fn edit_element(
     state: WorkspaceState<'_>,

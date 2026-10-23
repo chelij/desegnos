@@ -7,7 +7,8 @@ import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, u
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '@tauri-apps/api/core';
 import { flushSync } from 'react-dom';
-import { canonicalSelections, regionTargets, sameTarget, unionRect } from './elementTargets';
+import { canonicalSelections, documentKey, regionTargets, sameDocument, sameTarget, targetKey, unionRect } from './elementTargets';
+import { pageRectToInnerDocument, remapFramedRequest, requestFrame } from './frameDocuments';
 import { useDraftText } from './DraftText';
 import { escapeHtml, imageFile } from './elementEditing';
 import { StyleBar, type StyleChange } from './StyleBar';
@@ -22,7 +23,7 @@ import type { LiveHistoryAction } from './liveBar';
 import { overlayPlacement, placeOverlays } from './previewFrames';
 import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
-import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
+import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
 import type { RequestShapeKind } from './CanvasTools';
 import './canvas.css';
@@ -62,13 +63,14 @@ type CanvasProps = {
   projectImages?: import('./types').ProjectImage[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void; onLiveLocation?: (path: string) => void;
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   requestShape?: RequestShapeKind; grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: { rect: Rect; shape?: RegionShape }[]; highlighted?: { rect: Rect; shape?: RegionShape }[];
+  frameDocuments?: FrameDocumentView[]; ensureElementId: (target: ElementTarget) => Promise<ElementTarget | null>; setFrameTarget: (regionId: string, frameTarget: FrameTarget | null) => Promise<void>;
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
   openSource?: (target: ElementTarget) => void;
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
-  changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => void; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
+  changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => Promise<Region | null>; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
-export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
   const [problemErrors, setProblemErrors] = useState<Record<string, string>>({});
   const [problemBusy, setProblemBusy] = useState(false);
@@ -524,6 +526,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     setEditingElement(true); setElementError('');
     try {
       const target = await editElement(selected.element, change);
+      // Native reports identities without their document; the selection still lives in it.
+      const next = target && selected.element.document ? { ...target, document: selected.element.document } : target;
       if (ownsSelection && pageRef.current.id === pageId && selectionSerial.current === ticket) {
         // Keep the box the canvas is already drawing (a drag target or a nudged box)
         // instead of the rect measured before the edit.
@@ -531,9 +535,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         const shown = latest && sameTarget(latest.element, selected.element) ? latest : selected;
         // The edit may report a new identity for the same element; the box the canvas is
         // drawing belongs to it either way.
-        if (target && expectedSelection.current && sameTarget(expectedSelection.current.element, selected.element)) expectedSelection.current = { element: target, rect: expectedSelection.current.rect };
-        pendingSelection.current = target;
-        storeElement(target ? { ...shown, element: target } : null);
+        if (next && expectedSelection.current && sameTarget(expectedSelection.current.element, selected.element)) expectedSelection.current = { element: next, rect: expectedSelection.current.rect };
+        pendingSelection.current = next;
+        storeElement(next ? { ...shown, element: next } : null);
       }
     } catch (error) { if (pageRef.current.id === pageId && selectionSerial.current === ticket) setElementError(error instanceof Error ? error.message : String(error)); throw error; }
     finally { setEditingElement(false); }
@@ -545,9 +549,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     setEditingElement(true); setElementError('');
     try {
       const target = await undoElement(selected.element);
+      const next = target && selected.element.document ? { ...target, document: selected.element.document } : target;
       if (pageRef.current.id === pageId && selectionSerial.current === ticket) {
-        pendingSelection.current = target;
-        storeElement(target ? { ...selected, element: target } : null);
+        pendingSelection.current = next;
+        storeElement(next ? { ...selected, element: next } : null);
       }
     } catch (error) { if (pageRef.current.id === pageId && selectionSerial.current === ticket) setElementError(error instanceof Error ? error.message : String(error)); }
     finally { setEditingElement(false); }
@@ -582,7 +587,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     const mover = site.current?.beginMove(selected.element);
     if (!mover) throw new Error('This item cannot be moved here. Select it again.');
     const css = mover.style(x, y);
-    const source = site.current?.source(); const pageId = pageRef.current.id;
+    const source = site.current?.sourceOf(selected.element); const pageId = pageRef.current.id;
     const target = { ...selected.rect, x: selected.rect.x + x, y: selected.rect.y + y };
     // Move the box with the nudge and keep it as the target until the committed
     // preview settles; a measurement taken before then can describe another layout.
@@ -598,10 +603,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   }
   const moveElementRef = useRef(moveElement); moveElementRef.current = moveElement;
   async function waitForSite(pageId: string, target?: ElementTarget, previousSource?: string | null) {
-    const deadline = performance.now() + 4000;
+    // A framed document is swapped behind its visible copy, so it may take longer than a page reload.
+    const deadline = performance.now() + (target?.document ? 10_000 : 4000);
     do {
       if (pageRef.current.id !== pageId) throw new Error('The page changed. Select the item again.');
-      const source = site.current?.source();
+      const source = target ? site.current?.sourceOf(target) : site.current?.source();
       if (source && source !== previousSource && (!target || site.current?.find(target))) return;
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     } while (performance.now() < deadline);
@@ -633,10 +639,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     if (syncing.current) return syncing.current;
     const work = async () => {
       const current = pageRef.current;
-      if (!current.content || !current.regions.some(region => !region.completed)) { setStale(new Set()); return; }
+      if (!current.content || !current.regions.some(region => !region.completed && !region.frameTarget)) { setStale(new Set()); return; }
       await waitForSite(current.id);
       if (JSON.stringify(pageRef.current.content) !== JSON.stringify(current.content) || pageRef.current.id !== current.id) throw new Error('The page changed while measuring its items. Try again.');
-      const regions = pageRef.current.regions.filter(region => !region.completed);
+      const regions = pageRef.current.regions.filter(region => !region.completed && !region.frameTarget);
       const bounds: ElementBounds[] = []; const missing = new Set<string>();
       const areaBounds = regions.some(region => !regionTargets(region).length) ? site.current!.measuredElements().map(item => ({ target: item.element, rect: item.rect })) : [];
       for (const region of regions) {
@@ -659,6 +665,45 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     syncing.current = work().finally(() => { syncing.current = null; });
     return syncing.current;
   }
+  // --- Framed requests -------------------------------------------------------------
+  // A box drawn over an editable frame belongs to the document inside it: the region keeps
+  // the host-page rect for the canvas, and a frame target with the rect mapped inside.
+  async function createRequest(rect: Rect, shape?: RegionShape): Promise<Region | null> {
+    // Live navigation leaves the still geometry behind, so a live box stays a page request.
+    const frames = liveView ? [] : site.current?.frames() ?? [];
+    const framed = requestFrame(frames, rect);
+    let iframe = framed?.frame.iframe ?? null;
+    if (iframe && !iframe.id) {
+      try { iframe = await ensureElementId({ ...iframe }); }
+      catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+    }
+    const region = await add(rect, shape);
+    if (region && framed && iframe?.id) {
+      try {
+        await setFrameTarget(region.id, { pageId: pageRef.current.id, iframeId: iframe.id, document: framed.frame.document, rect: framed.rect });
+      } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+    }
+    return region;
+  }
+  function createRequestInBackground(rect: Rect, shape?: RegionShape) {
+    void createRequest(rect, shape).catch(error => setElementError(error instanceof Error ? error.message : String(error)));
+  }
+  // A framed request keeps its mapping while it moves inside the frame; leaving the frame
+  // turns it back into a host-page request.
+  async function changeRequest(id: string, patch: RequestPatch): Promise<Region> {
+    const region = await change(id, patch);
+    const framed = region.frameTarget;
+    if (patch.rect && framed) {
+      const frames = site.current?.frames() ?? [];
+      const rect = frames.length ? remapFramedRequest(frames, framed, region.rect) : framed.rect;
+      if (rect && (rect.x !== framed.rect.x || rect.y !== framed.rect.y || rect.width !== framed.rect.width || rect.height !== framed.rect.height)) {
+        await setFrameTarget(id, { ...framed, rect });
+      } else if (!rect && frames.length) {
+        await setFrameTarget(id, null);
+      }
+    }
+    return region;
+  }
   function addRequestInView() {
     const node = scroll.current; if (!node) return;
     const current = boundsRef.current;
@@ -667,7 +712,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     const withinGuide = end.x > 0 && start.x < page.viewport.width && end.y > 0 && start.y < page.viewport.height;
     const center = withinGuide ? { x: (Math.max(0, start.x) + Math.min(page.viewport.width, end.x)) / 2, y: (Math.max(0, start.y) + Math.min(page.viewport.height, end.y)) / 2 }
       : { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
-    deselectElement(); add(requestAt({ x: center.x - 160 / zoom, y: center.y - 80 / zoom }, zoom));
+    deselectElement(); createRequestInBackground(requestAt({ x: center.x - 160 / zoom, y: center.y - 80 / zoom }, zoom));
   }
   function focusRegion(id: string) {
     const region = pageRef.current.regions.find(item => item.id === id && !item.completed); if (!region) return;
@@ -735,7 +780,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       const pastedPage = result.workspace.project?.pages.find(item => item.id === pageId);
       if (!pastedPage) return;
       if (result.selection.element) {
-        const target = result.selection.element;
+        const document = elementRef.current?.element.document ?? pageRef.current.regions.find(region => region.id === selected)?.frameTarget?.document ?? null;
+        const target = document ? { ...result.selection.element, document } : result.selection.element;
         pendingSelection.current = target;
         storeElement(null);
         const expected = JSON.stringify([pastedPage.content, pastedPage.viewport, pastedPage.appearance]);
@@ -777,12 +823,37 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
     finally { setLayerBusy(false); }
   }
-  function askAI() { const current = elementRef.current; if (current && !editingElement && !nudging) { setContext(null); pickElement(canonicalSelections([current, ...extrasRef.current])); } }
+  async function askFrameRequest(selections: ElementSelection[]) {
+    const document = selections[0].element.document;
+    if (!document) return;
+    const sameDoc = selections.filter(item => sameDocument(item.element.document, document));
+    const frames = site.current?.frames() ?? [];
+    const frame = frames.find(item => documentKey(item.document) === documentKey(document));
+    if (!frame) throw new Error('This framed document is no longer shown. Select it again.');
+    const hostRect = unionRect(sameDoc.map(item => item.rect));
+    const innerRect = unionRect(sameDoc.map(item => pageRectToInnerDocument(frame.mapping, item.rect)));
+    let iframe = frame.iframe;
+    if (!iframe.id) iframe = await ensureElementId({ ...iframe }) ?? iframe;
+    if (!iframe.id) throw new Error('This frame cannot be targeted yet. Try again.');
+    const region = await add(hostRect);
+    if (!region) return;
+    await setFrameTarget(region.id, { pageId: pageRef.current.id, iframeId: iframe.id, document: frame.document, rect: innerRect });
+  }
+  function askAI() {
+    const current = elementRef.current;
+    if (!current || editingElement || nudging) return;
+    setContext(null);
+    const selections = canonicalSelections([current, ...extrasRef.current]);
+    // A framed element has no targets on the host page: the request names the document instead.
+    if (selections.some(item => item.element.document)) { void askFrameRequest(selections).catch(error => setElementError(error instanceof Error ? error.message : String(error))); return; }
+    pickElement(selections);
+  }
   // Select a website element by its structural selector (used by Page check), if the page has rendered.
-  function focusElement(selector: string, tag: string, id?: string, expectedPageId?: string) {
+  function focusElement(selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) {
     if (expectedPageId && pageRef.current.id !== expectedPageId) return null;
-    const sourceSha256 = site.current?.source(); if (!sourceSha256) return null;
-    const found = site.current?.find({ selector, tag, label: '', ...(id ? { id } : { sourceSha256 }) }) ?? null;
+    const sourceSha256 = site.current?.sourceOf({ selector, tag, label: '', ...(document ? { document } : {}) });
+    if (!sourceSha256) return null;
+    const found = site.current?.find({ selector, tag, label: '', ...(id ? { id } : { sourceSha256 }), ...(document ? { document } : {}) }) ?? null;
     if (found) { chooseElement(found); reveal(found.rect, false); }
     return found;
   }
@@ -940,17 +1011,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     const rect = currentRect({ x: event.clientX, y: event.clientY }, current);
     cancel();
     if (current.kind === 'new') {
-      if (current.shapeKind === 'freehand') { if (current.active && rect && current.freehand) add(rect, current.freehand); }
-      else if (current.active && rect && rect.width >= 1 && rect.height >= 1) add(current.shapeKind === 'rect' ? requestPlacement(rect, zoom) : rect, { kind: current.shapeKind });
-      else if (!current.active && tool === 'request') { const at = requestAt(current.start, zoom); add(current.shapeKind === 'ellipse' ? { ...at, height: at.width } : at, { kind: current.shapeKind }); }
+      if (current.shapeKind === 'freehand') { if (current.active && rect && current.freehand) createRequestInBackground(rect, current.freehand); }
+      else if (current.active && rect && rect.width >= 1 && rect.height >= 1) createRequestInBackground(current.shapeKind === 'rect' ? requestPlacement(rect, zoom) : rect, { kind: current.shapeKind });
+      else if (!current.active && tool === 'request') { const at = requestAt(current.start, zoom); createRequestInBackground(current.shapeKind === 'ellipse' ? { ...at, height: at.width } : at, { kind: current.shapeKind }); }
       else if (tool === 'select' && page.content) { const at = point({ x: event.clientX, y: event.clientY }); toggleElement(site.current?.pick(at.x, at.y) ?? null); }
       return;
     }
-    if (current.region && rect && !sameRect(rect, current.initial)) void change(current.region.id, { rect }).catch(() => {});
+    if (current.region && rect && !sameRect(rect, current.initial)) void changeRequest(current.region.id, { rect }).catch(error => setElementError(error instanceof Error ? error.message : String(error)));
   }
   function finishPlainClick(client: Point, plain: boolean, additive = false) {
     if (repicking && page.content) {
       const at = point(client); const hit = site.current?.pick(at.x, at.y) ?? null;
+      if (hit?.element.document) { setElementError('Choose an element on the page itself. Draw a request over the frame to change what is inside it.'); return; }
       if (hit && hit.element.selector !== 'body' && repick) { const id = repicking; setRepicking(null); void repick(id, hit).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }
       return;
     }
@@ -979,19 +1051,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     const at = point(client);
     if (page.content) {
       const hit = site.current?.pick(at.x, at.y);
-      if (hit && hit.element.tag !== 'body') {
-        // The second click on an already selected frame starts interacting with it,
-        // the same place the toolbar's Interact button goes.
-        const current = elementRef.current;
-        if (hit.element.tag === 'iframe' && current && sameTarget(current.element, hit.element)) {
-          const frame = liveOverlays.find(item => item.selector === hit.element.selector);
-          if (frame) { setInteractingFrame(value => value === frame.key ? null : frame.key); return; }
-        }
-        chooseElement(hit); void editTextAt(at); return;
-      }
+      // A frame itself has no text to edit: a double-click over it places a request.
+      if (hit && hit.element.tag !== 'body' && hit.element.tag !== 'iframe') { chooseElement(hit); void editTextAt(at); return; }
+      if (hit?.element.tag === 'iframe') { createRequestInBackground(requestAt(at, zoom)); return; }
     }
     const snapped = geometryForGesture({ kind: 'new', start: at, initial: { ...at, width: 0, height: 0 } }, at, page.viewport, gridSettings);
-    add(requestAt({ x: snapped.x, y: snapped.y }, zoom));
+    createRequestInBackground(requestAt({ x: snapped.x, y: snapped.y }, zoom));
   }
   function activate(event: ReactMouseEvent) {
     if (liveView) return;
@@ -1031,7 +1096,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       const node = scroll.current!;
       const at = { x: bounds.left + (node.scrollLeft + node.clientWidth / 2 - 160) / zoom, y: bounds.top + (node.scrollTop + node.clientHeight / 2 - 80) / zoom };
       const snapped = geometryForGesture({ kind: 'new', start: at, initial: { ...at, width: 0, height: 0 } }, at, page.viewport, gridSettings);
-      add(requestAt({ x: snapped.x, y: snapped.y }, zoom)); return;
+      createRequestInBackground(requestAt({ x: snapped.x, y: snapped.y }, zoom)); return;
     }
     if (!region && element) {
       if (extrasRef.current.length) { if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void deleteSelected().catch(error => setElementError(String(error))); } return; }
@@ -1051,7 +1116,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     if (!region) { scroll.current!.scrollBy(direction.x * 80, direction.y * 80); return; }
     const resizing = event.shiftKey || resize;
     setNudging(true);
-    void change(region.id, { rect: keyboardRectChange(direction, page.viewport, gridSettings, resizing, event.altKey, region.shape && region.shape.kind !== 'rect' ? { x: 1, y: 1 } : minimum) }).then(updated => reveal(updated.rect, resizing)).catch(() => {}).finally(() => setNudging(false));
+    void changeRequest(region.id, { rect: keyboardRectChange(direction, page.viewport, gridSettings, resizing, event.altKey, region.shape && region.shape.kind !== 'rect' ? { x: 1, y: 1 } : minimum) }).then(updated => reveal(updated.rect, resizing)).catch(() => {}).finally(() => setNudging(false));
   }
 
   useLayoutEffect(() => {
@@ -1064,10 +1129,17 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const frameViewport = { x: visible.x, y: visible.y, width: measurements.width / zoom, height: measurements.height / zoom };
   const visibleFrames = useMemo(() => page.content && !liveView ? placeOverlays(frameView.frames, frameViewport) : [],
     [frameView, frameViewport.x, frameViewport.y, frameViewport.width, frameViewport.height, liveView, page.content]);
-  const frameSession = useLiveFrameSession(page.id, acceptedVersion, visibleFrames.length > 0);
-  const liveOverlays = frameSession ? visibleFrames : [];
-  const overlaySelection = element?.element.tag === 'iframe' && !extras.length ? liveOverlays.find(frame => frame.selector === element.element.selector) ?? null : null;
+  const overlaySelection = element?.element.tag === 'iframe' && !extras.length ? visibleFrames.find(frame => frame.selector === element.element.selector) ?? null : null;
   const interacting = !!overlaySelection && interactingFrame === overlaySelection.key;
+  // External and unresolvable frames keep their live copy; an editable frame is still until
+  // Interact plays it, so its document can be picked and edited on the canvas.
+  const overlayFrames = useMemo(() => {
+    const frames = visibleFrames.filter(frame => !frame.editable);
+    if (interacting && overlaySelection && !frames.some(frame => frame.key === overlaySelection.key)) frames.push(overlaySelection);
+    return frames;
+  }, [visibleFrames, interacting, overlaySelection]);
+  const frameSession = useLiveFrameSession(page.id, acceptedVersion, overlayFrames.length > 0);
+  const liveOverlays = frameSession ? overlayFrames : [];
   const overlayKeys = liveOverlays.map(frame => frame.key).join('|');
   useEffect(() => { if (interactingFrame && !(tool === 'select' && interacting)) setInteractingFrame(null); }, [interactingFrame, tool, interacting]);
   // Hide the still copy of every frame the live overlay covers, and show it again when
@@ -1151,10 +1223,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     ...(context.kind === 'element' ? [
       { id: 'edit', label: 'Edit', disabled: editBusy, action: () => setElementDialog('edit') },
       { id: 'generate', label: 'Ask AI', disabled: editBusy, action: askAI },
-      ...(fixOnPhones && elementRef.current && elementRef.current.element.selector !== 'body' ? [{ id: 'phones', label: 'Fix on phones', disabled: editBusy, action: () => { const current = elementRef.current; if (current) fixOnPhones(current); } }] : []),
+      ...(fixOnPhones && elementRef.current && elementRef.current.element.selector !== 'body' && !elementRef.current.element.document ? [{ id: 'phones', label: 'Fix on phones', disabled: editBusy, action: () => { const current = elementRef.current; if (current) fixOnPhones(current); } }] : []),
       { id: 'replace', label: 'Replace', disabled: editBusy, action: () => setElementDialog('replace') },
       ...(undoElement && elementRef.current && elementRef.current.element.selector !== 'body' ? [{ id: 'undo-element', label: 'Undo changes to this element', shortcut: 'Alt+Z', disabled: editBusy, action: () => { void stepBackElement(); } }] : []),
-    ] : context.kind === 'request' ? [{ id: 'edit', label: 'Edit request', disabled: editBusy, action: () => focusRegion(context.regionId) }] : [{ id: 'add', label: 'Add request here', action: () => { deselectElement(); add(requestAt(context.at, zoom)); } }]),
+    ] : context.kind === 'request' ? [{ id: 'edit', label: 'Edit request', disabled: editBusy, action: () => focusRegion(context.regionId) }] : [{ id: 'add', label: 'Add request here', action: () => { deselectElement(); createRequestInBackground(requestAt(context.at, zoom)); } }]),
     ...(context.kind === 'request' ? [{ id: 'whole-page', label: 'Whole page', checked: page.regions.some(item => item.id === context.regionId && isWholePage(item, page)), action: () => { const region = page.regions.find(item => item.id === context.regionId); if (region) void change(region.id, { wholePage: !isWholePage(region, page) }).catch(() => {}); } }] : []),
     ...(context.kind === 'request' && regionTargets(page.regions.find(item => item.id === context.regionId)).length ? [{ id: 'allow-target-removal', label: 'Allow AI to remove selected items', checked: !!page.regions.find(item => item.id === context.regionId)?.allowTargetRemoval, action: () => setTargetRemoval(context.regionId, !page.regions.find(item => item.id === context.regionId)?.allowTargetRemoval) }] : []),
     ...(context.kind !== 'canvas' ? [
@@ -1214,7 +1286,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           onKeyDown={event => { if (event.target === event.currentTarget || event.key === 'Escape') keyboard(event); }}>
           {page.content && <div className="accepted-canvas-preview" data-testid="accepted-canvas-preview" style={positioned({ x: 0, y: 0, width: page.viewport.width, height: previewHeight })} aria-hidden="true">
             <div className="accepted-canvas-content" style={{ width: page.viewport.width, height: previewHeight, transform: `scale(${zoom})` }}>
-              <PreviewFrame ref={site} content={page.content} referenceHeight={page.viewport.height} onHeight={setSiteHeight} onReady={(settled, revision) => refreshElement(settled, revision)} pageId={page.id} revision={acceptedVersion} title={`${page.name} accepted static preview`} staticView />
+              <PreviewFrame ref={site} content={page.content} frameDocuments={frameDocuments} referenceHeight={page.viewport.height} onHeight={setSiteHeight} onReady={(settled, revision) => refreshElement(settled, revision)} pageId={page.id} revision={acceptedVersion} title={`${page.name} accepted static preview`} staticView />
             </div>
           </div>}
           {liveView && page.content && <div className={`live-canvas-page${tool === 'request' || panReady || panning ? ' passive' : ''}`} data-testid="live-canvas-page" style={positioned({ x: 0, y: 0, width: liveView.width, height: liveHeight })}>
@@ -1236,7 +1308,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
             return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} wholePage={isWholePage(region, page)} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
-              layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => change(region.id, patch)} />;
+              layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => changeRequest(region.id, patch)} />;
           })}
           {element && !liveView && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
             <span className="element-type-tag">{elementName(element.element.tag)}{foundUrl && <span className="found-tag" title={foundUrl}> · Found online · {foundHost}</span>}</span>
@@ -1291,7 +1363,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
         {element.element.selector !== 'body' && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}
       </>}
-      {element && foundUrl && openSource && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
+      {element && foundUrl && openSource && !element.element.document && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
       {element && undoElement && element.element.selector !== 'body' && <button aria-label="Undo changes to this element" title="Step this element back to its previous version · Alt+Z" disabled={editBusy} onClick={() => { void stepBackElement(); }}><QuickIcon name="undo" /></button>}
       <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
       {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={site.current?.visual(element.element) ?? null} busy={editBusy} apply={change => { void applyStyles(change); }} />}
@@ -1299,7 +1371,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       </>}
     </div>}
     {context && <ContextMenu key={`${context.kind}:${context.point.x}:${context.point.y}`} label={context.kind === 'element' ? 'Element actions' : context.kind === 'request' ? 'Request actions' : 'Canvas actions'} point={context.point} close={closeContext} items={contextItems} />}
-    <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element?.element.selector ?? null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady} anchor={toolbarPoint ? { x: toolbarPoint.x, y: toolbarPoint.y, height: toolbarSize.height } : null} contextElement={openElementContext} contextRequest={openRequestContext}
+    <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element ? targetKey(element.element) : null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady} anchor={toolbarPoint ? { x: toolbarPoint.x, y: toolbarPoint.y, height: toolbarSize.height } : null} contextElement={openElementContext} contextRequest={openRequestContext}
       chooseElement={item => { chooseElement(item); reveal(item.rect, false); }} chooseRequest={item => { deselectElement(); select(item.id); reveal(item.rect, false); }}
       arrange={direction => { void arrangeLayer(direction); }} copy={() => { void copyLayer(); }} paste={() => { void pasteLayer(); }} close={() => setLayersOpen(false)} />
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void stageImage(target, file); }} />
@@ -1349,8 +1421,10 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
   const attachments = region.attachments ?? [];
   const targets = regionTargets(region);
   const target = targets.length > 0;
+  const framed = !!region.frameTarget;
+  const attached = target || framed;
   const shaped = !target && !!region.shape && region.shape.kind !== 'rect';
-  const promptRect = requestPlacement(target || shaped ? requestPromptRect(rect, zoom) : rect, zoom);
+  const promptRect = requestPlacement(attached || shaped ? requestPromptRect(rect, zoom) : rect, zoom);
   useLayoutEffect(() => {
     const node = text.current; if (!node) return;
     const old = node.style.height; node.style.height = '0px'; const style = getComputedStyle(node);
@@ -1359,10 +1433,10 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
   }, [draft, promptRect.width, zoom]);
   const minimumHeight = promptRect.height * zoom;
   // Text keeps its own height; attachments and actions add normal-flow rows below it.
-  const collapseHeight = target || shaped ? Math.max(minimumHeight, maxHeight) : minimumHeight;
+  const collapseHeight = attached || shaped ? Math.max(minimumHeight, maxHeight) : minimumHeight;
   const fullHeight = Math.max(minimumHeight, naturalHeight);
   const hasMore = fullHeight > collapseHeight;
-  useLayoutEffect(() => { if (target && hasMore && document.activeElement === text.current) setExpanded(true); }, [target, hasMore, draft]);
+  useLayoutEffect(() => { if (attached && hasMore && document.activeElement === text.current) setExpanded(true); }, [attached, hasMore, draft]);
   const displayHeight = expanded ? fullHeight : Math.min(collapseHeight, fullHeight);
   const shown = { ...promptRect, height: (displayHeight + (hasMore ? 30 : 0)) / zoom };
   // Only placement controls are clipped to the workspace. The card grows below
@@ -1374,7 +1448,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
   return <>
   {shaped && <RegionOutline shape={region.shape!} rect={rect} bounds={bounds} zoom={zoom} layer={layer} selected={selected} regionId={region.id} onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); select(); }} />}
   {selected && !target && !shaped && <div className="element-selection request-placement" style={{ ...paintStyle(rect, bounds, zoom), zIndex: controlsLayer }} aria-hidden="true" />}
-  {target && <div className="element-selection" data-testid="element-selection" style={{ ...paintStyle(rect, bounds, zoom), zIndex: layer }} aria-hidden="true" />}
+  {(target || framed) && <div className="element-selection" data-testid="element-selection" style={{ ...paintStyle(rect, bounds, zoom), zIndex: layer }} aria-hidden="true" />}
   <div data-region-id={region.id} className={`annotation ${target || shaped ? 'element-prompt' : ''} ${selected ? 'selected' : ''} ${expanded ? 'expanded' : ''}`} style={{ ...windowStyle(shown, bounds, zoom), height: 'auto', zIndex: layer }}
     onPointerDown={event => { if (event.target === event.currentTarget) { event.preventDefault(); event.stopPropagation(); text.current?.focus({ preventScroll: true }); } }}
     onFocusCapture={select}
@@ -1389,11 +1463,11 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     <div className="request-frame" aria-hidden="true" />
     {dropping && <div className="request-drop-hint" aria-hidden="true">Drop to attach to this request</div>}
     {stale && <ProblemBanner className="request-stale" message="This element was removed." action={repickNow ? { label: 'Pick again', onClick: repickNow } : undefined} secondaryAction={removeNow ? { label: 'Remove request', onClick: removeNow } : undefined} />}
-    {!target && <span className="request-number" aria-hidden="true">{number}</span>}
+    {!attached && <span className="request-number" aria-hidden="true">{number}</span>}
     {wholePage && <span className="request-phone-tag" title={region.wholePage ? "Whole page" : "Whole page (automatically detected). Turn off in request controls."}>Whole page</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture…' : target ? 'Describe the change…' : 'Describe what goes here…'}
-      style={{ height: displayHeight, borderWidth: 0, outline: 'none' }} onFocus={() => { if (target && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (target && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
+      style={{ height: displayHeight, borderWidth: 0, outline: 'none' }} onFocus={() => { if (attached && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (attached && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
     {hasMore && <button type="button" className="request-expand" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
     {(attachments.length > 0 || reports.length > 0) && <div className="request-attachment-group">

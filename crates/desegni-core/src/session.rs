@@ -349,6 +349,25 @@ impl Session {
         )
     }
 
+    /// Give one element its editor identity, for anchoring a framed request to its iframe.
+    pub fn ensure_element_id_document(
+        &mut self,
+        revision: u64,
+        document: &crate::DocumentTarget,
+        target: &crate::ElementTarget,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<Option<crate::ElementTarget>> {
+        self.assert_revision(revision)?;
+        let (next, target) =
+            self.project
+                .ensure_element_id_in(document, self.project.revision, target)?;
+        if next.revision != self.project.revision {
+            durable(&next)?;
+            self.commit(next);
+        }
+        Ok(target)
+    }
+
     pub fn undo_element_document(
         &mut self,
         revision: u64,

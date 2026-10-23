@@ -3,11 +3,16 @@ import type { ElementSelection, ElementStyleEdit, ElementTarget, LayerDirection,
 
 export type SiteLayer = ElementSelection & { children: SiteLayer[]; canForward: boolean; canBackward: boolean };
 const excluded = new Set(['script', 'style', 'link', 'meta', 'template', 'noscript', 'source', 'track']);
+// A framed document has its own window; computed styles come from the node's own document.
+const computedStyle = (node: Element, pseudo?: string) => {
+  const view = node.ownerDocument.defaultView;
+  return view ? view.getComputedStyle(node, pseudo) : getComputedStyle(node, pseudo);
+};
 const box = (node: Element): Rect => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; };
-const visible = (node: Element) => { const r = box(node); return !excluded.has(node.localName) && Object.values(r).every(Number.isFinite) && r.width >= 1 && r.height >= 1 && getComputedStyle(node).visibility !== 'hidden'; };
+const visible = (node: Element) => { const r = box(node); return !excluded.has(node.localName) && Object.values(r).every(Number.isFinite) && r.width >= 1 && r.height >= 1 && computedStyle(node).visibility !== 'hidden'; };
 
 function paintOrder(node: Element, order: boolean): { category: number; z: number; order: number } {
-  const css = getComputedStyle(node), parent = node.parentElement && getComputedStyle(node.parentElement);
+  const css = computedStyle(node), parent = node.parentElement && computedStyle(node.parentElement);
   const indexed = css.position !== 'static' || !!parent && /^(inline-)?(flex|grid)$/.test(parent.display);
   const z = indexed ? Number.parseInt(css.zIndex) || 0 : 0;
   const context = css.opacity !== '1' || css.transform !== 'none' || css.filter !== 'none' || css.perspective !== 'none' || css.isolation === 'isolate' || css.mixBlendMode !== 'normal' || /paint|layout|strict|content/.test(css.contain) || css.willChange.split(',').some(value => ['transform', 'opacity', 'filter'].includes(value.trim()));
@@ -15,7 +20,7 @@ function paintOrder(node: Element, order: boolean): { category: number; z: numbe
   return { category, z, order: order ? Number.parseInt(css.order) || 0 : 0 };
 }
 function siblings(parent: Element): Element[] {
-  const order = /^(inline-)?(flex|grid)$/.test(getComputedStyle(parent).display);
+  const order = /^(inline-)?(flex|grid)$/.test(computedStyle(parent).display);
   return [...parent.children].filter(visible).map((node, index) => ({ node, index, ...paintOrder(node, order) }))
     .sort((a, b) => a.category - b.category || a.z - b.z || a.order - b.order || a.index - b.index).map(item => item.node);
 }
@@ -24,7 +29,7 @@ export function siteLayerTree(doc: Document, select: (node: Element) => ElementS
   const visit = (parent: Element): SiteLayer[] => {
     const peers = siblings(parent);
     const indexed = new Map(peers.map((node, index) => [node, index]));
-    const descendants = [...parent.children].filter(node => !excluded.has(node.localName) && !indexed.has(node) && getComputedStyle(node).display !== 'none').flatMap(visit);
+    const descendants = [...parent.children].filter(node => !excluded.has(node.localName) && !indexed.has(node) && computedStyle(node).display !== 'none').flatMap(visit);
     return [...peers].reverse().flatMap(node => {
       const item = select(node);
       const children = node.localName === 'svg' ? [] : visit(node);
@@ -62,13 +67,13 @@ export function siteLayerStyles(node: Element, direction: LayerDirection, target
   if (!identity) throw new Error('The page changed. Select this layer again.');
   const original = node.getAttribute('style'), css = doc.createElement('div').style;
   css.cssText = original ?? '';
-  const layout = getComputedStyle(parent).display;
-  if (getComputedStyle(node).position === 'static' && !/^(inline-)?(flex|grid)$/.test(layout)) {
+  const layout = computedStyle(parent).display;
+  if (computedStyle(node).position === 'static' && !/^(inline-)?(flex|grid)$/.test(layout)) {
     css.setProperty('position', 'relative', 'important'); css.setProperty('inset', 'auto', 'important');
   }
-  const zValues = peers.map(peer => Number.parseInt(getComputedStyle(peer).zIndex) || 0);
+  const zValues = peers.map(peer => Number.parseInt(computedStyle(peer).zIndex) || 0);
   const destination = next.indexOf(node), neighbor = next[destination + (direction === 'forward' || direction === 'front' ? -1 : 1)];
-  const neighborZ = Number.parseInt(getComputedStyle(neighbor).zIndex) || 0;
+  const neighborZ = Number.parseInt(computedStyle(neighbor).zIndex) || 0;
   const candidates = [...new Set([neighborZ, neighborZ + 1, neighborZ - 1, ...zValues.flatMap(z => [z, z + 1, z - 1])])]
     .filter(z => Number.isSafeInteger(z) && Math.abs(z) <= 2147483647);
   try {
@@ -113,9 +118,9 @@ export function siteCopyStyles(node: Element, identify: (node: Element) => Eleme
     };
     return nodes.map(value => {
       const target = identify(value); if (!target) throw new Error('The page changed. Select this layer again.');
-      const computed = getComputedStyle(value);
+      const computed = computedStyle(value);
       const pseudoStyles = (['before', 'after', 'marker'] as const).flatMap(pseudo => {
-        const decoration = getComputedStyle(value, `::${pseudo}`);
+        const decoration = computedStyle(value, `::${pseudo}`);
         const marker = pseudo === 'marker' && computed.display === 'list-item' && decoration.content !== 'none';
         return marker || decoration.content && !['none', 'normal'].includes(decoration.content) ? [{ pseudo, style: snapshot(decoration) }] : [];
       });

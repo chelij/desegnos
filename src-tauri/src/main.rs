@@ -138,6 +138,8 @@ fn main() {
             edit_project,
             inspect_element,
             get_frame_targets,
+            get_frame_documents,
+            ensure_element_id,
             refresh_element_bounds,
             refresh_element_target_bounds,
             edit_element,

@@ -575,6 +575,38 @@ impl Project {
         self.finish_document_edit(document, revision, &doc, retained, tracked, None)
     }
 
+    /// Give one element its editor identity without changing what the document shows. A framed
+    /// request names its host iframe by editor ID, so an authored iframe needs one before the
+    /// request can be anchored to the document inside it.
+    pub fn ensure_element_id_in(
+        &self,
+        document: &crate::DocumentTarget,
+        revision: u64,
+        selected: &ElementTarget,
+    ) -> Result<(Self, Option<ElementTarget>)> {
+        self.validate()?;
+        ensure(
+            revision == self.revision,
+            "The project changed. Try the edit again.",
+        )?;
+        let content = self.document_content(document)?;
+        let hash = self.document_hash(document)?;
+        ensure(
+            !selected.id.is_empty() || hash == selected.source_sha256,
+            "The document changed. Select this element again.",
+        )?;
+        let doc = self.parse_document_target(document, &content.html)?;
+        let node = locate(&doc, selected)?;
+        if node.has_attr(crate::ELEMENT_ID_ATTRIBUTE) {
+            return Ok((self.clone(), Some(selected.clone())));
+        }
+        let tracked = match document {
+            crate::DocumentTarget::Page { page_id } => tracked(&doc, self.page(*page_id)?, &hash)?,
+            crate::DocumentTarget::SiteFile { .. } => vec![],
+        };
+        self.finish_document_edit(document, revision, &doc, Some(node), tracked, None)
+    }
+
     /// Store an edited DOM back into its document. Pages keep their tracked requests and shared
     /// CSS/JavaScript; site files keep their exact path and change only their own bytes.
     pub(crate) fn finish_document_edit(

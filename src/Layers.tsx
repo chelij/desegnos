@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SiteLayer } from './siteLayers';
+import { documentKey, targetKey } from './elementTargets';
 import type { LayerDirection, Page, Region } from './types';
 import { RequestShapeIcon } from './RegionOutline';
 
@@ -20,7 +21,7 @@ export function LayersPopover({ open, page, siteLayers, selectedElement, selecte
   const [collapsed, setCollapsed] = useState(new Set<string>());
   const pending = page.regions.map((region, index) => ({ region, index })).filter(item => !item.region.completed)
     .sort((a, b) => b.region.zIndex - a.region.zIndex || b.index - a.index).map(item => item.region);
-  const find = (items: SiteLayer[]): SiteLayer | undefined => { for (const item of items) { if (item.element.selector === selectedElement) return item; const match = find(item.children); if (match) return match; } };
+  const find = (items: SiteLayer[]): SiteLayer | undefined => { for (const item of items) { if (targetKey(item.element) === selectedElement) return item; const match = find(item.children); if (match) return match; } };
   const selectedSite = find(siteLayers), requestIndex = pending.findIndex(region => region.id === selectedRequest);
   const canForward = selectedSite?.canForward ?? requestIndex > 0;
   const canBackward = selectedSite?.canBackward ?? (requestIndex >= 0 && requestIndex < pending.length - 1);
@@ -49,13 +50,16 @@ export function LayersPopover({ open, page, siteLayers, selectedElement, selecte
     return () => { cancelAnimationFrame(focus); document.removeEventListener('pointerdown', outside, true); };
   }, [open]);
   if (!open) return null;
-  const rows = (items: SiteLayer[], depth = 0) => items.map(item => <div key={item.element.selector} className="layer-branch" role="group">
-    <div className="layer-row" data-selector={item.element.selector} data-selected={selectedElement === item.element.selector} style={{ paddingInlineStart: 6 + depth * 14 }} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); contextElement(item, { x: event.clientX, y: event.clientY }); }}>
-      {item.children.length ? <button type="button" className="layer-disclosure" aria-label={`${collapsed.has(item.element.selector) ? 'Expand' : 'Collapse'} ${layerName(item.element.tag, item.element.label)}`} aria-expanded={!collapsed.has(item.element.selector)} onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(item.element.selector)) next.delete(item.element.selector); else next.add(item.element.selector); return next; })}>{collapsed.has(item.element.selector) ? '▸' : '▾'}</button> : <span className="layer-spacer" />}
-      <button type="button" className="layer-select" data-layer-selector={item.element.selector} aria-pressed={selectedElement === item.element.selector} title={item.element.label || layerName(item.element.tag, '')} onClick={() => chooseElement(item)} disabled={busy}><LayerIcon /><span>{layerName(item.element.tag, item.element.label)}</span></button>
+  const rows = (items: SiteLayer[], depth = 0) => items.map(item => {
+    const key = targetKey(item.element);
+    return <div key={key} className="layer-branch" role="group">
+    <div className="layer-row" data-selector={item.element.selector} data-document={item.element.document ? documentKey(item.element.document) : undefined} data-selected={selectedElement === key} style={{ paddingInlineStart: 6 + depth * 14 }} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); contextElement(item, { x: event.clientX, y: event.clientY }); }}>
+      {item.children.length ? <button type="button" className="layer-disclosure" aria-label={`${collapsed.has(key) ? 'Expand' : 'Collapse'} ${layerName(item.element.tag, item.element.label)}`} aria-expanded={!collapsed.has(key)} onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })}>{collapsed.has(key) ? '▸' : '▾'}</button> : <span className="layer-spacer" />}
+      <button type="button" className="layer-select" data-layer-selector={item.element.selector} aria-pressed={selectedElement === key} title={item.element.label || layerName(item.element.tag, '')} onClick={() => chooseElement(item)} disabled={busy}><LayerIcon /><span>{layerName(item.element.tag, item.element.label)}</span>{item.element.tag === 'iframe' && item.children.length ? <span className="layer-frame-tag" aria-hidden="true">frame</span> : null}</button>
     </div>
-    {!collapsed.has(item.element.selector) && rows(item.children, depth + 1)}
-  </div>);
+    {!collapsed.has(key) && rows(item.children, depth + 1)}
+  </div>;
+  });
   return <section ref={panel} className="layers-popover" style={position} role="dialog" aria-modal="false" aria-label="Layers" onKeyDown={event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); (opener.current?.isConnected ? opener.current : document.querySelector<HTMLButtonElement>('.canvas-tools [data-layers-trigger]'))?.focus({ preventScroll: true }); }
     if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {

@@ -11,7 +11,7 @@ import { CanvasTools, type CanvasTool, type RequestShapeKind } from './CanvasToo
 import { WorkspaceSurface, WorkspaceSurfaces, SurfaceHost, isTextField } from './WorkspaceSurface';
 import { isPendingRecovery, type PendingRecovery, type RecoveryChoices } from './RecoveryBanner';
 import { SaveConflictDialog, type SaveConflict, type SaveOutcome, type SaveChoice } from './SaveConflict';
-import { regionTargets, sameTargets } from './elementTargets';
+import { documentKey, nativeTarget, regionTargets, sameTargets } from './elementTargets';
 import brandLight from './assets/brand/desegnos-wordmark-light.svg';
 import brandDark from './assets/brand/desegnos-wordmark-dark.svg';
 import { NewProject } from './NewProject';
@@ -37,7 +37,7 @@ import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './delet
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
 import { useHistory } from './useHistory';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AiSettingsView, Appearance, Brief, Command, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, Page, Project, Rect, RecoveryInfo, Region, RegionShape, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent, RequestAttachment } from './types';
+import type { AiSettingsView, Appearance, Brief, Command, ElementStyleEdit, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, Page, Project, Rect, RecoveryInfo, Region, RegionShape, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent, RequestAttachment } from './types';
 
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
@@ -99,6 +99,7 @@ function Editor() {
   const [highlightResult, setHighlightResult] = useState(false);
   const [showLayers, setShowLayers] = useState(false);
   const [activeLayer, setActiveLayer] = useState<ElementTarget | null>(null);
+  const [framedDocuments, setFramedDocuments] = useState<{ pageId: string; documents: FrameDocumentView[] }>({ pageId: '', documents: [] });
   const [showNew, setShowNew] = useState(false);
   const [pendingRecovery, setPendingRecovery] = useState<PendingRecovery | null>(null);
   async function requestProjectOpen<T>(operation: () => Promise<T>): Promise<T | null> {
@@ -608,6 +609,23 @@ function Editor() {
     name: importedImages.find(image => image.dataUri === dataUri)?.name ?? `Picture ${index + 1}` }));
   const projectImages = [...storedImages, ...importedImages.filter(image => !storedImages.some(stored => stored.dataUri === image.dataUri))];
   const page = project?.pages.find(page => page.id === pageId) ?? project?.pages.find(page => page.id === project.homePageId) ?? null;
+  // Framed documents the selected element belongs to, read from the current project revision.
+  const frameRead = useRef(0);
+  useEffect(() => {
+    if (!project || !page?.content) { setFramedDocuments({ pageId: '', documents: [] }); return; }
+    const ticket = ++frameRead.current;
+    const projectId = project.id, pageId = page.id;
+    void native<FrameDocumentView[]>('get_frame_documents', { projectId, pageId })
+      .then(value => { if (ticket === frameRead.current) setFramedDocuments({ pageId, documents: value.map(item => ({ ...item, pageId })) }); })
+      .catch(() => { if (ticket === frameRead.current) setFramedDocuments({ pageId, documents: [] }); });
+  }, [project?.id, project?.revision, page?.id, page?.content]);
+  const frameDocuments = framedDocuments.pageId === page?.id ? framedDocuments.documents : [];
+  // Code and Split show the document the selected element lives in.
+  const framedDocument = activeLayer?.document ?? null;
+  const framedCode = !framedDocument ? null
+    : framedDocument.kind === 'siteFile'
+      ? frameDocuments.find(item => documentKey(item.document) === documentKey(framedDocument))?.content ?? null
+      : project?.pages.find(item => item.id === framedDocument.pageId)?.content ?? null;
   // Only a path that names a project page can leave Live for the editor.
   const livePage = project && livePath ? pathPage(livePath, project.pages) : null;
   const region = page?.regions.find(region => region.id === selected) ?? null;
@@ -793,11 +811,13 @@ function Editor() {
     if (result.active !== pageId && result.active) { setPageId(result.active); setSelected(null); }
   }
   async function selectPage(id: string, keep: string | null = null) { await synchronize(); await settle(); await dismissEmpty(keep); activatePage(id); setSelected(null); }
-  async function addRegion(rect: Rect, shape?: RegionShape) {
-    if (!page) return;
+  async function addRegion(rect: Rect, shape?: RegionShape): Promise<Region | null> {
+    if (!page) return null;
     const id = page.id;
     const next = await mutate(shape && shape.kind !== 'rect' ? { type: 'add_shaped_region', page_id: id, rect, shape } : { type: 'add_region', page_id: id, rect });
-    setSelected(next.project!.pages.find(page => page.id === id)!.regions.at(-1)!.id); setFocusPrompt(true);
+    const region = next.project!.pages.find(page => page.id === id)!.regions.at(-1)!;
+    setSelected(region.id); setFocusPrompt(true);
+    return region;
   }
   async function pickElement(selections: ElementSelection[]) {
     if (!page || !selections.length) return;
@@ -834,7 +854,12 @@ function Editor() {
   }
   async function deleteElements(elements: ElementTarget[]) {
     if (!page) return;
-    await mutate({ type: 'delete_elements', page_id: page.id, elements });
+    // Targets inside a frame are deleted from that document; page targets keep their own call.
+    const groups = new Map<string, ElementTarget[]>();
+    for (const target of elements) groups.set(documentKey(target.document), [...(groups.get(documentKey(target.document)) ?? []), target]);
+    for (const group of groups.values()) {
+      await mutate({ type: 'delete_elements', page_id: page.id, elements: group.map(nativeTarget), document: group[0].document ?? null });
+    }
     setNotice('Items deleted.');
   }
   async function inspectElement(target: ElementTarget): Promise<ElementDetails> {
@@ -842,7 +867,7 @@ function Editor() {
     const projectId = project.id; const pageId = page.id;
     return queue(async workspace => {
       if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns this element.');
-      return native<ElementDetails>('inspect_element', { projectId, pageId, target });
+      return native<ElementDetails>('inspect_element', { projectId, pageId, target: nativeTarget(target), document: target.document ?? null });
     }, false);
   }
   async function editElement(target: ElementTarget, change: ElementEdit): Promise<ElementTarget | null> {
@@ -850,7 +875,8 @@ function Editor() {
     const projectId = project.id; const pageId = page.id; setError('');
     return queue(async workspace => {
       if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns this element.');
-      const result = await native<ElementEditView>('edit_element', { projectId, pageId, revision: workspace.project.revision, target, change });
+      const payload = change.kind === 'layerStyles' ? { ...change, styles: change.styles.map(style => ({ ...style, target: nativeTarget(style.target) })) } : change;
+      const result = await native<ElementEditView>('edit_element', { projectId, pageId, revision: workspace.project.revision, target: nativeTarget(target), change: payload, document: target.document ?? null });
       accept(result.workspace); setNotice('Element updated.'); return result.element;
     }, false);
   }
@@ -860,16 +886,31 @@ function Editor() {
     await synchronize(); await settle();
     return queue(async workspace => {
       if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns this element.');
-      const result = await native<ElementEditView>('undo_element', { projectId, pageId, revision: workspace.project.revision, target });
+      const result = await native<ElementEditView>('undo_element', { projectId, pageId, revision: workspace.project.revision, target: nativeTarget(target), document: target.document ?? null });
       accept(result.workspace); setNotice('Element stepped back to its previous version.'); return result.element;
     }, false);
+  }
+  const layerTarget = (target: LayerTarget): LayerTarget => target.kind === 'element' ? { kind: 'element', target: nativeTarget(target.target) } : target;
+  const targetDocument = (target: LayerTarget) => target.kind === 'element' ? target.target.document ?? null : null;
+  async function ensureElementIdNative(target: ElementTarget): Promise<ElementTarget | null> {
+    const projectId = project?.id, targetPageId = page?.id;
+    return queue(async workspace => {
+      if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before this frame could be reached.');
+      const result = await native<ElementEditView>('ensure_element_id', { projectId, pageId: targetPageId, revision: workspace.project.revision, target: nativeTarget(target), document: target.document ?? null });
+      accept(result.workspace);
+      return result.element ? { ...result.element, ...(target.document ? { document: target.document } : {}) } : null;
+    }, false);
+  }
+  async function setFrameTargetNative(regionId: string, frameTarget: FrameTarget | null) {
+    if (!page) return;
+    await mutate({ type: 'set_region_frame_target', page_id: page.id, region_id: regionId, frame_target: frameTarget });
   }
   async function copyLayerNative(target: LayerTarget, styles: ElementStyleEdit[]) {
     const projectId = project?.id, targetPageId = page?.id;
     await settle();
     await queue(async workspace => {
       if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was copied.');
-      await native<void>('copy_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, target, visualStyles: styles });
+      await native<void>('copy_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, target: layerTarget(target), visualStyles: styles.map(style => ({ ...style, target: nativeTarget(style.target) })), document: targetDocument(target) });
       setNotice('Layer copied.');
     }, false);
   }
@@ -878,7 +919,7 @@ function Editor() {
     await settle();
     return queue(async workspace => {
       if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was pasted.');
-      const result = await native<LayerPasteView>('paste_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, after });
+      const result = await native<LayerPasteView>('paste_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, after: after ? nativeTarget(after) : null, document: after?.document ?? null });
       accept(result.workspace); setNotice('Layer pasted.'); return result;
     }, false);
   }
@@ -891,7 +932,7 @@ function Editor() {
     await settle();
     await queue(async workspace => {
       if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was cut.');
-      const next = await native<WorkspaceView>('cut_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, target, visualStyles: styles });
+      const next = await native<WorkspaceView>('cut_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, target: layerTarget(target), visualStyles: styles.map(style => ({ ...style, target: nativeTarget(style.target) })), document: targetDocument(target) });
       accept(next); setNotice('Layer cut.');
     }, false);
   }
@@ -946,7 +987,7 @@ function Editor() {
   }
   function openFoundSource(pageId: string, target: ElementTarget) {
     const projectId = current.current?.project?.id; if (!projectId) return;
-    void native('open_found_source', { projectId, pageId, target }).catch(error => setError(errorMessage(error)));
+    void native('open_found_source', { projectId, pageId, target: nativeTarget(target) }).catch(error => setError(errorMessage(error)));
   }
   async function saveSource(language: keyof SiteContent, text: string, expected: string) {
     const projectId = project?.id, pageId = page?.id;
@@ -1091,7 +1132,7 @@ function Editor() {
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
       <SurfaceHost place="canvas" />
-      {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => addRegion(rect, shape)} ensureElementId={ensureElementIdNative} setFrameTarget={setFrameTargetNative} frameDocuments={frameDocuments} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {resultReview && !showGenerationStatus ? <Notice className="generation-notice status-applied" variant={retryResult ? 'warning' : 'success'} priority="result" title={retryResult ? 'Try again?' : 'Page updated'}
         message={retryResult ? 'This uses your AI account again.' : summarizeOutsideChanges(generation.job?.validationEvents ?? [])}
         action={retryResult ? { label: 'Try again', disabled: pending > 0, onClick: () => { setRetryResult(false); run(() => rejectResult(true)); } } : { label: 'Undo', disabled: pending > 0, onClick: () => run(() => rejectResult()) }}
@@ -1119,7 +1160,7 @@ function Editor() {
       </div>
       {codeView !== 'design' && <>
         {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}
-        <CodePane ref={code} saveProject={() => run(() => save())} tidy={page?.content ? () => run(async () => { await synchronize(); await mutate({ type: 'format_page_code', page_id: page.id }); setNotice('Code tidied. Undo puts it back.'); }) : undefined} key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id); }} />
+        <CodePane ref={code} saveProject={() => run(() => save())} tidy={page?.content && !framedCode ? () => run(async () => { await synchronize(); await mutate({ type: 'format_page_code', page_id: page.id }); setNotice('Code tidied. Undo puts it back.'); }) : undefined} key={`${page?.id}:${framedCode ? documentKey(activeLayer?.document) : 'page'}`} content={framedCode ?? page?.content ?? null} target={activeLayer} map={framedCode ? null : sourceMap} save={!framedCode && page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id, framedCode ? activeLayer?.document : undefined); }} />
       </>}
       {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} retryResult={resultReview ? () => { setRetryResult(true); setShowLog(false); } : undefined} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} manageUsage={manageChatgptUsage} editRequest={id => {
         const owner = project.pages.find(item => item.regions.some(region => region.id === id));

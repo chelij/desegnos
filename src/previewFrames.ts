@@ -21,7 +21,8 @@ export type FrameCandidate = {
 };
 
 /// One frame the canvas can show live. `src` is resolved against the page's session URL,
-/// so a relative frame points at the file the live session will serve.
+/// so a relative frame points at the file the live session will serve. `editable` marks a frame
+/// whose document the canvas renders statically and edits; the live copy waits for Interact.
 export type CollectedFrame = {
   key: string;
   rect: FrameBox;
@@ -30,6 +31,7 @@ export type CollectedFrame = {
   allow: string | null;
   allowFullscreen: boolean;
   selector: string | null;
+  editable?: boolean;
 };
 
 export type FramePlacement = { left: number; top: number; width: number; height: number };

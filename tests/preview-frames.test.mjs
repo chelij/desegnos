@@ -12,7 +12,7 @@ try {
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022',
     '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/previewDocument.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { hardenStaticFrames, staticBase, staticDocument, staticPolicy } = await import(pathToFileURL(join(temporary, 'previewDocument.js')).href);
+  const { hardenStaticFrames, staticBase, staticDocument, staticFrameDocument, staticPolicy } = await import(pathToFileURL(join(temporary, 'previewDocument.js')).href);
 
   const website = { website: true, url: 'desegni-preview://session-1.localhost/play/solopong/index.html' };
   const generated = { url: 'desegni-preview://localhost/session-2/page-1/index.html' };
@@ -23,7 +23,7 @@ try {
     assert.match(frames, /desegni-preview:/);
     assert.match(frames, /http:\/\/\*\.desegni-preview\.localhost/);
     assert.match(frames, /http:\/\/desegni-preview\.localhost/);
-    assert.match(frames, / https:$/);
+    assert.match(frames, / https: about:$/);
     assert.equal(directive('child-src'), frames.replace('frame-src ', 'child-src '));
   });
 
@@ -67,6 +67,31 @@ try {
   await test('a base URL cannot break out of its attribute', () => {
     const document = staticDocument('<p>Hello</p>', 'desegni-preview://session-1.localhost/a"b.html');
     assert.ok(document.includes('<base href="desegni-preview://session-1.localhost/a&quot;b.html">'), document);
+  });
+
+  await test('a framed page renders scriptless with its own CSS and the page policy', () => {
+    const document = staticFrameDocument({ html: '<main><h1>Framed</h1></main>', css: 'main { color: red; }' }, staticBase(website));
+    assert.ok(document.startsWith('<!doctype html><html><head>'));
+    assert.ok(document.includes(`content="${staticPolicy}"`) || document.includes('http-equiv="Content-Security-Policy"'));
+    assert.ok(document.includes('<style data-desegnos-framed-css>main { color: red; }</style>'), document);
+    assert.ok(document.includes('<base href="desegni-preview://session-1.localhost/play/solopong/index.html">'), document);
+    assert.ok(document.endsWith('<body><main><h1>Framed</h1></main></body></html>'));
+    assert.ok(!document.includes('<script'));
+  });
+
+  await test('a framed site file keeps its authored document and gains policy, base and CSS in its head', () => {
+    const html = '<!doctype html>\n<html><head><title>Game</title></head><body><canvas></canvas></body></html>';
+    const document = staticFrameDocument({ html, css: '' }, 'desegni-preview://session-1.localhost/play/game/index.html');
+    assert.ok(document.startsWith('<!doctype html>\n<html><head>'), document);
+    assert.ok(document.indexOf('Content-Security-Policy') < document.indexOf('<title>Game</title>'), document);
+    assert.ok(document.indexOf('<base href="desegni-preview://session-1.localhost/play/game/index.html">') < document.indexOf('<title>Game</title>'), document);
+    assert.ok(document.includes('<body><canvas></canvas></body></html>'));
+    assert.ok(!document.includes('data-desegnos-framed-css'));
+    // A document without a head element still gets one, after its doctype or html tag.
+    const headless = staticFrameDocument({ html: '<html><body><p>Hi</p></body></html>', css: '' }, null);
+    assert.ok(headless.startsWith('<html><head>') && headless.includes('</head><body><p>Hi</p></body></html>'), headless);
+    const doctypeOnly = staticFrameDocument({ html: '<!doctype html><p>Hi</p>', css: '' }, null);
+    assert.ok(doctypeOnly.startsWith('<!doctype html><head>'), doctypeOnly);
   });
 
   function frame(sandbox) {

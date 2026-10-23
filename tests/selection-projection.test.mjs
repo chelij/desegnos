@@ -13,7 +13,7 @@ try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/elementTargets.ts', 'src/editorHtml.ts', 'src/codeMirrorMetadata.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { canonicalSelections, sameTarget, sameTargets, regionTargets, unionRect } = await import(pathToFileURL(join(temporary, 'elementTargets.js')).href);
+  const { canonicalSelections, documentKey, nativeTarget, sameDocument, sameTarget, sameTargets, regionTargets, targetKey, unionRect } = await import(pathToFileURL(join(temporary, 'elementTargets.js')).href);
   const { projectCodeSource, projectEditorHtml, restoreEditorHtml, sourceOffset, sourcePosition } = await import(pathToFileURL(join(temporary, 'editorHtml.js')).href);
   const { metadataChanges, mapHtmlMetadata } = await import(pathToFileURL(join(temporary, 'codeMirrorMetadata.js')).href);
   const updateProjection = (projection, from, to, insert = '') => { const change = ChangeSet.of({ from, to, insert }, projection.text.length); return mapHtmlMetadata(projection, change, change.apply(EditorState.create({ doc: projection.text }).doc).toString()); };
@@ -29,6 +29,20 @@ try {
     assert.ok(sameTargets([target('a'), target('b')], [target('b'), target('a')]));
     assert.deepEqual(regionTargets({ elements: [target('a')], element: target('old') }), [target('a')]);
     assert.deepEqual(regionTargets({ element: target('old') }), [target('old')]);
+  });
+  await test('element identity, keys and native payloads stay inside their document', () => {
+    const site = { kind: 'siteFile', path: 'play/game.html' };
+    const framed = { ...target('x'), document: site };
+    const other = { ...target('x'), document: { kind: 'page', pageId: 'page-2' } };
+    assert.ok(!sameTarget(framed, other));
+    assert.ok(!sameTarget(framed, target('x')));
+    assert.ok(sameTarget(framed, { ...framed, selector: 'body > p:nth-of-type(2)' }));
+    assert.ok(sameDocument(undefined, undefined));
+    assert.ok(!sameDocument(site, undefined));
+    assert.equal(documentKey(site), 'site:play/game.html');
+    assert.equal(documentKey({ kind: 'page', pageId: 'page-2' }), 'page:page-2');
+    assert.equal(targetKey(framed), `site:play/game.html|${framed.selector}`);
+    assert.deepEqual(nativeTarget(framed), target('x'));
   });
   await test('multi-selection keeps outer nodes, removes duplicate IDs and measures signed union', () => {
     const outer = select('a', 'body > article:nth-of-type(1)', -60, 20);

@@ -131,6 +131,7 @@
 .layer-select > span:not(.request-layer-mark):not(.sr-only) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layer-disclosure { display: grid; place-items: center; border: 0; background: transparent; padding: 0; min-width: 20px; width: 20px; min-height: 28px; }
 .layer-spacer { width: 20px; flex-shrink: 0; }
+.layer-frame-tag { flex-shrink: 0; margin-inline-start: auto; padding: 0 4px; border: 1px solid var(--border-soft); border-radius: 2px; color: var(--muted); font-size: 9px; line-height: 14px; text-transform: uppercase; letter-spacing: 0.04em; }
 .request-layer-mark { width: 16px; height: 14px; border: 1px dashed currentColor; flex-shrink: 0; }
 .request-layer-mark:has(svg) { border: 0; }
 .request-layer-mark svg { width: 16px; height: 14px; stroke-dasharray: 3 2; }
