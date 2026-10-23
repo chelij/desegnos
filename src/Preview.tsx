@@ -266,11 +266,15 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   }));
   useEffect(() => { setObservations([]); }, [observationsVersion]);
   const rate = useRef({ started: 0, count: 0 });
+  // Errors reported by the current load; null while a reload is pending.
+  const reported = useRef<string[] | null>(null);
   useEffect(() => {
     let active = true;
     let registered: string | null = null;
     picked.current = null; mounted.current = null; invalidated.current = false; setExtent(referenceHeight);
-    setDescriptor(null); setError(''); setLoading(true); setObservations([]);
+    // Keep the last errors until the reloaded page reports again, so the banner doesn't blink on every edit.
+    setDescriptor(null); setError(''); setLoading(true); reported.current = null;
+    if (registeredVersion.current?.pageId !== pageId) setObservations([]);
     void native<PreviewDescriptor>('create_preview', { pageId, jobId, draftId, runScripts }).then(async value => {
       if (!active) { void native('release_preview', { sessionId: value.sessionId }).catch(() => {}); return; }
       registered = value.sessionId;
@@ -290,6 +294,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   }, [pageId, jobId, draftId, runScripts, revision, retry]);
   useEffect(() => {
     if (!descriptor || staticView) return;
+    reported.current = [];
+    const settle = setTimeout(() => { if (reported.current?.length === 0) setObservations([]); }, 2000);
     function receive(event: MessageEvent) {
       if (event.source !== frame.current?.contentWindow || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
       const now = performance.now();
@@ -301,10 +307,12 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       if (value.type !== 'desegni-preview-error' || value.sessionId !== descriptor!.sessionId || value.pageId !== pageId ||
         typeof value.message !== 'string' || value.message.length > 4096 || Object.keys(value).length !== 4) return;
       const message = value.message;
-      setObservations(previous => previous.includes(message) ? previous : [...previous.slice(-9), message]);
+      const fresh = reported.current ?? [];
+      if (!fresh.includes(message)) reported.current = [...fresh.slice(-9), message];
+      setObservations(reported.current ?? []);
     }
     window.addEventListener('message', receive);
-    return () => window.removeEventListener('message', receive);
+    return () => { clearTimeout(settle); window.removeEventListener('message', receive); };
   }, [descriptor, pageId, staticView]);
   useLayoutEffect(() => {
     if (!staticView || !mounted.current || invalidated.current) return;

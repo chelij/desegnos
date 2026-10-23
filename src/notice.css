@@ -7,7 +7,9 @@
   --notice-warning-bg: #392a06; --notice-warning-fg: #fff3d2; --notice-warning-border: #e5c26a;
   --notice-success-bg: #173321; --notice-success-fg: #dcf5e3; --notice-success-border: #89c79b;
 }
-.notice-host { container-type: inline-size; flex: none; min-width: 0; }
+.notice-host { container-type: inline-size; flex: none; min-width: 0; position: relative; height: 0; z-index: 30; }
+/* Notices float over the canvas so showing or hiding one never shifts the page. */
+.notice-host > .notice { position: absolute; top: 0; left: 0; right: 0; box-shadow: 0 4px 16px #0006; }
 .notice, .area-problem {
   --notice-bg: var(--surface); --notice-fg: var(--text); --notice-border: var(--border);
   color: var(--notice-fg); background: var(--notice-bg); border: 1px solid var(--notice-border);
