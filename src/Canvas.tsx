@@ -17,6 +17,7 @@ import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, type MenuItem } from './Menus';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type InlineText } from './Preview';
+import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
@@ -111,6 +112,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const elementRef = useRef(element); elementRef.current = element;
   const dialogRef = useRef(elementDialog); dialogRef.current = elementDialog;
   const pendingSelection = useRef<ElementTarget | null>(null);
+  // The box the current edit aims at. A promoted frame is measured before its layout has
+  // settled, so the canvas keeps drawing this box until the settled measurement arrives.
+  const expectedSelection = useRef<{ element: ElementTarget; rect: Rect } | null>(null);
+  function expectSelection(element: ElementTarget, rect: Rect) { expectedSelection.current = { element, rect }; }
   const pageRef = useRef(page); pageRef.current = page;
   const nudge = useRef({ x: 0, y: 0, promise: null as Promise<void> | null });
   const syncing = useRef<Promise<void> | null>(null);
@@ -210,7 +215,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   }
   function browseImage(selection: ElementSelection | null) { browseFor.current = selection; imagePicker.current?.click(); }
   function storeElement(value: ElementSelection | null) { elementRef.current = value; setElement(value); selectionChanged(value?.element ?? null); }
-  function deselectElement() { setElementDialog(null); setConfirmMany(null); setExtras([]); setContext(null); inlineTicket.current++; selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; storeElement(null); }
+  function deselectElement() { setElementDialog(null); setConfirmMany(null); setExtras([]); setContext(null); inlineTicket.current++; selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; expectedSelection.current = null; storeElement(null); }
   useLayoutEffect(() => { deselectElement(); setRepicking(null); setStale(new Set()); setElementDialog(null); setElementError(''); }, [page.id]);
   const zoomIntent = useRef<{ pageId: string; zoom: number; origin: Point } | null>(null);
   const live = useRef({ zoom, changeZoom, pageId: page.id });
@@ -289,6 +294,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       const drag = elementDrag.current;
       if (restoreElement) {
         drag.mover?.cancel(); drag.resizer?.cancel();
+        expectedSelection.current = null;
         if (drag.pageId === pageRef.current.id && drag.version === acceptedVersionRef.current) storeElement(drag.original);
         else deselectElement();
       }
@@ -511,8 +517,15 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     try {
       const target = await editElement(selected.element, change);
       if (ownsSelection && pageRef.current.id === pageId && selectionSerial.current === ticket) {
+        // Keep the box the canvas is already drawing (a drag target or a nudged box)
+        // instead of the rect measured before the edit.
+        const latest = elementRef.current;
+        const shown = latest && sameTarget(latest.element, selected.element) ? latest : selected;
+        // The edit may report a new identity for the same element; the box the canvas is
+        // drawing belongs to it either way.
+        if (target && expectedSelection.current && sameTarget(expectedSelection.current.element, selected.element)) expectedSelection.current = { element: target, rect: expectedSelection.current.rect };
         pendingSelection.current = target;
-        storeElement(target ? { ...selected, element: target } : null);
+        storeElement(target ? { ...shown, element: target } : null);
       }
     } catch (error) { if (pageRef.current.id === pageId && selectionSerial.current === ticket) setElementError(error instanceof Error ? error.message : String(error)); throw error; }
     finally { setEditingElement(false); }
@@ -560,9 +573,15 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     if (!selected || !x && !y) return;
     const mover = site.current?.beginMove(selected.element);
     if (!mover) throw new Error('This item cannot be moved here. Select it again.');
+    const css = mover.style(x, y);
     const source = site.current?.source(); const pageId = pageRef.current.id;
+    const target = { ...selected.rect, x: selected.rect.x + x, y: selected.rect.y + y };
+    // Move the box with the nudge and keep it as the target until the committed
+    // preview settles; a measurement taken before then can describe another layout.
+    expectSelection(selected.element, target);
+    storeElement({ ...selected, rect: target });
     try {
-      await applyElement({ kind: 'update', texts: [], attributes: {}, style: mover.style(x, y) }, selected);
+      await applyElement({ kind: 'update', texts: [], attributes: {}, style: css }, selected);
       // Stable IDs also resolve in the retained old frame. Wait for the committed
       // document before another queued nudge reads its computed translation.
       await waitForSite(pageId, elementRef.current?.element, source);
@@ -814,6 +833,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         moved = drag.mover!.preview(drag.x, drag.y);
       }
       if (!moved) throw new Error('This item left its editable page.');
+      expectSelection(moved.element, moved.rect);
       storeElement(moved);
     } catch (error) { cancel(); setElementError(error instanceof Error ? error.message : String(error)); }
   }
@@ -837,16 +857,25 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     if (selection && selection.element.selector !== 'body') openElementContext(selection, client);
     else { cancel(); chooseElement(null); setContext({ kind: 'canvas', at, point: client }); }
   }
-  function refreshElement() {
+  function refreshElement(settled = true, revision?: number | string) {
+    // A measurement from an earlier revision describes a layout the canvas has already
+    // replaced; the frame loading now owns the selection.
+    if (revision !== undefined && revision !== acceptedVersionRef.current) return;
     refreshLayers();
-    setExtras(extrasRef.current.flatMap(item => { const found = site.current?.find(item.element); return found ? [found] : []; }));
+    setExtras(extrasRef.current.flatMap(item => { const found = site.current?.find(item.element); return found ? [{ ...found, rect: settled ? found.rect : item.rect }] : []; }));
     for (const item of pendingImages.current) site.current?.previewImage(item.selection.element, item.src);
     setPlaceholders(page.content ? (site.current?.placeholders() ?? []).filter(item => !pendingImages.current.some(pending => sameTarget(pending.selection.element, item.element))) : []);
     refreshStaleTargets();
     const current = elementRef.current;
     if (current) {
       const found = site.current?.find(current.element);
-      if (found) { pendingSelection.current = null; storeElement(found); }
+      if (found) {
+        pendingSelection.current = null;
+        // The edit's own target box, or the box already drawn when there is none.
+        const aimed = expectedSelection.current && sameTarget(expectedSelection.current.element, found.element) ? expectedSelection.current.rect : current.rect;
+        if (settled) expectedSelection.current = null;
+        storeElement({ ...found, rect: shownSelectionRect(found.rect, aimed, settled) });
+      }
       else if (!dialogRef.current && (pendingSelection.current !== current.element || (site.current?.source() && !site.current?.find(current.element)))) deselectElement();
     }
     // Missing targets already have an actionable request banner. The Generate
@@ -1148,7 +1177,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           onKeyDown={event => { if (event.target === event.currentTarget || event.key === 'Escape') keyboard(event); }}>
           {page.content && <div className="accepted-canvas-preview" data-testid="accepted-canvas-preview" style={positioned({ x: 0, y: 0, width: page.viewport.width, height: previewHeight })} aria-hidden="true">
             <div className="accepted-canvas-content" style={{ width: page.viewport.width, height: previewHeight, transform: `scale(${zoom})` }}>
-              <PreviewFrame ref={site} content={page.content} referenceHeight={page.viewport.height} onHeight={setSiteHeight} onReady={refreshElement} pageId={page.id} revision={acceptedVersion} title={`${page.name} accepted static preview`} staticView />
+              <PreviewFrame ref={site} content={page.content} referenceHeight={page.viewport.height} onHeight={setSiteHeight} onReady={(settled, revision) => refreshElement(settled, revision)} pageId={page.id} revision={acceptedVersion} title={`${page.name} accepted static preview`} staticView />
             </div>
           </div>}
           {liveView && page.content && <div className={`live-canvas-page${tool === 'request' || panReady || panning ? ' passive' : ''}`} data-testid="live-canvas-page" style={positioned({ x: 0, y: 0, width: liveView.width, height: liveHeight })}>

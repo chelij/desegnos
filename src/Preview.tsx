@@ -4,7 +4,7 @@ import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, us
 import { native } from './api';
 import { siteLayerTree, siteLayerStyles, siteCopyStyles, type SiteLayer } from './siteLayers';
 import { translatedStyle } from './elementEditing';
-import { measurableDocument } from './previewMeasurement';
+import { measurableDocument, needsReferenceMeasure, pendingFrameHeight, promotionHeight } from './previewMeasurement';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
 import type { ElementSelection, ElementTarget, ElementStyleEdit, LayerDirection, ElementVisual, Page, PreviewDescriptor, Rect, SiteContent } from './types';
 
@@ -31,7 +31,7 @@ const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'no
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   pageId: string; draftId?: string | null; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
   onRuntimeProblems?: (errors: string[]) => void; fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
-  content?: SiteContent; onReady?: () => void; referenceHeight?: number; onHeight?: (height: number) => void;
+  content?: SiteContent; onReady?: (settled: boolean, revision: number | string) => void; referenceHeight?: number; onHeight?: (height: number) => void;
 }>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady, onRuntimeProblems, fixRuntimeErrors, aiDisabled, observationsVersion }, ref) {
   const frame = useRef<HTMLIFrameElement>(null);
   const stagingFrame = useRef<HTMLIFrameElement>(null);
@@ -322,12 +322,12 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     // element rather than on the pending frame's layout.
     shown.current = readyDocument.current && readyDocument.current.session === visible.descriptor.sessionId ? { pageId: visible.pageId, revision: visible.revision, session: visible.descriptor.sessionId, document: readyDocument.current.document } : null;
     if (staticView && readyDocument.current) { onHeight?.(readyDocument.current.height); }
-    onReady?.();
+    onReady?.(false, visible.revision);
     // Viewport-relative layout (for example 100vh) can settle one paint after the
     // promoted frame gets its own size, so measure again once that layout is final.
     // Skip it when a newer revision is already loading: that frame owns the selection.
     let active = true;
-    const settled = requestAnimationFrame(() => requestAnimationFrame(() => { if (active && measurable()) onReady?.(); }));
+    const settled = requestAnimationFrame(() => requestAnimationFrame(() => { if (active && measurable()) onReady?.(true, visible.revision); }));
     return () => { active = false; cancelAnimationFrame(settled); };
   }, [visible]);
   useEffect(() => {
@@ -365,15 +365,19 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     Document.prototype.getAnimations?.call(mounted.current.document).forEach(animation => animation.pause());
   }, [staticView, extent]);
   const frames = [visible, pending].filter((item): item is PreparedFrame => !!item);
+  const visibleExtent = visible ? { pageId: visible.pageId, extent } : null;
   return <div style={staticView ? undefined : { position: 'relative' }} data-source-hash={descriptor?.sourceSha256 ?? undefined} data-preview-ready={staticView && !loading && !error && visible?.pageId === pageId && visible.revision === revision && readyDocument.current?.session === descriptor?.sessionId ? 'true' : undefined} className={staticView ? 'preview-frame static-preview' : 'preview-frame'}>
     {loading && !staticView && !visible && <p role="status" className="preview-status">Preparing preview…</p>}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={!staticView ? { label: 'Retry preview', onClick: () => setRetry(value => value + 1) } : undefined} />}
     {frames.map(candidate => {
       const staging = candidate === pending;
       const sourceDocument = staticView && candidate.source ? `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${staticPolicy}"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${candidate.source.html}</body></html>` : undefined;
+      // The hidden frame is laid out at the extent the visible frame already has, so a
+      // viewport-relative page inside it keeps the layout the canvas is showing.
+      const frameHeight = staging ? pendingFrameHeight(visibleExtent, candidate.pageId, referenceHeight) : extent;
       return <iframe key={candidate.descriptor.sessionId} ref={node => { if (staging) stagingFrame.current = node; else frame.current = node; }} inert={staging || staticView || !!draftId || undefined}
         src={sourceDocument ? undefined : candidate.descriptor.url} srcDoc={sourceDocument} sandbox={sourceDocument ? 'allow-same-origin' : candidate.runScripts ? 'allow-scripts' : ''} referrerPolicy="no-referrer" title={title}
-        style={{ ...(sourceDocument ? { height: staging ? referenceHeight : extent } : {}), ...(staging ? { position: 'absolute', inset: 0, visibility: 'hidden', pointerEvents: 'none' } as CSSProperties : {}) }}
+        style={{ ...(sourceDocument ? { height: frameHeight } : {}), ...(staging ? { position: 'absolute', inset: 0, visibility: 'hidden', pointerEvents: 'none' } as CSSProperties : {}) }}
         tabIndex={staging || staticView || draftId ? -1 : undefined} aria-hidden={staging || staticView || undefined} onLoad={async event => {
           const node = event.currentTarget;
           // A later navigation of the editable document must never regain DOM access.
@@ -393,8 +397,20 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
               // Styles can introduce images and fonts after the srcdoc load event.
               await Promise.allSettled(Array.from(doc.images, image => image.decode()));
               Document.prototype.getAnimations?.call(doc).forEach(animation => animation.pause());
-              prepared = { document: doc, session: candidate.descriptor.sessionId, height: Math.min(100000, Math.max(referenceHeight, doc.body.scrollHeight, doc.documentElement.scrollHeight)) };
-              node.style.height = `${prepared.height}px`;
+              const content = () => Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight);
+              const staged = pendingFrameHeight(visibleExtent, candidate.pageId, referenceHeight);
+              let height = promotionHeight(referenceHeight, content());
+              if (needsReferenceMeasure(staged, referenceHeight, content())) {
+                // The frame is taller than the reference viewport and still overflows, so its
+                // own height feeds the content. Decide the height where it cannot feed itself.
+                node.style.height = `${referenceHeight}px`;
+                await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+                height = promotionHeight(referenceHeight, content());
+              }
+              prepared = { document: doc, session: candidate.descriptor.sessionId, height };
+              // The pending frame keeps this height through promotion, so the frame measured
+              // here is the frame the canvas shows.
+              node.style.height = `${height}px`;
             }
             // Keep both documents mounted across a paint opportunity. Promote in one
             // React commit; onReady then measures the visible document in layout effect.
