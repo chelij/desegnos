@@ -6,6 +6,7 @@ use desegni_storage::{
     FileStamp, Journal, ProjectFile, SaveFailure, SaveFailureKind, write_markdown,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
     io::Read,
@@ -19,6 +20,43 @@ use uuid::Uuid;
 
 type NativeResult<T> = Result<T, String>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
+
+/// Hash what framed documents are made of: page code and the HTML site files a frame can
+/// show. Request prompts, rectangles and other editor-only state stay out of it.
+fn documents_key(project: Option<&Project>) -> String {
+    let Some(project) = project else {
+        return String::new();
+    };
+    fn feed(hash: &mut Sha256, value: &str) {
+        hash.update((value.len() as u64).to_le_bytes());
+        hash.update(value.as_bytes());
+    }
+    let mut hash = Sha256::new();
+    for page in &project.pages {
+        feed(&mut hash, &page.id.to_string());
+        feed(&mut hash, &page.path);
+        hash.update([u8::from(page.included)]);
+        if let Some(content) = &page.content {
+            feed(&mut hash, &content.html);
+            feed(&mut hash, &content.css);
+            feed(&mut hash, &content.javascript);
+        }
+    }
+    if let Some(site) = &project.website {
+        for (path, encoded) in &site.files {
+            if !matches!(path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str(), "html" | "htm") {
+                continue;
+            }
+            feed(&mut hash, path);
+            feed(&mut hash, encoded);
+        }
+        for (page_id, path) in &site.page_files {
+            feed(&mut hash, &page_id.to_string());
+            feed(&mut hash, path);
+        }
+    }
+    format!("{:x}", hash.finalize())
+}
 
 /// Open failures keep existing text errors and expose recovery choices without parsing prose.
 #[derive(Debug, Serialize)]
@@ -111,6 +149,9 @@ pub struct WorkspaceView {
     site_warnings: Vec<String>,
     outside_edits: desegni_storage::project_folder::OutsideEdits,
     project_folder: bool,
+    /// A fingerprint of the code and framed documents, so editors can re-read them after a
+    /// document change without waking on every request prompt keystroke.
+    documents_key: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -546,6 +587,7 @@ impl Workspace {
             );
         }
         WorkspaceView {
+            documents_key: documents_key(self.session.as_ref().map(Session::project)),
             project: self.session.as_ref().map(|s| s.project().clone()),
             path: self
                 .file
@@ -2498,6 +2540,32 @@ mod tests {
             Appearance::Dark,
         )
         .unwrap()
+    }
+
+    #[test]
+    fn documents_key_ignores_request_prompts_but_tracks_page_code() {
+        let mut project = project("Key");
+        let page_id = project.pages[0].id;
+        project.pages[0].content = Some(desegni_core::SiteContent {
+            html: "<h1>Home</h1>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        });
+        let rect = desegni_core::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
+        let added = project.apply(project.revision, Command::AddRegion { page_id, rect }).unwrap();
+        let region_id = added.pages[0].regions[0].id;
+        let typed = added
+            .apply(added.revision, Command::UpdateRegion { page_id, region_id, rect, prompt: "First".into() })
+            .unwrap();
+        let retyped = typed
+            .apply(typed.revision, Command::UpdateRegion { page_id, region_id, rect, prompt: "A much longer prompt typed by hand".into() })
+            .unwrap();
+        assert_ne!(typed.revision, retyped.revision, "the save still advances the project revision");
+        assert_eq!(documents_key(Some(&typed)), documents_key(Some(&retyped)), "typing must not change framed-document revisions");
+        let mut edited = retyped.clone();
+        edited.pages[0].content.as_mut().unwrap().html.push_str("<p>More</p>");
+        assert_ne!(documents_key(Some(&typed)), documents_key(Some(&edited)));
+        assert_eq!(documents_key(None), "");
     }
 
     #[test]

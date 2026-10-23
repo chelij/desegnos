@@ -609,8 +609,10 @@ function Editor() {
     name: importedImages.find(image => image.dataUri === dataUri)?.name ?? `Picture ${index + 1}` }));
   const projectImages = [...storedImages, ...importedImages.filter(image => !storedImages.some(stored => stored.dataUri === image.dataUri))];
   const page = project?.pages.find(page => page.id === pageId) ?? project?.pages.find(page => page.id === project.homePageId) ?? null;
-  // Framed documents the selected element belongs to, read from the current project revision.
+  // Framed documents the selected element belongs to. They are read again when page code or
+  // a framed document changes (view.documentsKey), never when only a prompt is typed.
   const frameRead = useRef(0);
+  const documentsKey = view?.documentsKey ?? '';
   useEffect(() => {
     if (!project || !page?.content) { setFramedDocuments({ pageId: '', documents: [] }); return; }
     const ticket = ++frameRead.current;
@@ -618,7 +620,7 @@ function Editor() {
     void native<FrameDocumentView[]>('get_frame_documents', { projectId, pageId })
       .then(value => { if (ticket === frameRead.current) setFramedDocuments({ pageId, documents: value.map(item => ({ ...item, pageId })) }); })
       .catch(() => { if (ticket === frameRead.current) setFramedDocuments({ pageId, documents: [] }); });
-  }, [project?.id, project?.revision, page?.id, page?.content]);
+  }, [documentsKey, project?.id, page?.id, !!page?.content]);
   const frameDocuments = framedDocuments.pageId === page?.id ? framedDocuments.documents : [];
   // Code and Split show the document the selected element lives in.
   const framedDocument = activeLayer?.document ?? null;

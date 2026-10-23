@@ -12,6 +12,7 @@
 
 use crate::workspace::Workspace;
 use desegni_core::{PreviewFile, Project};
+use sha2::{Digest, Sha256};
 use http_body_util::Full;
 use hyper::{
     Request, Response, StatusCode,
@@ -58,6 +59,9 @@ struct Site {
     package: Arc<Package>,
     /// The project revision this package was built from.
     served: (Uuid, u64),
+    /// The served source this package was built from. It ignores request prompts and
+    /// other editor-only state, so those never rebuild or reload the site.
+    signature: Option<String>,
 }
 
 #[derive(Default)]
@@ -73,6 +77,8 @@ struct Shared {
     /// Builds the package for a project revision, or `None` when the workspace no longer
     /// holds that project.
     build: Box<dyn Fn(Uuid) -> Option<Arc<Package>> + Send + Sync>,
+    /// Fingerprints the served sources; `None` always rebuilds.
+    signature: Box<dyn Fn(Uuid) -> Option<String> + Send + Sync>,
 }
 
 struct Running {
@@ -98,13 +104,22 @@ impl RevisionWatch {
 }
 
 impl LocalSite {
+    #[cfg(test)]
     pub fn new(build: impl Fn(Uuid) -> Option<Arc<Package>> + Send + Sync + 'static) -> Self {
+        Self::with_signature(build, |_| None)
+    }
+
+    fn with_signature(
+        build: impl Fn(Uuid) -> Option<Arc<Package>> + Send + Sync + 'static,
+        signature: impl Fn(Uuid) -> Option<String> + Send + Sync + 'static,
+    ) -> Self {
         Self {
             shared: Arc::new(Shared {
                 site: Mutex::new(None),
                 versions: watch::channel(0).0,
                 observed: Mutex::new(Observed::default()),
                 build: Box::new(build),
+                signature: Box::new(signature),
             }),
             running: None,
         }
@@ -113,18 +128,27 @@ impl LocalSite {
     /// Wire the server to the live workspace.
     pub fn for_app(app: &AppHandle) -> Self {
         let app = app.clone();
-        Self::new(move |project_id| {
-            let project = {
-                let workspace = app.state::<Mutex<Workspace>>();
+        let sources = app.clone();
+        Self::with_signature(
+            move |project_id| {
+                let project = {
+                    let workspace = app.state::<Mutex<Workspace>>();
+                    let workspace = workspace.lock().ok()?;
+                    let project = workspace.project().ok()?;
+                    if project.id != project_id {
+                        return None;
+                    }
+                    project.clone()
+                };
+                package(&project).ok().map(Arc::new)
+            },
+            move |project_id| {
+                let workspace = sources.state::<Mutex<Workspace>>();
                 let workspace = workspace.lock().ok()?;
                 let project = workspace.project().ok()?;
-                if project.id != project_id {
-                    return None;
-                }
-                project.clone()
-            };
-            package(&project).ok().map(Arc::new)
-        })
+                (project.id == project_id).then(|| source_signature(&project))
+            },
+        )
     }
 
     pub fn watch(&self) -> RevisionWatch {
@@ -132,12 +156,23 @@ impl LocalSite {
     }
 
     /// Serve one project revision and return the address to open, starting the server on
-    /// first use.
+    /// first use. Tests use this without a source signature, so every revision rebuilds.
+    #[cfg(test)]
     pub fn open(
         &mut self,
         project_id: Uuid,
         revision: u64,
         package: Arc<Package>,
+    ) -> Result<String, String> {
+        self.open_with_signature(project_id, revision, package, None)
+    }
+
+    fn open_with_signature(
+        &mut self,
+        project_id: Uuid,
+        revision: u64,
+        package: Arc<Package>,
+        signature: Option<String>,
     ) -> Result<String, String> {
         if self.running.is_none() {
             self.running = Some(start(&self.shared)?);
@@ -155,6 +190,7 @@ impl LocalSite {
                 version,
                 package,
                 served: (project_id, revision),
+                signature,
             });
             (version, (project_id, revision))
         };
@@ -199,7 +235,12 @@ fn open(app: &AppHandle) -> Result<String, String> {
         .state::<Mutex<LocalSite>>()
         .lock()
         .map_err(|_| "The local site server is unavailable.")?
-        .open(project.id, project.revision, package)?;
+        .open_with_signature(
+            project.id,
+            project.revision,
+            package,
+            Some(source_signature(&project)),
+        )?;
     crate::system_open::open(&url).map_err(|_| {
         format!("The site is running at {url}, but no browser could open it. Open that address manually.")
     })?;
@@ -233,6 +274,55 @@ pub(crate) fn package(project: &Project) -> Result<Package, String> {
         }
     }
     Ok(Package { files })
+}
+
+/// Fingerprint everything the served package is compiled from. Requests, prompts,
+/// selections and other editor-only state are deliberately absent, so saving a request
+/// never rebuilds or reloads the site.
+pub(crate) fn source_signature(project: &Project) -> String {
+    let mut hash = Sha256::new();
+    feed(&mut hash, &project.name);
+    for page in &project.pages {
+        feed(&mut hash, &page.path);
+        hash.update([u8::from(page.included)]);
+        if let Some(content) = &page.content {
+            feed(&mut hash, &content.html);
+            feed(&mut hash, &content.css);
+            feed(&mut hash, &content.javascript);
+        }
+    }
+    for (id, picture) in &project.pictures {
+        feed(&mut hash, &id.to_string());
+        feed(&mut hash, picture);
+    }
+    if let Some(identity) = &project.imported_identity {
+        for asset in &identity.assets {
+            feed(&mut hash, &asset.id.to_string());
+            feed(&mut hash, &asset.sha256);
+            feed(&mut hash, &asset.data_uri);
+        }
+        for photo in &identity.photos {
+            feed(&mut hash, &photo.id.to_string());
+            feed(&mut hash, &photo.sha256);
+            feed(&mut hash, &photo.data_uri);
+        }
+    }
+    if let Some(site) = &project.website {
+        for (path, encoded) in &site.files {
+            feed(&mut hash, path);
+            feed(&mut hash, encoded);
+        }
+        for (page_id, path) in &site.page_files {
+            feed(&mut hash, &page_id.to_string());
+            feed(&mut hash, path);
+        }
+    }
+    format!("{:x}", hash.finalize())
+}
+
+fn feed(hash: &mut Sha256, value: &str) {
+    hash.update((value.len() as u64).to_le_bytes());
+    hash.update(value.as_bytes());
 }
 
 fn token() -> String {
@@ -310,6 +400,17 @@ fn observe(shared: &Arc<Shared>, project: Option<(Uuid, u64)>) {
         if locked(&shared.observed).generation != generation {
             return;
         }
+        // A prompt save or another editor-only change leaves the served sources alone.
+        let signature = (shared.signature)(project_id);
+        if let Some(signature) = &signature {
+            let current = locked(&shared.site);
+            if current
+                .as_ref()
+                .is_some_and(|site| site.served.0 == project_id && site.signature.as_ref() == Some(signature))
+            {
+                return;
+            }
+        }
         let Some(package) = (shared.build)(project_id) else {
             return;
         };
@@ -325,6 +426,7 @@ fn observe(shared: &Arc<Shared>, project: Option<(Uuid, u64)>) {
         }
         site.package = package;
         site.served = (project_id, revision);
+        site.signature = signature;
         site.version += 1;
         let version = site.version;
         drop(current);
@@ -947,6 +1049,84 @@ mod tests {
             request(address, "GET", &target, &[("range", "bytes=0-999999999")]);
         assert_eq!(status, 416);
         assert_eq!(headers["content-range"], format!("bytes */{clip}"));
+    }
+
+    #[test]
+    fn source_signature_ignores_request_prompts_and_tracks_documents() {
+        use desegni_core::Command;
+        let mut project = generated();
+        let page_id = project.pages[0].id;
+        let rect = desegni_core::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
+        let added = project.apply(project.revision, Command::AddRegion { page_id, rect }).unwrap();
+        let region_id = added.pages[0].regions[0].id;
+        let typed = added
+            .apply(added.revision, Command::UpdateRegion { page_id, region_id, rect, prompt: "First".into() })
+            .unwrap();
+        let retyped = typed
+            .apply(typed.revision, Command::UpdateRegion { page_id, region_id, rect, prompt: "A much longer prompt typed by hand".into() })
+            .unwrap();
+        assert_ne!(typed.revision, retyped.revision);
+        assert_eq!(source_signature(&typed), source_signature(&retyped), "a prompt save must not rebuild the site");
+        let mut edited = retyped.clone();
+        edited.pages[0].content.as_mut().unwrap().html.push_str("<p>More</p>");
+        assert_ne!(source_signature(&typed), source_signature(&edited));
+        let mut framed = typed.clone();
+        framed.website = Some(desegni_core::ImportedWebsite {
+            page_files: BTreeMap::new(),
+            files: BTreeMap::from([("play/game.html".to_string(), "<p>Game</p>".into())]),
+            framework: None,
+            skipped: vec![],
+        });
+        let unchanged_prompt = framed
+            .apply(framed.revision, Command::UpdateRegion { page_id, region_id, rect, prompt: "Another prompt".into() })
+            .unwrap();
+        assert_eq!(source_signature(&framed), source_signature(&unchanged_prompt));
+        let mut changed_site = framed.clone();
+        changed_site.website.as_mut().unwrap().files.insert("play/game.html".to_string(), "<p>Game two</p>".into());
+        assert_ne!(source_signature(&framed), source_signature(&changed_site));
+    }
+
+    #[test]
+    fn prompt_only_revisions_do_not_rebuild_or_bump_the_served_site() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let project = generated();
+        let builds = Arc::new(AtomicUsize::new(0));
+        let sources = Arc::new(Mutex::new(source_signature(&project)));
+        let counted = Arc::clone(&builds);
+        let served = Arc::clone(&sources);
+        let mut site = LocalSite::with_signature(
+            move |_| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                Some(Arc::new(package_from(&[("index.html", "<html><body>Rebuilt</body></html>")])))
+            },
+            move |_| Some(locked(&served).clone()),
+        );
+        let url = site
+            .open_with_signature(
+                project.id,
+                project.revision,
+                Arc::new(package_from(&[("index.html", "<html><body>First</body></html>")])),
+                Some(source_signature(&project)),
+            )
+            .expect("site starts");
+        let (address, token) = address(&url);
+        let reload = format!("/{token}/{RELOAD}");
+        assert_eq!(request(address, "GET", &reload, &[]).2, b"1");
+        // Saving a request prompt advances the revision but changes no served source.
+        site.watch().observe(Some((project.id, project.revision + 1)));
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(request(address, "GET", &reload, &[]).2, b"1", "a prompt-only save must not reload the browser");
+        assert_eq!(builds.load(Ordering::SeqCst), 0, "a prompt-only save must not rebuild the package");
+        // Editing page code does rebuild once.
+        *locked(&sources) = "changed-document".into();
+        site.watch().observe(Some((project.id, project.revision + 2)));
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(request(address, "GET", &format!("{reload}?since=1"), &[]).2, b"2");
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        assert!(String::from_utf8_lossy(&request(address, "GET", &format!("/{token}/"), &[]).2).contains("Rebuilt"));
     }
 
     #[test]

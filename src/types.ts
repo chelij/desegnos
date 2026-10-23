@@ -62,7 +62,7 @@ export type ProjectLocationView = { path: string; systemDefault: string; customi
 export type WebsiteExport = { path: string; indexPath: string; pageCount: number; fileCount: number; warnings: string[] };
 export type HistoryView = { sessionId: string; start: number; position: number; end: number; version: number };
 export type OpenProjectSummary = { id: string; name: string; dirty: boolean; active: boolean; pages: { id: string; name: string }[] };
-export type WorkspaceView = { openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
+export type WorkspaceView = { documentsKey?: string; openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
   siteWarnings?: string[]; outsideEdits?: OutsideEdits; projectFolder?: boolean;
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null; migrationNotice: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;

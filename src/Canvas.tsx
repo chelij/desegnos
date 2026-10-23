@@ -3,7 +3,7 @@ import { areaProblems, fixLabel, jobOutcome, placeCallouts, type OutcomeFix } fr
 import type { GenerationController } from './useGeneration';
 import { userError, runtimeError, generationError, generationPageError } from './userErrors.js';
 import { isWholePage } from './wholePageScope';
-import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
+import { forwardRef, memo, useCallback, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '@tauri-apps/api/core';
 import { flushSync } from 'react-dom';
@@ -18,9 +18,9 @@ import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, type MenuItem } from './Menus';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type FrameView, type InlineText } from './Preview';
-import { FrameOverlay, useLiveFrameSession } from './FrameOverlays';
+import { FrameOverlay, useLiveFrameSession, type LiveFrameSession } from './FrameOverlays';
 import type { LiveHistoryAction } from './liveBar';
-import { overlayPlacement, placeOverlays } from './previewFrames';
+import { overlayPlacement, placeOverlays, type CollectedFrame } from './previewFrames';
 import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
@@ -54,6 +54,31 @@ function paintStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSPrope
 function requestPromptRect(rect: Rect, zoom: number): Rect {
   return { x: rect.x, y: rect.y + rect.height + 10 / zoom, width: Math.max(260 / zoom, Math.min(rect.width, 420 / zoom)), height: 112 / zoom };
 }
+
+// The live layer depends on the page's code and viewport, never on its requests. Typing a
+// prompt re-renders React requests without touching the live page or its iframe.
+const LiveCanvasLayer = memo(function LiveCanvasLayer({ pageId, pageName, revision, width, height, bounds, zoom, passive, aiDisabled, observationsVersion, frameRef, onLiveLocation, onRuntimeProblems, fixRuntimeErrors }: {
+  pageId: string; pageName: string; revision: string; width: number; height: number; bounds: WorkspaceBounds; zoom: number; passive: boolean;
+  aiDisabled: boolean; observationsVersion?: number; frameRef: RefObject<CanvasPreviewHandle | null>; onLiveLocation?: (path: string) => void;
+  onRuntimeProblems: (errors: string[]) => void; fixRuntimeErrors?: (errors: string[]) => void;
+}) {
+  return <div className={`live-canvas-page${passive ? ' passive' : ''}`} data-testid="live-canvas-page" style={windowStyle({ x: 0, y: 0, width, height }, bounds, zoom)}>
+    <div className="live-canvas-content" style={{ width, height, transform: `scale(${zoom})` }}>
+      <PreviewFrame ref={frameRef} onLiveLocation={onLiveLocation} onRuntimeProblems={onRuntimeProblems} fixRuntimeErrors={fixRuntimeErrors} aiDisabled={aiDisabled} observationsVersion={observationsVersion} pageId={pageId} revision={revision} runScripts title={`${pageName} live`} />
+    </div>
+  </div>;
+});
+
+// Live copies of frames are anchored to their still copies. A prompt edit changes neither,
+// so the overlays stay mounted and their sessions survive.
+const FrameLayer = memo(function FrameLayer({ frames, session, pageId, pageName, staticPageUrl, bounds, zoom, interactingFrame, interactiveSelector, stop }: {
+  frames: CollectedFrame[]; session: LiveFrameSession; pageId: string; pageName: string; staticPageUrl: string | null;
+  bounds: WorkspaceBounds; zoom: number; interactingFrame: string | null; interactiveSelector: string | null; stop: () => void;
+}) {
+  return <>{frames.map(frame => <FrameOverlay key={frame.key} frame={frame} live={session} pageId={pageId} staticPageUrl={staticPageUrl} zoom={zoom}
+    interactive={interactiveSelector !== null && interactingFrame === frame.key && interactiveSelector === frame.selector}
+    placement={{ ...overlayPlacement(frame.rect, { x: bounds.left, y: bounds.top }, zoom), zIndex: 1 }} title={`${pageName} interactive frame`} stop={stop} />)}</>;
+});
 
 type CanvasProps = {
   generation?: GenerationController;
@@ -1228,6 +1253,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const editBusy = layerBusy || editingElement || nudging;
   // Requests line up with the design only at the page's own width, so they show (and can be added) there.
   const liveRequests = !liveView || liveView.width === page.viewport.width;
+  // Keep callbacks stable so prompt edits cannot re-render the memoized live layer.
+  const fixRuntimeErrorsRef = useRef(fixRuntimeErrors); fixRuntimeErrorsRef.current = fixRuntimeErrors;
+  const stableFixRuntimeErrors = useCallback((errors: string[]) => fixRuntimeErrorsRef.current?.(errors), []);
+  const stopInteracting = useCallback(() => setInteractingFrame(null), []);
   const liveHeight = liveView ? Math.max(liveView.height, liveView.width === page.viewport.width ? previewHeight : liveView.height) : 0;
   nativeDrag.current = value => {
     if (value.phase === 'leave') { setDropTarget(null); return; }
@@ -1337,14 +1366,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
               <PreviewFrame ref={site} content={page.content} frameDocuments={frameDocuments} referenceHeight={page.viewport.height} onHeight={setSiteHeight} onReady={(settled, revision) => refreshElement(settled, revision)} pageId={page.id} revision={acceptedVersion} title={`${page.name} accepted static preview`} staticView />
             </div>
           </div>}
-          {liveView && page.content && <div className={`live-canvas-page${tool === 'request' || panReady || panning ? ' passive' : ''}`} data-testid="live-canvas-page" style={positioned({ x: 0, y: 0, width: liveView.width, height: liveHeight })}>
-            <div className="live-canvas-content" style={{ width: liveView.width, height: liveHeight, transform: `scale(${zoom})` }}>
-              <PreviewFrame ref={liveSite} onLiveLocation={onLiveLocation} onRuntimeProblems={setRuntimeProblems} fixRuntimeErrors={fixRuntimeErrors} aiDisabled={aiDisabled} observationsVersion={observationsVersion} pageId={page.id} revision={`live:${acceptedVersion}`} runScripts title={`${page.name} live`} />
-            </div>
-          </div>}
-          {!liveView && frameSession && liveOverlays.map(frame => <FrameOverlay key={frame.key} frame={frame} live={frameSession} pageId={page.id} staticPageUrl={frameView.pageUrl} zoom={zoom}
-            interactive={tool === 'select' && interactingFrame === frame.key && !!element && element.element.selector === frame.selector}
-            placement={{ ...overlayPlacement(frame.rect, origin, zoom), zIndex: 1 }} title={`${page.name} interactive frame`} stop={() => setInteractingFrame(null)} />)}
+          {liveView && page.content && <LiveCanvasLayer pageId={page.id} pageName={page.name} revision={`live:${acceptedVersion}`} width={liveView.width} height={liveHeight}
+            bounds={bounds} zoom={zoom} passive={tool === 'request' || panReady || panning} aiDisabled={!!aiDisabled} observationsVersion={observationsVersion} frameRef={liveSite}
+            onLiveLocation={onLiveLocation} onRuntimeProblems={setRuntimeProblems} fixRuntimeErrors={stableFixRuntimeErrors} />}
+          {!liveView && frameSession && <FrameLayer frames={liveOverlays} session={frameSession} pageId={page.id} pageName={page.name} staticPageUrl={frameView.pageUrl}
+            bounds={bounds} zoom={zoom} interactingFrame={interactingFrame} interactiveSelector={tool === 'select' && element ? element.element.selector : null} stop={stopInteracting} />}
           <div className={`screen-guide ${page.content ? 'has-preview' : ''}`} data-testid="screen-guide" style={positioned({ x: 0, y: 0, ...page.viewport })} aria-hidden="true">
             <span className="screen-guide-label">Screen · {page.viewport.width} × {page.viewport.height}</span>
           </div>
@@ -1459,7 +1485,9 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
 }) {
   const text = useRef<HTMLTextAreaElement>(null);
   const move = useRef<HTMLButtonElement>(null);
-  const [draft, changeDraft] = useDraftText(region.prompt, (_value, latest) => change({ prompt: latest }).then(updated => updated.prompt));
+  // Typing stays local; a short pause saves once instead of sending every keystroke to the
+  // workspace, where each save journals the whole project and republishes the view.
+  const [draft, changeDraft, flushDraft] = useDraftText(region.prompt, (_value, latest) => change({ prompt: latest }).then(updated => updated.prompt), 400);
   const [expanded, setExpanded] = useState(false);
   const [dropping, setDropping] = useState(false);
   const [attachmentsExpanded, setAttachmentsExpanded] = useState(false);
@@ -1520,7 +1548,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     {wholePage && <span className="request-phone-tag" title={region.wholePage ? "Whole page" : "Whole page (automatically detected). Turn off in request controls."}>Whole page</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture…' : target ? 'Describe the change…' : 'Describe what goes here…'}
-      style={{ height: displayHeight, borderWidth: 0, outline: 'none' }} onFocus={() => { if (attached && hasMore) setExpanded(true); }} onChange={event => { changeDraft(event.target.value); if (attached && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
+      style={{ height: displayHeight, borderWidth: 0, outline: 'none' }} onFocus={() => { if (attached && hasMore) setExpanded(true); }} onBlur={flushDraft} onChange={event => { changeDraft(event.target.value); if (attached && hasMore) setExpanded(true); }} onPointerDown={event => event.stopPropagation()}
       onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); (moveVisible ? move.current : document.getElementById('page-canvas'))?.focus({ preventScroll: true }); } }} />
     {hasMore && <button type="button" className="request-expand" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
     {(attachments.length > 0 || reports.length > 0) && <div className="request-attachment-group">
