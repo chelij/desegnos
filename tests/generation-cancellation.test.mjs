@@ -45,6 +45,22 @@ try {
     ]);
   });
 
+  await test('start and retry follow a refreshed job ID for Stop and later actions', async () => {
+    const calls = [];
+    const render = setup(async (command, args) => {
+      calls.push({ command, args });
+      if (command === 'prepare_generation') return prepared;
+      return { ...prepared, jobId: command === 'start_generation' ? 'fresh-start' : 'fresh-retry', status: 'generating' };
+    });
+    await render().prepare();
+    assert.equal(render().job.jobId, 'fresh-start');
+    await render().retry();
+    assert.deepEqual(calls.at(-1), { command: 'retry_generation', args: { jobId: 'fresh-start' } });
+    assert.equal(render().job.jobId, 'fresh-retry');
+    await render().cancel();
+    assert.deepEqual(nativeCalls.at(-1), { command: 'cancel_generation', args: { jobId: 'fresh-retry' } });
+  });
+
   await test('Stop before queued preparation dispatch makes no native/provider request', async () => {
     const gate = deferred(); const calls = [];
     const render = setup(async (command, args, signal) => { await gate.promise; signal.throwIfAborted(); calls.push(command); return prepared; });

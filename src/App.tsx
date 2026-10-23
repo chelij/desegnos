@@ -369,6 +369,7 @@ function Editor() {
     if (target.pages.some(entry => entry.content && entry.appearance !== next)) setOfferRestyle(`Existing pages need restyling for ${next} mode.`);
   }
   async function regenerateWithContext() {
+    await synchronize(true); await settle();
     setOfferRestyle(false);
     const target = current.current?.project; if (!target) return;
     for (const item of target.pages.filter(entry => entry.content)) {
@@ -540,7 +541,7 @@ function Editor() {
     return () => { active = false; clearTimeout(timer); };
   }, [mapHtml, project?.id, page?.id]);
   const activeProjectId = project?.id ?? null;
-  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve(command === 'prepare_generation' || command === 'apply_generation' || command === 'generation_draft' && args?.action === 'apply' ? synchronize(command === 'prepare_generation') : undefined).then(() => queue(async workspace => {
+  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve(command === 'prepare_generation' || command === 'start_generation' || command === 'retry_generation' || command === 'apply_generation' || command === 'generation_draft' && args?.action === 'apply' ? synchronize(['prepare_generation', 'start_generation', 'retry_generation'].includes(command)) : undefined).then(() => queue(async workspace => {
     signal?.throwIfAborted();
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {
@@ -645,6 +646,7 @@ function Editor() {
   async function pickElement(selections: ElementSelection[]) {
     if (!page || !selections.length) return;
     const pageId = page.id, elements = selections.map(selection => selection.element);
+    await synchronize(true); await settle();
     // Resolve against the queued current state, so repeated clicks cannot create duplicate requests.
     const next = await mutate(project => {
       const currentPage = project.pages.find(item => item.id === pageId);

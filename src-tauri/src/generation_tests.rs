@@ -876,7 +876,7 @@ fn omitted_and_invalid_regions_recover_without_applying_unsafe_source() {
 }
 
 #[test]
-fn changed_source_mode_and_identity_block_completed_results_and_stale_retries() {
+fn changed_source_mode_and_identity_block_old_results_but_retry_current_inputs() {
     for condition in ["source", "mode", "identity"] {
         let temp = Temp::new();
         let mut service = temp.service();
@@ -912,7 +912,11 @@ fn changed_source_mode_and_identity_block_completed_results_and_stale_retries() 
         status(&blocked, JobStatus::Blocked);
         assert!(blocked.candidate.is_some());
         assert!(blocked.message.contains("stale"));
-        assert!(service.begin(&current, prepared.job_id, true).is_err());
+        let (retried, _) = service.begin(&current, prepared.job_id, true).unwrap();
+        assert_ne!(retried.job_id, prepared.job_id);
+        assert_eq!(retried.base_revision, current.revision);
+        retried.requirements.validate_current(&current).unwrap();
+        assert_eq!(retried.generation_mode, current.generation_mode);
         assert_eq!(service.jobs[&prepared.job_id].view.attempts.len(), 1);
         assert!(current.applied_job_ids.is_empty());
     }
@@ -2265,4 +2269,125 @@ fn retained_drafts_survive_restart_past_history_and_dismissal() {
         .unwrap();
     assert!(loaded.drafts[0].dismissed);
     assert_eq!(loaded.drafts[0].code, drafts[0].code);
+}
+
+#[test]
+fn start_and_retry_refresh_source_revision_and_request_regions_after_manual_edits() {
+    for retry in [false, true] {
+        let temp = Temp::new();
+        let mut service = temp.service();
+        let original = project();
+        let prepared = service.prepare(&original).unwrap();
+        if retry {
+            service.begin(&original, prepared.job_id, false).unwrap();
+            service.cancel(&original, prepared.job_id).unwrap();
+        }
+        let frozen = fs::read(
+            service
+                .job_directory(original.id, prepared.job_id)
+                .join("REQUIREMENTS.md"),
+        )
+        .unwrap();
+        let mut edited = original.clone();
+        edited.revision += 1;
+        edited.pages[0].content = Some(SiteContent {
+            html: "<main><h1>My edited heading</h1><img src=\"https://example.com/new.png\" alt=\"New photo\"></main>".into(),
+            css: "main { color: red; transform: translate(20px, 30px); width: 640px; }".into(),
+            javascript: String::new(),
+        });
+        edited.pages[0].regions[0].prompt = "Keep my heading and new photo".into();
+        edited.pages[0].regions[0].rect.x += 16.;
+        edited.pages[0].regions[0].rect.width += 24.;
+        let (submitted, _) = service.begin(&edited, prepared.job_id, retry).unwrap();
+        assert_ne!(submitted.job_id, prepared.job_id);
+        assert_eq!(submitted.base_revision, edited.revision);
+        submitted.requirements.validate_current(&edited).unwrap();
+        assert!(
+            submitted
+                .requirements
+                .markdown
+                .contains("My edited heading")
+        );
+        assert!(
+            submitted
+                .requirements
+                .markdown
+                .contains("Keep my heading and new photo")
+        );
+        assert!(
+            submitted
+                .requirements
+                .request_history
+                .contains("Changes you made since the last result")
+        );
+        assert_eq!(submitted.areas[0].rect, edited.pages[0].regions[0].rect);
+        assert_eq!(
+            fs::read(
+                service
+                    .job_directory(original.id, prepared.job_id)
+                    .join("REQUIREMENTS.md")
+            )
+            .unwrap(),
+            frozen
+        );
+        assert_eq!(
+            service
+                .saved_job(original.id, prepared.job_id)
+                .unwrap()
+                .requirements,
+            prepared.requirements
+        );
+    }
+}
+
+#[test]
+fn repair_draft_uses_current_source_instead_of_its_stale_base_and_retained_code() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let original = project();
+    let prepared = service.prepare(&original).unwrap();
+    let mut record = service.record(&original, prepared.job_id).unwrap();
+    record.view.status = JobStatus::Discarded;
+    service.persist(record).unwrap();
+    let mut edited = original.clone();
+    edited.revision += 1;
+    edited.pages[0].content.as_mut().unwrap().html =
+        "<main>Manual text and deleted old elements</main>".into();
+    let draft = desegni_core::GenerationDraft {
+        id: Uuid::new_v4(),
+        page_id: Some(original.home_page_id),
+        region_ids: vec![original.pages[0].regions[0].id],
+        code: "STALE DRAFT SOURCE MUST NOT BE SENT".into(),
+        content: original.pages[0].content.clone(),
+        base_sha256: Some("stale-base".into()),
+        base_editor_ids: vec![],
+        reason: "Keep the change inside the requested area".into(),
+        dismissed: false,
+        applied: false,
+    };
+    let repaired = service
+        .prepare_targeted(&edited, None, Some(draft))
+        .unwrap();
+    repaired.requirements.validate_current(&edited).unwrap();
+    assert_eq!(repaired.base_revision, edited.revision);
+    assert_eq!(repaired.requirements.region_count, 1);
+    assert!(
+        repaired
+            .requirements
+            .markdown
+            .contains("Manual text and deleted old elements")
+    );
+    assert!(!repaired.requirements.markdown.contains("stale-base"));
+    assert!(
+        !repaired
+            .requirements
+            .markdown
+            .contains("STALE DRAFT SOURCE")
+    );
+    assert!(
+        repaired
+            .requirements
+            .request_history
+            .contains("Changes you made since the last result")
+    );
 }

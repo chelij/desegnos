@@ -3,10 +3,27 @@ use crate::{
     Project, Rect, RegionOutcome, RegionStatus, RequirementsSnapshot, Result, digest, ensure,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use uuid::Uuid;
 
 const HEADING: &str = "\n## Earlier requests for these areas (context only — the current requests are the authority)\n\n```jsonl\n";
 pub const REQUEST_HISTORY_CHARS: usize = 3000;
+const CHANGES_HEADING: &str = "\n## Changes you made since the last result\n\nPreserve these edits in the current page source, including text, images, removals, styles and layout, unless the current request explicitly changes them. Component names below identify changed source, not permission to expand scope.\n\n```jsonl\n";
+
+/// Small fingerprints keep historical source out of the bounded request-history index.
+pub fn source_fingerprints(content: Option<&crate::SiteContent>) -> BTreeMap<String, String> {
+    let mut hashes = BTreeMap::new();
+    if let Some(content) = content {
+        for (name, source) in [
+            ("html", &content.html),
+            ("css", &content.css),
+            ("javascript", &content.javascript),
+        ] {
+            hashes.insert(name.into(), digest(source.as_bytes()));
+        }
+    }
+    hashes
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -24,9 +41,14 @@ pub struct EarlierRequest {
     /// The complete original scope of the job-wide summary. Empty for older indexes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub summary_targets: Vec<(Uuid, Uuid)>,
+    /// Exact stored source after application, or base source for unapplied results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_fingerprints: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_source_fingerprints: Option<BTreeMap<String, String>>,
 }
 
-/// Read only request data blocks, never attachments, page source, or prior context.
+/// Read request blocks and source hashes, never attachments, source text, or prior context.
 pub fn earlier_requests(
     snapshot: &RequirementsSnapshot,
     requested_at: i64,
@@ -35,12 +57,25 @@ pub fn earlier_requests(
     regions: &[RegionOutcome],
 ) -> Vec<EarlierRequest> {
     let mut requests = Vec::new();
+    let mut sources = BTreeMap::new();
     let mut fence = None;
     let mut block = String::new();
     for line in snapshot.markdown.lines() {
         if let Some(end) = &fence {
             if line == end {
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&block) {
+                    if let Some(page_id) = value
+                        .get("pageId")
+                        .and_then(|id| serde_json::from_value::<Uuid>(id.clone()).ok())
+                    {
+                        if let Some(hashes) = value.get("sourceHashes").and_then(|hashes| {
+                            serde_json::from_value::<BTreeMap<String, String>>(hashes.clone()).ok()
+                        }) {
+                            sources.insert(page_id, hashes);
+                        } else if value.get("content").is_some_and(serde_json::Value::is_null) {
+                            sources.insert(page_id, BTreeMap::new());
+                        }
+                    }
                     let parse = || {
                         let page_id = serde_json::from_value(value.get("pageId")?.clone()).ok()?;
                         let region_id =
@@ -86,6 +121,8 @@ pub fn earlier_requests(
                                 200,
                             ),
                             summary_targets: Vec::new(),
+                            source_fingerprints: None,
+                            base_source_fingerprints: None,
                         })
                     };
                     if let Some(request) = parse() {
@@ -108,6 +145,8 @@ pub fn earlier_requests(
     let summary_targets = snapshot.target_ids().unwrap_or_default();
     for request in &mut requests {
         request.summary_targets = summary_targets.clone();
+        request.source_fingerprints = sources.get(&request.page_id).cloned();
+        request.base_source_fingerprints = request.source_fingerprints.clone();
     }
     requests
 }
@@ -198,6 +237,54 @@ impl RequirementsSnapshot {
                 r.region_id,
             )
         });
+        let mut changes = String::new();
+        let mut compared = std::collections::BTreeSet::new();
+        // Compare only the newest relevant result for each page. A later result on a
+        // different page must not hide edits on this page. Undone results use their base.
+        for r in &records {
+            if !targets.iter().any(|(p, area)| {
+                r.page_id == p.id
+                    && (r.region_id == area.id
+                        || area.is_whole_page(p)
+                        || r.whole_page
+                        || nearby(area.rect, r.rect))
+            }) {
+                continue;
+            }
+            if !compared.insert(r.page_id) {
+                continue;
+            }
+            let baseline = if r.outcome.starts_with("undone") {
+                &r.base_source_fingerprints
+            } else {
+                &r.source_fingerprints
+            };
+            let Some(before) = baseline else { continue };
+            let page = project.page(r.page_id)?;
+            let current = source_fingerprints(page.content.as_ref());
+            let changed: Vec<_> = ["html", "css", "javascript"]
+                .into_iter()
+                .filter(|name| before.get(*name) != current.get(*name))
+                .collect();
+            if changed.is_empty() {
+                continue;
+            }
+            let line = format!(
+                "{}\n",
+                serde_json::json!({"page":r.page_id,"changed":changed})
+            );
+            if CHANGES_HEADING.chars().count() + changes.chars().count() + line.chars().count() + 4
+                > 1200
+            {
+                break;
+            }
+            changes.push_str(&line);
+        }
+        let changes = if changes.is_empty() {
+            changes
+        } else {
+            format!("{CHANGES_HEADING}{changes}```\n")
+        };
         let mut counts = vec![0; targets.len()];
         let mut seen = std::collections::BTreeSet::new();
         let mut section = String::new();
@@ -227,7 +314,11 @@ impl RequirementsSnapshot {
             let entry = serde_json::json!({"page":r.page_id,"area":r.region_id,"when":relative(now,r.requested_at),
                 "request":clip(&r.request,300),"outcome":clip(&r.outcome,320),"summary":summary});
             let line = format!("{}\n", entry);
-            if HEADING.chars().count() + section.chars().count() + line.chars().count() + 4
+            if changes.chars().count()
+                + HEADING.chars().count()
+                + section.chars().count()
+                + line.chars().count()
+                + 4
                 > REQUEST_HISTORY_CHARS
             {
                 break;
@@ -238,9 +329,9 @@ impl RequirementsSnapshot {
             }
         }
         self.set_request_history(if section.is_empty() {
-            section
+            changes
         } else {
-            format!("{HEADING}{section}```\n")
+            format!("{changes}{HEADING}{section}```\n")
         })?;
         Ok(self)
     }
@@ -249,7 +340,7 @@ impl RequirementsSnapshot {
         ensure(
             section.is_empty()
                 || (self.format_version()? >= 19
-                    && section.starts_with(HEADING)
+                    && (section.starts_with(HEADING) || section.starts_with(CHANGES_HEADING))
                     && section.chars().count() <= REQUEST_HISTORY_CHARS),
             "The request history is invalid.",
         )?;
@@ -319,8 +410,106 @@ mod tests {
             outcome: "applied".into(),
             summary: format!("Changed the photo {n}."),
             summary_targets: vec![(p.home_page_id, p.pages[0].regions[0].id)],
+            source_fingerprints: None,
+            base_source_fingerprints: None,
         }
     }
+    #[test]
+    fn manual_edits_compare_current_source_and_preserve_snapshot_validation() {
+        let mut p = project();
+        p.pages[0].content = Some(crate::SiteContent {
+            html: "<section><h1>Old text</h1><img src=\"old.png\"><p>Delete me</p></section>"
+                .into(),
+            css: "section { width: 200px; }".into(),
+            javascript: String::new(),
+        });
+        let mut previous = record(&p, 1);
+        previous.source_fingerprints = Some(source_fingerprints(p.pages[0].content.as_ref()));
+        let render = |p: &Project, previous: &EarlierRequest| {
+            p.prepare_requirements()
+                .unwrap()
+                .with_earlier_requests(p, std::slice::from_ref(previous), 7200)
+                .unwrap()
+        };
+        assert!(
+            !render(&p, &previous)
+                .request_history
+                .contains(CHANGES_HEADING)
+        );
+        p.pages[0].content = Some(crate::SiteContent {
+            html: "<section><h1>My new text</h1><img src=\"new.png\"></section>".into(),
+            css: "section { width: 400px; transform: translate(40px, 20px); color: red; }".into(),
+            javascript: String::new(),
+        });
+        p.revision += 1;
+        let snapshot = render(&p, &previous);
+        assert!(snapshot.request_history.contains(CHANGES_HEADING));
+        assert!(
+            snapshot
+                .request_history
+                .contains("\"changed\":[\"html\",\"css\"]")
+        );
+        assert!(!snapshot.request_history.contains("javascript"));
+        assert!(snapshot.markdown.contains("My new text"));
+        assert!(!snapshot.markdown.contains("Delete me"));
+        assert!(snapshot.request_history.chars().count() <= REQUEST_HISTORY_CHARS);
+        snapshot.validate_current(&p).unwrap();
+    }
+
+    #[test]
+    fn manual_edits_ignore_other_areas_and_compare_undo_to_base() {
+        let p = project();
+        let mut previous = record(&p, 1);
+        previous.source_fingerprints = Some(source_fingerprints(Some(&crate::SiteContent {
+            html: "<p>Rejected result</p>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        })));
+        previous.base_source_fingerprints = Some(source_fingerprints(p.pages[0].content.as_ref()));
+        previous.outcome = "undone (do not repeat)".into();
+        let render = |r: EarlierRequest| {
+            p.prepare_requirements()
+                .unwrap()
+                .with_earlier_requests(&p, &[r], 7200)
+                .unwrap()
+        };
+        assert!(
+            !render(previous.clone())
+                .request_history
+                .contains(CHANGES_HEADING)
+        );
+        previous.outcome = "applied".into();
+        previous.region_id = Uuid::new_v4();
+        previous.rect.x = 1000.;
+        assert!(!render(previous).request_history.contains(CHANGES_HEADING));
+    }
+
+    #[test]
+    fn manual_edit_notes_and_history_share_the_existing_budget() {
+        let mut p = project();
+        let previous = p.clone();
+        let mut records = Vec::new();
+        for n in 1..30 {
+            let mut r = record(&p, n);
+            r.source_fingerprints = Some(source_fingerprints(previous.pages[0].content.as_ref()));
+            r.request = "あ".repeat(1000);
+            records.push(r);
+        }
+        p.pages[0].content = Some(crate::SiteContent {
+            html: "<p>Manual edit</p>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        });
+        let snapshot = p
+            .prepare_requirements()
+            .unwrap()
+            .with_earlier_requests(&p, &records, 200000)
+            .unwrap();
+        assert!(snapshot.request_history.contains(CHANGES_HEADING));
+        assert!(snapshot.request_history.chars().count() <= REQUEST_HISTORY_CHARS);
+        snapshot.validate_current(&p).unwrap();
+    }
+
     #[test]
     fn request_history_included_newest_first_undone_rejected_and_project_isolated() {
         let p = project();
@@ -497,6 +686,8 @@ mod index_tests {
                     request: format!("request {n}"),
                     summary: "One-line change".into(),
                     summary_targets: vec![(page_id, Uuid::from_u128(region))],
+                    source_fingerprints: None,
+                    base_source_fingerprints: None,
                     outcome: if n == 10 {
                         "undone (do not repeat)".into()
                     } else {
