@@ -300,3 +300,5 @@ p { margin-bottom: 12px; }
 .device-frame .preview-frame iframe { height: var(--device-height); min-height: 0; border: 0; outline: 1px solid var(--border); }
 .device-frame.device-phone .preview-frame iframe, .device-frame.device-tablet .preview-frame iframe { border-radius: 14px; }
 .cm-editor .cm-widgetBuffer { display: inline-block; width: 0; height: 1em; vertical-align: baseline; }
+.import-pages { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; overflow-wrap: anywhere; }
+.import-remove summary { cursor: pointer; margin-bottom: 8px; }

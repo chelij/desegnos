@@ -38,11 +38,11 @@ try {
     tree = render();
     assert.deepEqual(calls, [{ command: 'prepare_website_import', args: { kind: 'files' } }]);
     const checkboxes = all(tree).filter(node => node.type === 'input');
-    assert.equal(checkboxes.length, 2);
+    // The home page is never offered for removal.
+    assert.equal(checkboxes.length, 1);
     assert.ok(checkboxes.every(node => node.props.checked === false));
-    assert.equal(checkboxes[1].props.disabled, true);
     const text = JSON.stringify(tree);
-    for (const label of ['Update', 'Add', 'Keep', '/new', '/keep']) assert.ok(text.includes(label));
+    for (const label of ['Update', 'Add', 'Remove pages not in this import', '/new', '/keep']) assert.ok(text.includes(label));
     checkboxes[0].props.onChange({ target: { checked: true } });
     tree = render();
     button(tree, 'Import').props.onClick(); await settle();

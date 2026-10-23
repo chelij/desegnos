@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { native } from './api';
+import { ProblemBanner } from './ProblemBanner.js';
 import type { Page } from './types';
 
 type Selection = { token: string; review: { updated: string[]; added: string[]; kept: Pick<Page, 'id' | 'name' | 'path'>[] } };
@@ -27,13 +28,18 @@ export function ImportWebsite({ homePageId, busy, beforePick, apply }: Props) {
     finally { setWorking(false); }
   }
   const locked = busy || working;
+  // The home page always stays, so it is never offered for removal.
+  const removable = selection?.review.kept.filter(page => page.id !== homePageId) ?? [];
   return <div className="dialog-body">
     <div className="form-actions"><button disabled={locked} onClick={() => void pick('folder')}>Choose folder…</button><button disabled={locked} onClick={() => void pick('files')}>Choose ZIP or HTML files…</button></div>
-    {error && <p role="alert">{error}</p>}
+    {error && <ProblemBanner message={error} dismiss={() => setError('')} />}
     {selection && <>
-      <h3>Update</h3><ul>{selection.review.updated.map(path => <li key={path}>{path}</li>)}</ul>
-      <h3>Add</h3><ul>{selection.review.added.map(path => <li key={path}>{path}</li>)}</ul>
-      <h3>Keep</h3><ul>{selection.review.kept.map(page => <li key={page.id}><label className="check-label"><input type="checkbox" disabled={locked || page.id === homePageId} title={page.id === homePageId ? 'The home page must be kept.' : undefined} checked={remove.includes(page.id)} onChange={event => setRemove(ids => event.target.checked ? [...ids, page.id] : ids.filter(id => id !== page.id))} />Remove {page.path}</label></li>)}</ul>
+      {selection.review.updated.length > 0 && <><h3>Update {selection.review.updated.length}</h3><ul className="import-pages">{selection.review.updated.map(path => <li key={path}>{path}</li>)}</ul></>}
+      {selection.review.added.length > 0 && <><h3>Add {selection.review.added.length}</h3><ul className="import-pages">{selection.review.added.map(path => <li key={path}>{path}</li>)}</ul></>}
+      {removable.length > 0 && <details className="import-remove">
+        <summary>Remove pages not in this import{remove.length > 0 ? ` · ${remove.length}` : ''}</summary>
+        <ul className="import-pages">{removable.map(page => <li key={page.id}><label className="check-label"><input type="checkbox" disabled={locked} checked={remove.includes(page.id)} onChange={event => setRemove(ids => event.target.checked ? [...ids, page.id] : ids.filter(id => id !== page.id))} />{page.path}</label></li>)}</ul>
+      </details>}
       <div className="form-actions"><button className="primary" disabled={locked} onClick={() => void submit()}>Import</button></div>
     </>}
   </div>;
