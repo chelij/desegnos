@@ -1750,7 +1750,7 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, before.revision);
     fresh.requirements.validate_current(&before).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 19);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 20);
     assert_eq!(
         fresh.source_fingerprints.get(&before.pages[0].id),
         Some(&desegni_core::source_fingerprints(
@@ -1815,7 +1815,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_while_begin_submits_current_
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, project.revision);
     fresh.requirements.validate_current(&project).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 19);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 20);
     assert_eq!(
         fresh.source_fingerprints.get(&project.pages[0].id),
         Some(&desegni_core::source_fingerprints(
@@ -2414,4 +2414,42 @@ fn repair_draft_uses_current_source_instead_of_its_stale_base_and_retained_code(
             .request_history
             .contains("Changes you made since the last result")
     );
+}
+
+#[test]
+fn runtime_repairs_prepare_only_the_repair_and_rebind_to_current_source() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let mut project = project();
+    let page_id = project.pages[0].id;
+    let region_id = project.pages[0].regions[0].id;
+    project = project
+        .apply(
+            project.revision,
+            Command::SetRegionRuntimeErrors {
+                page_id,
+                region_id,
+                errors: vec!["TypeError: pause is null".into()],
+            },
+        )
+        .unwrap();
+    let prepared = service
+        .prepare_requests(&project, None, None, None, Some(&[region_id]))
+        .unwrap();
+    assert_eq!(prepared.areas.len(), 1);
+    assert_eq!(prepared.areas[0].region_id, region_id);
+    assert!(
+        prepared
+            .requirements
+            .markdown
+            .contains("TypeError: pause is null")
+    );
+    project.pages[0].content.as_mut().unwrap().javascript = "const pause = null;".into();
+    project.revision += 1;
+    let (fresh, _) = service.begin(&project, prepared.job_id, false).unwrap();
+    assert_ne!(fresh.job_id, prepared.job_id);
+    assert_eq!(fresh.areas.len(), 1);
+    assert_eq!(fresh.areas[0].region_id, region_id);
+    assert!(fresh.requirements.markdown.contains("const pause = null;"));
+    fresh.requirements.validate_current(&project).unwrap();
 }

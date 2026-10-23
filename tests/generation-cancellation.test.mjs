@@ -45,6 +45,16 @@ try {
     ]);
   });
 
+  await test('runtime repair uses the standard lifecycle with only its current request targeted', async () => {
+    const calls = [];
+    const render = setup(async (command, args) => { calls.push({ command, args }); return prepared; });
+    await render().prepare(undefined, ['runtime-repair']);
+    assert.deepEqual(calls, [
+      { command: 'prepare_generation', args: { regionIds: ['runtime-repair'] } },
+      { command: 'start_generation', args: { jobId: 'job' } },
+    ]);
+  });
+
   await test('start and retry follow a refreshed job ID for Stop and later actions', async () => {
     const calls = [];
     const render = setup(async (command, args) => {

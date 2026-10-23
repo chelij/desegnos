@@ -789,6 +789,7 @@ impl Project {
                 elements: vec![],
                 allow_target_removal: false,
                 mobile_only: false,
+                runtime_errors: vec![],
                 whole_page: false,
                 whole_page_disabled: false,
                 attachments: vec![],

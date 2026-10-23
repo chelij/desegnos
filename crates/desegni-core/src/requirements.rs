@@ -1,5 +1,5 @@
 /// Requirements contract used for newly prepared requests.
-pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 19;
+pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 20;
 
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
@@ -564,6 +564,10 @@ impl Project {
                     value
                 }).collect());
             }
+            if format >= 20 && !region.runtime_errors.is_empty() {
+                area["requestKind"] = serde_json::json!("runtimeRepair");
+                area["runtimeErrors"] = serde_json::json!(region.runtime_errors);
+            }
             if format >= 18 {
                 area["layerOrder"] = serde_json::json!(
                     targets
@@ -653,7 +657,12 @@ impl Project {
         }
         md.push('\n');
         if format >= 18 {
-            md.push_str("## Region scripts\n\nLocal element and area requests may add behavior without changing shared JavaScript, including on partial pages. Append one <script type=\"application/x-desegnos-region\" data-desegnos-script=\"<request region UUID>\">code</script> as a direct child of the selected root or area root. This inert source block is stored with that request's HTML; replace or remove it there to update or remove behavior. It runs after the page script in its own function with root bound to that element. Preserve all existing shared scripts byte-for-byte.\n\n");
+            md.push_str("## Region scripts\n\nLocal element and area requests may add behavior without changing shared JavaScript, including on partial pages. Append one <script type=\"application/x-desegnos-region\" data-desegnos-script=\"<request region UUID>\">code</script> as a direct child of the selected root or area root. This inert source block is stored with that request's HTML; replace or remove it there to update or remove behavior. It runs after the page script in its own function with root bound to that element. ");
+            if format >= 20 {
+                md.push_str("Local element and area requests must preserve all existing shared scripts byte-for-byte. Page-scoped runtimeRepair requests may change this page's shared JavaScript, embedded shared scripts, region scripts, and HTML/CSS only as needed to fix the supplied runtimeErrors. Keep all other design and content unchanged.\n\n");
+            } else {
+                md.push_str("Preserve all existing shared scripts byte-for-byte.\n\n");
+            }
             md.push_str("## Whole-page requests and precedence\n\nFor each request with scope=page, change the whole page to satisfy this request; keep content and IDs unless asked. Its complete page source is listed above. The rectangle describes page intent, not a region root or fixed output size. You may restructure that page's HTML and change its shared CSS and JavaScript. Preserve existing data-desegnos-id elements and their IDs; leave new elements without IDs. Removal needs allowTargetRemoval for selected roots (and their descendants), or an explicit removal request naming the editor ID. Protected content and accepted project decisions remain authoritative; other pages cannot change. No remote code.\n\nThese page-scope rules override the area-only restrictions above only for page-scoped requests. When page and area requests share a page, the page-scoped request owns shared CSS/JavaScript and the surrounding layout. Compose requests from bottom to top by layerOrder (ascending zIndex, with original request order breaking ties). Apply areas layered above the base inside its result, in that order; where boxes overlap, the higher layer wins for its own box only. Full-width page-layout requests (including below-fold one-screen requests) are page-scoped too and refine the page layout in this same order. Element-fix rules and partial-page/conflict rules constrain only their own local regions; they must never freeze the page-scoped request's shared CSS/JavaScript or surrounding structure. Area requests do not independently authorize global changes. Page-scoped requests need no data-desegnos-region wrapper. Conflicted page requests grant no page-wide authority; preserve conflicted local targets/roots even when a page request is implemented.\n\n");
         }
         md.push_str("## Acceptance and review\n\nAccount for every target. Preserve scope, accepted identity, protected content, deliberate exceptions, and the selected generation setting. Coordinate the requested content and placement intent into a complete responsive layout. Implement actual browser behavior; disclose missing configuration. Preview and exported behavior must agree. Describe component choices, proposed identity/decision changes, and concrete design criticism. Never silently apply a new project-wide rule or replace an intentional style solely to follow a convention.\n");
@@ -966,6 +975,9 @@ impl RequirementsSnapshot {
 
 fn region_digest(page: &Page, region: &Region, format: u8) -> Result<String> {
     let mut frozen = region.clone();
+    if format < 20 {
+        frozen.runtime_errors.clear();
+    }
     if format < 18 {
         frozen.whole_page = false;
         frozen.whole_page_disabled = false;

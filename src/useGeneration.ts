@@ -76,7 +76,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     catch (error) { if (!signal?.aborted && context.current === id && version === epoch.current) setError(describe(error)); throw error; }
     finally { if (!signal?.aborted && context.current === id && token === action.current) setOperation(null); }
   }
-  async function prepare(draft?: { jobId: string; draftId: string }) {
+  async function prepare(draft?: { jobId: string; draftId: string }, regionIds?: string[]) {
     if (running) return;
     setVisible(false); setRunning(true); setStopped(false);
     let finish!: () => void;
@@ -86,7 +86,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     try {
       if (job && ['prepared', 'ready', 'blocked'].includes(job.status)) await perform('discard_generation', 'Preparing your changes…', { jobId: job.jobId }, signal);
       signal.throwIfAborted();
-      const prepared = await perform('prepare_generation', 'Preparing AI instructions…', draft ? { repairJobId: draft.jobId, repairDraftId: draft.draftId } : undefined, signal);
+      const prepared = await perform('prepare_generation', 'Preparing AI instructions…', draft ? { repairJobId: draft.jobId, repairDraftId: draft.draftId } : regionIds ? { regionIds } : undefined, signal);
       current.jobId = prepared.jobId;
       signal.throwIfAborted();
       automatic.current = prepared.jobId;

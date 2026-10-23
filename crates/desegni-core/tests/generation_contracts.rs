@@ -396,7 +396,7 @@ fn current_conflicts_keep_other_pages_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 19"));
+    assert!(snapshot.markdown.contains("Requirements format: 20"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -686,6 +686,7 @@ fn source_candidate_and_requirements_limits_fail_without_truncation() {
             elements: vec![],
             allow_target_removal: false,
             mobile_only: false,
+            runtime_errors: vec![],
             whole_page: false,
             whole_page_disabled: false,
             attachments: vec![],

@@ -1219,7 +1219,7 @@ impl GenerationService {
         account_id: Option<Uuid>,
         draft: Option<desegni_core::GenerationDraft>,
     ) -> NativeResult<GenerationJobView> {
-        self.prepare_requests(project, account_id, draft, None)
+        self.prepare_requests(project, account_id, draft, None, None)
     }
 
     fn prepare_requests(
@@ -1228,6 +1228,7 @@ impl GenerationService {
         account_id: Option<Uuid>,
         draft: Option<desegni_core::GenerationDraft>,
         previous: Option<&GenerationJobView>,
+        region_ids: Option<&[Uuid]>,
     ) -> NativeResult<GenerationJobView> {
         let provider = previous.map_or(self.provider, |v| v.provider);
         let authentication = previous.map_or(self.authentication, |v| v.authentication);
@@ -1265,7 +1266,9 @@ impl GenerationService {
             .into_iter()
             .map(|(_, id)| id)
             .collect();
-        let requirements = if previous.is_some() {
+        let requirements = if let Some(ids) = region_ids {
+            project.prepare_targeted_requirements(capabilities, ids)
+        } else if previous.is_some() {
             project.prepare_targeted_requirements(capabilities, &retry_targets)
         } else if let Some(draft) = &draft {
             project.prepare_targeted_requirements(capabilities, &draft.region_ids)
@@ -1443,6 +1446,7 @@ impl GenerationService {
                 record.view.chatgpt_account_id,
                 None,
                 Some(&record.view),
+                None,
             )?;
             return self.begin(project, fresh.job_id, false);
         }
@@ -2344,6 +2348,7 @@ pub async fn prepare_generation(
     chatgpt: State<'_, ChatgptState>,
     repair_job_id: Option<Uuid>,
     repair_draft_id: Option<Uuid>,
+    region_ids: Option<Vec<Uuid>>,
 ) -> NativeResult<GenerationJobView> {
     trusted(&window)?;
     refresh_image_access(&state, &chatgpt, false).await?;
@@ -2401,7 +2406,12 @@ pub async fn prepare_generation(
         (None, None) => None,
         _ => return Err("Choose a saved draft to repair.".into()),
     };
-    if let Some(draft) = draft {
+    if let Some(ids) = region_ids {
+        if draft.is_some() {
+            return Err("Choose one request source.".into());
+        }
+        service.prepare_requests(project, account_id, None, None, Some(&ids))
+    } else if let Some(draft) = draft {
         service.prepare_targeted(project, account_id, Some(draft))
     } else if let Some(account_id) = account_id {
         service.prepare_bound(project, Some(account_id))

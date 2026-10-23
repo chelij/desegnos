@@ -678,3 +678,115 @@ fn omitted_javascript_is_normalised_but_reformatted_javascript_stays_a_draft() {
         candidate.pages[0].content.javascript
     );
 }
+
+#[test]
+fn runtime_repair_requirements_and_recovery_allow_page_scripts_only_for_page_scope() {
+    let (mut project, _, mut candidate) = fixture(true);
+    for region in &mut project.pages[0].regions {
+        region.whole_page = false;
+        region.whole_page_disabled = true;
+    }
+    let page_id = project.pages[0].id;
+    let region_id = project.pages[0].regions[0].id;
+    let script_owner = project.pages[0].regions[1].id;
+    let source = project.pages[0].content.as_mut().unwrap();
+    source.html = source.html.replace(
+        &format!("<section data-desegnos-region='{script_owner}'>Original</section>"),
+        &format!("<section data-desegnos-region='{script_owner}'>Original<script type=\"application/x-desegnos-region\" data-desegnos-script=\"{script_owner}\">root.dataset.broken = 'yes';</script></section>"),
+    );
+    source
+        .html
+        .push_str("<script>const sharedBroken = true;</script>");
+    let message = "TypeError: null is not an object (evaluating pause.addEventListener)";
+    project = project
+        .apply(
+            project.revision,
+            Command::SetRegionRuntimeErrors {
+                page_id,
+                region_id,
+                errors: vec![message.into()],
+            },
+        )
+        .unwrap();
+    let snapshot = project
+        .prepare_targeted_requirements(GenerationCapabilities::default(), &[region_id])
+        .unwrap();
+    assert!(snapshot.markdown.contains(message));
+    assert!(
+        snapshot
+            .markdown
+            .contains("\"requestKind\": \"runtimeRepair\"")
+    );
+    assert!(snapshot.markdown.contains("\"scope\": \"page\""));
+    assert!(
+        !snapshot
+            .markdown
+            .contains("shared JavaScript stays exactly as it is")
+    );
+    assert!(
+        !snapshot
+            .markdown
+            .contains("Preserve all existing shared scripts byte-for-byte.")
+    );
+    candidate.job_id = snapshot.job_id;
+    candidate.requirements_sha256 = snapshot.sha256.clone();
+    candidate.regions.truncate(1);
+    candidate.pages[0].content = project.pages[0].content.clone().unwrap();
+    candidate.pages[0].content.html = candidate.pages[0]
+        .content
+        .html
+        .replace(
+            "root.dataset.broken = 'yes';",
+            "root.dataset.fixed = 'yes';",
+        )
+        .replace("const sharedBroken = true;", "const sharedBroken = false;");
+    candidate.pages[0].content.javascript = "const pause = document.querySelector('button'); pause?.addEventListener('click', () => {});".into();
+    let (accepted, events) = recover(&candidate, &snapshot, &project);
+    assert_eq!(
+        accepted.pages[0].content.javascript,
+        candidate.pages[0].content.javascript
+    );
+    assert!(!events.iter().any(|event| event.kind == "sharedJavascript"));
+    assert_eq!(
+        accepted.pages[0].content.html,
+        candidate.pages[0].content.html
+    );
+    assert!(project.apply_generation(&snapshot, &accepted, &[]).is_ok());
+
+    project.pages[0].regions[0].runtime_errors.clear();
+    let local = project
+        .prepare_targeted_requirements(GenerationCapabilities::default(), &[region_id])
+        .unwrap();
+    candidate.job_id = local.job_id;
+    candidate.requirements_sha256 = local.sha256.clone();
+    assert!(candidate.validate(&local, &project).is_err());
+    let (accepted, _) = recover(&candidate, &local, &project);
+    assert!(accepted.pages.iter().all(
+        |page| page.content.javascript == project.pages[0].content.as_ref().unwrap().javascript
+    ));
+    assert!(
+        accepted
+            .regions
+            .iter()
+            .all(|region| region.status == RegionStatus::Conflict)
+    );
+}
+
+#[test]
+fn runtime_repair_rejects_unbounded_errors() {
+    let (project, _, _) = fixture(true);
+    for errors in [vec![], vec!["error".into(); 11], vec!["x".repeat(16385)]] {
+        assert!(
+            project
+                .apply(
+                    project.revision,
+                    Command::SetRegionRuntimeErrors {
+                        page_id: project.pages[0].id,
+                        region_id: project.pages[0].regions[0].id,
+                        errors,
+                    }
+                )
+                .is_err()
+        );
+    }
+}

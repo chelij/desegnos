@@ -27,8 +27,9 @@ const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'no
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   pageId: string; draftId?: string | null; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
+  fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
   content?: SiteContent; onReady?: () => void; referenceHeight?: number; onHeight?: (height: number) => void;
-}>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady }, ref) {
+}>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady, fixRuntimeErrors, aiDisabled, observationsVersion }, ref) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [extent, setExtent] = useState(referenceHeight);
   const [descriptor, setDescriptor] = useState<PreviewDescriptor | null>(null);
@@ -260,6 +261,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       } catch { return null; }
     },
   }));
+  useEffect(() => { setObservations([]); }, [observationsVersion]);
   const rate = useRef({ started: 0, count: 0 });
   useEffect(() => {
     let active = true;
@@ -331,7 +333,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       <button className="primary" onClick={() => { const url = outsideLink; setOutsideLink(null); void native('open_preview_link', { url }).catch(error => setObservations(previous => [...previous.slice(-9), error instanceof Error ? error.message : String(error)])); }}>Open in browser</button>
       <button aria-label="Dismiss link" onClick={() => setOutsideLink(null)}>×</button></div>}
     {!staticView && observations.length > 0 && <section className="preview-observations" aria-label="Preview runtime observations"><h3>Preview reported errors</h3>
-      <ul>{observations.map((message, index) => <li key={index}>{message}</li>)}</ul><button onClick={() => setObservations([])}>Clear observations</button>
+      <ul>{observations.map((message, index) => <li key={index}>{message}</li>)}</ul>{!draftId && !jobId && fixRuntimeErrors && <button className="primary" disabled={aiDisabled} onClick={() => fixRuntimeErrors(observations)}>Fix with AI</button>}<button onClick={() => setObservations([])}>Clear observations</button>
     </section>}
   </div>;
 });

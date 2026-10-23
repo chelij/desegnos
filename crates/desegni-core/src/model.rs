@@ -240,6 +240,9 @@ pub struct Region {
     /// A phone-layout fix: only CSS inside small-screen media queries may change.
     #[serde(default, skip_serializing_if = "is_false")]
     pub mobile_only: bool,
+    /// Bounded preview errors; this request uses whole-page repair authority.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtime_errors: Vec<String>,
     /// Force page scope, or suppress automatic detection after the user turns it off.
     #[serde(default, skip_serializing_if = "is_false")]
     pub whole_page: bool,
@@ -257,7 +260,9 @@ impl Region {
     /// Coverage uses measured page extents, falling back to the guide.
     /// Phone fixes and element selections stay local unless explicitly overridden.
     pub fn is_whole_page(&self, page: &Page) -> bool {
-        self.whole_page || (!self.whole_page_disabled && self.auto_whole_page(page))
+        !self.runtime_errors.is_empty()
+            || self.whole_page
+            || (!self.whole_page_disabled && self.auto_whole_page(page))
     }
 
     pub fn auto_whole_page(&self, page: &Page) -> bool {
@@ -511,6 +516,11 @@ pub enum Command {
         region_id: Uuid,
         whole_page: bool,
     },
+    SetRegionRuntimeErrors {
+        page_id: Uuid,
+        region_id: Uuid,
+        errors: Vec<String>,
+    },
     SetRegionMobileOnly {
         page_id: Uuid,
         region_id: Uuid,
@@ -727,6 +737,19 @@ impl Project {
                         "A selected element was supplied twice.",
                     )?;
                 }
+                ensure(
+                    region.runtime_errors.len() <= 10
+                        && region
+                            .runtime_errors
+                            .iter()
+                            .all(|error| !error.is_empty() && error.chars().count() <= 4096),
+                    "Preview errors exceed the repair request limit.",
+                )?;
+                ensure(
+                    region.runtime_errors.is_empty()
+                        || (!region.mobile_only && !region.has_targets()),
+                    "Runtime repairs require a page request.",
+                )?;
                 validate_text(&region.prompt, "Area description", MAX_PROMPT_CHARS, false)?;
                 for attachment in &region.attachments {
                     attachment.validate()?;
@@ -1001,6 +1024,7 @@ impl Project {
                     elements: vec![],
                     allow_target_removal: false,
                     mobile_only: false,
+                    runtime_errors: vec![],
                     whole_page: false,
                     whole_page_disabled: false,
                     attachments: vec![],
@@ -1033,6 +1057,7 @@ impl Project {
                     elements: canonical,
                     allow_target_removal: false,
                     mobile_only: false,
+                    runtime_errors: vec![],
                     whole_page: false,
                     whole_page_disabled: false,
                     attachments: vec![],
@@ -1067,6 +1092,7 @@ impl Project {
                     elements: targets,
                     allow_target_removal,
                     mobile_only: false,
+                    runtime_errors: vec![],
                     whole_page: false,
                     whole_page_disabled: false,
                     attachments: vec![],
@@ -1124,6 +1150,33 @@ impl Project {
                 if whole_page {
                     region.mobile_only = false;
                 }
+            }
+            Command::SetRegionRuntimeErrors {
+                page_id,
+                region_id,
+                errors,
+            } => {
+                ensure(
+                    !errors.is_empty()
+                        && errors.len() <= 10
+                        && errors
+                            .iter()
+                            .all(|e| !e.is_empty() && e.chars().count() <= 4096),
+                    "Preview errors exceed the repair request limit.",
+                )?;
+                let region = next
+                    .page_mut(page_id)?
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.id == region_id && !r.completed)
+                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                ensure(
+                    !region.has_targets(),
+                    "Runtime repairs require a page request.",
+                )?;
+                region.runtime_errors = errors;
+                region.mobile_only = false;
+                region.prompt = "Fix these runtime errors on this page. Edit this page's shared JavaScript, region scripts, and HTML/CSS as needed to fix them. Keep the rest of the design and content unchanged.".into();
             }
             Command::SetRegionMobileOnly {
                 page_id,
