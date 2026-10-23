@@ -1,5 +1,5 @@
 import { ProblemBanner } from './ProblemBanner.js';
-import { areaProblems, placeCallouts } from './generationProblems';
+import { areaProblems, fixLabel, jobOutcome, placeCallouts, type OutcomeFix } from './generationProblems';
 import type { GenerationController } from './useGeneration';
 import { userError, runtimeError, generationError, generationPageError } from './userErrors.js';
 import { isWholePage } from './wholePageScope';
@@ -66,11 +66,12 @@ type CanvasProps = {
   frameDocuments?: FrameDocumentView[]; ensureElementId: (target: ElementTarget) => Promise<ElementTarget | null>; setFrameTarget: (regionId: string, frameTarget: FrameTarget | null) => Promise<void>;
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
   openSource?: (target: ElementTarget) => void;
+  resolveGenerationFix?: (fix: OutcomeFix, regionId: string) => void;
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => Promise<Region | null>; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
   const [problemErrors, setProblemErrors] = useState<Record<string, string>>({});
   const [problemBusy, setProblemBusy] = useState(false);
@@ -1289,10 +1290,17 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 8 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
     {(() => {
       const key = `page:${generation?.job?.jobId ?? 'start'}:${page.id}`;
+      const outcome = jobOutcome(generation?.job ?? null, id => page.regions.find(region => region.id === id)?.prompt);
+      const gap = outcome.blocked[0];
+      const busy = problemBusy || !!generation?.operation || generation?.canStop;
       const failed = (!problems.length && generation?.error) || (generation?.job && ['failed', 'unknown', 'blocked'].includes(generation.job.status) && !problems.length && !generation.job.drafts?.some(d => d.applied || d.dismissed) ? generationPageError(generation.job.message) : '');
       if (runtimeProblems.length && !dismissedProblems.includes(`runtime:${key}`)) return <ProblemBanner message={runtimeError(runtimeProblems[0])} action={{ label: 'Fix with AI', disabled: aiDisabled, onClick: () => fixRuntimeErrors?.(runtimeProblems) }} dismiss={() => dismissProblem(`runtime:${key}`)} />;
       if (!failed || dismissedProblems.includes(key)) return null;
-      return <ProblemBanner message={userError(failed)} action={{ label: 'Try again', disabled: aiDisabled, onClick: () => { void generation?.prepare().catch(() => {}); } }} dismiss={() => dismissProblem(key)} />;
+      if (gap) return <ProblemBanner message={gap.reason}
+        action={{ label: 'Change request', disabled: busy || !!generation?.operation, onClick: () => { select(gap.regionId); setRequestFocus(previous => ({ id: gap.regionId, serial: previous.serial + 1 })); } }}
+        secondaryAction={gap.fix && resolveGenerationFix ? { label: fixLabel(gap.fix), onClick: () => resolveGenerationFix(gap.fix!, gap.regionId) } : undefined}
+        dismiss={() => dismissProblem(key)} />;
+      return <ProblemBanner message={userError(failed)} action={outcome.retryable.length || outcome.retryAll ? { label: 'Try again', disabled: aiDisabled, onClick: () => { void generation?.prepare(undefined, outcome.retryable.length ? outcome.retryable : undefined).catch(() => {}); } } : undefined} dismiss={() => dismissProblem(key)} />;
     })()}
     {gridSettings.rulers && !liveView && <><div className="ruler-corner" aria-hidden="true">{rulerUnit === 'percent' ? '%' : 'px'}</div>
       <Ruler axis="x" unit={rulerUnit} start={visible.x} length={measurements.width} reference={page.viewport.width} zoom={zoom} cursor={cursor?.x} selection={selectedRect ? [selectedRect.x, selectedRect.x + selectedRect.width] : undefined} />
@@ -1362,9 +1370,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
             const busy = problemBusy || !!generation?.operation || generation?.canStop;
             return <div key={problem.key} role="alert" className="area-problem" style={{ left: position.x, top: position.y, width: position.width, height: position.height, zIndex: overlayLayer + 5 }} onPointerDown={event => event.stopPropagation()}>
               <span>{error ? generationError(error, page.regions.find(r => r.id === problem.regionId)?.prompt) : problem.message}</span>
-              <div><button disabled={busy || !problem.draftId || !!error} onClick={() => { void applyProblem(problem.regionId, problem.draftId!, problem.key); }}>Apply anyway</button>
-              <button disabled={busy || aiDisabled} onClick={() => { void generation?.prepare(undefined, [problem.regionId]).catch(() => {}); }}>Try again</button>
-              {!problem.stale && !error && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Edit request</button>}
+              <div>{!problem.retryable ? <>
+                <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>
+                {problem.fix && resolveGenerationFix && <button disabled={busy} onClick={() => resolveGenerationFix(problem.fix!, problem.regionId)}>{fixLabel(problem.fix)}</button>}
+              </> : <>
+                <button disabled={busy || !problem.draftId || !!error} onClick={() => { void applyProblem(problem.regionId, problem.draftId!, problem.key); }}>Apply anyway</button>
+                <button disabled={busy || aiDisabled} onClick={() => { void generation?.prepare(undefined, [problem.regionId]).catch(() => {}); }}>Try again</button>
+                {!problem.stale && !error && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>}
+              </>}
               <button aria-label="Dismiss problem" onClick={() => dismissProblem(problem.key)}>×</button></div>
             </div>;
           })}

@@ -10,7 +10,7 @@ try {
   const compiler = new URL('bin/tsc', import.meta.resolve('typescript/package.json')).pathname;
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--outDir', temporary, 'src/generationProblems.ts'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  const { areaProblems, placeCallouts } = await import(pathToFileURL(join(temporary, 'generationProblems.js')));
+  const { areaProblems, placeCallouts, areaOutcome, jobOutcome, resolutionAction } = await import(pathToFileURL(join(temporary, 'generationProblems.js')));
   const rect = { x: 100, y: 200, width: 200, height: 80 };
   const other = { x: 110, y: 50, width: 200, height: 80 };
   const intersects = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -52,5 +52,46 @@ try {
     assert.equal(problem.stale, true);
     assert.equal(problem.message, 'The page was edited after the AI made this draft.');
     assert.equal(stale.drafts[0].reason, job.drafts[1].reason);
+  });
+  const frozen = (prompt) => '```json\n' + JSON.stringify({ pageId: 'page', regionId: 'a', prompt, placementHint: rect }) + '\n```';
+  const declared = { ...job, requirements: { markdown: frozen('Add scrolling chat') }, validationEvents: [], candidate: { regions: [{ regionId: 'a', status: 'conflict', explanation: `Area 12345678-1234-1234-1234-123456789abc: Which chat service should this use?` }] } };
+  await test('an explained AI conflict is not retried and offers the resolving surface', () => {
+    const outcome = areaOutcome(declared, 'a', 'Add scrolling chat');
+    assert.deepEqual(outcome, { retryable: false, reason: 'Which chat service should this use?', fix: 'aiSettings' });
+    assert.deepEqual(areaOutcome(declared, 'a', 'Add a support chat'), { retryable: true, reason: '' });
+    const review = jobOutcome(declared, id => id === 'a' ? 'Add scrolling chat' : undefined);
+    assert.deepEqual(review.retryable, []);
+    assert.equal(review.blocked.length, 1); assert.equal(review.blocked[0].fix, 'aiSettings');
+  });
+  await test('an app rejection stays retryable even beside a declared conflict', () => {
+    const rejected = { ...declared, candidate: { regions: [{ regionId: 'a', status: 'conflict', explanation: `Area 12345678-1234-1234-1234-123456789abc: Region script also affects another area.` }] } };
+    assert.equal(areaOutcome(rejected, 'a', 'Add scrolling chat').retryable, true);
+    const review = jobOutcome(rejected, () => 'Add scrolling chat');
+    assert.deepEqual(review.retryable, ['a']); assert.deepEqual(review.blocked, []);
+  });
+  await test('retry returns after the request text is edited', () => {
+    assert.equal(areaOutcome(declared, 'a', 'Add a support chat').retryable, true);
+    const edited = jobOutcome(declared, () => 'Add a support chat');
+    assert.deepEqual(edited.retryable, ['a']); assert.deepEqual(edited.blocked, []);
+  });
+  await test('declared reasons map to plain routes', () => {
+    assert.equal(resolutionAction('Which direction should the photo point?'), 'brief');
+    assert.equal(resolutionAction('The logo file is missing.'), 'import');
+    assert.equal(resolutionAction('This needs a payment provider.'), 'aiSettings');
+    assert.equal(resolutionAction('Make it feel calmer.'), undefined);
+  });
+  await test('a rejected reply is recognised from its app text while repair limits do not retry', () => {
+    const whole = { ...declared, candidate: { regions: [{ regionId: 'a', status: 'conflict', explanation: `Area 12345678-1234-1234-1234-123456789abc: The generation result omitted a requested area.` }] } };
+    assert.equal(areaOutcome(whole, 'a', 'Add scrolling chat').retryable, true);
+    const limited = { ...declared, validationEvents: [{ kind: 'repairLimit', disposition: 'conflicted', regionId: null, message: 'Skipped the repair because it would exceed the spending limit.' }] };
+    assert.equal(areaOutcome(limited, 'a', 'Add scrolling chat').retryable, false);
+  });
+  await test('unavailable capabilities and missing areas keep their classification', () => {
+    const capability = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', regionId: 'a' }], drafts: [], candidate: { regions: [{ regionId: 'a', status: 'implemented', explanation: 'Done' }], componentRequests: [{ regionId: 'a', capability: 'Video player', resolution: 'unavailable', reason: 'No video service is connected.' }] } };
+    const outcome = areaOutcome(capability, 'a', 'Add a video');
+    assert.equal(outcome.retryable, false); assert.equal(outcome.fix, 'aiSettings');
+    assert.equal(jobOutcome(capability, () => 'Add a video').retryable.length, 0);
+    const failed = { jobId: 'job', status: 'failed', areas: [], drafts: [], candidate: null };
+    assert.equal(jobOutcome(failed).retryAll, true);
   });
 } finally { await rm(temporary, { recursive: true, force: true }); }

@@ -254,6 +254,9 @@
 .log-who { font-size: 11px; font-weight: 600; color: var(--muted); }
 .log-meta { display: block; font-size: 11px; color: var(--muted); }
 .log-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.log-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.log-needs-input { display: grid; gap: 10px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border-soft); }
+.log-needs-input p { margin-bottom: 4px; }
 .log-requests, .log-outcomes { margin: 6px 0; padding-left: 18px; display: grid; gap: 8px; }
 .log-outcomes { list-style: none; padding-left: 0; }
 .log-outcomes li { padding-left: 8px; border-left: 3px solid #2b8a3e; }

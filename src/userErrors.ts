@@ -25,8 +25,41 @@ export function generationError(reason: string, request = 'this request', affect
   return `The AI could not complete “${subject}” as requested.`;
 }
 
+// Diagnostics name implementation details; a model's own explanation is already prose.
+const technical = /[\n\r<>`{}\[\]\\/#:;]|\b[\da-f]{8}-[\da-f-]{27,}\b|\b\w*(?:Error|Exception)\b|\b(?:scopes?|dossiers?|candidates?|schemas?|salvaged|revisions?|regions?|stack|root|DOM|CSS|HTML|JavaScript|finite|MiB|identity|analysis|selector|attribute|validation|checkpoint|journal|persist|mutex|poisoned|executable|stacking|painting|packet|manifest|digest|provenance|credential|vault|keyring)\b|\b\w+\.\w+|(?:^|\s)[.#][\w-]+|\w+\(/i;
+
 function isPlain(value: string): boolean {
-  return value.length <= 160 && !/[\n\r<>`{}\[\]\\/#:;]|\b[\da-f]{8}-[\da-f-]{27,}\b|\b\w*(?:Error|Exception)\b|\b(?:scopes?|dossiers?|candidates?|schemas?|salvaged|revisions?|regions?|stack|root|DOM|CSS|HTML|JavaScript|finite|MiB|identity|analysis|selector|attribute|validation|checkpoint|journal|persist|mutex|poisoned|executable|stacking|painting|packet|manifest|digest|provenance|credential|vault|keyring)\b|\b\w+\.\w+|(?:^|\s)[.#][\w-]+|\w+\(/i.test(value) && /^(?:This |That |The |Your |Choose |Select |Enter |Open |Save |Add |Remove |Wait |Stop |Sign |Allow |Keep |Could|Can|We |No |Only |There |A |An |Desegnos |Please |Too )/.test(value) && (value.match(/[.!?](?:\s|$)/g)?.length ?? 0) <= 2;
+  return value.length <= 160 && !technical.test(value) && /^(?:This |That |The |Your |Choose |Select |Enter |Open |Save |Add |Remove |Wait |Stop |Sign |Allow |Keep |Could|Can|We |No |Only |There |A |An |Desegnos |Please |Too )/.test(value) && (value.match(/[.!?](?:\s|$)/g)?.length ?? 0) <= 2;
+}
+
+// Model explanations may use punctuation and questions freely but must not leak internals.
+// App-generated fallback text is also recognised so a rejected reply never looks like a question.
+const modelJargon = /[\n\r<>`{}\[\]\\]|\b[\da-f]{8}-[\da-f-]{27,}\b|\barea [0-9a-f]{8,}[^\s]*|data-desegnos|\bgeneration result\b|\brequired format\b|\brequirements format\b|\bgenerated source\b|\bconflicted page\b|\bomitted a requested area\b|\b(?:regions?|candidates?|schemas?|validat(?:e|ed|es|ion|or)|selectors?|dossiers?|revisions?|excerpts?|DOM|CSS|HTML|JavaScript|stack|finite)\b/i;
+// Case-sensitive: camelCase identifiers such as pageId leak implementation names.
+const camelCase = /\b[a-z]+[A-Z]\w*\b/;
+// App-issued conflict text names the area (and sometimes the page) before its own reason.
+const appPrefix = /^Area\s+[0-9a-f][0-9a-f-]{7,}(?:\s*,\s*page\s+[0-9a-f][0-9a-f-]{7,})?\s*[:,]\s*/i;
+const pagePrefix = /^Area\s+[0-9a-f][0-9a-f-]{7,}\s*,\s*page\s+/i;
+
+function reasonText(reason: string): string {
+  return String(reason ?? '').split(/\bExcerpt:/i)[0].replace(appPrefix, '').replace(/\s+/g, ' ').trim();
+}
+
+/// A validation explanation names implementation details; a model explanation is plain prose.
+export function technicalReason(reason: string): boolean {
+  const raw = String(reason ?? '');
+  const text = reasonText(reason);
+  return pagePrefix.test(raw) || camelCase.test(text) || modelJargon.test(text);
+}
+
+/// One plain sentence for an outcome the AI itself declared, falling back to translated diagnostics.
+export function outcomeReason(reason: string, request = 'this request', affected?: string): string {
+  const value = reasonText(reason);
+  if (!value) return generationError(reason, request, affected);
+  if (modelJargon.test(value) || camelCase.test(value)) return generationError(value, request, affected);
+  const first = value.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? value;
+  const sentence = first.length > 200 ? `${first.slice(0, 197).trimEnd()}…` : first;
+  return /[.!?…]$/.test(sentence) ? sentence : `${sentence}.`;
 }
 
 export function userError(error: unknown): string {

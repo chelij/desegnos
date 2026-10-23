@@ -1,5 +1,6 @@
 import { ProblemBanner } from './ProblemBanner.js';
 import { userError, generationError } from './userErrors.js';
+import { areaOutcome, fixLabel, jobOutcome, jsonBlocks } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import type { AiSettingsView } from './types';
@@ -12,9 +13,9 @@ import type { GenerationHistory, GenerationJobView, Project } from './types';
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
-export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, manageUsage, editRequest, retryResult }: {
+export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, openImport, openBrief, manageUsage, editRequest, retryResult }: {
   retryResult?: () => void;
-  settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
+  settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
   job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; controller: GenerationController; close: () => void;
 }) {
   const [history, setHistory] = useState<GenerationHistory | null>(null);
@@ -45,8 +46,13 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
     const sent = frozen.find(item => item.regionId === area.regionId);
     const draft = job?.drafts?.filter(draft => draft.regionIds.includes(area.regionId)).at(-1);
     const done = region?.completed || draft?.applied || job?.candidate?.regions.find(outcome => outcome.regionId === area.regionId)?.status === 'implemented';
-    return { done, key: area.regionId, completed: region?.completed, page: sent?.pageName || page?.name || 'Removed page', box: index + 1, prompt: sent?.prompt || region?.prompt || '', attachments: sent?.attachments ?? (past ? [] : region?.attachments ?? []), phone: !!(sent?.mobileOnly ?? (!past && region?.mobileOnly)) };
+    const current = region?.prompt;
+    return { done, key: area.regionId, completed: region?.completed, page: sent?.pageName || page?.name || 'Removed page', box: index + 1, prompt: sent?.prompt || region?.prompt || '', current, outcome: job ? areaOutcome(job, area.regionId, current) : null, attachments: sent?.attachments ?? (past ? [] : region?.attachments ?? []), phone: !!(sent?.mobileOnly ?? (!past && region?.mobileOnly)) };
   });
+  // Only areas whose result can still change are resent; declared gaps need a different request.
+  const review = jobOutcome(job, id => requests.find(item => item.key === id)?.current);
+  const openFix = (fix: Parameters<typeof fixLabel>[0]) => fix === 'aiSettings' ? openSettings : fix === 'import' ? openImport : openBrief;
+  const applyFix = (fix: Parameters<typeof fixLabel>[0]) => { openFix(fix)?.(); };
   const working = !past && (!!operation || job?.status === 'prepared' || job?.status === 'generating' || job?.status === 'ready' || job?.status === 'applying');
   const candidate = job?.candidate;
   const label = (id: string) => {
@@ -63,7 +69,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           <p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p>
           <p>{requests.length} {requests.length === 1 ? 'request' : 'requests'}</p>
           <ol className="log-requests">{requests.map(item => <li key={item.key}>
-            <span className="log-meta">{label(item.key)}{item.phone ? ' · Phone fix' : ''} · {item.done ? 'Done' : working ? 'Working' : 'Needs attention'}</span>
+            <span className="log-meta">{label(item.key)}{item.phone ? ' · Phone fix' : ''} · {item.done ? 'Done' : working ? 'Working' : item.outcome?.retryable === false ? 'Needs your input' : 'Needs attention'}</span>
             {item.prompt && <p className="log-text">{item.prompt}</p>}
             {item.attachments.length > 0 && <p className="log-meta">Attached: {item.attachments.map((attachment: { name: string }) => attachment.name).join(', ')}</p>}
           </li>)}</ol>
@@ -72,8 +78,19 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
           {working && !candidate && <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p>}
           {!past && !working && retryResult && <button onClick={retryResult}>Try again</button>}
-          {!past && !working && !retryResult && requests.some(item => !item.completed) && <button disabled={!!operation} onClick={() => { void controller.prepare(undefined, requests.filter(item => !item.completed).map(item => item.key)).catch(() => {}); }}>Try again</button>}
+          {!past && !working && !retryResult && (review.retryable.length > 0 || review.retryAll) && <button disabled={!!operation} onClick={() => { void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
           {candidate && candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></details>}
+          {!past && review.blocked.length > 0 && <section className="log-needs-input" aria-label="Needs your input">
+            <p className="log-who">Needs your input</p>
+            {review.blocked.map(item => <div key={item.regionId}>
+              <span className="log-meta">{label(item.regionId)}</span>
+              <p className="log-text">{item.reason}</p>
+              <div className="log-actions">
+                <button type="button" onClick={() => editRequest(item.regionId)}>Change request</button>
+                {item.fix && openFix(item.fix) && <button type="button" onClick={() => applyFix(item.fix!)}>{fixLabel(item.fix)}</button>}
+              </div>
+            </div>)}
+          </section>}
           {candidate && candidate.decisionProposals.length > 0 && <details><summary>Suggested rules ({candidate.decisionProposals.length})</summary><ul>{candidate.decisionProposals.map((proposal, index) => <li key={index}><strong>{humanText(proposal.topic)}</strong><p className="log-text">{humanText(proposal.value)}</p><p className="log-meta">{scopeLabel(project, proposal.scope)}</p></li>)}</ul></details>}
 
           <details className="conversation-request-details"><summary>Request details</summary><dl className="conversation-facts">
@@ -105,17 +122,6 @@ function statusLabel(status: string) {
   if (['failed', 'unknown'].includes(status)) return 'Failed';
   if (status === 'blocked') return 'Needs a decision';
   return 'In progress';
-}
-
-function jsonBlocks(markdown: string): any[] {
-  const blocks: any[] = [];
-  let fence = ''; let lines: string[] = [];
-  for (const line of markdown.split('\n')) {
-    if (!fence) { const match = /^(`{3,})json$/.exec(line); if (match) { fence = match[1]; lines = []; } }
-    else if (line === fence) { try { blocks.push(JSON.parse(lines.join('\n'))); } catch { /* A partial diagnostic is still readable as text. */ } fence = ''; }
-    else lines.push(line);
-  }
-  return blocks;
 }
 
 function humanText(value: string) {

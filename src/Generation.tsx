@@ -1,5 +1,6 @@
 import { Notice, ProblemBanner, needsAiSettings, type ProblemAction } from './ProblemBanner.js';
-import { userError, generationError } from './userErrors.js';
+import { userError, outcomeReason } from './userErrors.js';
+import { fixLabel, jobOutcome } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
 import { scopeLabel } from './Notes';
@@ -49,26 +50,39 @@ function requestLabel(project: Project, id: string) {
   return 'Request';
 }
 
-export function GenerationFeedback({ controller, action, openSettings, details }: {
+export function GenerationFeedback({ controller, action, openSettings, openImport, openBrief, changeRequest, project, details }: {
   details?: () => void;
-  controller: GenerationController; action?: ProblemAction; openSettings?: () => void;
+  controller: GenerationController; action?: ProblemAction; openSettings?: () => void; openImport?: () => void; openBrief?: () => void;
+  changeRequest?: (regionId: string) => void; project?: Project;
 }) {
   const { job: currentJob, operation, elapsedSeconds, error } = controller;
   const job = operation === 'Preparing AI instructions…' ? null : currentJob;
   if (!job && !operation && !error && !controller.stopped) return null;
   const minutes = elapsedSeconds ?? 0;
+  const review = jobOutcome(job, id => project?.pages.flatMap(page => page.regions).find(region => region.id === id)?.prompt);
+  const needsInput = review.blocked.length > 0 && review.retryable.length === 0 && !review.retryAll;
+  const retry = review.retryable.length > 0 || review.retryAll || (controller.stopped && !review.blocked.length);
+  const blocked = review.blocked[0];
   const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your page…' : 'Building your page…',
-    ready: 'Updating your page…', blocked: 'Needs attention', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
+    ready: 'Updating your page…', blocked: needsInput ? 'Needs your input' : 'Needs attention', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your page…', applied: 'Page updated' };
   const heading = operation === 'Stopping…' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
+  const fix = blocked?.fix ? () => {
+    const open = blocked.fix === 'aiSettings' ? openSettings : blocked.fix === 'import' ? openImport : openBrief;
+    open?.();
+  } : undefined;
+  const fixAction = blocked?.fix && fix ? { label: fixLabel(blocked.fix), onClick: fix } : undefined;
+  const changeAction = blocked && changeRequest ? { label: 'Change request', onClick: () => changeRequest(blocked.regionId) } : fixAction;
+  // Keep the resolving surface visible beside the request change when both exist.
+  const secondaryAction = needsInput && changeAction && changeAction !== fixAction && fixAction ? fixAction : details ? { label: 'Details', onClick: details } : undefined;
   return <Notice className={`generation-notice status-${job?.status ?? 'preparing'}`} variant={error || job && ['failed', 'blocked', 'unknown'].includes(job.status) ? 'error' : job?.status === 'applied' ? 'success' : 'info'} priority="result" title={heading} dismissKey={`${job?.jobId}:${job?.status}:${operation}:${error}`}
-    message={error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : ''}
-    action={action ?? (needsAiSettings(error || job?.message || '') && openSettings ? { label: 'AI settings', onClick: openSettings } : controller.canStop ? { label: 'Stop', onClick: () => { void controller.cancel(); } } : controller.stopped || job && ['cancelled', 'failed', 'unknown', 'blocked'].includes(job.status) ? { label: 'Try again', onClick: () => { void controller.prepare().catch(() => {}); } } : undefined)}
-    secondaryAction={details ? { label: 'Details', onClick: details } : undefined} />;
+    message={error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : blocked?.reason ?? ''}
+    action={action ?? (needsAiSettings(error || job?.message || '') && openSettings ? { label: 'AI settings', onClick: openSettings } : controller.canStop ? { label: 'Stop', onClick: () => { void controller.cancel(); } } : changeAction ?? (retry ? { label: 'Try again', onClick: () => { void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); } } : undefined))}
+    secondaryAction={secondaryAction} />;
 }
 
-export function GenerationDetails({ controller, project, settings, openSettings, manageUsage, editRequest }: {
-  controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
+export function GenerationDetails({ controller, project, settings, openSettings, openImport, openBrief, manageUsage, editRequest }: {
+  controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
 }) {
   const { job, operation } = controller;
   const [tab, setTab] = useState<'review' | 'requirements' | 'attempts' | 'details'>('review');
@@ -102,7 +116,10 @@ export function GenerationDetails({ controller, project, settings, openSettings,
     }));
   });
   const source = candidate?.pages.find(page => page.pageId === pageId) ?? candidate?.pages[0];
-  const canRetry = !!job && (['failed', 'unknown', 'cancelled', 'blocked'].includes(job.status) || (job.status === 'applied' && conflicts.length > 0));
+  const review = jobOutcome(job, id => project.pages.flatMap(page => page.regions).find(region => region.id === id)?.prompt);
+  const canRetry = review.retryable.length > 0 || review.retryAll;
+  const changeRequest = (regionId: string) => { editRequest(regionId); setConfirmRetry(false); };
+  const openFix = (fix: Parameters<typeof fixLabel>[0]) => { if (fix === 'aiSettings') openSettings(); else if (fix === 'import') openImport?.(); else openBrief?.(); };
   const canDiscard = !!job && ['prepared', 'ready', 'blocked', 'failed', 'unknown', 'cancelled'].includes(job.status);
   const alreadyApplied = !!job && project.appliedJobIds.includes(job.jobId);
   const pricing = settings?.catalogue.find(model => model.id === job?.settings.model);
@@ -143,7 +160,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
     ...(canDiscard ? [{ id: 'discard', label: job?.status === 'prepared' ? 'Discard request' : 'Discard result', disabled: !!operation, action: () => { void controller.discard().catch(() => {}); } }] : []),
   ];
   return <>
-    <GenerationFeedback controller={controller} openSettings={openSettings}
+    <GenerationFeedback controller={controller} openSettings={openSettings} openImport={openImport} openBrief={openBrief} changeRequest={editRequest} project={project}
       action={job?.status === 'prepared' ? { label: 'Send and generate', disabled: !!operation, onClick: () => { void controller.start().catch(() => {}); } } : undefined} /><div className="generation-dialog">
       {usageError && <ProblemBanner message={userError(usageError)} dismiss={() => setUsageError('')} />}
       {job?.dossierError && <ProblemBanner message={userError(job.dossierError)} />}
@@ -188,8 +205,12 @@ export function GenerationDetails({ controller, project, settings, openSettings,
           {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft">
             <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
               const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
+              const gap = review.blocked.find(item => item.regionId === region.regionId);
               return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
-                <span>Needs attention</span></li>;
+                {gap ? <><p className="preserve-text">{gap.reason}</p><div className="form-actions">
+                  <button type="button" onClick={() => changeRequest(region.regionId)}>Change request</button>
+                  {gap.fix && <button type="button" onClick={() => openFix(gap.fix!)}>{fixLabel(gap.fix)}</button>}
+                </div></> : <span>Needs attention</span>}</li>;
             })}</ul>
             <details><summary>Technical details</summary><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></details>
           </section> : <><h3>Your page</h3><p>{candidate.summary}</p></>}
@@ -203,23 +224,23 @@ export function GenerationDetails({ controller, project, settings, openSettings,
           </>}
           {candidate.decisionProposals.length > 0 && <details className="proposal-list"><summary>Suggested rules ({candidate.decisionProposals.length})</summary>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
             <input type="checkbox" checked={selected.includes(index)} disabled={job.status !== 'ready' || alreadyApplied || !!operation} onChange={event => setSelected(previous => event.target.checked ? [...previous, index] : previous.filter(value => value !== index))} />
-            <span><strong>{proposal.topic}</strong><span className="preserve-text">{proposal.value}</span><span className="small muted">{scopeLabel(project, proposal.scope)} · {proposal.rationale}</span></span>
+            <span><strong>{proposal.topic}</strong><span className="preserve-text">{outcomeReason(proposal.value)}</span><span className="small muted">{scopeLabel(project, proposal.scope)} · {outcomeReason(proposal.rationale)}</span></span>
           </label>)}</details>}
-          {candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.regionId ? requestLabel(project, criticism.regionId) : 'Whole site'}</strong><p>{criticism.message}</p><p className="muted">{criticism.suggestion}</p></li>)}</ul></details>}
-          <details className="generation-coverage"><summary>Request details</summary><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.regions.map(region => <tr key={region.regionId}><th>{requestLabel(project, region.regionId)}</th><td>{readable(region.status)}</td><td>{region.status === 'conflict' ? generationError(region.explanation) : region.explanation}</td></tr>)}</tbody></table></div>
-            {candidate.componentRequests.length > 0 && <ul className="generation-list">{candidate.componentRequests.map((component, index) => <li key={index}><strong>{component.capability}</strong><p>{component.resolution === 'native' ? 'Built in' : 'Unavailable'}: {component.reason}</p></li>)}</ul>}
+          {candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.regionId ? requestLabel(project, criticism.regionId) : 'Whole site'}</strong><p>{outcomeReason(criticism.message)}</p><p className="muted">{outcomeReason(criticism.suggestion)}</p></li>)}</ul></details>}
+          <details className="generation-coverage"><summary>Request details</summary><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.regions.map(region => <tr key={region.regionId}><th>{requestLabel(project, region.regionId)}</th><td>{readable(region.status)}</td><td>{region.status === 'conflict' ? outcomeReason(region.explanation) : region.explanation}</td></tr>)}</tbody></table></div>
+            {candidate.componentRequests.length > 0 && <ul className="generation-list">{candidate.componentRequests.map((component, index) => <li key={index}><strong>{component.capability}</strong><p>{component.resolution === 'native' ? 'Built in' : 'Unavailable'}: {outcomeReason(component.reason)}</p></li>)}</ul>}
           </details>
         </>}</section>
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
           {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready changes' : 'Apply changes'}</button>}
-          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>Try again</button>}
+          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
         </div>
       </>}
     </div>
     {confirmRetry && job && <section ref={retryConfirmation} aria-label="Confirm retry" className="dialog-body"><strong>Try these requests with the current page?</strong><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
       <p>{usesChatgpt ? 'The retry counts toward that account’s ChatGPT plan or credits balance. Earlier attempts may also have used your plan or credits.' : `Estimated job cost: ${money(job.estimateUsd)}. Earlier attempts may also have been charged.`}</p>
       {usageError && <ProblemBanner message={userError(usageError)} dismiss={() => setUsageError('')} />}
-      <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { dismissRetry(); void controller.retry().catch(() => {}); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={dismissRetry}>Keep current job</button></div></section>}
+      <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { dismissRetry(); void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={dismissRetry}>Keep current job</button></div></section>}
   </>;
 }

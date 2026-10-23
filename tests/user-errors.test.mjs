@@ -10,7 +10,7 @@ try {
   const compiler = new URL('bin/tsc', import.meta.resolve('typescript/package.json'));
   const result = spawnSync(process.execPath, [compiler.pathname, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--outDir', temporary, 'src/userErrors.ts'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  const { userError, runtimeError, generationError } = await import(pathToFileURL(join(temporary, 'userErrors.js')));
+  const { userError, runtimeError, generationError, outcomeReason, technicalReason } = await import(pathToFileURL(join(temporary, 'userErrors.js')));
   await test('browser error shapes have plain descriptions without echoing code', () => {
     const cases = [
       ["TypeError: null is not an object (evaluating pause.addEventListener)", "A script on this page looks for something that isn't there."],
@@ -37,6 +37,14 @@ try {
     assert.equal(generationError('Region script cannot be parsed', 'Add chat'), 'The AI did not produce a usable page for “Add chat”.');
     assert.equal(generationError('Invalid candidate schema'), 'The AI did not produce a usable page for “this request”.');
     assert.equal(generationError('Source revision changed'), 'The page was edited after the AI made this draft.');
+  });
+  await test('declared outcomes keep one plain sentence and drop app prefixes', () => {
+    assert.equal(outcomeReason(`Area 561acc85-1234-1234-1234-123456789012: Which booking service should this use?`, 'Add booking'), 'Which booking service should this use?');
+    assert.equal(outcomeReason('The logo file is missing', 'Add a logo'), 'The logo file is missing.');
+    assert.equal(outcomeReason('Which colour? It can match the header. Use a strong accent.'), 'Which colour?');
+    assert.equal(outcomeReason('', 'Add booking'), 'The AI could not complete “Add booking” as requested.');
+    assert.equal(technicalReason('Which booking service should this use?'), false);
+    assert.equal(technicalReason(`Area 561acc85-1234-1234-1234-123456789012: Region script root contains another region.`), true);
   });
   await test('native and caught errors hide internal details and keep plain instructions', () => {
     assert.equal(userError(''), '');

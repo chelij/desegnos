@@ -27,18 +27,46 @@ try {
   const job = { jobId: 'job', status: 'blocked', settings: { model: 'model' }, requirements: { markdown: '' }, generationMode: 'fuzzy', areas: [{ pageId: 'page', regionId: id }],
     candidate: { summary: 'Booking form needs a service address.', regions: [{ regionId: id, status: 'conflict', explanation: `Area ${id}: Which booking service should this use?` }], criticism: [{ message: 'Keep the heading concise.', suggestion: 'Shorten the heading.' }], decisionProposals: [{ topic: `Booking links ${id}`, value: 'Use the booking service', scope: { kind: 'project' } }] },
     drafts: [{ id: 'draft', pageId: 'page', regionIds: [id], reason: 'CSS outside the region', code: '<script>PRIVATE GENERATED SOURCE</script>' }], usage: { inputTokens: 10, outputTokens: 20 }, repairRounds: 0 };
-  const props = { job, project, controller: { job }, settings: null, operation: null, error: null, close() {}, openSettings() {}, manageUsage: async () => {}, editRequest() {} };
-  await test('conflict explanations hide diagnostics without changing the saved job', () => {
+  const props = { job, project, controller: { job }, settings: null, operation: null, error: null, close() {}, openSettings() {}, openImport() {}, openBrief() {}, manageUsage: async () => {}, editRequest() {} };
+  await test('conflict diagnostics stay hidden while an app rejection keeps its retry', () => {
     const explanation = `Area ${id} ([data-desegnos-region=${id}]): Region script root contains another region. Excerpt: <section id="private">`;
     const conflicted = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation }] } };
     const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: conflicted }));
     const visible = html.split('<summary>Technical details</summary>')[0];
     assert.match(visible, /Needs attention/);
     assert.equal((visible.match(/>Try again</g) ?? []).length, 1);
+    assert.doesNotMatch(visible, /Needs your input|>Change request</);
     assert.match(html, /<summary>Technical details<\/summary>/);
     assert.match(html, /Excerpt/);
     assert.doesNotMatch(visible, /data-desegnos-|Excerpt|private|script root|12345678-1234/);
     assert.equal(conflicted.candidate.regions[0].explanation, explanation);
+  });
+  await test('an unclear answer keeps Try again while a declared question does not', () => {
+    const question = renderToStaticMarkup(React.createElement(GenerationLog, props));
+    assert.doesNotMatch(question, />Try again</);
+    assert.match(question, /Which booking service should this use\?/);
+    assert.match(question, />Change request</);
+    assert.match(question, />AI settings</);
+    const rejected = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation: `Area ${id}: Region script also affects another area.` }] } };
+    const retry = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: rejected }));
+    assert.equal((retry.match(/>Try again</g) ?? []).length, 1);
+    assert.doesNotMatch(retry, /Needs your input|>Change request</);
+  });
+  await test('editing the request makes Try again available again', () => {
+    const markdown = '```json\n' + JSON.stringify({ pageId: 'page', regionId: id, prompt: 'Add an earlier booking form', placementHint: { x: 0, y: 0, width: 10, height: 10 } }) + '\n```';
+    const edited = { ...job, requirements: { markdown } };
+    const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: edited }));
+    assert.equal((html.match(/>Try again</g) ?? []).length, 1);
+    assert.doesNotMatch(html, /Needs your input/);
+  });
+  await test('a missing file points at Import while an identity question points at the brief', () => {
+    const missing = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation: 'The logo file is missing.' }] } };
+    const importHtml = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: missing }));
+    assert.match(importHtml, /The logo file is missing\./);
+    assert.match(importHtml, />Import…</);
+    const identity = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation: 'Which brand name should the header use?' }] } };
+    const briefHtml = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: identity }));
+    assert.match(briefHtml, />Project brief</);
   });
   await test('conversation presents one ordered review without the legacy generation card or raw source', () => {
     const html = renderToStaticMarkup(React.createElement(GenerationLog, props));
@@ -46,7 +74,7 @@ try {
     let previous = -1;
     for (const marker of order) { const position = html.indexOf(marker); assert.ok(position > previous, `${marker} is missing or out of order`); previous = position; }
     assert.equal((html.match(/<summary>Request details<\/summary>/g) ?? []).length, 1);
-    assert.doesNotMatch(html, /Build remaining draft|Change request|Ask AI to fix|problem-banner|Needs details/);
+    assert.doesNotMatch(html, /Build remaining draft|Ask AI to fix|problem-banner|Needs details/);
     assert.doesNotMatch(html, /generation-status|generation-dialog|Copy code|PRIVATE GENERATED SOURCE/);
   });
   await test('preparation does not mount the old generation header inside the conversation', () => {
