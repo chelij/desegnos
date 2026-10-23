@@ -1,3 +1,4 @@
+import { ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { isWholePage } from './wholePageScope';
 import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
@@ -1180,7 +1181,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void stageImage(target, file); }} />
     {repicking && <div className="repick-hint" role="status">Click the element this request is for. <button type="button" onClick={() => setRepicking(null)}>Cancel</button></div>}
 
-    {elementError && <div className="element-edit-error" role="alert">{userError(elementError)}<button onClick={() => setElementError('')}>Dismiss</button></div>}
+    {elementError && <ProblemBanner className="element-edit-error" message={userError(elementError)} dismiss={() => setElementError('')} />}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
     {measuring && selectedRect && coordinate && gridSettings.rulers && !liveView && <div ref={measurement} className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
       style={{ left: measurementPosition?.x ?? 0, top: measurementPosition?.y ?? 0, visibility: measurementPosition ? undefined : 'hidden' }}>
@@ -1263,7 +1264,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     }}>
     <div className="request-frame" aria-hidden="true" />
     {dropping && <div className="request-drop-hint" aria-hidden="true">Drop to attach to this request</div>}
-    {stale && <div className="request-stale" role="alert" onPointerDown={event => event.stopPropagation()}><span>This element was removed.</span><button type="button" onClick={repickNow}>Pick again</button><button type="button" onClick={removeNow}>Remove request</button></div>}
+    {stale && <ProblemBanner className="request-stale" message="This element was removed." action={repickNow ? { label: 'Pick again', onClick: repickNow } : undefined} instruction="Remove this request before generating."><button type="button" onClick={removeNow}>Remove request</button></ProblemBanner>}
     {!target && <span className="request-number" aria-hidden="true">{number}</span>}
     {wholePage && <span className="request-phone-tag" title={region.wholePage ? "Whole page" : "Whole page (automatically detected). Turn off in request controls."}>Whole page</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
@@ -1280,7 +1281,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     </ul>}
     {reports.map((report, index) => <details className="request-archive-report" key={index} onPointerDown={event => event.stopPropagation()}>
       <summary>From {report.name}: {report.added} added, {report.skipped.length} skipped{report.skipped.length ? ` (${new Set(report.skipped.map(item => item.reason)).size === 1 ? userError(report.skipped[0].reason) : 'multiple reasons'})` : ''}</summary>
-      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: {userError(item.reason)}</li>)}</ul>}
+      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: <ProblemBanner message={userError(item.reason)} instruction="Choose another file to attach." /></li>)}</ul>}
     </details>)}
     </div>}
     {selected && attach && <div className="request-attach-row">

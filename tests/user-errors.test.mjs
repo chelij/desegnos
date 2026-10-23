@@ -51,8 +51,8 @@ try {
   });
   await test('runtime repair still sends the original observations', async () => {
     const source = await readFile(new URL('../src/Preview.tsx', import.meta.url), 'utf8');
-    assert.match(source, /onClick=\{\(\) => fixRuntimeErrors\(observations\)\}/);
-    assert.match(source, /new Set\(observations\.map\(runtimeError\)\)/);
+    assert.match(source, /onClick: \(\) => fixRuntimeErrors\(observations\)/);
+    assert.match(source, /message=\{runtimeError\(observations\[0\]\)\}/);
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
     assert.match(app, /errors: errors\.slice\(0, 10\)\.map\(error => error\.slice\(0, 4096\)\)/);
   });

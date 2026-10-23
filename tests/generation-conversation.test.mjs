@@ -32,8 +32,12 @@ try {
     const explanation = `Area ${id} ([data-desegnos-region=${id}]): Region script root contains another region. Excerpt: <section id="private">`;
     const conflicted = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation }] } };
     const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: conflicted }));
-    assert.match(html, /The AI added a script that affects the wrong part of the page\. Try again\./);
-    assert.doesNotMatch(html, /data-desegnos-|Excerpt|private|script root|12345678-1234/);
+    const visible = html.split('<summary>Technical details</summary>')[0];
+    assert.match(visible, /The AI added a script that affects the wrong part of the page\./);
+    assert.match(visible, /class="primary">Try again/);
+    assert.match(html, /<summary>Technical details<\/summary>/);
+    assert.match(html, /Excerpt/);
+    assert.doesNotMatch(visible, /data-desegnos-|Excerpt|private|script root|12345678-1234/);
     assert.equal(conflicted.candidate.regions[0].explanation, explanation);
   });
   await test('conversation presents one ordered review without the legacy generation card or raw source', () => {
@@ -44,7 +48,7 @@ try {
     assert.equal((html.match(/<summary>Request details<\/summary>/g) ?? []).length, 1);
     assert.match(html, /Build remaining draft/);
     assert.match(html, /Change request/);
-    assert.doesNotMatch(html, /generation-status|generation-dialog|Copy code|PRIVATE GENERATED SOURCE|12345678-1234/);
+    assert.doesNotMatch(html, /generation-status|generation-dialog|Copy code|PRIVATE GENERATED SOURCE/);
   });
   await test('preparation does not mount the old generation header inside the conversation', () => {
     const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: null, operation: 'Preparing AI instructions…' }));

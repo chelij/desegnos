@@ -1,3 +1,4 @@
+import { ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useMemo, useState } from 'react';
 import type { Command, Project } from './types';
@@ -68,7 +69,7 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
     finally { setBusy(false); }
   }
   return <div className="dialog-body style-guide">
-    {error && <p className="message error" role="alert">{userError(error)}</p>}
+    {error && <ProblemBanner message={userError(error)} instruction="Choose the style again to retry." dismiss={() => setError('')} />}
     <section aria-label="Brand colours"><h3>Colours</h3><div className="sg-roles">
       {COLOUR_ROLES.map(topic => { const value = normal(rule(topic)?.value ?? '') ?? null; return <div key={topic} className="sg-role">
         <label className="sg-swatch" style={{ background: value ?? undefined }} title={value ? `Change ${topic.toLowerCase()}` : `Choose ${topic.toLowerCase()}`}>

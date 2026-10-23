@@ -31,7 +31,8 @@ try {
   await test('side panel renders each draft once with a human label and repair action', () => {
     const html = renderToStaticMarkup(React.createElement(GenerationDrafts, props));
     assert.equal((html.match(/Draft · Home · Box 1/g) ?? []).length, 1);
-    assert.equal((html.match(/The AI added a script that affects the wrong part of the page\. Try again\./g) ?? []).length, 1);
+    assert.equal((html.match(/The AI added a script that affects the wrong part of the page\./g) ?? []).length, 1);
+    assert.match(html, /class="primary">Try again/);
     assert.match(html, /Ask AI to fix/);
     assert.match(html, /Dismiss/);
     assert.doesNotMatch(html, /Copy code|Retained code|SECRET SOURCE|internal-/);

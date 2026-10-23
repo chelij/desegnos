@@ -1,3 +1,4 @@
+import { ProblemBanner } from './ProblemBanner.js';
 import { useLayoutEffect, useRef } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import type { WorkspaceView } from './types';
@@ -11,14 +12,12 @@ export function SaveConflictDialog({ conflict, choose }: { conflict: SaveConflic
   const defaultButton = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => { defaultButton.current?.focus(); }, [conflict.token]);
   const different = conflict.kind === 'differentProject';
-  const sentence = conflict.kind === 'changed' ? `“${conflict.fileName}” changed on disk. Save a copy or replace it?` : different ? `“${conflict.fileName}” belongs to another project.` : 'This file cannot be replaced. Save a copy with a new name.';
+  const sentence = conflict.kind === 'changed' ? `“${conflict.fileName}” changed on disk.` : different ? `“${conflict.fileName}” belongs to another project.` : 'This file cannot be replaced.';
   return <WorkspaceSurface place="banner" title="Save conflict" showHeader={false} close={() => choose('cancel')}>
-    <div className="inline-notice save-conflict" role="group" aria-label="Resolve save conflict">
-      <span>{sentence}</span>
+    <ProblemBanner className="save-conflict" message={sentence} dismiss={() => choose('cancel')}>
       <button type="button" className={conflict.defaultChoice === 'copy' ? 'primary' : undefined} ref={conflict.defaultChoice === 'copy' ? defaultButton : undefined} autoFocus={conflict.defaultChoice === 'copy'} onClick={() => choose('copy')}>Save as copy</button>
       {conflict.canReplace && <button type="button" onClick={() => choose('replace')}>Replace it</button>}
       <button type="button" className={conflict.defaultChoice === 'cancel' ? 'primary' : undefined} ref={conflict.defaultChoice === 'cancel' ? defaultButton : undefined} autoFocus={conflict.defaultChoice === 'cancel'} onClick={() => choose('cancel')}>Cancel</button>
-      <details><summary>Details</summary><p className="wrap-path">{conflict.path}</p><p>{conflict.canReplace ? 'Replacing overwrites the file with your current work.' : 'Choose another file name.'}</p></details>
-    </div>
+    </ProblemBanner>
   </WorkspaceSurface>;
 }

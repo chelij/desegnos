@@ -16,17 +16,17 @@ try {
     .replace(/^import .* from 'react';$/m, `import { forwardRef, useRef, useImperativeHandle, useState as realUseState } from 'react';
       const useEffect = () => {}; const useLayoutEffect = () => {};
       const useState = initial => realUseState(Array.isArray(initial) ? ['TypeError: pause is null', 'TypeError: null is not an object (evaluating pause.addEventListener)'] : initial);`)
-    .replace(/^import (?!.*userErrors).* from '\.\/[^']+';$/gm, '');
+    .replace(/^import (?!.*(?:userErrors|ProblemBanner)).* from '\.\/[^']+';$/gm, '');
   await writeFile(join(temporary, 'Preview.mjs'), source);
   const { PreviewFrame } = await import(pathToFileURL(join(temporary, 'Preview.mjs')));
   const props = { pageId: 'page', title: 'Live page', fixRuntimeErrors() {} };
   await test('only the live preview offers a primary runtime repair action', () => {
     const html = renderToStaticMarkup(React.createElement(PreviewFrame, props));
     assert.match(html, /class="primary">Fix with AI<\/button>/);
-    assert.match(html, /This page has a problem/);
+    assert.match(html, /role="alert"/);
     assert.equal((html.match(/A script on this page looks for something that isn&#x27;t there\./g) ?? []).length, 1);
     assert.doesNotMatch(html, /TypeError|pause|addEventListener/);
-    assert.match(html, />Clear<\/button>/);
+    assert.match(html, />Dismiss<\/button>/);
     for (const extra of [{ staticView: true }, { draftId: 'draft' }, { jobId: 'job' }, { fixRuntimeErrors: undefined }]) {
       assert.doesNotMatch(renderToStaticMarkup(React.createElement(PreviewFrame, { ...props, ...extra })), /Fix with AI/);
     }

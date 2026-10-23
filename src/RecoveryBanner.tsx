@@ -1,3 +1,4 @@
+import { ProblemBanner } from './ProblemBanner.js';
 export type PendingRecovery = { code: 'pendingRecovery'; projectId: string; path: string };
 
 export function isPendingRecovery(error: unknown): error is PendingRecovery {
@@ -9,10 +10,8 @@ export function isPendingRecovery(error: unknown): error is PendingRecovery {
 export function RecoveryBanner({ busy, recover, openSaved, dismiss }: {
   busy: boolean; recover: () => void; openSaved: () => void; dismiss: () => void;
 }) {
-  return <div className="message warning recovery-banner" role="status">
-    <span>This project has unsaved changes from an earlier session.</span>
-    <button type="button" disabled={busy} onClick={recover}>Recover</button>
+  return <ProblemBanner className="recovery-banner" message="This project has unsaved changes from an earlier session."
+    action={{ label: 'Recover', disabled: busy, onClick: recover }} dismiss={dismiss}>
     <button type="button" disabled={busy} onClick={openSaved}>Open saved version</button>
-    <button type="button" onClick={dismiss} aria-label="Dismiss recovery banner">Dismiss</button>
-  </div>;
+  </ProblemBanner>;
 }
