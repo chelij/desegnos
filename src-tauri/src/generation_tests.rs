@@ -1742,14 +1742,41 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
     assert_eq!(fs::read(&archive_path).unwrap(), LEGACY_SELECTION_ARCHIVE);
     assert_eq!(fs::read(&markdown_path).unwrap(), packet);
-    assert!(service.begin(&before, job_id, true).is_err());
-    assert!(service.active.is_empty());
+    // Retrying the migrated job submits a fresh packet and preserves the blocked record.
+    let job_path = job_directory.join("job.json");
+    let job_bytes = fs::read(&job_path).unwrap();
+    let (fresh, _) = service.begin(&before, job_id, true).unwrap();
+    assert_ne!(fresh.job_id, job_id);
+    status(&fresh, JobStatus::Generating);
+    assert_eq!(fresh.base_revision, before.revision);
+    fresh.requirements.validate_current(&before).unwrap();
+    assert_eq!(fresh.requirements.format_version().unwrap(), 19);
+    assert_eq!(
+        fresh.source_fingerprints.get(&before.pages[0].id),
+        Some(&desegni_core::source_fingerprints(
+            before.pages[0].content.as_ref()
+        ))
+    );
+    let source_key = format!("source:{}", before.pages[0].id);
+    assert_ne!(
+        fresh.requirements.dependencies[&source_key],
+        expected_requirements.dependencies[&source_key]
+    );
+    assert!(fresh.requirements.markdown.contains(&region.elements[0].id));
+    assert_eq!(fresh.attempts.len(), 1);
+    assert_eq!(service.active.len(), 1);
+    assert!(service.active.contains_key(&fresh.job_id));
+    assert_eq!(fs::read(&job_path).unwrap(), job_bytes);
     let persisted = disk_record(&service, &before, job_id);
     assert_eq!(persisted.view.requirements, expected_requirements);
     assert_eq!(persisted.view.attempts.len(), 1);
     drop(service);
     let mut restarted = temp.service();
-    let restored = restarted.latest(&before).unwrap().unwrap();
+    assert_eq!(
+        restarted.latest(&before).unwrap().unwrap().job_id,
+        fresh.job_id
+    );
+    let restored = restarted.saved_job(project_id, job_id).unwrap();
     status(&restored, JobStatus::Blocked);
     assert_eq!(restored.requirements, expected_requirements);
     assert_eq!(restored.candidate, Some(expected_candidate));
@@ -1758,11 +1785,12 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
         expected_attempts
     );
     assert_eq!(fs::read(markdown_path).unwrap(), packet);
+    assert_eq!(fs::read(job_path).unwrap(), job_bytes);
     assert!(restarted.active.is_empty());
 }
 
 #[test]
-fn schema_six_prepared_format_nine_job_is_preserved_but_cannot_submit_after_source_migration() {
+fn schema_six_prepared_format_nine_job_is_preserved_while_begin_submits_current_source() {
     let temp = Temp::new();
     let fixture = legacy_selection_fixture();
     let frozen = fixture.prepared_record.view.requirements.clone();
@@ -1782,14 +1810,37 @@ fn schema_six_prepared_format_nine_job_is_preserved_but_cannot_submit_after_sour
     status(&view, JobStatus::Prepared);
     assert_eq!(view.requirements, frozen);
     assert!(view.attempts.is_empty());
-    assert!(service.begin(&project, job_id, false).is_err());
-    assert!(service.active.is_empty());
-    assert!(
-        disk_record(&service, &project, job_id)
-            .view
-            .attempts
-            .is_empty()
+    let (fresh, _) = service.begin(&project, job_id, false).unwrap();
+    assert_ne!(fresh.job_id, job_id);
+    status(&fresh, JobStatus::Generating);
+    assert_eq!(fresh.base_revision, project.revision);
+    fresh.requirements.validate_current(&project).unwrap();
+    assert_eq!(fresh.requirements.format_version().unwrap(), 19);
+    assert_eq!(
+        fresh.source_fingerprints.get(&project.pages[0].id),
+        Some(&desegni_core::source_fingerprints(
+            project.pages[0].content.as_ref()
+        ))
     );
+    let source_key = format!("source:{}", project.pages[0].id);
+    assert_ne!(
+        fresh.requirements.dependencies[&source_key],
+        frozen.dependencies[&source_key]
+    );
+    assert!(
+        fresh
+            .requirements
+            .markdown
+            .contains(&project.pages[0].regions[0].elements[0].id)
+    );
+    assert_eq!(fresh.attempts.len(), 1);
+    assert_eq!(service.active.len(), 1);
+    assert!(service.active.contains_key(&fresh.job_id));
+    let old = disk_record(&service, &project, job_id);
+    status(&old.view, JobStatus::Prepared);
+    assert_eq!(old.view.requirements, frozen);
+    assert!(old.view.attempts.is_empty());
+    assert!(old.view.candidate.is_none());
     assert_eq!(fs::read(&job_path).unwrap(), job_bytes);
     assert_eq!(
         fs::read(job_directory.join("REQUIREMENTS.md")).unwrap(),
@@ -1797,33 +1848,6 @@ fn schema_six_prepared_format_nine_job_is_preserved_but_cannot_submit_after_sour
     );
     assert_eq!(workspace.project().unwrap(), &project);
     assert_eq!(fs::read(&archive_path).unwrap(), LEGACY_SELECTION_ARCHIVE);
-    assert!(
-        service.prepare(&project).is_err(),
-        "a pending job needs an explicit discard choice"
-    );
-    // An explicit Cancel followed by Generate can create a new packet from the migrated page.
-    // Neither action submits a provider request, and the old packet remains an immutable record.
-    service.cancel(&project, job_id).unwrap();
-    let fresh = service.prepare(&project).unwrap();
-    assert_ne!(fresh.job_id, job_id);
-    assert_eq!(fresh.requirements.format_version().unwrap(), 19);
-    assert!(
-        fresh
-            .requirements
-            .markdown
-            .contains(&project.pages[0].regions[0].elements[0].id)
-    );
-    assert!(fresh.attempts.is_empty());
-    assert!(service.active.is_empty());
-    let old: JobRecord = read_json(&job_path, MAX_JOB_BYTES).unwrap();
-    status(&old.view, JobStatus::Cancelled);
-    assert_eq!(old.view.requirements, frozen);
-    assert!(old.view.attempts.is_empty());
-    assert_eq!(
-        fs::read(job_directory.join("REQUIREMENTS.md")).unwrap(),
-        packet
-    );
-    assert_eq!(workspace.project().unwrap(), &project);
 }
 
 #[test]

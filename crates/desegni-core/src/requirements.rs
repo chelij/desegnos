@@ -827,7 +827,7 @@ impl RequirementsSnapshot {
             .ok_or_else(|| Error("The requirements format is unsupported.".into()))
     }
 
-    pub(crate) fn target_ids(&self) -> Result<Vec<(Uuid, Uuid)>> {
+    pub fn target_ids(&self) -> Result<Vec<(Uuid, Uuid)>> {
         let mut targets = Vec::new();
         for key in self
             .dependencies
