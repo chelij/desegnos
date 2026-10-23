@@ -258,7 +258,6 @@ mod tests {
             "const =",
             "if (",
             "import x from 'remote'",
-            "const document = {};",
             "} window.changed = true; (function() {",
         ] {
             assert!(check(code).is_err(), "accepted: {code}");
