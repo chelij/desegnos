@@ -1095,9 +1095,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     {(() => {
       const key = `page:${generation?.job?.jobId ?? 'start'}:${page.id}`;
       const failed = (!problems.length && generation?.error) || (generation?.job && ['failed', 'unknown', 'blocked'].includes(generation.job.status) && !problems.length && !generation.job.drafts?.some(d => d.applied || d.dismissed) ? generationPageError(generation.job.message) : '');
-      if (runtimeProblems.length && !dismissedProblems.includes(`runtime:${key}`)) return <div className="canvas-page-problem" role="alert"><span>{runtimeError(runtimeProblems[0])}</span><button disabled={aiDisabled} onClick={() => fixRuntimeErrors?.(runtimeProblems)}>Fix with AI</button><button aria-label="Dismiss problem" onClick={() => dismissProblem(`runtime:${key}`)}>×</button></div>;
+      if (runtimeProblems.length && !dismissedProblems.includes(`runtime:${key}`)) return <ProblemBanner message={runtimeError(runtimeProblems[0])} action={{ label: 'Fix with AI', disabled: aiDisabled, onClick: () => fixRuntimeErrors?.(runtimeProblems) }} dismiss={() => dismissProblem(`runtime:${key}`)} />;
       if (!failed || dismissedProblems.includes(key)) return null;
-      return <div className="canvas-page-problem" role="alert"><span>{userError(failed)}</span><button disabled={aiDisabled} onClick={() => { void generation?.prepare().catch(() => {}); }}>Try again</button><button aria-label="Dismiss problem" onClick={() => dismissProblem(key)}>×</button></div>;
+      return <ProblemBanner message={userError(failed)} action={{ label: 'Try again', disabled: aiDisabled, onClick: () => { void generation?.prepare().catch(() => {}); } }} dismiss={() => dismissProblem(key)} />;
     })()}
     {gridSettings.rulers && !liveView && <><div className="ruler-corner" aria-hidden="true">{rulerUnit === 'percent' ? '%' : 'px'}</div>
       <Ruler axis="x" unit={rulerUnit} start={visible.x} length={measurements.width} reference={page.viewport.width} zoom={zoom} cursor={cursor?.x} selection={selectedRect ? [selectedRect.x, selectedRect.x + selectedRect.width] : undefined} />
@@ -1166,7 +1166,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
               <span>{error ? generationError(error, page.regions.find(r => r.id === problem.regionId)?.prompt) : problem.message}</span>
               <div><button disabled={busy || !problem.draftId || !!error} onClick={() => { void applyProblem(problem.regionId, problem.draftId!, problem.key); }}>Apply anyway</button>
               <button disabled={busy || aiDisabled} onClick={() => { void generation?.prepare(undefined, [problem.regionId]).catch(() => {}); }}>Try again</button>
-              {!problem.stale && !error && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>}
+              {!problem.stale && !error && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Edit request</button>}
               <button aria-label="Dismiss problem" onClick={() => dismissProblem(problem.key)}>×</button></div>
             </div>;
           })}
@@ -1300,7 +1300,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     }}>
     <div className="request-frame" aria-hidden="true" />
     {dropping && <div className="request-drop-hint" aria-hidden="true">Drop to attach to this request</div>}
-    {stale && <ProblemBanner className="request-stale" message="This element was removed." action={repickNow ? { label: 'Pick again', onClick: repickNow } : undefined} instruction="Remove this request before generating."><button type="button" onClick={removeNow}>Remove request</button></ProblemBanner>}
+    {stale && <ProblemBanner className="request-stale" message="This element was removed." action={repickNow ? { label: 'Pick again', onClick: repickNow } : undefined} secondaryAction={removeNow ? { label: 'Remove request', onClick: removeNow } : undefined} />}
     {!target && <span className="request-number" aria-hidden="true">{number}</span>}
     {wholePage && <span className="request-phone-tag" title={region.wholePage ? "Whole page" : "Whole page (automatically detected). Turn off in request controls."}>Whole page</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
@@ -1317,7 +1317,7 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
     </ul>}
     {reports.map((report, index) => <details className="request-archive-report" key={index} onPointerDown={event => event.stopPropagation()}>
       <summary>From {report.name}: {report.added} added, {report.skipped.length} skipped{report.skipped.length ? ` (${new Set(report.skipped.map(item => item.reason)).size === 1 ? userError(report.skipped[0].reason) : 'multiple reasons'})` : ''}</summary>
-      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: <ProblemBanner message={userError(item.reason)} instruction="Choose another file to attach." /></li>)}</ul>}
+      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: <ProblemBanner message={userError(item.reason)} /></li>)}</ul>}
     </details>)}
     </div>}
     {selected && attach && <div className="request-attach-row">

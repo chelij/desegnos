@@ -45,6 +45,6 @@ export function WebsiteChoice({ folder, brand, disabled, chooseBrand, edit, upda
         : <button type="button" disabled={disabled || build?.running || !site.buildCommand} onClick={() => { void action('start'); }}>Build site</button>}
     </>}
     {build && <p role="status">{build.line} {build.running && <button type="button" onClick={() => { void action('stop'); }}>Stop</button>}</p>}
-    {(error || build?.error) && <ProblemBanner message={userError(error || build?.error)} dismiss={() => { setError(''); setBuild(value => value ? { ...value, error: null } : value); }} action={site.buildCommand && !site.buildUnavailable ? { label: 'Try again', disabled: disabled || build?.running, onClick: () => { void action('start'); } } : undefined} instruction="Ask the website creator to prepare this folder for editing." />}
+    {(error || build?.error) && <ProblemBanner message={userError(error || build?.error)} dismiss={() => { setError(''); setBuild(value => value ? { ...value, error: null } : value); }} action={site.buildCommand && !site.buildUnavailable ? { label: 'Try again', disabled: disabled || build?.running, onClick: () => { void action('start'); } } : undefined} />}
   </section>;
 }

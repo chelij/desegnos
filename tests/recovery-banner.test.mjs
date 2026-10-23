@@ -26,15 +26,15 @@ try {
     const actions = [];
     const props = { busy: false, recover: () => actions.push('recover'), openSaved: () => actions.push('saved'), dismiss: () => actions.push('dismiss') };
     const html = renderToStaticMarkup(React.createElement(RecoveryBanner, props));
-    assert.equal(html.replace(/<[^>]+>/g, ''), 'This project has unsaved changes from an earlier session.RecoverOpen saved versionDismiss');
-    assert.match(html, /class="problem-banner recovery-banner"/);
+    assert.equal(html.replace(/<[^>]+>/g, ''), 'This project has unsaved changes from an earlier session.RecoverOpen saved version×');
+    assert.match(html, /class="notice notice-warning" role="alert"/);
     assert.doesNotMatch(html, /role="dialog"|<dialog|modal|helper/i);
     const banner = RecoveryBanner(props).props;
-    banner.action.onClick(); banner.children.props.onClick(); banner.dismiss();
+    banner.action.onClick(); banner.secondaryAction.onClick(); banner.dismiss();
     assert.deepEqual(actions, ['recover', 'saved', 'dismiss']);
     const busy = RecoveryBanner({ ...props, busy: true }).props;
     assert.equal(busy.action.disabled, true);
-    assert.equal(busy.children.props.disabled, true);
+    assert.equal(busy.secondaryAction.disabled, true);
   });
 
   // Exercise App's actual handlers with a native/queue boundary stub, without a GUI.

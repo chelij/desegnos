@@ -1,3 +1,4 @@
+import { ProblemBanner } from './ProblemBanner.js';
 import { userError, generationError } from './userErrors.js';
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
@@ -11,7 +12,8 @@ import type { GenerationHistory, GenerationJobView, Project } from './types';
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
-export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, manageUsage, editRequest }: {
+export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, manageUsage, editRequest, retryResult }: {
+  retryResult?: () => void;
   settings: AiSettingsView | null; openSettings: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
   job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; controller: GenerationController; close: () => void;
 }) {
@@ -69,7 +71,8 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
         <section className="log-message from-ai" aria-label="AI reply" aria-live="polite">
           <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
           {working && !candidate && <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p>}
-          {!past && !working && requests.some(item => !item.completed) && <button disabled={!!operation} onClick={() => { void controller.prepare(undefined, requests.filter(item => !item.completed).map(item => item.key)).catch(() => {}); }}>Try again</button>}
+          {!past && !working && retryResult && <button onClick={retryResult}>Try again</button>}
+          {!past && !working && !retryResult && requests.some(item => !item.completed) && <button disabled={!!operation} onClick={() => { void controller.prepare(undefined, requests.filter(item => !item.completed).map(item => item.key)).catch(() => {}); }}>Try again</button>}
           {candidate && candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></details>}
           {candidate && candidate.decisionProposals.length > 0 && <details><summary>Suggested rules ({candidate.decisionProposals.length})</summary><ul>{candidate.decisionProposals.map((proposal, index) => <li key={index}><strong>{humanText(proposal.topic)}</strong><p className="log-text">{humanText(proposal.value)}</p><p className="log-meta">{scopeLabel(project, proposal.scope)}</p></li>)}</ul></details>}
 
@@ -89,7 +92,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
         </button></p>)}
         {history?.skipped ? <p className="field-help">{history.skipped} saved records could not be read.</p> : null}
         {history?.truncated && <p className="field-help">Showing the latest 100 saved generations.</p>}
-        {historyError && <p role="status">{userError(historyError)}</p>}
+        {historyError && <ProblemBanner message={userError(historyError)} dismiss={() => setHistoryError('')} />}
       </details>
       {(error || job?.message || job?.candidate) && <details><summary>Technical details</summary><pre>{JSON.stringify({ error, message: job?.message, providerError: job?.providerError, validationEvents: job?.validationEvents, outcomes: job?.candidate?.regions, drafts: job?.drafts?.map(({ reason }) => ({ reason })) }, null, 2)}</pre></details>}
     </div>

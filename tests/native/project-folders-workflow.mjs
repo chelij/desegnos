@@ -120,13 +120,13 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
     project = (await driver.invoke('edit_project', { revision: project.revision, command: { type: 'set_grid', enabled: false } })).project;
     await driver.button('Save'); const state = await savedState(driver, path);
     assert.ok(state.siteWarnings.some(s => s.includes('index.html')));
-    await waitFor(() => driver.execute(() => [...document.querySelectorAll('.message.warning')].some(node => node.textContent.includes('index.html'))), 'The site warning was not visible');
+    await waitFor(() => driver.execute(() => [...document.querySelectorAll('.notice-warning')].some(node => node.textContent.includes('index.html'))), 'The site warning was not visible');
     await verifyArchive(path, project, await driver.invoke('get_project_notes'));
     assert.equal(await readFile(index, 'utf8'), 'Owner-edited HTML');
     await physical.captureWindow(join(output, 'site-warning.png'));
-    await driver.button('Dismiss website warning');
+    await driver.click('.notice-warning .notice-dismiss');
     await driver.button('Save');
-    await waitFor(() => driver.execute(() => [...document.querySelectorAll('.message.warning')].some(node => node.textContent.includes('index.html'))), 'A repeated sync failure did not show its warning again');
+    await waitFor(() => driver.execute(() => [...document.querySelectorAll('.notice-warning')].some(node => node.textContent.includes('index.html'))), 'A repeated sync failure did not show its warning again');
     await rm(index); await driver.button('Save');
     await waitFor(async () => (await workspace()).siteWarnings.length === 0, 'Retry did not finish syncing');
   });

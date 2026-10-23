@@ -1,4 +1,5 @@
-import { needsAiSettings, ProblemBanner } from './ProblemBanner.js';
+import { needsAiSettings, ProblemBanner, Notice, NoticeProvider, NoticeHost } from './ProblemBanner.js';
+import { summarizeOutsideChanges } from './noticeSummary.js';
 import { userError } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
@@ -53,7 +54,7 @@ function readTheme(): Theme {
 }
 
 export default function App() {
-  return <WorkspaceSurfaces><Editor /></WorkspaceSurfaces>;
+  return <NoticeProvider><WorkspaceSurfaces><Editor /></WorkspaceSurfaces></NoticeProvider>;
 }
 
 function Editor() {
@@ -67,7 +68,9 @@ function Editor() {
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  const [notices, setNotices] = useState<{ id: number; message: string }[]>([]);
+  const noticeId = useRef(0);
+  const setNotice = useCallback((message: string) => { const id = ++noticeId.current; setNotices(items => [...items, { id, message }]); }, []);
   const [dismissedMigration, setDismissedMigration] = useState('');
   // The recovery error can be put aside for this session; the recovery files stay on disk.
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
@@ -575,7 +578,7 @@ function Editor() {
     if (command === 'generation_draft' && (result as import('./types').DraftReview).workspace) accept((result as import('./types').DraftReview).workspace!);
     return result;
   })), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
-  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setNotice('Website updated.'); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
+  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); setRetryResult(false); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
@@ -660,7 +663,7 @@ function Editor() {
     setSelected(null); setShowLog(true);
     await generation.prepare(undefined, [added.id]);
   }
-  function keepResult() { setObservationsVersion(value => value + 1); setResultReview(null); }
+  function keepResult() { setRetryResult(false); setObservationsVersion(value => value + 1); setResultReview(null); }
 
   function dismissEmpty(keep: string | null) {
     return mutate(project => project.pages.some(page => page.regions.some(region => !region.completed && region.id !== keep && !region.prompt.trim()))
@@ -883,8 +886,7 @@ function Editor() {
     { id: 'page-settings', label: 'Page settings', disabled: !page, action: () => setPageDialog(page) },
     { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: () => run(removePage) },
     { id: 'page-divider', label: '', separator: true },
-    { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => setLive(value => !value) },
-    { id: 'preview', label: 'Live preview', disabled: !page?.content, action: () => { setLive(true); setLiveDevice('desktop'); } },
+    { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => { setLive(value => !value); setLiveDevice('desktop'); } },
     { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
@@ -915,7 +917,7 @@ function Editor() {
         {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import context</button>}
         {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo} onClick={() => run(() => travel('redo_project'))}>Redo</button>
           <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
-        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live preview'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
+        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live view'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
         {!aiConnected && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {project && (generation.job || generation.operation) && <button type="button" aria-pressed={showLog} onClick={() => setShowLog(value => !value)}>AI log</button>}
@@ -923,14 +925,16 @@ function Editor() {
       </div>
     </header>
     <SurfaceHost place="banner" />
+    <NoticeHost />
     {pendingRecovery && <RecoveryBanner busy={pending > 0} recover={() => run(() => recover(pendingRecovery.projectId))} openSaved={() => run(() => open(false, pendingRecovery.path, true))} dismiss={() => setPendingRecovery(null)} />}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />}
-    {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span title={exported.path}>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'}{exported.warnings.length > 0 && ` · ${exported.warnings.length} to check`}</span>{exported.warnings.length > 0 && <details><summary>Things to check</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
-    {offerRestyle && project && <div className="message info restyle-offer" role="status"><span>{offerRestyle}</span><button className="primary" disabled={pending > 0 || working} onClick={() => run(regenerateWithContext)}>Regenerate pages</button><button onClick={() => setOfferRestyle(false)}>Not now</button></div>}
+    {notices.map(item => <Notice key={item.id} variant="info" message={item.message} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
+    {exported && <Notice className="export-notice" priority="result" variant={exported.warnings.length ? 'warning' : 'success'} title="Website exported" message={`${exported.pageCount} ${exported.pageCount === 1 ? 'page' : 'pages'}${exported.warnings.length ? ` · ${[...new Set(exported.warnings)].join(' ')}` : ''}`} action={{ label: 'Open folder', onClick: () => run(() => native('open_export_folder', { path: exported.path })) }} dismiss={() => setExported(null)} />}
+    {offerRestyle && project && <Notice variant="info" message={offerRestyle} action={{ label: 'Regenerate pages', disabled: pending > 0 || working, onClick: () => run(regenerateWithContext) }} dismiss={() => setOfferRestyle(false)} />}
     {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <ProblemBanner message={userError(view.recoveryError)} dismiss={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} />}
     {project?.website?.framework && <p className="field-help" role="note">Edits don't change the {project.website.framework} source files.</p>}
     {!!project?.website?.skipped.length && <details className="field-help"><summary>Skipped {project.website.skipped.length} files</summary><p>{project.website.skipped.slice(0, 5).join(", ")}</p></details>}
-    {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <div className="message warning migration-notice" role="status"><span>{view.migrationNotice}</span><button onClick={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} aria-label="Dismiss migration notice">Dismiss</button></div>}
+    {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <Notice variant="warning" message={view.migrationNotice} dismiss={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} />}
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
       <SurfaceHost place="start" />
       {!showNew && <NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} />}
@@ -954,20 +958,11 @@ function Editor() {
       <div className="design-pane">
       <SurfaceHost place="canvas" />
       {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
-      {(showGenerationStatus || resultReview || draftCount > 0) && <div className="canvas-pill" role="region" aria-label="Generation status">
-        {resultReview && !showGenerationStatus ? <><strong role="status">Page updated</strong>{generation.job?.validationEvents?.filter(event => event.kind === 'outsideChanges').map((event, index) => <span role="status" key={index}>{event.message}</span>)}{draftCount > 0 && <button onClick={openGeneration}>· {draftCount} {draftCount === 1 ? 'draft' : 'drafts'}</button>}
-          <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
-          <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => setRetryResult(true)}>Try again</button>
-          {retryResult && <span className="retry-confirmation" role="group" aria-label="Confirm retry">Try again with your AI account? <button onClick={() => { setRetryResult(false); run(() => rejectResult(true)); }}>Yes</button><button onClick={() => setRetryResult(false)}>No</button></span>}
-          {!showLog && <button onClick={openGeneration}>Details</button>}
-          <button className="pill-close" aria-label="Keep changes" title="Keep" onClick={keepResult}>×</button>
-        </> : <GenerationFeedback controller={generation} compact openSettings={() => setShowAiSettings(true)}>
-          {generation.canStop && <button onClick={() => { void generation.cancel(); }}>Stop</button>}
-          {!working && (generation.stopped || generation.job?.status === 'cancelled') && <button className="primary" onClick={generate}>Try again</button>}
-          {!working && !showLog && <button onClick={openGeneration}>Details</button>}
-        </GenerationFeedback>}
-        {!resultReview && draftCount > 0 && <button onClick={openGeneration}>{draftCount} {draftCount === 1 ? 'draft' : 'drafts'}</button>}
-      </div>}
+      {resultReview && !showGenerationStatus ? <Notice className="generation-notice status-applied" variant={retryResult ? 'warning' : 'success'} priority="result" title={retryResult ? 'Try again?' : 'Page updated'}
+        message={retryResult ? 'This uses your AI account again.' : summarizeOutsideChanges(generation.job?.validationEvents ?? [])}
+        action={retryResult ? { label: 'Try again', disabled: pending > 0, onClick: () => { setRetryResult(false); run(() => rejectResult(true)); } } : { label: 'Undo', disabled: pending > 0, onClick: () => run(() => rejectResult()) }}
+        secondaryAction={retryResult ? { label: 'Cancel', onClick: () => setRetryResult(false) } : { label: 'Details', onClick: openGeneration }}
+        dismiss={keepResult} /> : showGenerationStatus ? <GenerationFeedback controller={generation} openSettings={() => setShowAiSettings(true)} details={openGeneration} /> : draftCount > 0 ? <Notice priority="result" message={`${draftCount} ${draftCount === 1 ? 'draft' : 'drafts'}`} action={{ label: 'Details', onClick: openGeneration }} /> : null}
       <FirstRunTips />
       {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
         <strong>Live</strong>
@@ -983,29 +978,29 @@ function Editor() {
         {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}
         <CodePane ref={code} saveProject={() => run(() => save())} tidy={page?.content ? () => run(async () => { await synchronize(); await mutate({ type: 'format_page_code', page_id: page.id }); setNotice('Code tidied. Undo puts it back.'); }) : undefined} key={page?.id} content={page?.content ?? null} target={activeLayer} map={sourceMap} save={page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id); }} />
       </>}
-      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} manageUsage={manageChatgptUsage} editRequest={id => {
+      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} retryResult={resultReview ? () => { setRetryResult(true); setShowLog(false); } : undefined} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} manageUsage={manageChatgptUsage} editRequest={id => {
         const owner = project.pages.find(item => item.regions.some(region => region.id === id));
         if (owner) run(async () => { await selectPage(owner.id, id); setSelected(id); setFocusPrompt(true); });
       }} close={() => setShowLog(false)} />}
       <SurfaceHost place="panel" />
       </main>
-      <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? requestShape === 'freehand' ? 'Draw around an area; release to close' : requestShape === 'ellipse' ? 'Drag an ellipse · Shift for a circle' : 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}{notice && <span className="sr-only"> · {notice}</span>}</span></div></footer>
+      <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? requestShape === 'freehand' ? 'Draw around an area; release to close' : requestShape === 'ellipse' ? 'Drag an ellipse · Shift for a circle' : 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{fixCount > 0 && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(value => !value)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}<button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button><span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</span></div></footer>
     </>}
     {showShortcuts && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></WorkspaceSurface>}
-    {showNew && <WorkspaceSurface place={project ? 'panel' : 'start'} title="New project" startHeading={false} close={() => setShowNew(false)}><ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} /><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} /></WorkspaceSurface>}
-    {!!view?.siteWarnings?.length && dismissedSiteWarnings !== `${project?.id}:${view.siteWarnings.join('\n')}` && <div className="message warning" role="status"><span>Project saved. {view.siteWarnings.join(' ')}</span><button aria-label="Dismiss website warning" onClick={() => setDismissedSiteWarnings(`${project?.id}:${view.siteWarnings?.join('\n')}`)}>Dismiss</button></div>}
+    {showNew && <WorkspaceSurface place={project ? 'panel' : 'start'} title="New project" startHeading={false} close={() => setShowNew(false)}><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} /></WorkspaceSurface>}
+    {!!view?.siteWarnings?.length && dismissedSiteWarnings !== `${project?.id}:${view.siteWarnings.join('\n')}` && <Notice variant="warning" title="Project saved" message={[...new Set(view.siteWarnings)].join(' ')} dismiss={() => setDismissedSiteWarnings(`${project?.id}:${view.siteWarnings?.join('\n')}`)} />}
     {showProjectLocation && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
-    {showRecovery && view && <WorkspaceSurface place={project ? 'panel' : 'start'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}><ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />
+    {showRecovery && view && <WorkspaceSurface place={project ? 'panel' : 'start'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
     {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import context" close={() => setShowImport(false)}><ImportContext initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} /></WorkspaceSurface>}
     {showStyleGuide && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Style guide" close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></WorkspaceSurface>}
-    {showNotes && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project brief" close={() => setShowNotes(null)}><ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} /><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
-    {showGridSettings && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Grid and rulers" close={() => setShowGridSettings(false)}><ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} /><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
+    {showNotes && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project brief" close={() => setShowNotes(null)}><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
+    {showGridSettings && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Grid and rulers" close={() => setShowGridSettings(false)}><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
       if (visible !== project.showGrid) await mutate({ type: 'set_grid', enabled: visible });
       await mutate({ type: 'set_grid_settings', settings }); setShowGridSettings(false);
     }} /></WorkspaceSurface>}
     {pageDialog && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title={pageDialog === 'new' ? 'Add page' : 'Page settings'} close={() => setPageDialog(null)}>
-      <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} /><PageForm paths={project.pages.map(item => item.path)} page={pageDialog === 'new' ? null : pageDialog} home={pageDialog !== 'new' && pageDialog.id === project.homePageId} busy={pending > 0} submit={async values => {
+      <PageForm paths={project.pages.map(item => item.path)} page={pageDialog === 'new' ? null : pageDialog} home={pageDialog !== 'new' && pageDialog.id === project.homePageId} busy={pending > 0} submit={async values => {
         if (pageDialog === 'new') {
           await dismissEmpty(null);
           await synchronize();
@@ -1015,13 +1010,13 @@ function Editor() {
         setPageDialog(null);
       }} />
     </WorkspaceSurface>}
-    {showRename && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Rename project" close={() => setShowRename(false)}><ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} /><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); setShowRename(false); }} /></WorkspaceSurface>}
+    {showRename && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Rename project" close={() => setShowRename(false)}><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); setShowRename(false); }} /></WorkspaceSurface>}
     {saveConflict && <SaveConflictDialog conflict={saveConflict} choose={chooseSaveConflict} />}
-    {replacement && <WorkspaceSurface place="banner" title="Save your changes?" close={() => setReplacement(null)}><ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} /><div className="dialog-body"><p>Save “{project?.name}” before you {replacement.label}?</p><p className="muted">Discard continues without saving these changes to the project file.</p><div className="form-actions">
+    {replacement && <WorkspaceSurface place="banner" title="Save your changes?" close={() => setReplacement(null)}><div className="dialog-body"><p>Save “{project?.name}” before you {replacement.label}?</p><p className="muted">Discard continues without saving these changes to the project file.</p><div className="form-actions">
       <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(() => {}); }}>Save and continue</button>
       <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(() => {}); }}>Discard and continue</button><button onClick={() => setReplacement(null)}>Keep editing</button>
     </div></div></WorkspaceSurface>}
-    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} /><div className="inline-notice"><span>{confirmation.message}</span><button className="danger" disabled={pending > 0} onClick={() => { if (confirmation.skippable && skipNextAsk) setAskBeforeDelete(false); void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>Delete</button><button onClick={() => setConfirmation(null)}>Cancel</button>{confirmation.skippable && <details><summary>Options</summary><label className="check-label"><input type="checkbox" checked={skipNextAsk} onChange={event => setSkipNextAsk(event.target.checked)} />Don’t ask again</label></details>}</div></WorkspaceSurface>}
+    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className="danger" disabled={pending > 0} onClick={() => { if (confirmation.skippable && skipNextAsk) setAskBeforeDelete(false); void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>Delete</button><button onClick={() => setConfirmation(null)}>Cancel</button>{confirmation.skippable && <details><summary>Options</summary><label className="check-label"><input type="checkbox" checked={skipNextAsk} onChange={event => setSkipNextAsk(event.target.checked)} />Don’t ask again</label></details>}</div></WorkspaceSurface>}
     {showAiSettings && <WorkspaceSurface place={project ? 'panel' : 'start'} title="AI settings" close={() => setShowAiSettings(false)}><AiSettings current={aiSettings} refresh={refreshAiSettings} update={updateAiSettings} manageUsage={manageChatgptUsage} pollingError={aiPollingError} /></WorkspaceSurface>}
   </div>;
 }

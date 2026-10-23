@@ -72,8 +72,6 @@
 
 .free-workspace .element-toolbar { position: absolute; z-index: 12; display: flex; gap: 3px; padding: 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); box-shadow: 0 3px 12px #00000030; }
 .element-toolbar > button, .element-toolbar .menu-anchor > button { min-height: 30px; padding: 3px 10px; }
-.element-edit-error { position: absolute; z-index: 13; left: 32px; right: 20px; bottom: 20px; padding: 8px; background: var(--error-surface); border: 1px solid var(--danger); color: var(--text); }
-.element-edit-error button { margin-left: 12px; }
 .element-dialog form { display: grid; gap: 16px; }
 .element-dialog details { padding: 10px 0; }
 .element-dialog summary { cursor: pointer; }
@@ -145,10 +143,6 @@
 .free-workspace .element-toolbar .multi-count { align-self: center; padding: 0 8px; font-size: 12px; color: var(--muted); white-space: nowrap; }
 
 /* A request whose element changed: say so plainly and offer the two fixes. */
-.free-workspace .request-stale { position: absolute; left: 0; right: 0; bottom: 100%; z-index: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 5px 8px; background: #fff3e0; color: #7a4a00; border: 1px solid #f0c27b; font-size: 12px; }
-.free-workspace .request-stale span { flex: 1 1 140px; }
-.free-workspace .request-stale button { min-height: 24px; padding: 1px 8px; font-size: 11px; }
-:root[data-theme="dark"] .free-workspace .request-stale { background: #3a2a10; color: #f2c94c; border-color: #7a5a20; }
 .free-workspace .repick-hint { position: absolute; z-index: 12; top: 40px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 6px 8px 6px 14px; border-radius: 999px; background: var(--surface); color: var(--text); border: 1px solid var(--border); font-size: 13px; box-shadow: 0 3px 12px #00000030; }
 .free-workspace .repick-hint button { min-height: 26px; padding: 2px 10px; border-radius: 999px; font-size: 12px; }
 .free-workspace.repicking .canvas { cursor: crosshair; }
@@ -205,10 +199,6 @@
 .delete-inline details { font-size: 11px; }
 .delete-inline details[open] { flex-basis: 100%; }
 
-.area-problem, .canvas-page-problem { background: #fff3d2; color: #2c2000; border: 2px solid #795600; border-radius: 7px; padding: 10px; box-sizing: border-box; box-shadow: 0 2px 8px #0004; font-size: 13px; line-height: 18px; }
 .area-problem { position: absolute; display: flex; flex-direction: column; justify-content: space-between; pointer-events: auto; }
 .area-problem > span { overflow-wrap: anywhere; }
-.area-problem > div, .canvas-page-problem { display: flex; gap: 6px; align-items: center; }
-.area-problem button, .canvas-page-problem button { background: #fff; color: #2c2000; border: 1px solid #795600; padding: 3px 7px; white-space: nowrap; }
-.canvas-page-problem { position: absolute; top: 34px; left: 40px; right: 16px; z-index: 100000; }
-.canvas-page-problem > span { flex: 1; }
+.area-problem > div { display: flex; gap: 6px; align-items: center; }

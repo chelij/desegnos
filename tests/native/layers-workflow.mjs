@@ -206,7 +206,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     provider.setMode('complete', { layerAudit: true }); await driver.button('Generate');
     const job = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'applied' && value; }, 'The native layer fixture did not apply', 25_000);
     assert.equal(provider.generationRequests().length, 1); assert.equal(provider.generationRequests()[0].markdown, job.requirements.markdown);
-    await previewReady(driver); if(await driver.execute(()=>!!document.querySelector('button[aria-label="Keep changes"]'))) await driver.button('Keep changes'); await driver.button('Fit'); await settled(driver);
+    await previewReady(driver); if(await driver.execute(()=>!!document.querySelector('.generation-notice .notice-dismiss'))) await driver.click('.generation-notice .notice-dismiss'); await driver.button('Fit'); await settled(driver);
     baseline = await siteState(driver); assert.equal(baseline.outerHit, 'orange-card'); assert.equal(baseline.nestedHit, 'purple-card');
     assert.equal(baseline.backdrop.zIndex, '-1'); assert.equal(baseline.backdrop.pointerEvents, 'none');
     // These wrappers have no selectable box; their visible children still need
@@ -456,7 +456,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     assert.ok(job.candidate.criticism.some(item => item.suggestion.includes('Clearly labelled image placeholders')));
     assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface')), false);
     await physical.captureWindow(join(output, 'downloaded-image-labelled-draft.png'));
-    if(await driver.execute(()=>!!document.querySelector('button[aria-label="Keep changes"]'))) await driver.button('Keep changes');
+    if(await driver.execute(()=>!!document.querySelector('.generation-notice .notice-dismiss'))) await driver.click('.generation-notice .notice-dismiss');
     const parent = join(output, 'image-export'); await mkdir(parent, { recursive: true });
     await chooseFolder(physical, () => driver.button('Export'), parent, output, 'image-export');
     await driver.ready('.export-notice');
@@ -464,7 +464,7 @@ export async function layersWorkflow(driver, physical, step, evidence, provider)
     const exported = await inspectChromiumPage({ url: pathToFileURL(join(directory, 'index.html')).href, outputDirectory: output, label: 'exported-image-draft', expression: `(() => ({ photo: document.querySelector('#downloaded-photo')?.naturalWidth, missing: document.querySelector('#missing-photo')?.naturalWidth, src: document.querySelector('#downloaded-photo')?.getAttribute('src'), disabled: document.querySelector('button')?.disabled }))()` });
     assert.equal(exported.value.photo, 2); assert.equal(exported.value.missing, 640); assert.equal(exported.value.disabled, true);
     assert.ok(!exported.value.src.startsWith('http') && !exported.value.src.startsWith('data:'));
-    await driver.click('[aria-label="Dismiss export notice"]');
+    await driver.click('.export-notice .notice-dismiss');
     // Keep the existing stacking/export checks focused on their original site.
     await driver.button('Undo'); await previewReady(driver);
   });

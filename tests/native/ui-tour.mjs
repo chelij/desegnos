@@ -81,7 +81,7 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
           if (Math.abs(rect(buttons[0]).top - rect(buttons[1]).top) > 1 || getComputedStyle(retry).whiteSpace !== 'nowrap') issues.push('Retry confirmation wraps');
         }
         const save = document.querySelector('.save-conflict');
-        if (save && (save.closest('.workspace-surface').querySelector('header') || rect(save).height > 90)) issues.push('Save conflict is not a compact bar');
+        if (save && (save.closest('.workspace-surface')?.querySelector('header') || rect(save).height > 90)) issues.push('Save conflict is not a compact bar');
         const deletion = document.querySelector('.delete-inline');
         if (deletion && !deletion.closest('.element-toolbar')) issues.push('Delete confirmation escaped selection toolbar');
         const accountMenu = document.querySelector('.ai-account-options .editor-menu');
@@ -169,10 +169,11 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
   await waitFor(async () => ['applied', 'blocked', 'failed'].includes((await driver.invoke('get_generation', { projectId: p.id }))?.status), 'Initial generation did not finish', 30000);
   await writeFile(join(evidence, 'initial-job.json'), JSON.stringify(await driver.invoke('get_generation', { projectId: p.id }), null, 2));
   await surface(3, 'retry-confirmation', 'Inline retry confirmation inside the Page updated status bubble', async () => {
-    await driver.click('.canvas-pill button[title^="Undo this result"]');
-    await driver.ready('.canvas-pill [aria-label="Confirm retry"]');
+    await driver.click('//div[contains(@class,"generation-notice")]//button[normalize-space(.)="Details"]', 'xpath');
+    await driver.button('Try again');
+    await driver.ready('//div[contains(@class,"generation-notice")]//strong[normalize-space(.)="Try again?"]', 'xpath');
   });
-  if (await driver.execute(() => !!document.querySelector('.canvas-pill [aria-label="Confirm retry"]'))) await driver.button('No');
+  if (await driver.execute(() => !![...document.querySelectorAll('.generation-notice strong')].some(node => node.textContent === 'Try again?'))) await driver.button('Cancel');
   // Restore the pictured fixture through acknowledged source edits before creating a retained draft.
   let current = await project();
   await driver.invoke('edit_page_source', { projectId: current.id, pageId, revision: current.revision, ...source });

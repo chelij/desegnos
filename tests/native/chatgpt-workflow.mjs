@@ -69,7 +69,7 @@ async function signedIn(driver, previousActive = null) {
 async function terminal(driver, projectId, expected) {
   const value = await waitFor(async () => { const value = await job(driver, projectId); return value?.status === expected && value; }, `ChatGPT request did not reach ${expected}`, 20_000);
   await button(driver, 'Refresh job');
-  await waitFor(() => driver.execute(status => document.querySelector('.workspace-surface .generation-status')?.dataset.jobStatus === status, expected), 'The visible ChatGPT job did not refresh');
+  await waitFor(() => driver.execute(status => document.querySelector('.notice-host .generation-notice')?.classList.contains('status-' + status), expected), 'The visible ChatGPT job did not refresh');
   return value;
 }
 async function prepare(driver, provider, mode) {

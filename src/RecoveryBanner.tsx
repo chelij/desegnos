@@ -10,8 +10,7 @@ export function isPendingRecovery(error: unknown): error is PendingRecovery {
 export function RecoveryBanner({ busy, recover, openSaved, dismiss }: {
   busy: boolean; recover: () => void; openSaved: () => void; dismiss: () => void;
 }) {
-  return <ProblemBanner className="recovery-banner" message="This project has unsaved changes from an earlier session."
-    action={{ label: 'Recover', disabled: busy, onClick: recover }} dismiss={dismiss}>
-    <button type="button" disabled={busy} onClick={openSaved}>Open saved version</button>
-  </ProblemBanner>;
+  return <ProblemBanner variant="warning" message="This project has unsaved changes from an earlier session."
+    action={{ label: 'Recover', disabled: busy, onClick: recover }} dismiss={dismiss}
+    secondaryAction={{ label: 'Open saved version', disabled: busy, onClick: openSaved }} />;
 }

@@ -31,8 +31,8 @@ os.chmod(dest,0o600)
 `,path,String(indent),destination,String(different)],{encoding:'utf8',timeout:10000});assert.equal(result.status,0,result.stderr);
 }
 async function conflict(driver,defaultLabel,canReplace=true){
- await driver.ready('.workspace-surface .save-conflict');
- await waitFor(()=>driver.execute(label=>document.activeElement?.textContent===label,defaultLabel),'Save conflict did not focus its safe default');
+ await driver.ready('.notice-host .save-conflict');
+ await waitFor(()=>driver.execute(label=>(document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent)===(label==='Cancel'?'Dismiss notice':label),defaultLabel),'Save conflict did not focus its safe default');
  assert.equal(await driver.execute(()=>[...document.querySelectorAll('.save-conflict button')].some(button=>button.textContent==='Replace it')),canReplace);
 }
 export async function selectionSaveWorkflow(driver,physical,step,output,home,about,projectPath,provider){
@@ -89,12 +89,12 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
   await physical.keys('Home',1,['Control']);await physical.keys('Down');await physical.keys('Home');await physical.keys('Down',1,['Shift']);await physical.keys('BackSpace');
   await waitFor(()=>driver.execute(()=>!document.querySelector('.static-preview iframe')?.contentDocument?.querySelector('h1')),'Deleting a source line did not remove its element');
   await driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Design"]','xpath');await ready(driver);
-  const stale=`[data-region-id="${multiId}"] .request-stale`;
+  const stale='.notice-host .request-stale';
   await driver.ready(stale);assert.match(await driver.execute(q=>document.querySelector(q).textContent,stale),/This element was removed/);
   await driver.click(`${stale} button:first-of-type`);await select(driver,physical,'#action');
   await waitFor(async()=>{const next=(await workspace(driver)).project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId);return next.elements.length===1&&next.elements[0].tag==='button';},'Pick again did not retarget the original request');
   assert.equal((await workspace(driver)).project.pages.find(p=>p.id===about).regions.find(r=>r.id===multiId).prompt,request.prompt);
-  await driver.button('Undo last change');await driver.ready(stale);await driver.click(`${stale} button:last-of-type`);await driver.button('Remove');
+  await driver.button('Undo last change');await driver.ready(stale);await driver.click(`${stale} .notice-actions button:nth-child(2)`);await driver.button('Remove');
   await waitFor(async()=>!(await workspace(driver)).project.pages.find(p=>p.id===about).regions.some(r=>r.id===multiId),'Remove request did not remove only the stale request');
   await driver.button('Undo last change');await driver.button('Undo last change');await ready(driver);
   assert.deepEqual((await workspace(driver)).project.pages,before.project.pages);
@@ -103,7 +103,7 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
   await driver.button('Save');const before=(await workspace(driver)).project;
   await driver.click('.project-title');await driver.fill('Project name','Safe draft');await driver.button('Rename project');
   externalArchive(projectPath,1);const changed=await readFile(projectPath);
-  await driver.button('Save');await conflict(driver,'Save as copy');await driver.button('Cancel');
+  await driver.button('Save');await conflict(driver,'Save as copy');await driver.click('.save-conflict .notice-dismiss');
   assert.equal(hash(await readFile(projectPath)),hash(changed));assert.equal((await workspace(driver)).dirty,true);
   await driver.button('Save');await conflict(driver,'Save as copy');
   await chooseFile(physical,()=>driver.button('Save as copy'),null,output,'cancel-conflict-copy',true);
@@ -125,7 +125,7 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
  await step('Another disk change invalidates a pending Replace and requires a fresh choice',async()=>{
   externalArchive(copyPath,3);await driver.button('Save');await conflict(driver,'Save as copy');
   externalArchive(copyPath,4);const newer=await readFile(copyPath),backup=await readFile(copyPath+'.previous');await driver.button('Replace it');
-  await conflict(driver,'Save as copy');assert.equal(hash(await readFile(copyPath)),hash(newer));assert.equal(hash(await readFile(copyPath+'.previous')),hash(backup));await driver.button('Cancel');
+  await conflict(driver,'Save as copy');assert.equal(hash(await readFile(copyPath)),hash(newer));assert.equal(hash(await readFile(copyPath+'.previous')),hash(backup));await driver.click('.save-conflict .notice-dismiss');
   // Reopen the disk version to establish its actual baseline, then restore the saved draft normally.
   await driver.button('Save');await conflict(driver,'Save as copy');await driver.button('Replace it');await savedState(driver,copyPath);
  });
@@ -133,14 +133,14 @@ export async function selectionSaveWorkflow(driver,physical,step,output,home,abo
  await step('Save as another project needs an in-app confirmation with Cancel as default',async()=>{
   externalArchive(copyPath,2,otherPath,true);const other=await readFile(otherPath);
   await chooseFile(physical,()=>driver.button('Save as'),otherPath,output,'different-project-save-as');
-  await conflict(driver,'Cancel');assert.match(await driver.execute(()=>document.querySelector('.workspace-surface h2').textContent),/different project/);
-  await driver.button('Cancel');assert.equal(hash(await readFile(otherPath)),hash(other));assert.equal((await workspace(driver)).path,copyPath);
+  await conflict(driver,'Cancel');assert.match(await driver.execute(()=>document.querySelector('.save-conflict').textContent),/different project/);
+  await driver.click('.save-conflict .notice-dismiss');assert.equal(hash(await readFile(otherPath)),hash(other));assert.equal((await workspace(driver)).path,copyPath);
   await physical.captureWindow(join(output,'safe-save.png'));
  });
  await step('Unreadable destinations offer a new name and never expose Replace',async()=>{
   const nonProject=join(output,'Notes.desegnos');await writeFile(nonProject,'Private notes, not a project.');
   await chooseFile(physical,()=>driver.button('Save as'),nonProject,output,'nonproject-save-as');await conflict(driver,'Save as copy',false);
-  await driver.button('Cancel');assert.equal(await readFile(nonProject,'utf8'),'Private notes, not a project.');
+  await driver.click('.save-conflict .notice-dismiss');assert.equal(await readFile(nonProject,'utf8'),'Private notes, not a project.');
  });
  await driver.page(home);await driver.button('Save');
  return (await workspace(driver)).project;

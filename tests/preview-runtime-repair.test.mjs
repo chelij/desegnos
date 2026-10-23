@@ -24,9 +24,9 @@ try {
     const html = renderToStaticMarkup(React.createElement(PreviewFrame, props));
     assert.match(html, /class="primary">Fix with AI<\/button>/);
     assert.match(html, /role="alert"/);
-    assert.equal((html.match(/A script on this page looks for something that isn&#x27;t there\./g) ?? []).length, 1);
+    assert.match(html, /<span>A script on this page looks for something that isn&#x27;t there\.<\/span>/);
     assert.doesNotMatch(html, /TypeError|pause|addEventListener/);
-    assert.match(html, />Dismiss<\/button>/);
+    assert.match(html, /aria-label="Dismiss notice"/);
     for (const extra of [{ staticView: true }, { draftId: 'draft' }, { jobId: 'job' }, { fixRuntimeErrors: undefined }]) {
       assert.doesNotMatch(renderToStaticMarkup(React.createElement(PreviewFrame, { ...props, ...extra })), /Fix with AI/);
     }

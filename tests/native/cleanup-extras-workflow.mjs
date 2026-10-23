@@ -178,11 +178,11 @@ export async function cleanupExtrasWorkflow(driver,physical,step,evidence,provid
     assert.match(await driver.execute(()=>document.querySelector('[contenteditable="true"][aria-label="JavaScript code"]').textContent),/const bad = ;/);
     const savedBytes=await readFile(projectPath);
     for(const action of [()=>driver.button('Save'),()=>driver.click('//div[@aria-label="Editor view"]/button[normalize-space(.)="Design"]','xpath'),()=>driver.page(home)]){
-      await action();await waitFor(()=>driver.execute(()=>document.querySelector('.message.error')?.textContent.includes('unsaved changes')),'Invalid code did not block leaving the draft');
+      await action();await waitFor(()=>driver.execute(()=>document.querySelector('.notice-error')?.textContent.includes('unsaved changes')),'Invalid code did not block leaving the draft');
       assert.match(await driver.execute(()=>document.querySelector('[aria-label="JavaScript code"]').textContent),/const bad = ;/);
       assert.equal(await driver.execute(id=>document.getElementById(`page-tab-${id}`).getAttribute('aria-selected'),about),'true');
       assert.ok(await driver.execute(()=>document.querySelector('.code-pane').getClientRects().length));
-      await driver.button('Dismiss error');
+      await driver.click('.notice-error .notice-dismiss');
     }
     assert.deepEqual(await readFile(projectPath),savedBytes);
     await physical.captureWindow(join(output,'invalid-code-retained.png'));

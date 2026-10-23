@@ -1,4 +1,4 @@
-import { ProblemBanner } from './ProblemBanner.js';
+import { Notice, ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { forwardRef, lazy, Suspense, useImperativeHandle, useEffect, useMemo, useRef, useState } from 'react';
 import { synchronizeCodeDrafts, type PendingCodeDraft } from './codeDraftLifecycle';
@@ -179,7 +179,7 @@ export const CodePane = forwardRef<CodePaneHandle, {
     return synchronizing.current;
   }
   useImperativeHandle(ref, () => ({ synchronize }));
-  const note = status.kind === 'saving' ? 'Saving…' : status.kind === 'saved' ? 'Saved. Undo works as usual.' : status.kind === 'invalid' ? 'Not saved yet. Fix the highlighted line.' : status.kind === 'error' || status.kind === 'conflict' ? userError(status.message) : drafts[tab] ? 'Saving after you pause…' : save && content ? 'Edits save automatically when you pause.' : '';
+
   return <section className="code-pane" aria-label="Page code">
     <header className="code-pane-bar">
       <div className="code-tabs" role="tablist" aria-label="Code files">{TABS.map(([value, label]) => <button key={value} role="tab" aria-selected={tab === value} onClick={() => { void commit(tab); setTab(value); }}>{label}{drafts[value] && drafts[value]!.text !== projections[value].text ? ' •' : ''}</button>)}</div>
@@ -200,7 +200,7 @@ export const CodePane = forwardRef<CodePaneHandle, {
       for (const error of statuses[language]?.diagnostics ?? []) if (error.language === language) mark(error.line, 'error', userError(error.message));
       return <CodeEditor key={language} ref={node => { if (node) editors.current[language] = node; else delete editors.current[language]; }} language={language} label={`${label} code`} text={value} projection={drafts[language]?.projection ?? projections[language]} hiddenMetadata={language === 'html' && !showMeta} readOnly={!save} active={language === tab} marks={[...marks.values()]} query={language === tab ? query : ''} focusLine={language === tab ? focusLine : null} change={(text, projection) => change(language, text, projection)} cursor={language === 'html' ? follow : () => {}} flush={() => { void commit(language); }} saveProject={saveProject ?? (() => { void synchronize().catch(() => {}); })} find={() => searchInput.current?.focus()} />;
     })}</Suspense>}
-    <footer className={`code-pane-note status-${status.kind}`} role="status">{['invalid', 'conflict', 'error'].includes(status.kind) ? <ProblemBanner key={`${tab}:${status.kind}`} message={status.kind === 'invalid' ? 'This code has a writing mistake.' : status.kind === 'conflict' || status.kind === 'error' ? userError(status.message) : ''} instruction={status.kind === 'invalid' ? 'Fix the highlighted line.' : 'Review your code changes before saving again.'} action={status.kind === 'error' && drafts[tab] ? { label: 'Try saving again', onClick: () => { setStatus(tab, { kind: 'idle' }); void commit(tab); } } : undefined} /> : <span>{note}</span>}
+    <footer className={`code-pane-note status-${status.kind}`}>{['invalid', 'conflict', 'error'].includes(status.kind) ? <ProblemBanner key={`${tab}:${status.kind}`} message={status.kind === 'invalid' ? 'This code has a writing mistake.' : status.kind === 'conflict' || status.kind === 'error' ? userError(status.message) : ''} action={status.kind === 'error' && drafts[tab] ? { label: 'Try saving again', onClick: () => { setStatus(tab, { kind: 'idle' }); void commit(tab); } } : undefined} /> : ['saving', 'saved'].includes(status.kind) ? <Notice key={`${tab}:${status.kind}`} variant={status.kind === 'saved' ? 'success' : 'info'} message={status.kind === 'saved' ? 'Code saved.' : 'Saving code…'} /> : null}
       {status.kind === 'invalid' && <ul className="code-errors">{(status.diagnostics ?? []).slice(0, 3).map((item, index) => <li key={index}><button type="button" className="link-button" onClick={() => { const language = item.language === 'css' ? 'css' : item.language === 'javascript' ? 'javascript' : 'html'; setTab(language); requestAnimationFrame(() => editors.current[language]?.reveal(item.line)); }}>Line {item.line}</button> {userError(item.message)}</li>)}</ul>}
       {drafts[tab] && ['invalid', 'conflict', 'error'].includes(status.kind) && <button type="button" disabled={!!flights.current[tab]} onClick={discard}>Discard code changes</button>}
     </footer>

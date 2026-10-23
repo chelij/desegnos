@@ -39,7 +39,7 @@ async function previewReady(driver) {
 }
 
 async function noRecoveryError(driver) {
-  const text = await driver.execute(() => [...document.querySelectorAll('.message.error')].map(item => item.textContent).join(' '));
+  const text = await driver.execute(() => [...document.querySelectorAll('.notice-error')].map(item => item.textContent).join(' '));
   assert.doesNotMatch(text, /Recovery could not be loaded/, text);
 }
 
@@ -209,13 +209,13 @@ export async function realUseWorkflow(driver, physical, step, evidence, provider
     assert.equal(sent.length, 1);
     assert.match(sent[0].markdown, /^Requirements format: 14$/m);
     await writeFile(join(evidence, 'real-element-fix-request.md'), sent[0].markdown);
-    const bar = '//*[@role="region" and @aria-label="Generation status"]';
+    const bar = '//*[contains(concat(" ", normalize-space(@class), " "), " generation-notice ")]';
     await driver.click(`${bar}//button[normalize-space(.)="Undo"]`, 'xpath');
     await waitFor(async () => (await workspace(driver)).project.pages.some(page => page.regions.some(region => !region.completed && region.prompt)), 'Discarding the result did not bring the request back');
     await driver.button('Generate');
     const second = await jobAt(driver, projectId, ['applied'], first.jobId);
     assert.equal(provider.generationRequests().length, before + 2);
-    if (await driver.execute(() => [...document.querySelectorAll('.canvas-pill[aria-label="Generation status"] button')].some(button => button.textContent.trim() === 'Keep'))) await driver.click(`${bar}//button[normalize-space(.)="Keep"]`, 'xpath');
+    if (await driver.execute(() => [...document.querySelectorAll('.notice-host .generation-notice button')].some(button => button.getAttribute('aria-label') === 'Dismiss notice'))) await driver.click(`${bar}//button[@aria-label="Dismiss notice"]`, 'xpath');
     await writeFile(join(evidence, 'real-element-fix.json'), JSON.stringify({ attempts: 2, requestBytes: provider.generationRequests().slice(before).map(record => record.requestBytes), finalJob: second.jobId }, null, 2));
     await physical.captureWindow(join(evidence, 'real-04-element-fix-kept.png'));
   });

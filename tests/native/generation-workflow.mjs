@@ -41,7 +41,7 @@ async function waitJob(driver, projectId, status, timeout = 20_000) {
   const job = await waitFor(async () => { const value = await latest(driver, projectId); return expected.includes(value?.status) && value; }, `Generation did not reach ${expected.join(' or ')}`, timeout);
   if (await driver.execute(() => !!document.querySelector('.workspace-surface .generation-dialog'))) {
     if (!expected.includes('prepared')) await dialogButton(driver, 'Refresh job');
-    await waitFor(() => driver.execute(states => states.includes(document.querySelector('.workspace-surface .generation-status')?.dataset.jobStatus), expected), 'The native generation status did not reach its visible review');
+    await waitFor(() => driver.execute(states => states.some(status => document.querySelector('.notice-host .generation-notice')?.classList.contains('status-' + status)), expected), 'The native generation status did not reach its visible review');
   }
   return job;
 }
@@ -260,7 +260,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     await driver.button('Strict');
     await driver.click('.shell-primary-actions button.primary');
     first = await waitFor(async () => { const value = await job(); return value?.status === 'generating' && value; }, 'One Generate click did not start generation');
-    await waitFor(() => driver.execute(() => !!document.querySelector('.generation-log .generation-status')), 'The progress window did not open');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.notice-host .generation-notice')), 'The progress window did not open');
     await waitFor(() => provider.generationRequests().length === count + 1, 'The native request did not reach the provider');
     assertAttachment(provider.generationRequests().at(-1), first);
     assert.equal(first.generationMode, 'strict');
@@ -432,7 +432,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     await driver.fill(`Request ${project.pages[0].regions.findIndex(region => region.id === area.id) + 1}`, 'Keep this newer request');
     await waitFor(async () => (await workspace()).project.pages[0].regions.find(region => region.id === area.id).prompt === 'Keep this newer request', 'The newer request did not save');
     provider.release(running.jobId); await waitFor(async () => (await job()).receivedBytes > 0, 'Stale response did not stream'); provider.release(running.jobId);
-    await waitFor(() => driver.execute(() => document.querySelector('.generation-progress [data-job-status]')?.dataset.jobStatus === 'blocked'), 'Stale application did not show its blocked outcome');
+    await waitFor(() => driver.execute(() => document.querySelector('.notice-host .generation-notice')?.classList.contains('status-blocked')), 'Stale application did not show its blocked outcome');
     assert.match((await job()).message, /stale|changed/i);
     assert.deepEqual((await workspace()).project.pages[0].content, before);
     await clearDialogs();

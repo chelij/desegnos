@@ -19,7 +19,7 @@ export function ElementDialog({ mode, target, visual, inspect, apply, move, clos
   const [details, setDetails] = useState<ElementDetails | null>(null); const [error, setError] = useState('');
   useEffect(() => { let active = true; void inspect(target).then(value => { if (active) setDetails(value); }, error => { if (active) setError(String(error)); }); return () => { active = false; }; }, [target.id, target.sourceSha256, target.selector]);
   return <WorkspaceSurface place={mode === 'remove' ? 'banner' : 'panel'} title={titles[mode]} close={close}><div className="dialog-body element-dialog">
-    {error && <ProblemBanner message={userError(error)} instruction="Review the selected item and try again." dismiss={() => setError('')} />}
+    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} />}
     {!details && !error && <p role="status">Opening this item…</p>}
     {details && <ElementForm key={`${target.id ?? target.sourceSha256}:${target.selector}:${mode}`} mode={mode} projectImages={projectImages} details={details} visual={visual} apply={apply} move={move} close={close} />}
   </div></WorkspaceSurface>;
@@ -73,7 +73,7 @@ function ElementForm({ mode, details, visual, apply, move, close, projectImages 
     <label>Image file<input type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml" onChange={event => { void file(event.target.files?.[0]); }} />{fileName && <span className="field-help">{fileName}</span>}</label>
   </>;
   return <form onSubmit={event => { void submit(event); }}>
-    {error && <ProblemBanner message={userError(error)} instruction="Review the selected item and try again." dismiss={() => setError('')} />}
+    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} />}
     {mode === 'remove' ? <><p>Delete this item and everything inside it?</p><label className="check-label"><input type="checkbox" checked={skipAsking} onChange={event => setSkipAsking(event.target.checked)} />Don’t ask again</label></> : mode === 'position' ? <><div className="form-row"><label>Move horizontally (px)<input type="number" value={x} step="any" onChange={event => setX(event.target.valueAsNumber)} required /></label><label>Move vertically (px)<input type="number" value={y} step="any" onChange={event => setY(event.target.valueAsNumber)} required /></label></div></> : mode === 'replace' ? <>
       <label>Replace with<select value={kind} onChange={event => setKind(event.target.value)}>{[['p','Paragraph'],['h1','Main heading'],['h2','Heading'],['h3','Small heading'],['button','Button'],['a','Link'],['img','Image'],['section','Section'],['div','Container']].map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       {kind === 'html' ? <label>Replacement HTML<textarea className="code-input" value={html} onChange={event => setHtml(event.target.value)} rows={10} maxLength={1048576} required /></label> : kind === 'img' ? <>{imageControl}<label>Image description<input value={attributes.alt ?? ''} onChange={event => attr('alt', event.target.value)} /></label></> : <label>Text<textarea value={replacementText} onChange={event => setReplacementText(event.target.value)} rows={3} /></label>}

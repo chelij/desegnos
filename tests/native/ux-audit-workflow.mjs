@@ -254,11 +254,11 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     const before = (await workspace(driver)).project;
     provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     cancelled = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The held generation did not reach the provider');
-    await driver.ready('.canvas-pill[aria-label="Generation status"]');
+    await driver.ready('.notice-host .generation-notice');
     assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface')), false);
     await driver.click('//header//button[normalize-space(.)="Stop"]', 'xpath');
     await jobAt(driver, projectId, ['cancelled']); provider.release(cancelled.jobId);
-    await waitFor(() => driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"] .generation-heading')?.textContent === 'Stopped'), 'Stop did not visibly acknowledge cancellation');
+    await waitFor(() => driver.execute(() => document.querySelector('.notice-host .generation-notice strong')?.textContent === 'Stopped'), 'Stop did not visibly acknowledge cancellation');
     await driver.ready('//header//button[normalize-space(.)="Generate" and not(@disabled)]', 'xpath');
     assert.deepEqual((await workspace(driver)).project.pages, before.pages);
     await physical.captureWindow(join(output, '07-cancelled-generation-window.png'));
@@ -268,7 +268,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     provider.setMode('waiting', { editorAudit: true }); await driver.button('Generate');
     const held = await waitFor(async () => { const value = await driver.invoke('get_generation', { projectId }); return value?.status === 'generating' && value.jobId !== cancelled.jobId && provider.generationRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The second generation did not reach the held provider');
     assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface')), false);
-    assert.match(await driver.execute(() => document.querySelector('.canvas-pill[aria-label="Generation status"]').textContent), /\d+:\d{2}|elapsed/i);
+    assert.match(await driver.execute(() => document.querySelector('.notice-host .generation-notice').textContent), /\d+:\d{2}|elapsed/i);
     await driver.click('[role="toolbar"][aria-label="Canvas tools"] button[aria-label="Pan"], [role="toolbar"][aria-label="Canvas tools"] button[title^="Pan"]');
     const view = await physical.rect('.free-workspace'); const start = { x: view.left + 80, y: view.top + 120 };
     const before = await driver.execute(() => { const element = document.querySelector('.workspace-scroll'); return [element.scrollLeft, element.scrollTop]; });
@@ -285,18 +285,18 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     const record = provider.generationRequests().find(item => item.metadata.jobId === applied.jobId);
     assert.equal(record.markdown, applied.requirements.markdown); assert.equal(hash(record.markdown), applied.requirements.sha256); assert.equal(record.metadata.generationMode, 'strict');
     assert.equal(applied.requirements.pageCount, 2); assert.equal((await workspace(driver)).project.pages.every(page => page.content?.html.includes('Generated native preview')), true);
-    await previewReady(driver, 'Generated native preview'); await driver.ready('.canvas-pill[aria-label="Generation status"]');
+    await previewReady(driver, 'Generated native preview'); await driver.ready('.notice-host .generation-notice');
     await writeFile(join(output, 'submitted-instructions.md'), record.markdown);
   });
 
   await step('On-canvas result actions preserve one-step Undo and Redo without a sidebar', async () => {
-    const bar = '//*[@role="region" and @aria-label="Generation status"]';
-    for (const label of ['Undo', 'Try again']) await driver.ready(`${bar}//button[normalize-space(.)=${xpathString(label)}]`, 'xpath');
+    const bar = '//*[contains(concat(" ", normalize-space(@class), " "), " generation-notice ")]';
+    for (const label of ['Undo', 'Details']) await driver.ready(`${bar}//button[normalize-space(.)=${xpathString(label)}]`, 'xpath');
     await physical.captureWindow(join(output, '09-applied-review-window.png'));
     const requests = requestCount(provider); await driver.click(`${bar}//button[normalize-space(.)="Undo"]`, 'xpath');
     await waitFor(async () => (await workspace(driver)).project.pages.every(page => !page.content), 'Result Undo did not restore the previous website');
     await driver.button('Redo'); await previewReady(driver, 'Generated native preview'); assert.equal(requestCount(provider), requests);
-    if (await driver.execute(() => !![...document.querySelectorAll('.canvas-pill[aria-label="Generation status"] button')].find(button=>button.textContent.trim()==='Keep'))) await driver.click(`${bar}//button[normalize-space(.)="Keep"]`, 'xpath');
+    if (await driver.execute(() => !![...document.querySelectorAll('.notice-host .generation-notice button')].find(button=>button.getAttribute('aria-label')==='Dismiss notice'))) await driver.click(`${bar}//button[@aria-label="Dismiss notice"]`, 'xpath');
     await assertCanvasOnly(driver);
   });
 
@@ -319,7 +319,7 @@ export async function uxAuditWorkflow(driver, physical, step, evidence, provider
     await driver.button('Undo'); await previewReady(driver, 'Generated native preview');
     provider.setMode('complete', { editorAudit: true }); await driver.button('Generate'); applied = await jobAt(driver, projectId, ['applied']);
     await previewReady(driver, 'Generated native preview');
-    await driver.ready('.canvas-pill[aria-label="Generation status"]');
+    await driver.ready('.notice-host .generation-notice');
     await physical.doubleClick(await childPoint(driver, 'h1', true)); await driver.ready('.inline-text-editor[role="textbox"]');
     await physical.keys('A', 1, ['Control']); await physical.raw({ action: 'text', text: 'Result review preserves newer typing' });
     await waitFor(() => driver.execute(() => (document.querySelector('.inline-text-editor')?.value ?? document.querySelector('.inline-text-editor')?.textContent) === 'Result review preserves newer typing'), 'The native typing did not settle in the inline editor');

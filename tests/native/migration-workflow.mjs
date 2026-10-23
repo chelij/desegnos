@@ -48,7 +48,7 @@ export async function migrationWorkflow(driver, physical, step, evidence) {
     assert.deepEqual(await readFile(destination), bytes);
     await assertCanvasOnly(driver);
     await writeFile(join(evidence, 'migration-open.png'), Buffer.from(await driver.screenshot(), 'base64'));
-    await driver.click('button[aria-label="Dismiss migration notice"]');
+    await driver.click('.notice-warning .notice-dismiss');
     assert.equal(await driver.execute(() => document.querySelector('.migration-notice') === null), true);
     assert.deepEqual((await driver.invoke('get_workspace')).project, expected);
   });

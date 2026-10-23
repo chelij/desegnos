@@ -34,7 +34,7 @@ export async function canvasInputWorkflow(driver, physical, step, evidence, prov
     await driver.invoke('set_ai_key', { key:provider.key(), storage:'session' }); provider.setMode('complete', { editorAudit:true }); await driver.button('Generate');
     await waitFor(async () => (await driver.invoke('get_generation', { projectId:id }))?.status === 'applied', 'The controlled result did not apply',25000);
     await waitFor(() => driver.execute(() => document.querySelector('.static-preview')?.dataset.previewReady === 'true'), 'The accepted canvas did not render');
-    await driver.button('Keep changes');
+    await driver.click('.generation-notice .notice-dismiss');
     await driver.button('Fit'); await settled(driver);
   });
   await step('Trusted site clicks remain under the pointer after combined zoom and panning', async () => {

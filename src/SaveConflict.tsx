@@ -1,5 +1,4 @@
 import { ProblemBanner } from './ProblemBanner.js';
-import { useLayoutEffect, useRef } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import type { WorkspaceView } from './types';
 
@@ -9,15 +8,11 @@ export type SaveOutcome = { status: 'saved'; workspace: WorkspaceView } | { stat
 export type SaveChoice = 'copy' | 'replace' | 'cancel';
 
 export function SaveConflictDialog({ conflict, choose }: { conflict: SaveConflict; choose: (choice: SaveChoice) => void }) {
-  const defaultButton = useRef<HTMLButtonElement>(null);
-  useLayoutEffect(() => { defaultButton.current?.focus(); }, [conflict.token]);
   const different = conflict.kind === 'differentProject';
   const sentence = conflict.kind === 'changed' ? `“${conflict.fileName}” changed on disk.` : different ? `“${conflict.fileName}” belongs to another project.` : 'This file cannot be replaced.';
   return <WorkspaceSurface place="banner" title="Save conflict" showHeader={false} close={() => choose('cancel')}>
-    <ProblemBanner className="save-conflict" message={sentence} dismiss={() => choose('cancel')}>
-      <button type="button" className={conflict.defaultChoice === 'copy' ? 'primary' : undefined} ref={conflict.defaultChoice === 'copy' ? defaultButton : undefined} autoFocus={conflict.defaultChoice === 'copy'} onClick={() => choose('copy')}>Save as copy</button>
-      {conflict.canReplace && <button type="button" onClick={() => choose('replace')}>Replace it</button>}
-      <button type="button" className={conflict.defaultChoice === 'cancel' ? 'primary' : undefined} ref={conflict.defaultChoice === 'cancel' ? defaultButton : undefined} autoFocus={conflict.defaultChoice === 'cancel'} onClick={() => choose('cancel')}>Cancel</button>
-    </ProblemBanner>
+    <ProblemBanner className="save-conflict" dismissKey={conflict.token} autoFocus={conflict.defaultChoice === 'copy' ? 'primary' : 'dismiss'} variant="warning" message={sentence} dismiss={() => choose('cancel')}
+      action={{ label: 'Save as copy', onClick: () => choose('copy') }}
+      secondaryAction={conflict.canReplace ? { label: 'Replace it', onClick: () => choose('replace') } : { label: 'Cancel', onClick: () => choose('cancel') }} />
   </WorkspaceSurface>;
 }

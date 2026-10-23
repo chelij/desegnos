@@ -14,9 +14,6 @@
 .recent-projects li:hover .recent-remove, .recent-projects li:focus-within .recent-remove { opacity: 1; }
 .recent-projects .recent-remove:hover, .recent-projects .recent-remove:focus-visible { background: var(--selected); color: var(--text); }
 @media (hover: none) { .recent-projects .recent-remove { opacity: 1; } }
-.new-project > .message.error { flex-wrap: wrap; }
-.new-project > .message.error > span { flex: 1 1 240px; min-width: 0; }
-.new-project > .message.error > button { flex-shrink: 0; white-space: nowrap; }
 .recent-projects .recent-avatar { display: grid; place-items: center; flex: 0 0 36px; height: 36px; border-radius: 8px; background: var(--selected); color: var(--accent); font-weight: 600; font-size: 16px; }
 .recent-projects .recent-text { display: grid; gap: 3px; min-width: 0; }
 .recent-projects .recent-text strong, .recent-projects .recent-text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

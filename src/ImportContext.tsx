@@ -1,4 +1,4 @@
-import { needsAiSettings, ProblemBanner } from './ProblemBanner.js';
+import { needsAiSettings, ProblemBanner, Notice } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { native } from './api';
@@ -273,10 +273,10 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
             {source.skipped.length > 0 && <><p className="field-help">Left out: {skippedSummary(source.skipped)}.</p><details><summary>See all skipped files</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details></>}
           </details>
           {!candidate && <p className="field-help">Sent to {analysisMethod === 'chatgpt' ? `ChatGPT (${(analysisAccount ?? account)?.label ?? 'current account'})` : `${settings?.providers.find(provider => provider.id === settings.provider)?.name ?? 'OpenAI'} (API key)`}</p>}
-          {!candidate && selection?.message && <ProblemBanner message={userError(selection.message)} instruction="Choose fewer files to continue." />}
+          {!candidate && selection?.message && <ProblemBanner message={userError(selection.message)} />}
           </>}
           {analyzing ? <div className="identity-progress" role="status"><span>Reading your brand…</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Stop reading</button></div> : !candidate ? <>
-            {analysis && (analysis.status === 'cancelled' ? <p role="status">Reading stopped.</p> : <ProblemBanner message={userError(analysis.error || 'The AI could not read your brand. Try again.')} action={needsAiSettings(analysis.error || '') ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!locked || !selection?.fits || !connected, onClick: () => { void analyze(); } }} />)}
+            {analysis && (analysis.status === 'cancelled' ? <Notice message="Reading stopped." /> : <ProblemBanner message={userError(analysis.error || 'The AI could not read your brand. Try again.')} action={needsAiSettings(analysis.error || '') ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!locked || !selection?.fits || !connected, onClick: () => { void analyze(); } }} />)}
             <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || !selection?.fits || !connected} onClick={() => { void analyze(); }}>Read my brand</button>{aiNeedsFixing && <button type="button" disabled={locked} onClick={openSettings}>{connected ? 'Check AI settings' : 'Connect AI'}</button>}</div>
           </> : <div className="identity-result" aria-label="Brand review">
             <div className="identity-review-intro"><h2>3. Choose what to keep</h2></div>

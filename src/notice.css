@@ -1,0 +1,35 @@
+:root {
+  --notice-error-bg: #630f16; --notice-error-fg: #fff; --notice-error-border: #ffb4ab;
+  --notice-warning-bg: #fff3d2; --notice-warning-fg: #2c2000; --notice-warning-border: #795600;
+  --notice-success-bg: #e4f4e8; --notice-success-fg: #163d23; --notice-success-border: #367546;
+}
+:root[data-theme='dark'] {
+  --notice-warning-bg: #392a06; --notice-warning-fg: #fff3d2; --notice-warning-border: #e5c26a;
+  --notice-success-bg: #173321; --notice-success-fg: #dcf5e3; --notice-success-border: #89c79b;
+}
+.notice-host { container-type: inline-size; flex: none; min-width: 0; }
+.notice, .area-problem {
+  --notice-bg: var(--surface); --notice-fg: var(--text); --notice-border: var(--border);
+  color: var(--notice-fg); background: var(--notice-bg); border: 1px solid var(--notice-border);
+  border-radius: 6px; padding: 8px 12px; font: 13px/20px system-ui, sans-serif; box-sizing: border-box;
+}
+.notice { display: flex; align-items: center; gap: 12px; min-height: 48px; min-width: 0; margin: 6px 12px; }
+.notice-error { --notice-bg: var(--notice-error-bg); --notice-fg: var(--notice-error-fg); --notice-border: var(--notice-error-border); }
+.notice-warning, .area-problem { --notice-bg: var(--notice-warning-bg); --notice-fg: var(--notice-warning-fg); --notice-border: var(--notice-warning-border); }
+.notice-success { --notice-bg: var(--notice-success-bg); --notice-fg: var(--notice-success-fg); --notice-border: var(--notice-success-border); }
+.notice-copy { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
+.notice-copy strong { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; }
+.notice-copy span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.notice-actions { display: flex; flex: none; align-items: center; gap: 6px; margin-left: auto; white-space: nowrap; }
+.notice .notice-actions button, .area-problem button {
+  min-height: 30px; padding: 4px 10px; border: 1px solid var(--notice-border); border-radius: 4px;
+  background: var(--notice-bg); color: var(--notice-fg); font: 600 12px/20px system-ui, sans-serif; white-space: nowrap;
+}
+.notice .notice-actions .primary, .area-problem button:first-child { color: var(--notice-bg); background: var(--notice-fg); }
+.notice .notice-actions .notice-dismiss { width: 30px; padding: 4px; font-size: 18px; border-color: transparent; }
+.notice button:disabled, .area-problem button:disabled { opacity: .65; }
+.notice button:focus-visible, .area-problem button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+@container (max-width: 440px) {
+  .notice { flex-wrap: wrap; gap: 6px; }
+  .notice-copy { flex-basis: 100%; }
+}
