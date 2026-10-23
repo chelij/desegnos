@@ -1,3 +1,4 @@
+import { userError } from './userErrors.js';
 import { isWholePage } from './wholePageScope';
 import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -1179,7 +1180,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void stageImage(target, file); }} />
     {repicking && <div className="repick-hint" role="status">Click the element this request is for. <button type="button" onClick={() => setRepicking(null)}>Cancel</button></div>}
 
-    {elementError && <div className="element-edit-error" role="alert">{elementError}<button onClick={() => setElementError('')}>Dismiss</button></div>}
+    {elementError && <div className="element-edit-error" role="alert">{userError(elementError)}<button onClick={() => setElementError('')}>Dismiss</button></div>}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
     {measuring && selectedRect && coordinate && gridSettings.rulers && !liveView && <div ref={measurement} className="workspace-measurement" aria-label="Placement in pixels" title={`${percent(coordinate.x, page.viewport.width)} · ${percent(coordinate.y, page.viewport.height)} · ${percent(selectedRect.width, page.viewport.width)} × ${percent(selectedRect.height, page.viewport.height)}`}
       style={{ left: measurementPosition?.x ?? 0, top: measurementPosition?.y ?? 0, visibility: measurementPosition ? undefined : 'hidden' }}>
@@ -1278,8 +1279,8 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
       {attachments.length > 3 && <li><button type="button" aria-expanded={attachmentsExpanded} aria-label={attachmentsExpanded ? 'Show fewer attachments' : `Show ${attachments.length - 3} more attachments`} onClick={() => setAttachmentsExpanded(value => !value)}>{attachmentsExpanded ? 'Less' : `+${attachments.length - 3}`}</button></li>}
     </ul>}
     {reports.map((report, index) => <details className="request-archive-report" key={index} onPointerDown={event => event.stopPropagation()}>
-      <summary>From {report.name}: {report.added} added, {report.skipped.length} skipped{report.skipped.length ? ` (${new Set(report.skipped.map(item => item.reason)).size === 1 ? report.skipped[0].reason : 'multiple reasons'})` : ''}</summary>
-      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: {item.reason}</li>)}</ul>}
+      <summary>From {report.name}: {report.added} added, {report.skipped.length} skipped{report.skipped.length ? ` (${new Set(report.skipped.map(item => item.reason)).size === 1 ? userError(report.skipped[0].reason) : 'multiple reasons'})` : ''}</summary>
+      {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: {userError(item.reason)}</li>)}</ul>}
     </details>)}
     </div>}
     {selected && attach && <div className="request-attach-row">

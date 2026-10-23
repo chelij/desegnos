@@ -56,7 +56,7 @@ fn validate(path: &Path) -> Result<(), String> {
             .components()
             .any(|c| c == std::path::Component::ParentDir)
     {
-        return Err("Choose an absolute project location.".into());
+        return Err("Choose a folder for your projects.".into());
     }
     Ok(())
 }

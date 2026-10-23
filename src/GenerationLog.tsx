@@ -1,3 +1,4 @@
+import { userError } from './userErrors.js';
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import type { AiSettingsView } from './types';
@@ -73,7 +74,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             <p className="log-text">{job.status === 'applied' && needsDetails.length ? `Applied ${candidate.regions.length - needsDetails.length} of ${candidate.regions.length} requests` : humanText(candidate.summary)}</p>
             <ul className="log-outcomes">{candidate.regions.map(outcome => <li key={outcome.regionId} className={outcome.status}>
               <span className="log-meta">{label(outcome.regionId)} · {outcome.status === 'implemented' ? 'Done' : 'Needs details'}</span>
-              {outcome.explanation && <p className="log-text">{humanText(outcome.explanation)}</p>}
+              {outcome.explanation && <p className="log-text">{outcome.status === 'conflict' ? plainReason(outcome.explanation) : humanText(outcome.explanation)}</p>}
             </li>)}</ul>
           </>}
           {!working && !candidate && job.status !== 'applied' && <p>{job.status === 'cancelled' ? 'Stopped.' : 'The AI could not finish this request.'}</p>}
@@ -106,9 +107,9 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
         </button></p>)}
         {history?.skipped ? <p className="field-help">{history.skipped} saved records could not be read.</p> : null}
         {history?.truncated && <p className="field-help">Showing the latest 100 saved generations.</p>}
-        {historyError && <p role="alert">{historyError}</p>}
+        {historyError && <p role="alert">{userError(historyError)}</p>}
       </details>
-      {error && <section className="log-message from-ai failed" role="alert"><p className="log-who">Desegnos</p><p className="log-text">{humanText(error)}</p></section>}
+      {error && <section className="log-message from-ai failed" role="alert"><p className="log-who">Desegnos</p><p className="log-text">{userError(error)}</p></section>}
     </div>
   </WorkspaceSurface>;
 }
@@ -133,6 +134,7 @@ function jsonBlocks(markdown: string): any[] {
 }
 
 function humanText(value: string) {
+  if (/region|candidate|schema|data-desegnos-|excerpt|selector|conflict|validation|<\/?[a-z][^>]*>/i.test(value)) return plainReason(value);
   if (/kept the validated changes for area/i.test(value)) return 'Kept the validated changes for this request.';
   if (/dynamic or executable|Copy code/i.test(value)) return plainReason(value);
   return value.replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, 'request').replace(/\barea [0-9a-f]{8,}[^\s]*/gi, 'request');

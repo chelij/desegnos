@@ -1,3 +1,4 @@
+import { userError } from './userErrors.js';
 import { useEffect, useRef, useState } from 'react';
 import { native } from './api';
 import type { WebsiteFolderSelection } from './types';
@@ -36,13 +37,13 @@ export function WebsiteChoice({ folder, brand, disabled, chooseBrand, edit, upda
     {!brand && <>
       <p className="field-help">{folder.name} · {site.pages.length} page{site.pages.length === 1 ? '' : 's'}</p>
       {site.framework && <p className="field-help">Edits don't change the {site.framework} source files.</p>}
-      {site.buildUnavailable && <p role="status">{site.buildUnavailable}{site.output ? " Using the existing build output; it may be out of date." : ""}</p>}
+      {site.buildUnavailable && <p role="status">{site.output ? "This website cannot be updated on this computer. The saved website may be out of date." : "This website cannot be prepared for editing on this computer. Ask its creator to prepare it for editing."}</p>}
       {site.fresh || (site.output && site.buildUnavailable) ? <button type="button" className="primary" disabled={disabled || build?.running} onClick={() => { void edit().catch(error => setError(String(error))); }}>Open website for editing</button>
         : site.buildUnavailable ? null
         : site.installCommand ? <p role="status">Run <code>{site.installCommand}</code> in this folder first: {site.path}</p>
         : <button type="button" disabled={disabled || build?.running || !site.buildCommand} onClick={() => { void action('start'); }}>Build site</button>}
     </>}
     {build && <p role="status">{build.line} {build.running && <button type="button" onClick={() => { void action('stop'); }}>Stop</button>}</p>}
-    {(error || build?.error) && <p role="alert" className="message error">{error || build?.error}</p>}
+    {(error || build?.error) && <p role="alert" className="message error">{userError(error || build?.error)}</p>}
   </section>;
 }

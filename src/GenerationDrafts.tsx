@@ -1,3 +1,4 @@
+import { userError, generationError } from './userErrors.js';
 import { useEffect, useState } from 'react';
 import { native } from './api';
 import { pendingDrafts } from './generationDraftState';
@@ -68,16 +69,11 @@ function Draft({ draft, job, project, controller, compact, changed }: {
       <p>Replace this page with the saved draft? You can undo this change.</p><button type="button" className="primary" disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button>{' '}
       <button type="button" disabled={busy} onClick={() => setConfirm(false)}>Cancel</button>
     </div>}
-    {error && <p role="alert">{error}</p>}
+    {error && <p role="alert">{userError(error)}</p>}
     {preview && page && <WorkspaceSurface place="canvas" title="Previewing draft" showClose={false} close={() => setPreview(false)} headerActions={<div className="draft-preview-bar"><button type="button" className="primary" disabled={busy || !!review?.blocked || !!controller.operation || controller.canStop} onClick={() => setConfirm(true)}>Apply anyway</button><button type="button" onClick={() => setPreview(false)}>Back</button></div>}>
       {confirm && review && <div className="draft-preview-confirm" role="group" aria-label="Confirm draft application"><p>Replace this page with the saved draft? You can undo this change.</p><button disabled={busy} onClick={() => { void act('apply'); }}>Confirm apply</button><button onClick={() => setConfirm(false)}>Cancel</button></div>}
-      {error && <p role="alert">{error}</p>}<PagePreview page={page} revision={project.revision} jobId={job.jobId} draftId={draft.id} /></WorkspaceSurface>}
+      {error && <p role="alert">{userError(error)}</p>}<PagePreview page={page} revision={project.revision} jobId={job.jobId} draftId={draft.id} /></WorkspaceSurface>}
   </section>;
 }
 
-export function plainReason(reason: string) {
-  if (/dynamic|executable|script|JavaScript|shared behavior/i.test(reason)) return 'This script reaches outside its box.';
-  if (/CSS outside|CSS selector|stylesheet|sharedCss/i.test(reason)) return 'Styles affect content outside this box.';
-  if (/changed|revision|stale/i.test(reason)) return 'The page has changed since this draft was made.';
-  return 'This draft needs a correction before it can be applied automatically.';
-}
+export const plainReason = generationError;

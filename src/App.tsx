@@ -1,3 +1,4 @@
+import { userError } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -920,10 +921,10 @@ function Editor() {
     </header>
     <SurfaceHost place="banner" />
     {pendingRecovery && <RecoveryBanner busy={pending > 0} recover={() => run(() => recover(pendingRecovery.projectId))} openSaved={() => run(() => open(false, pendingRecovery.path, true))} dismiss={() => setPendingRecovery(null)} />}
-    {error && <div className="message error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
+    {error && <div className="message error" role="alert"><span>{userError(error)}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
     {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span title={exported.path}>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'}{exported.warnings.length > 0 && ` · ${exported.warnings.length} to check`}</span>{exported.warnings.length > 0 && <details><summary>Things to check</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
     {offerRestyle && project && <div className="message info restyle-offer" role="status"><span>{offerRestyle}</span><button className="primary" disabled={pending > 0 || working} onClick={() => run(regenerateWithContext)}>Regenerate pages</button><button onClick={() => setOfferRestyle(false)}>Not now</button></div>}
-    {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <div className="message error" role="alert"><span>Recovery could not be loaded: {view.recoveryError}</span><button onClick={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} aria-label="Dismiss recovery error">Dismiss</button></div>}
+    {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <div className="message error" role="alert"><span>{userError(view.recoveryError)}</span><button onClick={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} aria-label="Dismiss recovery error">Dismiss</button></div>}
     {project?.website?.framework && <p className="field-help" role="note">Edits don't change the {project.website.framework} source files.</p>}
     {!!project?.website?.skipped.length && <details className="field-help"><summary>Skipped {project.website.skipped.length} files</summary><p>{project.website.skipped.slice(0, 5).join(", ")}</p></details>}
     {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <div className="message warning migration-notice" role="status"><span>{view.migrationNotice}</span><button onClick={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} aria-label="Dismiss migration notice">Dismiss</button></div>}
@@ -955,13 +956,13 @@ function Editor() {
           <button disabled={pending > 0} onClick={() => run(() => rejectResult())}>Undo</button>
           <button disabled={pending > 0} title="Undo this result and build a new version; this uses your AI account again" onClick={() => setRetryResult(true)}>Try again</button>
           {retryResult && <span className="retry-confirmation" role="group" aria-label="Confirm retry">Try again with your AI account? <button onClick={() => { setRetryResult(false); run(() => rejectResult(true)); }}>Yes</button><button onClick={() => setRetryResult(false)}>No</button></span>}
-          <button onClick={openGeneration}>Details</button>
+          {!showLog && <button onClick={openGeneration}>Details</button>}
           <button className="pill-close" aria-label="Keep changes" title="Keep" onClick={keepResult}>×</button>
         </> : <GenerationFeedback controller={generation} compact>
           {generation.canStop && <button onClick={() => { void generation.cancel(); }}>Stop</button>}
           {!working && (generation.stopped || generation.job && ['failed', 'unknown', 'cancelled', 'blocked'].includes(generation.job.status)) && <button className="primary" disabled={requestedAreas === 0 && pendingImages === 0} onClick={generate}>{generation.job?.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
           {generation.error && <button onClick={() => setShowAiSettings(true)}>AI settings</button>}
-          {!working && <button onClick={openGeneration}>Details</button>}
+          {!working && !showLog && <button onClick={openGeneration}>Details</button>}
         </GenerationFeedback>}
         {!resultReview && draftCount > 0 && <button onClick={openGeneration}>{draftCount} {draftCount === 1 ? 'draft' : 'drafts'}</button>}
       </div>}
@@ -1024,7 +1025,7 @@ function Editor() {
 }
 
 function DialogError({ error, dismiss }: { error: string; dismiss: () => void }) {
-  return error ? <div className="message error" role="alert"><span>{error}</span><button onClick={dismiss} aria-label="Dismiss dialog error">Dismiss</button></div> : null;
+  return error ? <div className="message error" role="alert"><span>{userError(error)}</span><button onClick={dismiss} aria-label="Dismiss dialog error">Dismiss</button></div> : null;
 }
 
 function editedAgo(editedAtMs: number) {

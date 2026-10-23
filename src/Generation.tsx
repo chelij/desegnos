@@ -1,3 +1,4 @@
+import { userError, generationError } from './userErrors.js';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
 import { scopeLabel } from './Notes';
@@ -63,6 +64,7 @@ export function GenerationFeedback({ controller, compact = false, children }: {
         <span role="timer" aria-live="off">{Math.floor(elapsedSeconds / 60)}:{String(elapsedSeconds % 60).padStart(2, '0')}</span>
       </p>}
 
+      {(error || job?.status === 'blocked') && <p role="alert">{error ? userError(error) : generationError(job?.candidate?.regions.find(item => item.status === 'conflict')?.explanation ?? job?.message ?? '')}</p>}
     </div>{children && <div className="generation-status-actions">{children}</div>}
   </section>;
 }
@@ -138,16 +140,16 @@ export function GenerationDetails({ controller, project, settings, openSettings,
         {job?.status === 'prepared' && <button className="primary" disabled={!!operation} onClick={() => { void controller.start().catch(() => {}); }}>Send and generate</button>}
         {controller.canStop && <button onClick={() => { void controller.cancel().catch(() => {}); }}>Cancel generation</button>}
       </GenerationFeedback><div className="generation-dialog">
-      {error && <p className="message error" role="alert">{error}</p>}
-      {usageError && <p className="message error" role="alert">{usageError}</p>}
-      {job?.dossierError && <p className="message warning" role="alert">Your result is saved, but the project brief needs attention: {job.dossierError}</p>}
+      {error && <p className="message error" role="alert">{userError(error)}</p>}
+      {usageError && <p className="message error" role="alert">{userError(usageError)}</p>}
+      {job?.dossierError && <p className="message warning" role="alert">{userError(job.dossierError)}</p>}
       {!job ? <><p>{operation ? 'Preparing…' : 'No generation request is prepared.'}</p><div className="form-actions">
         <button onClick={openSettings}>AI settings</button>{!operation && <button onClick={() => { void controller.prepare().catch(() => {}); }}>Prepare request again</button>}
       </div></> : <>
         {job.status === 'unknown' && <p className="message warning">The AI may have finished this request, but the result didn’t arrive. Trying again {usesChatgpt ? 'uses your plan again' : 'may cost again'}.</p>}
         {job.status === 'cancelled' && <p className="small muted">{usesChatgpt ? 'Submitted work may still count toward your plan.' : 'Submitted work may still be charged.'}</p>}
         {usageLimit && <p className="message warning"><strong>ChatGPT usage limit reached.</strong> Review your plan or this app’s limit in ChatGPT settings.</p>}
-        {job.status === 'applied' && !alreadyApplied && <p className="message warning">This job was applied earlier. The current project does not include that application; it may have been undone.</p>}
+        {job.status === 'applied' && !alreadyApplied && <p className="message warning">These changes were added earlier but are no longer on the page. They may have been undone.</p>}
         <div className="generation-review-toolbar"><p>{job.requirements.regionCount} {job.requirements.regionCount === 1 ? 'request' : 'requests'} · {affectedPages.join(', ')} · {readable(job.generationMode)}</p><MenuButton label="More" ariaLabel="Generation options" items={more} /></div>
         <details className="generation-section" open={tab === 'details' || undefined}><summary>Request details</summary><dl className="generation-facts"><dt>Cost</dt><dd>{usesChatgpt ? `Counts toward ${frozenAccount?.label ?? 'your ChatGPT'} plan or credits` : `About ${money(job.estimateUsd)}; final charges may vary`}</dd><dt>Provider</dt><dd>{service}</dd><dt>Authentication</dt><dd>{usesChatgpt ? 'ChatGPT plan' : 'API key'}</dd><dt>Model</dt><dd>{job.settings.model}</dd><dt>Generation mode</dt><dd>{readable(job.generationMode)}</dd>
           {usesChatgpt ? <><dt>Account</dt><dd>{frozenAccount?.label ?? job.chatgptAccountId ?? 'No account recorded'}{frozenAccount && <span className="small muted"> · {job.chatgptAccountId}</span>}</dd><dt>Reasoning effort</dt><dd>{job.settings.reasoningEffort}</dd></> : <>
@@ -179,7 +181,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
         </li>)}</ol>}</section>}
         <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><p>Couldn’t build the page.</p>{job.message && <details><summary>Show details</summary><p className="small">{job.message}</p></details>}</>}</> : <>
           {job.status === 'applied' && conflicts.length > 0 && <p>Applied {candidate.regions.length - conflicts.length} of {candidate.regions.length} areas</p>}
-          {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft"><h3>Requests needing details</h3>
+          {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft"><h3>Some changes need fixing</h3><p>{generationError(conflicts[0]?.explanation ?? job.message)}</p>
             <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
               const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
               return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
@@ -199,20 +201,20 @@ export function GenerationDetails({ controller, project, settings, openSettings,
             <span><strong>{proposal.topic}</strong><span className="preserve-text">{proposal.value}</span><span className="small muted">{scopeLabel(project, proposal.scope)} · {proposal.rationale}</span></span>
           </label>)}</details>}
           {candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.regionId ? requestLabel(project, criticism.regionId) : 'Whole site'}</strong><p>{criticism.message}</p><p className="muted">{criticism.suggestion}</p></li>)}</ul></details>}
-          <details className="generation-coverage"><summary>Request details</summary><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.regions.map(region => <tr key={region.regionId}><th>{requestLabel(project, region.regionId)}</th><td>{readable(region.status)}</td><td>{region.explanation}</td></tr>)}</tbody></table></div>
+          <details className="generation-coverage"><summary>Request details</summary><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.regions.map(region => <tr key={region.regionId}><th>{requestLabel(project, region.regionId)}</th><td>{readable(region.status)}</td><td>{region.status === 'conflict' ? generationError(region.explanation) : region.explanation}</td></tr>)}</tbody></table></div>
             {candidate.componentRequests.length > 0 && <ul className="generation-list">{candidate.componentRequests.map((component, index) => <li key={index}><strong>{component.capability}</strong><p>{component.resolution === 'native' ? 'Built in' : 'Unavailable'}: {component.reason}</p></li>)}</ul>}
           </details>
         </>}</section>
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
-          {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready regions' : 'Apply changes'}</button>}
+          {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready changes' : 'Apply changes'}</button>}
           {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>{conflicts.length > 0 ? 'Build remaining draft' : job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
         </div>
       </>}
     </div>
     {confirmRetry && job && <section ref={retryConfirmation} aria-label="Confirm retry" className="dialog-body"><strong>Try these requests with the current page?</strong><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
       <p>{usesChatgpt ? 'The retry counts toward that account’s ChatGPT plan or credits balance. Earlier attempts may also have used your plan or credits.' : `Estimated job cost: ${money(job.estimateUsd)}. Earlier attempts may also have been charged.`}</p>
-      {usageError && <p className="message error" role="alert">{usageError}</p>}
+      {usageError && <p className="message error" role="alert">{userError(usageError)}</p>}
       <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { dismissRetry(); void controller.retry().catch(() => {}); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={dismissRetry}>Keep current job</button></div></section>}
   </>;
 }

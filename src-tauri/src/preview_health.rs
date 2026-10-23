@@ -71,11 +71,13 @@ pub fn reload(app: &AppHandle) -> Result<(), String> {
                 health.warned.store(false, Ordering::SeqCst);
                 health.recovering.store(false, Ordering::SeqCst);
                 if let Err(error) = result {
-                    callback_app.dialog().message(format!("The editor could not be recreated: {error}. Accepted edits remain in local recovery; restart Desegnos to recover them.")).title("Workspace recovery").kind(MessageDialogKind::Error).show(|_| {});
+                    eprintln!("Editor recovery failed: {error}");
+                    callback_app.dialog().message("The editor could not reopen. Restart Desegnos to recover your changes.").title("Workspace recovery").kind(MessageDialogKind::Error).show(|_| {});
                 }
             }) {
+                eprintln!("Editor reload could not be scheduled: {error}");
                 handle.state::<PreviewHealth>().recovering.store(false, Ordering::SeqCst);
-                handle.dialog().message(format!("Workspace reload could not be scheduled: {error}. Restart Desegnos to recover accepted edits.")).title("Workspace recovery").kind(MessageDialogKind::Error).show(|_| {});
+                handle.dialog().message("The editor could not reload. Restart Desegnos to recover your changes.").title("Workspace recovery").kind(MessageDialogKind::Error).show(|_| {});
             }
         });
         Ok::<_, String>(())
@@ -119,9 +121,10 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 .is_ok_and(|registry| registry.scripts_enabled());
             if stale && scripts_enabled && !health.warned.swap(true, Ordering::SeqCst) {
                 let response_app = app.clone();
-                app.dialog().message("The editor stopped responding while website scripts were running. Reload the workspace with those scripts paused? Accepted edits are kept locally.").title("Website preview stopped responding").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancelCustom("Reload workspace".into(), "Keep waiting".into())).show(move |accepted| {
+                app.dialog().message("This page stopped responding. Reload the editor to recover your changes.").title("Website preview stopped responding").kind(MessageDialogKind::Warning).buttons(MessageDialogButtons::OkCancelCustom("Reload workspace".into(), "Keep waiting".into())).show(move |accepted| {
                 if accepted && let Err(error) = reload(&response_app) {
-                    response_app.dialog().message(error).title("Workspace recovery").kind(MessageDialogKind::Error).show(|_| {});
+                    eprintln!("Editor reload failed: {error}");
+                    response_app.dialog().message("The editor could not reload. Restart Desegnos to recover your changes.").title("Workspace recovery").kind(MessageDialogKind::Error).show(|_| {});
                 }
             });
             }

@@ -1,3 +1,4 @@
+import { userError } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { native } from './api';
 import type { AiSettingsView, IdentityAnalysis, IdentitySelection, IdentitySource } from './types';
@@ -27,11 +28,6 @@ function skippedSummary(skipped: string[]) {
     else counts.other += 1;
   }
   return Object.entries(counts).filter(([, count]) => count > 0).map(([kind, count]) => `${count} ${kind} file${count === 1 ? '' : 's'}`).join(', ');
-}
-function friendlyError(value: string) {
-  if (/context capacity|request estimate|input limit|context limit/i.test(value)) return "That's more than the AI can read at once. Untick a few files, or click 'Pick for me'.";
-  if (/result format|result limit|candidate|schema|UUID/i.test(value)) return "The AI's reply couldn't be read. Click 'Read my brand' to try again.";
-  return value.replace(/\bidentity analysis\b/gi, 'brand reading').replace(/\banalyzing identity\b/gi, 'reading your brand').replace(/\banalysis\b/gi, 'brand reading');
 }
 function skippedFile(value: string) {
   const separator = value.indexOf(': ');
@@ -138,7 +134,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
       if (stopped) return;
       setSelection(value);
       if (requestedFiles === null) setFiles(value.fileIds);
-    }).catch(error => { if (!stopped) setSelection({ fileIds: requestedFiles ?? [], fits: false, message: friendlyError(message(error)), needsSettings: false }); });
+    }).catch(error => { if (!stopped) setSelection({ fileIds: requestedFiles ?? [], fits: false, message: message(error), needsSettings: false }); });
     return () => { stopped = true; };
   }, [source, requestedFiles, pickVersion, settings?.provider, settings?.authentication, settings?.settings.model, settings?.settings.reasoningEffort, settings?.settings.maxOutputTokens, settings?.settings.spendingLimitUsd]);
 
@@ -148,7 +144,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
     try {
       const value = await native<IdentityAnalysis | null>('get_identity_analysis');
       if (mounted.current && serial === previousRead.current) { setPrevious(value); setRecoveryError(''); }
-    } catch (error) { if (mounted.current && serial === previousRead.current) setRecoveryError(`We couldn't load your previous brand: ${friendlyError(message(error))}`); }
+    } catch (error) { if (mounted.current && serial === previousRead.current) setRecoveryError(message(error)); }
     finally { if (mounted.current && serial === previousRead.current) setReadingPrevious(false); }
   }, []);
   useEffect(() => {
@@ -175,7 +171,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
       try {
         const value = await native<IdentityAnalysis | null>('get_identity_analysis');
         if (!stopped && value?.jobId === active.current) { acceptAnalysis(value); setError(''); }
-      } catch (error) { if (!stopped) setError(`We couldn't check on your brand: ${friendlyError(message(error))}`); }
+      } catch (error) { if (!stopped) setError(message(error)); }
       if (!stopped) timer = setTimeout(() => { void poll(); }, 900);
     }
     timer = setTimeout(() => { void poll(); }, 500);
@@ -183,7 +179,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
   }, [analyzing]);
   async function run(operation: () => Promise<void>) {
     setWorking(true); setError('');
-    try { await operation(); } catch (error) { if (mounted.current) setError(friendlyError(message(error))); }
+    try { await operation(); } catch (error) { if (mounted.current) setError(message(error)); }
     finally { if (mounted.current) setWorking(false); }
   }
   async function pick(kind: 'file' | 'folder') {
@@ -261,7 +257,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
         <div className="identity-address"><label>Website address<input type="text" inputMode="url" placeholder="example.com" value={address} disabled={locked} onChange={event => setAddress(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (address.trim()) void fetchSite(); } }} /></label>
           <button type="button" disabled={locked || !address.trim()} onClick={() => { void fetchSite(); }}>{working && address.trim() ? 'Opening…' : 'Open website'}</button></div>
         <div className="identity-source-actions"><span className="identity-or">or</span><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose folder</button><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose project or ZIP</button></div>
-        {!source && recoveryError && <div className="message error" role="alert"><span>{recoveryError}</span><button type="button" disabled={locked || readingPrevious} onClick={() => { void readPrevious(); }}>Try loading again</button></div>}
+        {!source && recoveryError && <div className="message error" role="alert"><span>{userError(recoveryError)}</span><button type="button" disabled={locked || readingPrevious} onClick={() => { void readPrevious(); }}>Try loading again</button></div>}
         {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setFiles(previous.fileIds); setAutomatic(false); setSelection(null); acceptAnalysis(previous); setPrevious(null); }}>Continue with my previous brand</button>}
         </>}
         {source && !editMode && <>
@@ -275,10 +271,10 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
             {source.skipped.length > 0 && <><p className="field-help">Left out: {skippedSummary(source.skipped)}.</p><details><summary>See all skipped files</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details></>}
           </details>
           {!candidate && <p className="field-help">Sent to {analysisMethod === 'chatgpt' ? `ChatGPT (${(analysisAccount ?? account)?.label ?? 'current account'})` : `${settings?.providers.find(provider => provider.id === settings.provider)?.name ?? 'OpenAI'} (API key)`}</p>}
-          {!candidate && selection?.message && <p role="alert">{selection.message}</p>}
+          {!candidate && selection?.message && <p role="alert">{userError(selection.message)}</p>}
           </>}
           {analyzing ? <div className="identity-progress" role="status"><span>Reading your brand…</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Stop reading</button></div> : !candidate ? <>
-            {analysis && <p role={analysis.status === 'failed' || analysis.status === 'unknown' ? 'alert' : 'status'}>{analysis.status === 'cancelled' ? 'Reading stopped.' : analysis.status === 'unknown' ? "Reading was interrupted. The AI may have used some of your allowance. Click 'Read my brand' to try again." : friendlyError(analysis.error || 'We couldn’t read your brand. Please try again.')}</p>}
+            {analysis && <p role={analysis.status === 'failed' || analysis.status === 'unknown' ? 'alert' : 'status'}>{analysis.status === 'cancelled' ? 'Reading stopped.' : analysis.status === 'unknown' ? "Reading stopped before the result arrived. Trying again may use more of your AI allowance." : userError(analysis.error || 'We couldn’t read your brand. Please try again.')}</p>}
             <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || !selection?.fits || !connected} onClick={() => { void analyze(); }}>Read my brand</button>{aiNeedsFixing && <button type="button" disabled={locked} onClick={openSettings}>{connected ? 'Check AI settings' : 'Connect AI'}</button>}</div>
           </> : <div className="identity-result" aria-label="Brand review">
             <div className="identity-review-intro"><h2>3. Choose what to keep</h2></div>
@@ -308,7 +304,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
               <label><input type="radio" name="pageDestination" checked={attachMatching} onChange={() => setAttachMatching(true)} />Use existing pages with the same path; add missing pages</label>
               <label><input type="radio" name="pageDestination" checked={!attachMatching} onChange={() => setAttachMatching(false)} />Add as new pages (Home uses the existing home page)</label>
             </fieldset>}
-            {candidate.warnings.length > 0 && <details className="identity-warnings"><summary>Things to check</summary><ul>{candidate.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}
+            {candidate.warnings.length > 0 && <details className="identity-warnings"><summary>Things to check</summary><ul>{candidate.warnings.map((warning, index) => <li key={index}>{userError(warning)}</li>)}</ul></details>}
             <button type="button" disabled={locked} onClick={() => { setAnalysis(null); setFindings([]); setAssets([]); }}>Change files</button>
           </div>}
         </>}
@@ -316,6 +312,6 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
     {candidate && !keepable && <p className="field-help">Choose at least one detail, logo or page to keep.</p>}
     {!editMode && !candidate && !analyzing && <p className="field-help">Read your brand first</p>}
     <div className="form-actions"><button type="button" disabled={locked} onClick={close}>Cancel</button><button className="primary" type="submit" hidden={editMode} disabled={locked || !candidate || !keepable}>{busy || working ? 'Working…' : 'Add to project'}</button></div>
-    {error && <p className="message error" role="alert">{error}</p>}
+    {error && <p className="message error" role="alert">{userError(error)}</p>}
   </form>;
 }

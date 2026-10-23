@@ -7,7 +7,7 @@ const MAX_CLIPBOARD_BYTES: usize = 8 * desegni_core::MAX_SITE_SOURCE_BYTES;
 
 fn check_size(text: &str) -> Result<(), String> {
     if text.len() > MAX_CLIPBOARD_BYTES {
-        return Err("This layer exceeds the 8 MiB clipboard limit. Copy a smaller section.".into());
+        return Err("This item is too large to copy. Copy a smaller group.".into());
     }
     Ok(())
 }
@@ -17,7 +17,7 @@ pub fn write(app: &AppHandle, text: String) -> Result<(), String> {
     check_size(&text)?;
     app.clipboard()
         .write_text(text)
-        .map_err(|error| format!("The layer could not be copied to the system clipboard: {error}"))
+        .map_err(|_| "This item could not be copied. Try again.".into())
 }
 
 /// Invoke from a blocking worker, outside any workspace lock. The official
@@ -28,7 +28,7 @@ pub fn read(app: &AppHandle) -> Result<String, String> {
     let text = app
         .clipboard()
         .read_text()
-        .map_err(|error| format!("The system clipboard could not be read: {error}"))?;
+        .map_err(|_| "The clipboard could not be read. Copy the item again.")?;
     check_size(&text)?;
     Ok(text)
 }

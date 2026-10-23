@@ -28,6 +28,14 @@ try {
     candidate: { summary: 'Booking form needs a service address.', regions: [{ regionId: id, status: 'conflict', explanation: `Area ${id}: Which booking service should this use?` }], criticism: [{ message: 'Keep the heading concise.', suggestion: 'Shorten the heading.' }], decisionProposals: [{ topic: `Booking links ${id}`, value: 'Use the booking service', scope: { kind: 'project' } }] },
     drafts: [{ id: 'draft', pageId: 'page', regionIds: [id], reason: 'CSS outside the region', code: '<script>PRIVATE GENERATED SOURCE</script>' }], usage: { inputTokens: 10, outputTokens: 20 }, repairRounds: 0 };
   const props = { job, project, controller: { job }, settings: null, operation: null, error: null, close() {}, openSettings() {}, manageUsage: async () => {}, editRequest() {} };
+  await test('conflict explanations hide diagnostics without changing the saved job', () => {
+    const explanation = `Area ${id} ([data-desegnos-region=${id}]): Region script root contains another region. Excerpt: <section id="private">`;
+    const conflicted = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation }] } };
+    const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: conflicted }));
+    assert.match(html, /The AI added a script that affects the wrong part of the page\. Try again\./);
+    assert.doesNotMatch(html, /data-desegnos-|Excerpt|private|script root|12345678-1234/);
+    assert.equal(conflicted.candidate.regions[0].explanation, explanation);
+  });
   await test('conversation presents one ordered review without the legacy generation card or raw source', () => {
     const html = renderToStaticMarkup(React.createElement(GenerationLog, props));
     const order = ['Sent to the AI', 'AI reply', 'Finish your draft', 'generation-draft', 'Design feedback', 'Suggested rules', 'Request details', 'token-footer'];

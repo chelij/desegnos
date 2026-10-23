@@ -91,8 +91,9 @@ fn main() {
                 && let Err(error) = preview_health::reload(app)
             {
                 use tauri_plugin_dialog::DialogExt;
+                eprintln!("Editor reload failed: {error}");
                 app.dialog()
-                    .message(error)
+                    .message("The editor could not reload. Restart Desegnos to recover your changes.")
                     .title("Workspace recovery")
                     .show(|_| {});
             }

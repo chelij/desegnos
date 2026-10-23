@@ -1,3 +1,4 @@
+import { userError } from './userErrors.js';
 import { useState, type FormEvent } from 'react';
 import type { AiSettingsView, ProjectLocationView, Viewport } from './types';
 import { native } from './api';
@@ -67,6 +68,6 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
       {custom && <div className="field-pair custom-screen"><label>Width <span className="unit">px</span><input name="width" type="number" required min={1} max={32768} value={viewport.width} disabled={locked} onChange={event => setViewport({ ...viewport, width: Number(event.target.value) })} /></label><label>Height <span className="unit">px</span><input name="height" type="number" required min={1} max={100000} value={viewport.height} disabled={locked} onChange={event => setViewport({ ...viewport, height: Number(event.target.value) })} /></label></div>}
       <div className="form-actions"><button type="button" disabled={locked} onClick={() => { setMode(null); setError(''); }}>Back</button><button className="primary" disabled={locked || !name.trim()} type="submit">{busy ? 'Creating…' : 'Create project'}</button></div>
     </>}
-    {error && <div className="message error" role="alert"><span>{error}</span>{missingRecent && <button type="button" disabled={locked} onClick={() => { void run(() => forgetRecent(missingRecent)); }}>Remove from recent</button>}</div>}
+    {error && <div className="message error" role="alert"><span>{userError(error)}</span>{missingRecent && <button type="button" disabled={locked} onClick={() => { void run(() => forgetRecent(missingRecent)); }}>Remove from recent</button>}</div>}
   </form>;
 }

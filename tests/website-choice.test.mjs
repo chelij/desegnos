@@ -28,14 +28,14 @@ try {
   }));
   await test('missing Node hides Build site and offers existing output with a warning', () => {
     const html = render(website);
-    assert.ok(html.includes('Needs Node.js to rebuild.'));
+    assert.ok(html.includes('This website cannot be updated on this computer.'));
     assert.ok(html.includes('may be out of date'));
     assert.ok(html.includes('Open website for editing'));
     assert.ok(!html.includes('>Build site<'));
   });
   await test('missing tool without output offers no build or open button', () => {
     const html = render({ ...website, output: null });
-    assert.ok(html.includes('Needs Node.js to rebuild.'));
+    assert.ok(html.includes('This website cannot be prepared for editing on this computer.'));
     assert.ok(!html.includes('>Build site<'));
     assert.ok(!html.includes('Open website for editing'));
   });
@@ -44,7 +44,7 @@ try {
   });
   await test('missing package manager takes precedence over installation instructions', () => {
     const html = render({ ...website, installCommand: 'pnpm install', buildUnavailable: 'Needs pnpm to rebuild.' });
-    assert.ok(html.includes('Needs pnpm to rebuild.'));
+    assert.ok(html.includes('This website cannot be updated on this computer.'));
     assert.ok(!html.includes('<code>pnpm install</code>'));
     assert.ok(!html.includes('>Build site<'));
   });
