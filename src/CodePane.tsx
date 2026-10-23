@@ -1,3 +1,4 @@
+import { ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { forwardRef, lazy, Suspense, useImperativeHandle, useEffect, useMemo, useRef, useState } from 'react';
 import { synchronizeCodeDrafts, type PendingCodeDraft } from './codeDraftLifecycle';
@@ -199,9 +200,8 @@ export const CodePane = forwardRef<CodePaneHandle, {
       for (const error of statuses[language]?.diagnostics ?? []) if (error.language === language) mark(error.line, 'error', userError(error.message));
       return <CodeEditor key={language} ref={node => { if (node) editors.current[language] = node; else delete editors.current[language]; }} language={language} label={`${label} code`} text={value} projection={drafts[language]?.projection ?? projections[language]} hiddenMetadata={language === 'html' && !showMeta} readOnly={!save} active={language === tab} marks={[...marks.values()]} query={language === tab ? query : ''} focusLine={language === tab ? focusLine : null} change={(text, projection) => change(language, text, projection)} cursor={language === 'html' ? follow : () => {}} flush={() => { void commit(language); }} saveProject={saveProject ?? (() => { void synchronize().catch(() => {}); })} find={() => searchInput.current?.focus()} />;
     })}</Suspense>}
-    <footer className={`code-pane-note status-${status.kind}`} role="status"><span>{note}</span>
+    <footer className={`code-pane-note status-${status.kind}`} role="status">{['invalid', 'conflict', 'error'].includes(status.kind) ? <ProblemBanner key={`${tab}:${status.kind}`} message={status.kind === 'invalid' ? 'This code has a writing mistake.' : status.kind === 'conflict' || status.kind === 'error' ? userError(status.message) : ''} instruction={status.kind === 'invalid' ? 'Fix the highlighted line.' : 'Review your code changes before saving again.'} action={status.kind === 'error' && drafts[tab] ? { label: 'Try saving again', onClick: () => { setStatus(tab, { kind: 'idle' }); void commit(tab); } } : undefined} /> : <span>{note}</span>}
       {status.kind === 'invalid' && <ul className="code-errors">{(status.diagnostics ?? []).slice(0, 3).map((item, index) => <li key={index}><button type="button" className="link-button" onClick={() => { const language = item.language === 'css' ? 'css' : item.language === 'javascript' ? 'javascript' : 'html'; setTab(language); requestAnimationFrame(() => editors.current[language]?.reveal(item.line)); }}>Line {item.line}</button> {userError(item.message)}</li>)}</ul>}
-      {drafts[tab] && status.kind === 'error' && <button type="button" onClick={() => { setStatus(tab, { kind: 'idle' }); void commit(tab); }}>Try saving again</button>}
       {drafts[tab] && ['invalid', 'conflict', 'error'].includes(status.kind) && <button type="button" disabled={!!flights.current[tab]} onClick={discard}>Discard code changes</button>}
     </footer>
   </section>;

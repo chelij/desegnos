@@ -1,3 +1,4 @@
+import { needsAiSettings, ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
@@ -74,10 +75,10 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             <p className="log-text">{job.status === 'applied' && needsDetails.length ? `Applied ${candidate.regions.length - needsDetails.length} of ${candidate.regions.length} requests` : humanText(candidate.summary)}</p>
             <ul className="log-outcomes">{candidate.regions.map(outcome => <li key={outcome.regionId} className={outcome.status}>
               <span className="log-meta">{label(outcome.regionId)} · {outcome.status === 'implemented' ? 'Done' : 'Needs details'}</span>
-              {outcome.explanation && <p className="log-text">{outcome.status === 'conflict' ? plainReason(outcome.explanation) : humanText(outcome.explanation)}</p>}
+              {outcome.explanation && (outcome.status === 'conflict' ? <ProblemBanner message={plainReason(outcome.explanation)} action={{ label: 'Try again', disabled: working, onClick: () => { void controller.prepare().catch(() => {}); } }} /> : <p className="log-text">{humanText(outcome.explanation)}</p>)}
             </li>)}</ul>
           </>}
-          {!working && !candidate && job.status !== 'applied' && <p>{job.status === 'cancelled' ? 'Stopped.' : 'The AI could not finish this request.'}</p>}
+          {!working && !candidate && ['failed', 'unknown'].includes(job.status) && <ProblemBanner message={userError(job.message || 'The AI could not finish this request. Try again.')} action={needsAiSettings(job.message || '') ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', onClick: () => { void controller.prepare().catch(() => {}); } }} />}
           {needsDetails.length > 0 && <section className="generation-needs-details" aria-label="Finish your draft">
             <h3>Needs details</h3>
             <ul className="log-outcomes">{needsDetails.map(outcome => <li key={outcome.regionId}>
@@ -96,7 +97,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             {job.repairRounds ? <><dt>Automatic corrections</dt><dd>{job.repairRounds}</dd></> : null}
             {context.length > 0 && <><dt>Additional context</dt><dd>{context.length} page elements</dd></>}
           </dl></details>
-          {!past && !working && !candidate && ['failed', 'unknown', 'cancelled'].includes(job.status) && <div className="form-actions"><button disabled={!!operation} onClick={() => { void controller.prepare().catch(() => {}); }}>Try again</button><button onClick={openSettings}>AI settings</button></div>}
+          {!past && !working && !candidate && job.status === 'cancelled' && <button onClick={() => { void controller.prepare().catch(() => {}); }}>Try again</button>}
           {job.usage && <p className="log-meta token-footer">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
         </section>
       </>}
@@ -107,9 +108,10 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
         </button></p>)}
         {history?.skipped ? <p className="field-help">{history.skipped} saved records could not be read.</p> : null}
         {history?.truncated && <p className="field-help">Showing the latest 100 saved generations.</p>}
-        {historyError && <p role="alert">{userError(historyError)}</p>}
+        {historyError && <ProblemBanner message={userError(historyError)} dismiss={() => setHistoryError('')} instruction="Open the conversation again to reload saved generations." />}
       </details>
-      {error && <section className="log-message from-ai failed" role="alert"><p className="log-who">Desegnos</p><p className="log-text">{userError(error)}</p></section>}
+      {error && <ProblemBanner message={userError(error)} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: working, onClick: () => { void controller.prepare().catch(() => {}); } }} />}
+      {(error || job?.message || job?.candidate) && <details><summary>Technical details</summary><pre>{JSON.stringify({ error, message: job?.message, providerError: job?.providerError, validationEvents: job?.validationEvents, outcomes: job?.candidate?.regions, drafts: job?.drafts?.map(({ reason }) => ({ reason })) }, null, 2)}</pre></details>}
     </div>
   </WorkspaceSurface>;
 }

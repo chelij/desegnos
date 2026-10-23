@@ -1,3 +1,4 @@
+import { ProblemBanner } from './ProblemBanner.js';
 import { userError, runtimeError } from './userErrors.js';
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { native } from './api';
@@ -311,7 +312,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   const sourceDocument = staticView && previewSource ? `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${staticPolicy}"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${previewSource.html}</body></html>` : undefined;
   return <div data-source-hash={descriptor?.sourceSha256 ?? undefined} data-preview-ready={staticView && !loading && !error && registeredVersion.current?.revision === revision && mounted.current?.session === descriptor?.sessionId ? 'true' : undefined} className={staticView ? 'preview-frame static-preview' : 'preview-frame'}>
     {loading && !staticView && <p role="status" className="preview-status">Preparing preview…</p>}
-    {error && <div className="preview-error"><p role="alert">{userError(error)}</p>{!staticView && <button onClick={() => setRetry(value => value + 1)}>Retry preview</button>}</div>}
+    {error && <ProblemBanner className="preview-problem" message={userError(error)} dismiss={() => setError('')} action={!staticView ? { label: 'Retry preview', onClick: () => setRetry(value => value + 1) } : undefined} />}
     {descriptor && <iframe key={`${descriptor.sessionId}:${runScripts}`} ref={frame} inert={staticView || !!draftId || undefined} src={sourceDocument ? undefined : descriptor.url} srcDoc={sourceDocument} sandbox={sourceDocument ? 'allow-same-origin' : runScripts ? 'allow-scripts' : ''} referrerPolicy="no-referrer" title={title}
       style={sourceDocument ? { height: extent } : undefined} tabIndex={staticView || draftId ? -1 : undefined} aria-hidden={staticView || undefined} onLoad={event => {
         if (event.currentTarget !== frame.current) return;
@@ -333,9 +334,10 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     {!staticView && outsideLink && <div className="message info preview-link" role="status"><span>This link leaves your site: <strong title={outsideLink}>{outsideLink.replace(/^https?:\/\//, '').slice(0, 80)}</strong></span>
       <button className="primary" onClick={() => { const url = outsideLink; setOutsideLink(null); void native('open_preview_link', { url }).catch(error => setObservations(previous => [...previous.slice(-9), error instanceof Error ? error.message : String(error)])); }}>Open in browser</button>
       <button aria-label="Dismiss link" onClick={() => setOutsideLink(null)}>×</button></div>}
-    {!staticView && observations.length > 0 && <section className="preview-observations" aria-label="Page problems"><h3>This page has a problem</h3>
-      <ul>{[...new Set(observations.map(runtimeError))].map((message, index) => <li key={index}>{message}</li>)}</ul>{!draftId && !jobId && fixRuntimeErrors && <button className="primary" disabled={aiDisabled} onClick={() => fixRuntimeErrors(observations)}>Fix with AI</button>}<button onClick={() => setObservations([])}>Clear</button>
-    </section>}
+    {!staticView && !error && observations.length > 0 && <ProblemBanner className="preview-problem" message={runtimeError(observations[0])}
+      instruction="Open the page source and correct the script."
+      action={!draftId && !jobId && fixRuntimeErrors ? { label: 'Fix with AI', disabled: aiDisabled, onClick: () => fixRuntimeErrors(observations) } : undefined}
+      dismiss={() => setObservations([])} />}
   </div>;
 });
 

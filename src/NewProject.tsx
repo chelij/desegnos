@@ -1,3 +1,4 @@
+import { ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useState, type FormEvent } from 'react';
 import type { AiSettingsView, ProjectLocationView, Viewport } from './types';
@@ -40,6 +41,7 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
   }
   return <form className="new-project simple-new-project" onSubmit={submit}>
     <h1>{mode === 'blank' ? 'Start with a blank website' : 'Create your website'}</h1>
+    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={missingRecent ? { label: 'Remove from recent', disabled: locked, onClick: () => { void run(() => forgetRecent(missingRecent)); } } : mode === 'blank' ? { label: 'Choose another location', disabled: locked, onClick: () => { void run(async () => { const chosen = await native<string | null>('pick_project_location'); if (chosen) setParentDirectory(chosen); }); } } : { label: 'Choose another location', disabled: locked, onClick: () => { void run(open); } }} />}
     {!mode ? <>
       <div className="project-start-choices">
         <button type="button" aria-label="Blank website" disabled={locked} onClick={() => setMode('blank')}><span className="start-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12" /></svg></span><strong>Blank website</strong></button>
@@ -68,6 +70,5 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
       {custom && <div className="field-pair custom-screen"><label>Width <span className="unit">px</span><input name="width" type="number" required min={1} max={32768} value={viewport.width} disabled={locked} onChange={event => setViewport({ ...viewport, width: Number(event.target.value) })} /></label><label>Height <span className="unit">px</span><input name="height" type="number" required min={1} max={100000} value={viewport.height} disabled={locked} onChange={event => setViewport({ ...viewport, height: Number(event.target.value) })} /></label></div>}
       <div className="form-actions"><button type="button" disabled={locked} onClick={() => { setMode(null); setError(''); }}>Back</button><button className="primary" disabled={locked || !name.trim()} type="submit">{busy ? 'Creating…' : 'Create project'}</button></div>
     </>}
-    {error && <div className="message error" role="alert"><span>{userError(error)}</span>{missingRecent && <button type="button" disabled={locked} onClick={() => { void run(() => forgetRecent(missingRecent)); }}>Remove from recent</button>}</div>}
   </form>;
 }

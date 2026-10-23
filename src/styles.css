@@ -318,3 +318,29 @@ p { margin-bottom: 12px; }
 .device-frame .preview-frame iframe { height: var(--device-height); min-height: 0; border: 0; outline: 1px solid var(--border); }
 .device-frame.device-phone .preview-frame iframe, .device-frame.device-tablet .preview-frame iframe { border-radius: 14px; }
 .cm-editor .cm-widgetBuffer { display: inline-block; width: 0; height: 1em; vertical-align: baseline; }
+
+/* Problems keep the same contrast in both editor themes. */
+.problem-banner {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+  padding: 14px 16px; margin: 8px 0; border: 2px solid #ffb4ab;
+  border-left: 6px solid #ffb4ab; border-radius: 6px;
+  background: #630f16; color: #fff; box-shadow: 0 2px 10px #0003;
+  text-align: left; font-size: 14px; line-height: 1.45;
+  max-width: 100%; min-width: 0; overflow-wrap: anywhere;
+}
+.problem-copy { flex: 1 1 220px; min-width: 0; }
+.problem-banner .problem-copy p { margin: 0; color: #fff; }
+.problem-banner .problem-copy p:first-child { font-weight: 700; }
+.problem-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.problem-banner .problem-actions button { background: #630f16; color: #fff; border: 1px solid #ffb4ab; opacity: 1; }
+.problem-banner .problem-actions .primary { background: #fff; color: #630f16; border-color: #fff; font-weight: 700; }
+.problem-banner .problem-actions button:disabled { opacity: .65; }
+.problem-banner button:focus-visible { outline: 3px solid #ffe28a; outline-offset: 3px; }
+.generation-status:has(.problem-banner) { flex-wrap: wrap; }
+.generation-status > .problem-banner { flex-basis: 100%; }
+.preview-problem { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 20; }
+.canvas-pill:has(.problem-banner) { border-radius: 12px; width: 680px; }
+.canvas-pill .generation-status.compact:has(.problem-banner) { flex-wrap: wrap; width: 100%; }
+.canvas-pill .problem-banner { margin: 0; }
+.problem-banner.element-edit-error, .free-workspace .problem-banner.request-stale,
+:root[data-theme="dark"] .free-workspace .problem-banner.request-stale { background: #630f16; color: #fff; border: 2px solid #ffb4ab; border-left-width: 6px; padding: 14px 16px; font-size: 14px; }

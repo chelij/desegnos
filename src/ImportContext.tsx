@@ -1,3 +1,4 @@
+import { needsAiSettings, ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { native } from './api';
@@ -249,6 +250,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
   }
   const aiNeedsFixing = !connected || selection?.needsSettings || (analysis?.status === 'failed' && /settings|sign in|connect|account|spending|key|model access|permission/i.test(analysis.error ?? ''));
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
+    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Choose another location', disabled: !!locked, onClick: () => { void pick(folder ? 'folder' : 'file'); } }} />}
       {folder?.website && <WebsiteChoice folder={folder} brand={brand} disabled={!!locked} update={setFolder}
         chooseBrand={() => { void readBrand(folder); }} edit={async () => { setBrand(false); if (folder.website && (folder.website.fresh || (folder.website.output && folder.website.buildUnavailable))) await run(async () => { await editWebsite(folder.id); close(); }); }} /> }
       <section className="identity-import" aria-label="Use my existing brand">
@@ -257,7 +259,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
         <div className="identity-address"><label>Website address<input type="text" inputMode="url" placeholder="example.com" value={address} disabled={locked} onChange={event => setAddress(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (address.trim()) void fetchSite(); } }} /></label>
           <button type="button" disabled={locked || !address.trim()} onClick={() => { void fetchSite(); }}>{working && address.trim() ? 'Opening…' : 'Open website'}</button></div>
         <div className="identity-source-actions"><span className="identity-or">or</span><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose folder</button><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose project or ZIP</button></div>
-        {!source && recoveryError && <div className="message error" role="alert"><span>{userError(recoveryError)}</span><button type="button" disabled={locked || readingPrevious} onClick={() => { void readPrevious(); }}>Try loading again</button></div>}
+        {!source && recoveryError && <ProblemBanner message={userError(recoveryError)} action={{ label: 'Try loading again', disabled: !!locked || readingPrevious, onClick: () => { void readPrevious(); } }} />}
         {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setFiles(previous.fileIds); setAutomatic(false); setSelection(null); acceptAnalysis(previous); setPrevious(null); }}>Continue with my previous brand</button>}
         </>}
         {source && !editMode && <>
@@ -271,10 +273,10 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
             {source.skipped.length > 0 && <><p className="field-help">Left out: {skippedSummary(source.skipped)}.</p><details><summary>See all skipped files</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details></>}
           </details>
           {!candidate && <p className="field-help">Sent to {analysisMethod === 'chatgpt' ? `ChatGPT (${(analysisAccount ?? account)?.label ?? 'current account'})` : `${settings?.providers.find(provider => provider.id === settings.provider)?.name ?? 'OpenAI'} (API key)`}</p>}
-          {!candidate && selection?.message && <p role="alert">{userError(selection.message)}</p>}
+          {!candidate && selection?.message && <ProblemBanner message={userError(selection.message)} instruction="Choose fewer files to continue." />}
           </>}
           {analyzing ? <div className="identity-progress" role="status"><span>Reading your brand…</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Stop reading</button></div> : !candidate ? <>
-            {analysis && <p role={analysis.status === 'failed' || analysis.status === 'unknown' ? 'alert' : 'status'}>{analysis.status === 'cancelled' ? 'Reading stopped.' : analysis.status === 'unknown' ? "Reading stopped before the result arrived. Trying again may use more of your AI allowance." : userError(analysis.error || 'We couldn’t read your brand. Please try again.')}</p>}
+            {analysis && (analysis.status === 'cancelled' ? <p role="status">Reading stopped.</p> : <ProblemBanner message={userError(analysis.error || 'The AI could not read your brand. Try again.')} action={needsAiSettings(analysis.error || '') ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!locked || !selection?.fits || !connected, onClick: () => { void analyze(); } }} />)}
             <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || !selection?.fits || !connected} onClick={() => { void analyze(); }}>Read my brand</button>{aiNeedsFixing && <button type="button" disabled={locked} onClick={openSettings}>{connected ? 'Check AI settings' : 'Connect AI'}</button>}</div>
           </> : <div className="identity-result" aria-label="Brand review">
             <div className="identity-review-intro"><h2>3. Choose what to keep</h2></div>
@@ -312,6 +314,5 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
     {candidate && !keepable && <p className="field-help">Choose at least one detail, logo or page to keep.</p>}
     {!editMode && !candidate && !analyzing && <p className="field-help">Read your brand first</p>}
     <div className="form-actions"><button type="button" disabled={locked} onClick={close}>Cancel</button><button className="primary" type="submit" hidden={editMode} disabled={locked || !candidate || !keepable}>{busy || working ? 'Working…' : 'Add to project'}</button></div>
-    {error && <p className="message error" role="alert">{userError(error)}</p>}
   </form>;
 }
