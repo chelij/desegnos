@@ -116,3 +116,25 @@ to retain exact anomalous frame indices and PNG strips. The analyzer uses instal
 FFmpeg, Pillow and NumPy; its fixed unchanged regions match these two fixtures and
 exclude the moved element, drag measurements and notices. The ordinary native report
 and desktop-cleanup checks remain in the run's `test-results/native/` directory.
+
+The flash workflow also selects the copied owner's Wheely Lucky, llama-wrap and
+Papan. cards and checks stable editor ID, tag/text and outline geometry after one
+Right, one Down, repeated keys and an Alt-drag. Arrow-key traces check identity
+and alignment on every animation frame, including staged preview swaps. Input
+uses trusted X11/XTEST events; captures use the owned window on guarded Xvfb.
+
+Run only this check with:
+
+```sh
+DESEGNI_SELECTION_ONLY=1 DESEGNI_FLASH_LABEL=verified node scripts/native-test.mjs --flash-only
+```
+
+Evidence is in `test-results/selection-jump/<label>/`: selected/before and after
+screenshots, identity/geometry records, swap traces and trusted-input events.
+`DESEGNI_SELECTION_ZOOM=1` tests 100% instead of the default 75%.
+`DESEGNI_SELECTION_RECOVERY=1` copies the real-use recovery fixtures into a
+separate test directory and applies the latest journal's home-page source to
+the opened project copy before testing. Originals remain read-only.
+`DESEGNI_SELECTION_ASSERT=0` captures a failing baseline without stopping at the
+first identity/geometry mismatch. A passing run does not establish the cause of
+an owner-reported failure that the copied state cannot reproduce.

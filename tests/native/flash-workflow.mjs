@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chooseFile } from './file-dialog-workflow.mjs';
 import { waitFor } from './webdriver.mjs';
+import { selectionJumpWorkflow } from './selection-jump-workflow.mjs';
 
 export async function flashWorkflow(driver, physical, step, evidence) {
   const original = '~/Projects/chelib/chelib-redesign/chelib-redesign.desegnos';
@@ -20,7 +21,7 @@ export async function flashWorkflow(driver, physical, step, evidence) {
   assert.equal(await hash(owner.path), originalHash, 'The recent-project copy must match the requested owner archive');
   await writeFile(join(output,'source-integrity.json'), JSON.stringify({ original, sha256:originalHash, copiedTo:owner.path },null,2));
   await physical.initialize(evidence);
-  for (const kind of ['owner', 'simple']) {
+  for (const kind of (process.env.DESEGNI_SELECTION_ONLY === '1' ? ['owner'] : ['owner', 'simple'])) {
     await step(`${kind}: trusted element drag with 60 Hz window capture and DOM trace`, async () => {
       if (kind === 'owner') {
         // The native picker is the same opening path used by the real-use suite.
@@ -36,6 +37,10 @@ export async function flashWorkflow(driver, physical, step, evidence) {
         await driver.button('Save');
       }
       await waitFor(() => driver.execute(() => document.querySelector('.static-preview')?.dataset.previewReady === 'true'), 'Editable preview not ready', 30000);
+      if (kind === 'owner') {
+        await selectionJumpWorkflow(driver, physical, step, evidence);
+        if (process.env.DESEGNI_SELECTION_ONLY === '1') return;
+      }
       await driver.select('Zoom', '0.75');
       await driver.press('[data-testid="canvas"]', '\uE011');
       await delay(500);
@@ -93,6 +98,10 @@ export async function flashWorkflow(driver, physical, step, evidence) {
         assert.ok(trace.frames.every(s=>s.frames.filter(p=>p.cls.includes('static-preview')).every(p=>p.iframes.some(f=>f.visibility!=='hidden'&&f.body>0))), 'Canvas lost its visible document');
       }
     });
+  }
+  if (process.env.DESEGNI_SELECTION_ONLY === '1') {
+    assert.equal(await hash(original), originalHash, 'Original archive changed');
+    return;
   }
   await step('Cancelled dragging and Undo/Redo retain the editable document and selection', async () => {
     const before = (await driver.invoke('get_workspace')).project;

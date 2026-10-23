@@ -560,15 +560,22 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     if (!selected || !x && !y) return;
     const mover = site.current?.beginMove(selected.element);
     if (!mover) throw new Error('This item cannot be moved here. Select it again.');
-    try { await applyElement({ kind: 'update', texts: [], attributes: {}, style: mover.style(x, y) }, selected); }
+    const source = site.current?.source(); const pageId = pageRef.current.id;
+    try {
+      await applyElement({ kind: 'update', texts: [], attributes: {}, style: mover.style(x, y) }, selected);
+      // Stable IDs also resolve in the retained old frame. Wait for the committed
+      // document before another queued nudge reads its computed translation.
+      await waitForSite(pageId, elementRef.current?.element, source);
+    }
     finally { mover.cancel(); }
   }
   const moveElementRef = useRef(moveElement); moveElementRef.current = moveElement;
-  async function waitForSite(pageId: string, target?: ElementTarget) {
+  async function waitForSite(pageId: string, target?: ElementTarget, previousSource?: string | null) {
     const deadline = performance.now() + 4000;
     do {
       if (pageRef.current.id !== pageId) throw new Error('The page changed. Select the item again.');
-      if (site.current?.source() && (!target || site.current.find(target))) return;
+      const source = site.current?.source();
+      if (source && source !== previousSource && (!target || site.current?.find(target))) return;
       await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
     } while (performance.now() < deadline);
     throw new Error('The editable page is still loading. Try again when it appears.');

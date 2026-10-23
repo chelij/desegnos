@@ -42,8 +42,8 @@ async function holdsUnsavedWork(record, projectPath, journal) {
   } catch { return true; }
 }
 
-export async function seedRealUse(dataHome, evidence, { recoveries = true } = {}) {
-  const source = process.env.DESEGNI_REAL_USE_SOURCE ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), APP);
+export async function seedRealUse(dataHome, evidence, { recoveries = true, source: sourceOverride } = {}) {
+  const source = sourceOverride ?? process.env.DESEGNI_REAL_USE_SOURCE ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), APP);
   const target = join(dataHome, APP), copies = join(evidence, 'real-projects');
   await mkdir(target, { recursive: true, mode: 0o700 }); await mkdir(copies, { recursive: true });
   const manifest = { source, projects: [], recoveries: [] };
