@@ -20,6 +20,44 @@ use uuid::Uuid;
 type NativeResult<T> = Result<T, String>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 
+/// Open failures keep existing text errors and expose recovery choices without parsing prose.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ProjectOpenError {
+    Recovery {
+        code: &'static str,
+        #[serde(rename = "projectId")]
+        project_id: Uuid,
+        path: PathBuf,
+    },
+    Recent(RecentProjectOpenError),
+    Message(String),
+}
+
+impl From<String> for ProjectOpenError {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
+}
+impl From<&str> for ProjectOpenError {
+    fn from(message: &str) -> Self {
+        Self::Message(message.into())
+    }
+}
+impl From<ProjectOpenError> for String {
+    fn from(error: ProjectOpenError) -> Self {
+        match error {
+            ProjectOpenError::Message(message) => message,
+            ProjectOpenError::Recent(error) => error.message,
+            ProjectOpenError::Recovery { .. } => {
+                "This project has unsaved changes from an earlier session.".into()
+            }
+        }
+    }
+}
+
+type OpenResult<T> = Result<T, ProjectOpenError>;
+
 fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
@@ -659,7 +697,7 @@ impl Workspace {
 
     /// Open or create another project in a new tab group. If that fails, the previous
     /// project becomes active again.
-    fn open_tab<T>(&mut self, open: impl FnOnce(&mut Self) -> NativeResult<T>) -> NativeResult<T> {
+    fn open_tab<T, E>(&mut self, open: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
         let previous = self.session.as_ref().map(|s| s.project().id);
         self.park_active();
         match open(self) {
@@ -680,10 +718,20 @@ impl Workspace {
         }
     }
 
-    fn open_document(&mut self, file: ProjectFile, document: DecodedProject) -> NativeResult<()> {
+    fn open_document(
+        &mut self,
+        file: ProjectFile,
+        document: DecodedProject,
+        discard_recovery: bool,
+    ) -> OpenResult<()> {
         let migration_notice = document.migration_notice();
         let revision = document.project.revision;
-        self.start(document.project, Some(file), Some(revision))?;
+        self.start_with_recovery(
+            document.project,
+            Some(file),
+            Some(revision),
+            discard_recovery,
+        )?;
         if let Some(notice) = migration_notice {
             self.note_migration(notice)?;
         }
@@ -693,7 +741,7 @@ impl Workspace {
 
     /// Opens a project file in its own tab. Choosing the active project's own file again reloads
     /// it from disk with fresh history, unless it has unsaved edits, which are kept as they are.
-    fn open_file_tab(&mut self, path: &std::path::Path) -> NativeResult<()> {
+    fn open_file_tab(&mut self, path: &std::path::Path, discard_recovery: bool) -> OpenResult<()> {
         if path.is_dir() {
             if let Some(file_path) = desegni_storage::project_in_folder(path).map_err(message)? {
                 let document =
@@ -706,24 +754,24 @@ impl Workspace {
                     )
                     .map_err(message)?;
                 }
-                return self.open_file_tab(&file_path);
+                return self.open_file_tab(&file_path, discard_recovery);
             }
             let file = desegni_storage::import_detected_website(path, &self.project_location()?)
                 .map_err(message)?;
             let document = file.load_document().map_err(message)?;
-            return self.open_tab(|state| state.open_document(file, document));
+            return self.open_tab(|state| state.open_document(file, document, discard_recovery));
         }
         let active = self.file.as_ref().is_some_and(|file| {
             file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
         });
         match (active, self.view().dirty) {
-            (true, false) => self.open_path(path),
+            (true, false) => self.open_path(path, discard_recovery),
             (true, true) => Ok(()),
-            (false, _) => self.open_tab(|state| state.open_path(path)),
+            (false, _) => self.open_tab(|state| state.open_path(path, discard_recovery)),
         }
     }
 
-    fn open_path(&mut self, path: &std::path::Path) -> NativeResult<()> {
+    fn open_path(&mut self, path: &std::path::Path, discard_recovery: bool) -> OpenResult<()> {
         let canonical = path.canonicalize().ok();
         if let Some(index) = self.parked.iter().position(|open| {
             open.file.as_ref().is_some_and(|file| {
@@ -744,7 +792,7 @@ impl Workspace {
             let document = file.load_document().map_err(message)?;
             (file, document)
         };
-        self.open_document(file, document)
+        self.open_document(file, document, discard_recovery)
     }
 
     /// The active project was upgraded from its saved file with a notice: until it is saved,
@@ -781,6 +829,17 @@ impl Workspace {
         file: Option<ProjectFile>,
         saved_revision: Option<u64>,
     ) -> NativeResult<()> {
+        self.start_with_recovery(project, file, saved_revision, false)
+            .map_err(String::from)
+    }
+
+    fn start_with_recovery(
+        &mut self,
+        project: Project,
+        file: Option<ProjectFile>,
+        saved_revision: Option<u64>,
+        discard_recovery: bool,
+    ) -> OpenResult<()> {
         if let Some(index) = self
             .parked
             .iter()
@@ -804,19 +863,33 @@ impl Workspace {
             if self.pointer_path(project.id).exists() {
                 match self.read_recovery(project.id) {
                     Ok(Some((recovered, _))) if recovered.project != project => {
-                        return Err("This project has unsaved changes from an earlier session. Open them with Menu → Recover unsaved projects, or recover and then close with Discard to open the saved file.".into());
+                        if !discard_recovery {
+                            return Err(ProjectOpenError::Recovery {
+                                code: "pendingRecovery",
+                                project_id: project.id,
+                                path: file
+                                    .as_ref()
+                                    .map(|file| file.path().to_path_buf())
+                                    .ok_or("This project has no saved file to open.")?,
+                            });
+                        }
+                        // Ownership stays held across dismissal and activation. Use the same
+                        // non-destructive pointer archival as dismiss_recovery.
+                        self.discard_recovery_pointer(project.id)?;
+                        self.refresh_recoveries();
                     }
                     Ok(_) => {}
                     Err(error) => {
                         return Err(format!(
                             "This project's recovery record needs attention before it can be replaced: {error}"
-                        ));
+                        ).into());
                     }
                 }
             }
             Some(ownership)
         };
         self.activate(project, file, saved_revision, ownership, None)
+            .map_err(Into::into)
     }
 
     fn activate(
@@ -1803,7 +1876,8 @@ pub async fn edit_website_folder(
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
     imports: State<'_, Mutex<crate::website_import::WebsiteImports>>,
     folder_id: Uuid,
-) -> NativeResult<WorkspaceView> {
+    discard_recovery: Option<bool>,
+) -> OpenResult<WorkspaceView> {
     generation
         .lock()
         .map_err(message)?
@@ -1818,7 +1892,7 @@ pub async fn edit_website_folder(
             .lock()
             .map_err(message)?
             .ensure_switch_allowed()?;
-        state.open_file_tab(&path)?;
+        state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
         Ok(state.view())
     })
     .await
@@ -1831,8 +1905,10 @@ pub async fn open_project(
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
     discard: bool,
     folder: Option<bool>,
+    path: Option<PathBuf>,
+    discard_recovery: Option<bool>,
     imports: State<'_, Mutex<crate::website_import::WebsiteImports>>,
-) -> NativeResult<Option<OpenProjectResult>> {
+) -> OpenResult<Option<OpenProjectResult>> {
     generation
         .lock()
         .map_err(message)?
@@ -1842,27 +1918,31 @@ pub async fn open_project(
         let state = state.lock().map_err(message)?;
         state.session.as_ref().map(|s| s.project().clone())
     };
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        let dialog = app.dialog().file();
-        if folder.unwrap_or(false) {
-            dialog
-                .set_title("Open project folder")
-                .blocking_pick_folder()
-        } else {
-            dialog
-                .add_filter(
-                    "Desegnos website",
-                    &desegni_storage::PROJECT_FILE_EXTENSIONS,
-                )
-                .blocking_pick_file()
-        }
-    })
-    .await
-    .map_err(message)?;
-    let Some(picked) = picked else {
-        return Ok(None);
+    let path = if let Some(path) = path {
+        path
+    } else {
+        let picked = tauri::async_runtime::spawn_blocking(move || {
+            let dialog = app.dialog().file();
+            if folder.unwrap_or(false) {
+                dialog
+                    .set_title("Open project folder")
+                    .blocking_pick_folder()
+            } else {
+                dialog
+                    .add_filter(
+                        "Desegnos website",
+                        &desegni_storage::PROJECT_FILE_EXTENSIONS,
+                    )
+                    .blocking_pick_file()
+            }
+        })
+        .await
+        .map_err(message)?;
+        let Some(picked) = picked else {
+            return Ok(None);
+        };
+        picked.into_path().map_err(message)?
     };
-    let path = picked.into_path().map_err(message)?;
     let mut state = state.lock().map_err(message)?;
     generation
         .lock()
@@ -1885,7 +1965,7 @@ pub async fn open_project(
             website: Box::new(website),
         }));
     }
-    state.open_file_tab(&path)?;
+    state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
     Ok(Some(OpenProjectResult::Workspace(Box::new(state.view()))))
 }
 
@@ -2254,7 +2334,7 @@ mod tests {
         let edited = workspace.project().unwrap().clone();
         workspace.save_snapshot(&edited, None).unwrap();
         assert!(workspace.view().can_undo);
-        workspace.open_file_tab(&folder).unwrap();
+        workspace.open_file_tab(&folder, false).unwrap();
         assert_eq!(workspace.project().unwrap(), &edited);
         assert!(!workspace.view().can_undo);
         assert!(!workspace.view().dirty);
@@ -2273,7 +2353,7 @@ mod tests {
         fs::write(folder.join("index.html"), html).unwrap();
         let directory = temp.0.join("app-data");
         let mut workspace = Workspace::from_directory(directory.clone()).unwrap();
-        workspace.open_file_tab(&folder).unwrap();
+        workspace.open_file_tab(&folder, false).unwrap();
         let path = folder.join("Existing site.desegnos");
         assert_eq!(workspace.file.as_ref().unwrap().path(), path);
         assert_eq!(fs::read_to_string(folder.join("index.html")).unwrap(), html);
@@ -2694,7 +2774,7 @@ mod tests {
         let edited = workspace.session.as_ref().unwrap().project().clone();
         workspace.save_snapshot(&edited, None).unwrap();
         let previous_session = workspace.view().history.unwrap().session_id;
-        workspace.open_path(&path).unwrap();
+        workspace.open_path(&path, false).unwrap();
         assert_eq!(workspace.session.as_ref().unwrap().project(), &edited);
         let history = workspace.view().history.unwrap();
         assert_ne!(history.session_id, previous_session);
@@ -2719,7 +2799,7 @@ mod tests {
         let stamp = workspace.file.as_ref().unwrap().stamp().unwrap();
         let bytes = fs::read(&path).unwrap();
         fs::write(&path, b"Unreadable external changes").unwrap();
-        assert!(workspace.open_path(&path).is_err());
+        assert!(workspace.open_path(&path, false).is_err());
         assert_eq!(workspace.session.as_ref().unwrap().project(), &original);
         assert_eq!(workspace.view().history, previous_history);
         assert_eq!(workspace.file.as_ref().unwrap().stamp().unwrap(), stamp);
@@ -2734,10 +2814,119 @@ mod tests {
             fs::remove_file(&backup).unwrap();
         }
         fs::create_dir(&backup).unwrap();
-        assert!(workspace.open_path(&path).is_err());
+        assert!(workspace.open_path(&path, false).is_err());
         assert_eq!(workspace.view().history, previous_history);
         assert_eq!(workspace.file.as_ref().unwrap().stamp().unwrap(), stamp);
         assert!(ProjectFile::acquire(&path).is_err());
+    }
+
+    #[test]
+    fn pending_recovery_is_structured_and_saved_version_retry_preserves_original_data() {
+        for folder in [false, true] {
+            let temp = Temp::new();
+            let original = project("Saved version");
+            let path = temp.0.join("site.desegnos");
+            let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+            workspace.start(original.clone(), None, None).unwrap();
+            workspace
+                .save_snapshot(&original, Some(path.clone()))
+                .unwrap();
+            change_grid(&mut workspace);
+            let pointer_bytes = fs::read(workspace.pointer_path(original.id)).unwrap();
+            let pointer: RecoveryPointer = serde_json::from_slice(&pointer_bytes).unwrap();
+            let journal = temp.0.join(pointer.journal_file);
+            let journal_bytes = fs::read(&journal).unwrap();
+            let saved_bytes = fs::read(&path).unwrap();
+            drop(workspace);
+
+            let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+            let other = project("Keep this tab");
+            restarted.start(other.clone(), None, None).unwrap();
+            let source = if folder {
+                temp.0.as_path()
+            } else {
+                path.as_path()
+            };
+            let error = restarted.open_file_tab(source, false).unwrap_err();
+            assert_eq!(
+                serde_json::to_value(&error).unwrap(),
+                serde_json::json!({
+                    "code": "pendingRecovery", "projectId": original.id, "path": path.canonicalize().unwrap(),
+                })
+            );
+            assert_eq!(restarted.session.as_ref().unwrap().project(), &other);
+            assert_eq!(
+                fs::read(restarted.pointer_path(original.id)).unwrap(),
+                pointer_bytes
+            );
+            assert_eq!(fs::read(&journal).unwrap(), journal_bytes);
+
+            restarted.open_file_tab(source, true).unwrap();
+            assert_eq!(restarted.session.as_ref().unwrap().project(), &original);
+            assert!(!restarted.view().dirty);
+            assert!(
+                restarted
+                    .parked
+                    .iter()
+                    .any(|open| open.session.project() == &other)
+            );
+            assert!(
+                !restarted
+                    .view()
+                    .recoveries
+                    .iter()
+                    .any(|item| item.project_id == original.id)
+            );
+            assert_eq!(
+                fs::read(
+                    temp.0
+                        .join(format!("{}.recovery.discarded.json", original.id))
+                )
+                .unwrap(),
+                pointer_bytes
+            );
+            assert_eq!(fs::read(&journal).unwrap(), journal_bytes);
+            assert_eq!(fs::read(&path).unwrap(), saved_bytes);
+            drop(restarted);
+            let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+            restarted.open_file_tab(&path, false).unwrap();
+            assert_eq!(restarted.session.as_ref().unwrap().project(), &original);
+        }
+    }
+
+    #[test]
+    fn discard_and_open_still_rejects_live_ownership_and_damaged_recovery() {
+        let temp = Temp::new();
+        let original = project("Protected recovery");
+        let path = temp.0.join("site.desegnos");
+        let mut first = Workspace::from_directory(temp.0.clone()).unwrap();
+        first.start(original.clone(), None, None).unwrap();
+        first.save_snapshot(&original, Some(path.clone())).unwrap();
+        change_grid(&mut first);
+        let mut second = Workspace::from_directory(temp.0.clone()).unwrap();
+        // A second file with the same project ID reaches the ownership guard.
+        let copy = temp.0.join("copy.desegnos");
+        fs::copy(&path, &copy).unwrap();
+        let error = second.open_file_tab(&copy, true).unwrap_err();
+        assert_eq!(
+            String::from(error),
+            "This project is already active in another Desegnos window."
+        );
+        drop(first);
+        let pointer = second.pointer_path(original.id);
+        fs::write(&pointer, b"damaged recovery").unwrap();
+        let error = second.open_file_tab(&path, true).unwrap_err();
+        assert!(String::from(error).starts_with(
+            "This project's recovery record needs attention before it can be replaced:"
+        ));
+        assert_eq!(fs::read(pointer).unwrap(), b"damaged recovery");
+        assert!(second.session.is_none());
+        assert!(
+            !temp
+                .0
+                .join(format!("{}.recovery.discarded.json", original.id))
+                .exists()
+        );
     }
 
     #[test]
@@ -3181,7 +3370,7 @@ mod tests {
         let document = file.load_document().unwrap();
         let expected = document.project.clone();
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.open_document(file, document).unwrap();
+        workspace.open_document(file, document, false).unwrap();
         assert_eq!(workspace.session.as_ref().unwrap().project(), &expected);
         assert_eq!(
             workspace.view().migration_notice.as_deref(),
@@ -3233,7 +3422,7 @@ mod tests {
         let path = temp.0.join("site.desegni");
         fs::write(&path, SCHEMA_SEVEN).unwrap();
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.open_file_tab(&path).unwrap();
+        workspace.open_file_tab(&path, false).unwrap();
         let opened = workspace.session.as_ref().unwrap().project().clone();
         assert!(!workspace.view().dirty);
         assert!(workspace.view().migration_notice.is_none());
@@ -3242,7 +3431,7 @@ mod tests {
 
         let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
         assert!(restarted.recoveries.is_empty());
-        restarted.open_file_tab(&path).unwrap();
+        restarted.open_file_tab(&path, false).unwrap();
         assert_eq!(restarted.session.as_ref().unwrap().project(), &opened);
         assert!(!restarted.view().dirty);
         restarted.close();
@@ -3266,7 +3455,7 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), SCHEMA_SEVEN);
 
         // Real edits are still offered.
-        restarted.open_file_tab(&path).unwrap();
+        restarted.open_file_tab(&path, false).unwrap();
         change_grid(&mut restarted);
         drop(restarted);
         let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
@@ -3354,10 +3543,16 @@ pub fn get_recent_projects(
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct RecentProjectOpenError {
     message: String,
     missing: bool,
+}
+
+impl From<RecentProjectOpenError> for ProjectOpenError {
+    fn from(error: RecentProjectOpenError) -> Self {
+        Self::Recent(error)
+    }
 }
 
 impl From<String> for RecentProjectOpenError {
@@ -3376,42 +3571,50 @@ pub fn open_recent_project(
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
     path: PathBuf,
     discard: bool,
-) -> Result<WorkspaceView, RecentProjectOpenError> {
-    if window.label() != "editor" {
-        return Err("Only the editor can open recent projects."
-            .to_owned()
-            .into());
-    }
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
-    let _ = discard; // Opening adds a tab group; the active project stays open.
-    let mut state = state.lock().map_err(message)?;
-    if !crate::recent::read(&state.directory)?
-        .iter()
-        .any(|entry| entry.path == path)
-    {
-        return Err(
-            "This project is not in your recent list. Use Open project to choose it."
+    discard_recovery: Option<bool>,
+) -> OpenResult<WorkspaceView> {
+    (|| -> OpenResult<WorkspaceView> {
+        if window.label() != "editor" {
+            return Err("Only the editor can open recent projects."
                 .to_owned()
-                .into(),
-        );
-    }
-    if let Err(error) = fs::metadata(&path) {
-        return Err(RecentProjectOpenError {
-            missing: matches!(
-                error.kind(),
-                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-            ),
-            message: format!(
-                "Could not open this recent project ({}): {error}",
-                path.display()
-            ),
-        });
-    }
-    state.open_file_tab(&path)?;
-    Ok(state.view())
+                .into());
+        }
+        generation
+            .lock()
+            .map_err(message)?
+            .ensure_switch_allowed()?;
+        let _ = discard; // Opening adds a tab group; the active project stays open.
+        let mut state = state.lock().map_err(message)?;
+        if !crate::recent::read(&state.directory)?
+            .iter()
+            .any(|entry| entry.path == path)
+        {
+            return Err(
+                "This project is not in your recent list. Use Open project to choose it."
+                    .to_owned()
+                    .into(),
+            );
+        }
+        if let Err(error) = fs::metadata(&path) {
+            return Err(RecentProjectOpenError {
+                missing: matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ),
+                message: format!(
+                    "Could not open this recent project ({}): {error}",
+                    path.display()
+                ),
+            }
+            .into());
+        }
+        state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
+        Ok(state.view())
+    })()
+    .map_err(|error| match error {
+        ProjectOpenError::Message(message) => RecentProjectOpenError::from(message).into(),
+        error => error,
+    })
 }
 
 #[cfg(test)]
@@ -3419,6 +3622,6 @@ pub(super) fn open_archive_for_tests(directory: PathBuf, path: &std::path::Path)
     let file = ProjectFile::acquire(path).unwrap();
     let document = file.load_document().unwrap();
     let mut workspace = Workspace::from_directory(directory).unwrap();
-    workspace.open_document(file, document).unwrap();
+    workspace.open_document(file, document, false).unwrap();
     workspace
 }

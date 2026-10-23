@@ -5,6 +5,7 @@ import { native, edit } from './api';
 import { Canvas, type CanvasHandle, type RequestPatch } from './Canvas';
 import { CanvasTools, type CanvasTool, type RequestShapeKind } from './CanvasTools';
 import { WorkspaceSurface, WorkspaceSurfaces, SurfaceHost } from './WorkspaceSurface';
+import { RecoveryBanner, isPendingRecovery, type PendingRecovery } from './RecoveryBanner';
 import { SaveConflictDialog, type SaveConflict, type SaveOutcome, type SaveChoice } from './SaveConflict';
 import { regionTargets, sameTargets } from './elementTargets';
 import brandLight from './assets/brand/desegnos-wordmark-light.svg';
@@ -88,6 +89,15 @@ function Editor() {
   const [showLayers, setShowLayers] = useState(false);
   const [activeLayer, setActiveLayer] = useState<ElementTarget | null>(null);
   const [showNew, setShowNew] = useState(false);
+  const [pendingRecovery, setPendingRecovery] = useState<PendingRecovery | null>(null);
+  async function requestProjectOpen<T>(operation: () => Promise<T>): Promise<T | null> {
+    setPendingRecovery(null);
+    try { return await operation(); }
+    catch (error) {
+      if (!isPendingRecovery(error)) throw error;
+      setError(''); setPendingRecovery(error); return null;
+    }
+  }
   const [showNotes, setShowNotes] = useState<DossierSection | null>(null);
   const [showGridSettings, setShowGridSettings] = useState(false);
   const [codeView, setCodeView] = useState<CodeView>('design');
@@ -100,7 +110,8 @@ function Editor() {
   async function editWebsite(folderId: string) {
     await synchronize(); await settle();
     await queue(async () => {
-      const opened = await native<WorkspaceView>('edit_website_folder', { folderId });
+      const opened = await requestProjectOpen(() => native<WorkspaceView>('edit_website_folder', { folderId }));
+      if (!opened) return;
       accept(opened); setSelected(null); setShowNew(false); setNotice('Website opened.');
       if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height));
       void refreshRecent().catch(() => {});
@@ -380,10 +391,10 @@ function Editor() {
     }
     generate();
   }
-  async function open(folder = false) {
+  async function open(folder = false, path?: string, discardRecovery = false) {
     await openAlongside(async discard => {
       await queue(async () => {
-        const opened = await native<WorkspaceView | { website: WebsiteFolderSelection } | null>('open_project', { discard, folder });
+        const opened = await requestProjectOpen(() => native<WorkspaceView | { website: WebsiteFolderSelection } | null>('open_project', { discard, folder, path: path ?? null, discardRecovery }));
         if (opened && 'website' in opened) { setImportFolder(opened.website); setImportAsNew(false); setShowNew(false); setShowImport(true); return; }
         if (opened) { accept(opened); setSelected(null); setNotice('Project opened.'); setShowNew(false); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
       });
@@ -392,7 +403,8 @@ function Editor() {
   async function openRecent(path: string) {
     await openAlongside(async discard => {
       await queue(async () => {
-        const opened = await native<WorkspaceView>('open_recent_project', { path, discard });
+        const opened = await requestProjectOpen(() => native<WorkspaceView>('open_recent_project', { path, discard }));
+        if (!opened) return;
         accept(opened); setSelected(null); setShowNew(false); setNotice('Project opened.');
         if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height));
         void refreshRecent().catch(() => {});
@@ -431,7 +443,7 @@ function Editor() {
         const recovered = await native<WorkspaceView>('recover_project', { projectId, discard });
         accept(recovered);
         if (recovered.project) setZoom(initialZoom(recovered.project.viewport.width, recovered.project.viewport.height));
-        setSelected(null); setShowRecovery(false);
+        setSelected(null); setShowRecovery(false); setShowNew(false); setPendingRecovery(null);
         setNotice('Project recovered.');
       });
     });
@@ -888,6 +900,7 @@ function Editor() {
       </div>
     </header>
     <SurfaceHost place="banner" />
+    {pendingRecovery && <RecoveryBanner busy={pending > 0} recover={() => run(() => recover(pendingRecovery.projectId))} openSaved={() => run(() => open(false, pendingRecovery.path, true))} dismiss={() => setPendingRecovery(null)} />}
     {error && <div className="message error" role="alert"><span>{error}</span><button onClick={() => setError('')} aria-label="Dismiss error">Dismiss</button></div>}
     {exported && <section className="export-notice" role="status"><div><strong>Website exported</strong><span title={exported.path}>{exported.pageCount} {exported.pageCount === 1 ? 'page' : 'pages'}{exported.warnings.length > 0 && ` · ${exported.warnings.length} to check`}</span>{exported.warnings.length > 0 && <details><summary>Things to check</summary><ul>{exported.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>}</div><button onClick={() => run(() => native('open_export_folder', { path: exported.path }))}>Open folder</button><button aria-label="Dismiss export notice" title="Dismiss" onClick={() => setExported(null)}>×</button></section>}
     {offerRestyle && project && <div className="message info restyle-offer" role="status"><span>{offerRestyle}</span><button className="primary" disabled={pending > 0 || working} onClick={() => run(regenerateWithContext)}>Regenerate pages</button><button onClick={() => setOfferRestyle(false)}>Not now</button></div>}

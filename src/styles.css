@@ -88,6 +88,9 @@ p { margin-bottom: 12px; }
 .message.error { background: var(--error-surface); color: var(--danger); }
 .message.warning { display: block; background: var(--warning-surface); border: 1px solid var(--border); }
 .message.migration-notice { display: flex; }
+.message.recovery-banner { display: flex; flex-wrap: wrap; }
+.recovery-banner > span { flex: 1 1 320px; }
+.recovery-banner > button { flex-shrink: 0; white-space: nowrap; }
 .startup { overflow: auto; flex: 1; display: flex; flex-direction: column; align-items: center; padding: 28px 24px 48px; }
 .startup > h1 { margin-top: 40px; }
 .new-project { width: 100%; max-width: 440px; display: flex; flex-direction: column; gap: 18px; padding: 22px 0; }
