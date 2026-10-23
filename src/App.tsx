@@ -685,6 +685,11 @@ function Editor() {
     }
     signal?.throwIfAborted();
     const result = await native<T>(command, args);
+    if (command === 'prepare_generation' && (result as import('./types').GenerationJobView).baseRevision !== workspace?.project?.revision) {
+      // Preparing may attach a framed document to an older request, which bumps the revision.
+      const refreshed = await native<WorkspaceView>('get_workspace');
+      if (refreshed.project?.id === activeProjectId) accept(refreshed);
+    }
     if (command === 'apply_generation' && !signal?.aborted) accept(result as WorkspaceView);
     if (command === 'generation_draft' && (result as import('./types').DraftReview).workspace) accept((result as import('./types').DraftReview).workspace!);
     return result;

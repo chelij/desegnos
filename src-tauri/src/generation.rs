@@ -825,6 +825,27 @@ impl GenerationService {
                     .and_then(|c| c.pages.iter().find(|p| p.page_id == entry.page_id))
                     .map(|p| desegni_core::source_fingerprints(Some(&p.content)));
             }
+            // Every editable document this job covered, after any applied result.
+            if view.status == JobStatus::Applied {
+                let mut applied = entry.base_document_fingerprints.clone();
+                if let Some(candidate) = &view.candidate {
+                    for page in &candidate.pages {
+                        if let Ok(hash) = page.content.sha256() {
+                            applied.insert(
+                                desegni_core::DocumentTarget::page(page.page_id).key(),
+                                hash,
+                            );
+                        }
+                    }
+                    for document in &candidate.documents {
+                        applied.insert(
+                            document.document.key(),
+                            digest(document.content.html.as_bytes()),
+                        );
+                    }
+                }
+                entry.document_fingerprints = applied;
+            }
         }
         entries
     }
@@ -2448,7 +2469,10 @@ pub async fn prepare_generation(
     } else {
         None
     };
-    let workspace = workspace.lock().map_err(message)?;
+    let mut workspace = workspace.lock().map_err(message)?;
+    // A box drawn over an iframe before framed editing existed gains its document here, so its
+    // source is supplied with the request instead of the AI reporting the source as unavailable.
+    workspace.adopt_frame_targets()?;
     let project = workspace.project()?;
     let mut service = state.lock().map_err(message)?;
     if service.authentication != authentication || service.provider != provider {

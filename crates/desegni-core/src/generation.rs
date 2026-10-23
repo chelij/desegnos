@@ -272,6 +272,7 @@ impl GenerationCandidate {
         let mut required_pages = BTreeSet::new();
         let mut allowed_pages: BTreeSet<Uuid> = target_pages.clone();
         let mut required_documents: BTreeSet<crate::DocumentTarget> = BTreeSet::new();
+        let mut allowed_documents: BTreeSet<crate::DocumentTarget> = BTreeSet::new();
         if format >= 22 {
             allowed_pages.clear();
             for (page_id, region_id) in &targets {
@@ -307,6 +308,17 @@ impl GenerationCandidate {
                 }
             }
         }
+        // Format 23: a Flexible request may also update the documents it was given.
+        for included in &snapshot.documents {
+            match &included.document {
+                crate::DocumentTarget::Page { page_id } => {
+                    allowed_pages.insert(*page_id);
+                }
+                crate::DocumentTarget::SiteFile { .. } => {
+                    allowed_documents.insert(included.document.clone());
+                }
+            }
+        }
         let mut pages = BTreeSet::new();
         for page in &self.pages {
             let allowed = if format >= 22 {
@@ -339,13 +351,16 @@ impl GenerationCandidate {
             let mut documents = BTreeSet::new();
             for document in &self.documents {
                 ensure(
-                    required_documents.contains(&document.document)
+                    (required_documents.contains(&document.document)
+                        || (format >= 23 && allowed_documents.contains(&document.document)))
                         && documents.insert(document.document.clone()),
                     "The generation result contains a duplicate or unrequested framed document.",
                 )?;
             }
             ensure(
-                documents == required_documents,
+                required_documents
+                    .iter()
+                    .all(|document| documents.contains(document)),
                 "Return source for exactly the framed documents with implemented regions.",
             )?;
         } else if format >= 17 {

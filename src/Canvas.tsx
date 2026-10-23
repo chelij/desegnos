@@ -8,7 +8,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '@tauri-apps/api/core';
 import { flushSync } from 'react-dom';
 import { canonicalSelections, documentKey, regionTargets, sameDocument, sameTarget, targetKey, unionRect } from './elementTargets';
-import { pageRectToInnerDocument, remapFramedRequest, requestFrame } from './frameDocuments';
+import { adoptRequestFrame, frameTargetShown, pageRectToInnerDocument, remapFramedRequest, requestFrame } from './frameDocuments';
 import { useDraftText } from './DraftText';
 import { escapeHtml, imageFile } from './elementEditing';
 import { StyleBar, type StyleChange } from './StyleBar';
@@ -635,12 +635,52 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       if (nudge.current.x || nudge.current.y) nudgeElement(0, 0); else setNudging(false);
     });
   }
+  // A box drawn over an editable frame belongs to the document inside it. Boxes created before
+  // framed editing existed, or whose frame changed, gain their framed document here, before
+  // generation measures and freezes the request.
+  async function adoptFrameTargets(): Promise<boolean> {
+    const current = pageRef.current;
+    if (liveView || !current.content) return false;
+    const frames = site.current?.frames() ?? [];
+    // Resolved frame documents do not need the static preview to be measurable; they keep a
+    // hidden frame's request from being cleared while its tab is closed.
+    const known = [
+      ...frames.map(item => ({ iframeId: item.iframe.id, document: item.document })),
+      ...frameDocuments.map(item => ({ iframeId: item.iframeId, document: item.document })),
+    ];
+    if (!known.length) return false;
+    let changed = false;
+    for (const region of current.regions.filter(item => !item.completed)) {
+      const existing = region.frameTarget;
+      if (existing) {
+        const valid = frameTargetShown(frames, existing) || known.some(item => item.iframeId === existing.iframeId && sameDocument(item.document, existing.document));
+        if (valid) continue;
+        await setFrameTarget(region.id, null);
+        changed = true;
+        continue;
+      }
+      // A new target needs the measured frame box; the backend repeats this rule at prepare.
+      if (!frames.length) continue;
+      const framed = adoptRequestFrame(frames, region.rect);
+      if (!framed) continue;
+      let iframe: ElementTarget | null = framed.frame.iframe;
+      if (!iframe.id) {
+        try { iframe = await ensureElementId({ ...iframe }); }
+        catch { iframe = null; }
+      }
+      if (!iframe?.id) continue;
+      await setFrameTarget(region.id, { pageId: current.id, iframeId: iframe.id, document: framed.frame.document, rect: framed.rect });
+      changed = true;
+    }
+    return changed;
+  }
   function synchronizeBounds(): Promise<void> {
     if (syncing.current) return syncing.current;
     const work = async () => {
       const current = pageRef.current;
-      if (!current.content || !current.regions.some(region => !region.completed && !region.frameTarget)) { setStale(new Set()); return; }
+      if (!current.content || !current.regions.some(region => !region.completed)) { setStale(new Set()); return; }
       await waitForSite(current.id);
+      if (await adoptFrameTargets()) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       if (JSON.stringify(pageRef.current.content) !== JSON.stringify(current.content) || pageRef.current.id !== current.id) throw new Error('The page changed while measuring its items. Try again.');
       const regions = pageRef.current.regions.filter(region => !region.completed && !region.frameTarget);
       const bounds: ElementBounds[] = []; const missing = new Set<string>();

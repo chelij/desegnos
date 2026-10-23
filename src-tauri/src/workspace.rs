@@ -249,6 +249,16 @@ impl Workspace {
             .ok_or_else(|| "Create or open a project first.".into())
     }
 
+    /// A request drawn before framed editing existed still needs its framed document.
+    pub(super) fn adopt_frame_targets(&mut self) -> NativeResult<()> {
+        let journal = self.journal.as_ref().ok_or("Open a project first.")?;
+        self.session
+            .as_mut()
+            .ok_or("Create or open a project first.")?
+            .adopt_frame_targets(|next| journal.append(next))
+            .map_err(message)
+    }
+
     pub(super) fn apply_generated(
         &mut self,
         snapshot: &RequirementsSnapshot,

@@ -214,6 +214,7 @@ fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
         markdown,
         region_count: 2,
         page_count: 1,
+        documents: vec![],
         dependencies: BTreeMap::new(),
         dossier_context: None,
         request_history: String::new(),

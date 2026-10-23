@@ -411,6 +411,7 @@ mod web_search_tests {
             markdown,
             region_count: 1,
             page_count: 1,
+            documents: vec![],
             dependencies: Default::default(),
             dossier_context: None,
             request_history: String::new(),

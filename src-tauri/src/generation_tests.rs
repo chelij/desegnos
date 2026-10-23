@@ -1754,7 +1754,7 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, before.revision);
     fresh.requirements.validate_current(&before).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 22);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 23);
     assert_eq!(
         fresh.source_fingerprints.get(&before.pages[0].id),
         Some(&desegni_core::source_fingerprints(
@@ -1819,7 +1819,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_while_begin_submits_current_
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, project.revision);
     fresh.requirements.validate_current(&project).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 22);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 23);
     assert_eq!(
         fresh.source_fingerprints.get(&project.pages[0].id),
         Some(&desegni_core::source_fingerprints(

@@ -15,7 +15,8 @@ try {
   const {
     canvasToInner, frameAt, frameContentRect, frameDocumentBase, frameDocumentSource, frameMapping,
     innerDocumentToPage, innerRectToPage, innerToCanvas, innerViewportToPage, pageRectToInnerDocument,
-    pageRectToInnerViewport, pageToInnerDocument, pageToInnerViewport, remapFramedRequest, requestFrame,
+    adoptRequestFrame, frameTargetShown, pageRectToInnerViewport, pageToInnerDocument,
+    pageToInnerViewport, remapFramedRequest, requestFrame,
   } = await import(pathToFileURL(join(temporary, 'frameDocuments.js')).href);
 
   const plain = () => frameMapping({ frame: { x: 100, y: 50, width: 400, height: 300 }, layoutWidth: 400, layoutHeight: 300 });
@@ -106,6 +107,35 @@ try {
     // The box is clamped only by its centre: a corner clip stays a page request.
     assert.equal(requestFrame([frame], { x: 60, y: 10, width: 20, height: 20 }), null);
     assert.equal(requestFrame([], { x: 150, y: 100, width: 100, height: 60 }), null);
+  });
+
+  await test('a box that was drawn before framed editing adopts the frame it covers', () => {
+    const frame = editable(pageDocument);
+    // The box's centre is outside the frame, so it was not a framed request when drawn.
+    const adopted = adoptRequestFrame([frame], { x: 60, y: 10, width: 120, height: 100 });
+    assert.ok(adopted);
+    assert.equal(adopted.frame, frame);
+    assert.deepEqual(adopted.rect, { x: -40, y: -40, width: 120, height: 100 });
+    // A corner clip without a meaningful shared area stays a page request.
+    assert.equal(adoptRequestFrame([frame], { x: 60, y: 10, width: 20, height: 20 }), null);
+    // A large frame the box mostly covers, and a small frame around the box's centre: the
+    // centre rule wins over the larger shared area.
+    const large = editable(siteDocument);
+    large.mapping = frameMapping({ frame: { x: 0, y: 0, width: 1000, height: 400 }, layoutWidth: 1000, layoutHeight: 400 });
+    large.contentRect = { x: 0, y: 0, width: 1000, height: 400 };
+    const small = editable(pageDocument);
+    small.mapping = frameMapping({ frame: { x: 450, y: 450, width: 100, height: 100 }, layoutWidth: 100, layoutHeight: 100 });
+    small.contentRect = { x: 450, y: 450, width: 100, height: 100 };
+    assert.equal(adoptRequestFrame([large, small], { x: 0, y: 300, width: 1000, height: 400 }).frame, small);
+    assert.equal(adoptRequestFrame([], { x: 150, y: 100, width: 100, height: 60 }), null);
+  });
+
+  await test('an existing frame target stays while its iframe still shows the document', () => {
+    const frame = editable(pageDocument);
+    assert.equal(frameTargetShown([frame], { iframeId: 'iframe1', document: pageDocument }), true);
+    assert.equal(frameTargetShown([frame], { iframeId: 'iframe1', document: siteDocument }), false);
+    assert.equal(frameTargetShown([frame], { iframeId: 'iframe2', document: pageDocument }), false);
+    assert.equal(frameTargetShown([], { iframeId: 'iframe1', document: pageDocument }), false);
   });
 
   await test('a moved framed request re-maps while it stays inside its frame', () => {

@@ -1,10 +1,15 @@
 //! Editable documents shown in a page's iframes: a project page or an imported site HTML file.
-use crate::{Error, Project, Result, SiteContent, Viewport, digest, ensure};
+use crate::{Error, Project, Rect, Result, SiteContent, Viewport, digest, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use dom_query::Document;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
+
+/// A request box meets an iframe when they share at least this much area, so that a small
+/// corner clip on a large page stays a page request.
+const MIN_FRAME_OVERLAP_AREA: f64 = 256.0;
+const MIN_FRAME_OVERLAP_SIDE: f64 = 4.0;
 
 /// A document the editor and the AI may change. Pages carry their project ID; imported site
 /// HTML files carry their original site path and are stored in the project's website bytes.
@@ -179,6 +184,20 @@ pub(crate) fn join_site_path(base: &str, value: &str) -> Option<String> {
         return None;
     }
     Some(parts.join("/"))
+}
+
+/// The shared part of two boxes, or None when they do not overlap.
+fn overlap_rect(a: Rect, b: Rect) -> Option<Rect> {
+    let x = a.x.max(b.x);
+    let y = a.y.max(b.y);
+    let right = (a.x + a.width).min(b.x + b.width);
+    let bottom = (a.y + a.height).min(b.y + b.height);
+    (right > x && bottom > y).then_some(Rect {
+        x,
+        y,
+        width: right - x,
+        height: bottom - y,
+    })
 }
 
 impl Project {
@@ -408,6 +427,158 @@ impl Project {
             }
         }
         FrameSource::Unresolvable { src: raw.into() }
+    }
+
+    /// The iframe boxes measured on a page, keyed by editor ID. Requests without their own
+    /// framed document contribute the measurement taken before they were prepared.
+    pub fn measured_frame_rects(&self, page_id: Uuid) -> BTreeMap<String, Rect> {
+        let mut boxes = BTreeMap::new();
+        if let Ok(page) = self.page(page_id) {
+            for region in page.regions.iter().filter(|region| !region.completed) {
+                for bound in &region.area_bounds {
+                    if !bound.target.id.is_empty() {
+                        boxes.entry(bound.target.id.clone()).or_insert(bound.rect);
+                    }
+                }
+            }
+        }
+        boxes
+    }
+
+    /// The frame a request box belongs to before generation. The frame under the box centre
+    /// wins when the box covers several; otherwise the largest shared area wins.
+    fn frame_target_in(
+        &self,
+        page_id: Uuid,
+        rect: Rect,
+        frames: &[PageFrameTarget],
+        boxes: &BTreeMap<String, Rect>,
+    ) -> Result<Option<FrameTarget>> {
+        let centre = (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0);
+        let mut best: Option<(bool, f64, FrameTarget)> = None;
+        for frame in frames {
+            let Some(document) = &frame.document else {
+                continue;
+            };
+            let Some(host) = boxes.get(&frame.iframe_id).copied() else {
+                continue;
+            };
+            let Some(shared) = overlap_rect(rect, host) else {
+                continue;
+            };
+            if shared.width < MIN_FRAME_OVERLAP_SIDE
+                || shared.height < MIN_FRAME_OVERLAP_SIDE
+                || shared.width * shared.height < MIN_FRAME_OVERLAP_AREA
+            {
+                continue;
+            }
+            let centred = centre.0 >= host.x
+                && centre.0 <= host.x + host.width
+                && centre.1 >= host.y
+                && centre.1 <= host.y + host.height;
+            let area = shared.width * shared.height;
+            let better = best.as_ref().is_none_or(|(best_centred, best_area, _)| {
+                (centred && !best_centred) || (centred == *best_centred && area > *best_area)
+            });
+            if better {
+                best = Some((
+                    centred,
+                    area,
+                    FrameTarget {
+                        page_id,
+                        iframe_id: frame.iframe_id.clone(),
+                        document: document.clone(),
+                        rect: self.frame_rect(document, host, rect)?,
+                    },
+                ));
+            }
+        }
+        Ok(best.map(|(_, _, frame)| frame))
+    }
+
+    /// Map a host-page box into the framed document. The measured iframe box is the document's
+    /// viewport drawn at its current size, so the ratio of the two sizes is the mapping.
+    fn frame_rect(&self, document: &DocumentTarget, host: Rect, rect: Rect) -> Result<Rect> {
+        let viewport = self.document_viewport(document)?;
+        let scale = |drawn: f64, viewport: u32| {
+            let scale = drawn / f64::from(viewport);
+            if scale.is_finite() && scale > 0.0 {
+                scale
+            } else {
+                1.0
+            }
+        };
+        let (scale_x, scale_y) = (
+            scale(host.width, viewport.width),
+            scale(host.height, viewport.height),
+        );
+        let mapped = Rect {
+            x: (rect.x - host.x) / scale_x,
+            y: (rect.y - host.y) / scale_y,
+            width: rect.width / scale_x,
+            height: rect.height / scale_y,
+        };
+        ensure(
+            [mapped.x, mapped.y, mapped.width, mapped.height]
+                .iter()
+                .all(|value| value.is_finite()),
+            "The framed request could not be mapped into its document.",
+        )?;
+        Ok(mapped)
+    }
+
+    /// Give every pending request drawn over an editable frame its framed document. A request
+    /// created before framed editing existed keeps its host-page box and gains the mapping here.
+    /// An existing target stays when its iframe still shows the same document.
+    pub fn adopt_frame_targets(&self) -> Result<Self> {
+        self.validate()?;
+        let mut next = self.clone();
+        let mut changed = false;
+        for index in 0..next.pages.len() {
+            let page_id = next.pages[index].id;
+            let frames = self.frame_targets(page_id)?;
+            let boxes = self.measured_frame_rects(page_id);
+            for region in next.pages[index]
+                .regions
+                .iter_mut()
+                .filter(|region| !region.completed)
+            {
+                if let Some(existing) = &region.frame_target {
+                    let shown = frames.iter().any(|frame| {
+                        frame.iframe_id == existing.iframe_id
+                            && frame.document.as_ref() == Some(&existing.document)
+                    });
+                    if shown {
+                        continue;
+                    }
+                }
+                let resolved = self.frame_target_in(page_id, region.rect, &frames, &boxes)?;
+                if region.frame_target == resolved {
+                    continue;
+                }
+                region.frame_target = resolved.clone();
+                if resolved.is_some() {
+                    region.element = None;
+                    region.elements.clear();
+                    region.area_bounds.clear();
+                    region.shape = crate::RegionShape::Rect;
+                    region.allow_target_removal = false;
+                    region.mobile_only = false;
+                    region.runtime_errors.clear();
+                    region.whole_page = false;
+                    region.whole_page_disabled = false;
+                }
+                changed = true;
+            }
+        }
+        if changed {
+            next.revision = self
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| Error("Project revision limit reached.".into()))?;
+            next.validate()?;
+        }
+        Ok(next)
     }
 
     /// Every iframe on a page, with its editor ID and resolved source.

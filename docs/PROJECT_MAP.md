@@ -45,7 +45,8 @@ Links: [core](../crates/desegni-core/src/), [storage](../crates/desegni-storage/
 | --- | --- |
 | [model.rs](../crates/desegni-core/src/model.rs) | Persisted `Project`, `Page`, `Region`, `ElementTarget`, `Command`, `GenerationMode`; `Project::apply`, `validate`, `Region::is_whole_page`. |
 | [session.rs](../crates/desegni-core/src/session.rs) | `Session`, revision checks, undo/redo and durable mutations; `execute`, `apply_generation`, `apply_generation_draft`, `undo`, `redo`. |
-| [document.rs](../crates/desegni-core/src/document.rs) | `DocumentTarget` (page or editable site HTML file), `FrameTarget`, `PageFrameTarget`; `frame_targets`, site document bytes, framed generation document source. |
+| [document.rs](../crates/desegni-core/src/document.rs) | `DocumentTarget` (page or editable site HTML file), `FrameTarget`, `PageFrameTarget`; `frame_targets`, `adopt_frame_targets`, site document bytes, framed generation document source. |
+| [document_context.rs](../crates/desegni-core/src/document_context.rs) | `DocumentContext`, `IncludedDocument`, `DocumentReason`, `SharedStylesheet`; editable-document selection for Flexible framed requests, bounded by `MAX_DOCUMENT_CONTEXT_BYTES`. |
 | [requirements.rs](../crates/desegni-core/src/requirements.rs) | Frozen `RequirementsSnapshot`, provider `GenerationCapabilities`, request/context Markdown; `prepare_requirements_with_capabilities`, `prepare_targeted_requirements`, `validate_current`. |
 | [generation.rs](../crates/desegni-core/src/generation.rs) | `SiteContent`, `GenerationCandidate`, `RegionOutcome`, proposals/criticism; candidate parsing/validation, `Project::apply_generation`, `candidate_schema`. |
 | [element_fix.rs](../crates/desegni-core/src/element_fix.rs) | Selected-element reply format and expansion; `result_schema`, `context_follow_up`, `adopt_follow_up_reply`, `GenerationCandidate::from_reply`. |
@@ -166,7 +167,7 @@ Shell configuration: [Cargo.toml](../src-tauri/Cargo.toml), [tauri.conf.json](..
 ### Flexible versus Precise scope
 
 1. [App.tsx](../src/App.tsx) maps **Flexible** → `fuzzy`, **Precise** → `strict` → `set_generation_mode` in [model.rs](../crates/desegni-core/src/model.rs).
-2. [requirements.rs](../crates/desegni-core/src/requirements.rs) uses current-format Flexible instructions: boxes anchor placement, related HTML/shared CSS/JS may change as needed, unrelated content stays unchanged. Precise local requests constrain placement, targets, styles and shared behavior; [element_fix.rs](../crates/desegni-core/src/element_fix.rs) handles selected-element replies.
+2. [requirements.rs](../crates/desegni-core/src/requirements.rs) uses current-format Flexible instructions: boxes anchor placement, related HTML/shared CSS/JS may change as needed, unrelated content stays unchanged. A Flexible framed request also receives the pages and site files it clearly concerns (same directory, or named in the prompt) within a 400 KiB budget; Precise keeps only the framed document. [element_fix.rs](../crates/desegni-core/src/element_fix.rs) handles selected-element replies.
 3. [generation.rs](../crates/desegni-core/src/generation.rs) validation → [generation_scope.rs](../crates/desegni-core/src/generation_scope.rs) and [region_scripts.rs](../crates/desegni-core/src/region_scripts.rs). Whole-page requests grant page-wide authority and compose by layer order; local requests alone do not. Scope detection lives in `Region::auto_whole_page` and mirrored [wholePageScope.ts](../src/wholePageScope.ts). Older frozen requirements retain their versioned rules.
 
 ### Region scripts runtime

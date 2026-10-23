@@ -557,6 +557,7 @@ fn freeze(
         markdown,
         region_count: 0,
         page_count: 0,
+        documents: vec![],
         dependencies: BTreeMap::new(),
         dossier_context: None,
         request_history: String::new(),

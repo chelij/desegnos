@@ -1,5 +1,5 @@
 /// Requirements contract used for newly prepared requests.
-pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 22;
+pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 23;
 
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
@@ -70,6 +70,9 @@ pub struct RequirementsSnapshot {
     pub sha256: String,
     pub region_count: usize,
     pub page_count: usize,
+    /// Format 23: every document this request may change, in priority order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<crate::IncludedDocument>,
     pub dependencies: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dossier_context: Option<GenerationDossierContext>,
@@ -288,6 +291,12 @@ impl Project {
                 || (format >= 12
                     && crate::element_fix::eligible(targets)
                     && (format < 18 || !targets.iter().any(|(p, r)| r.is_whole_page(p)))));
+        // Format 23: a Flexible framed request may also change the pages it clearly concerns.
+        let document_context = if format >= 23 {
+            self.document_context(targets, flexible)
+        } else {
+            crate::DocumentContext::default()
+        };
         // From format 14 page sources are sent without the layout whitespace added after a
         // generation; hashes and dependencies still describe the stored source.
         let compacted = (format >= 14).then(|| self.compact_pages());
@@ -616,7 +625,16 @@ impl Project {
                 })
                 .collect();
             if !framed.is_empty() {
-                md.push_str("\n## Framed document requests\n\nSome requests target a document shown inside an iframe on their page. frameTarget names the host page, the iframe's editor ID, the target document (a project page or an editable site HTML file) and the request box mapped into that document's CSS pixels. Change the request inside that document. The framed document's complete current source is supplied below; return its new source as a pages entry for a page document or as a documents entry for a site HTML file. In Precise mode only the framed document may change: return the host page's HTML, CSS and JavaScript exactly as they are, including the iframe element. In Flexible mode you may also change the host page's iframe element and CSS when the request needs it, and then return the host page source too. Preserve unrelated content in every document, keep existing data-desegnos-id values on retained elements and leave new elements without IDs; Desegnos assigns them afterwards. Account for every framed request once. No other document may change.\n\n");
+                let more = document_context
+                    .documents
+                    .iter()
+                    .any(|included| included.reason != crate::DocumentReason::Framed);
+                let closing = if format >= 23 && flexible && more {
+                    "A flexible request may also change the other editable documents listed below."
+                } else {
+                    "No other document may change."
+                };
+                md.push_str(&format!("\n## Framed document requests\n\nSome requests target a document shown inside an iframe on their page. frameTarget names the host page, the iframe's editor ID, the target document (a project page or an editable site HTML file) and the request box mapped into that document's CSS pixels. Change the request inside that document. The framed document's complete current source is supplied below; return its new source as a pages entry for a page document or as a documents entry for a site HTML file. In Precise mode only the framed document may change: return the host page's HTML, CSS and JavaScript exactly as they are, including the iframe element. In Flexible mode you may also change the host page's iframe element and CSS when the request needs it, and then return the host page source too. Preserve unrelated content in every document, keep existing data-desegnos-id values on retained elements and leave new elements without IDs; Desegnos assigns them afterwards. Account for every framed request once. {closing}\n\n"));
                 let mut shown = std::collections::BTreeSet::new();
                 for (_, _, frame) in &framed {
                     if !shown.insert(frame.document.key()) {
@@ -647,6 +665,43 @@ impl Project {
                         "content": source,
                         "requests": requests,
                     }))?);
+                    md.push('\n');
+                }
+            }
+        }
+        let extra_documents: Vec<_> = document_context
+            .documents
+            .iter()
+            .filter(|included| included.reason != crate::DocumentReason::Framed)
+            .collect();
+        if format >= 23 && flexible && !extra_documents.is_empty() {
+            let paths: Vec<_> = document_context
+                .documents
+                .iter()
+                .map(|included| format!("{} ({})", included.path, included.title))
+                .collect();
+            md.push_str(&format!("\n## Editable documents for this request\n\nFlexible: these documents are editable for this request and you may change all of them: {}. The framed documents above are editable too; their sources are supplied there. Each remaining document's complete current source is supplied below with its path. Do not report a document's source as unavailable. Return a project page's new source as a pages entry with its pageId, and an imported site file's new HTML as a documents entry with its document target. Return every changed document in this one reply; Desegnos applies them as one change and the user reviews it with Keep/Undo. Only the documents listed here and above may change.\n\n", paths.join(", ")));
+            for included in extra_documents {
+                let content = self.document_content(&included.document)?;
+                let source = match &included.document {
+                    crate::DocumentTarget::Page { .. } => self.all_asset_references(&content),
+                    crate::DocumentTarget::SiteFile { .. } => content,
+                };
+                md.push_str(&fenced_json(&serde_json::json!({
+                    "document": included.document,
+                    "path": included.path,
+                    "title": included.title,
+                    "reason": included.reason,
+                    "sha256": self.document_hash(&included.document)?,
+                    "viewport": self.document_viewport(&included.document)?,
+                    "content": source,
+                }))?);
+                md.push('\n');
+            }
+            if !document_context.stylesheets.is_empty() {
+                md.push_str("These imported site stylesheets are shared by those documents. They are read-only reference: imported site CSS is not an editable document, so change the document's own HTML or its inline styles instead.\n\n");
+                for stylesheet in &document_context.stylesheets {
+                    md.push_str(&fenced_json(stylesheet)?);
                     md.push('\n');
                 }
             }
@@ -755,6 +810,22 @@ impl Project {
                 );
             }
         }
+        if format >= 23 {
+            // A fingerprint for every editable document, so a changed one makes the snapshot
+            // stale before retry or apply.
+            for included in &document_context.documents {
+                dependencies.insert(
+                    format!("document:{}", included.document.key()),
+                    self.document_hash(&included.document)?,
+                );
+                if let crate::DocumentTarget::Page { page_id } = included.document {
+                    dependencies.insert(
+                        format!("source:{page_id}"),
+                        page_source_digest(self.page(page_id)?)?,
+                    );
+                }
+            }
+        }
         dependencies.insert(
             "context".into(),
             self.context_digest(
@@ -820,6 +891,7 @@ impl Project {
                 .map(|(p, _)| p.id)
                 .collect::<std::collections::BTreeSet<_>>()
                 .len(),
+            documents: document_context.documents,
             dependencies,
             dossier_context,
             request_history: String::new(),

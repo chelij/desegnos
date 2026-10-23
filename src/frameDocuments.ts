@@ -130,6 +130,35 @@ export function frameAt(frames: readonly FrameBoxGeometry[], point: { x: number;
   return null;
 }
 
+/// Smallest shared box that still makes a request part of a frame. A tiny corner clip on a
+/// large page stays a page request.
+const MIN_ADOPTED_SIDE = 4;
+const MIN_ADOPTED_AREA = 256;
+
+/// The frame a request box adopts when it is prepared. Unlike `requestFrame`, a box that only
+/// partly covers a frame still belongs to the document shown in it: a box drawn before framed
+/// editing existed has no target yet. The frame under the box's centre wins when it covers
+/// several, otherwise the largest shared area wins.
+export function adoptRequestFrame(frames: readonly EditableFrame[], rect: Rect): FramedRequest | null {
+  const centre = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  let best: { frame: EditableFrame; area: number; centred: boolean } | null = null;
+  for (const frame of frames) {
+    const host = frame.contentRect;
+    const width = Math.min(rect.x + rect.width, host.x + host.width) - Math.max(rect.x, host.x);
+    const height = Math.min(rect.y + rect.height, host.y + host.height) - Math.max(rect.y, host.y);
+    if (width < MIN_ADOPTED_SIDE || height < MIN_ADOPTED_SIDE || width * height < MIN_ADOPTED_AREA) continue;
+    const centred = centre.x >= host.x && centre.x <= host.x + host.width && centre.y >= host.y && centre.y <= host.y + host.height;
+    const area = width * height;
+    if (!best || (centred && !best.centred) || (centred === best.centred && area > best.area)) best = { frame, area, centred };
+  }
+  return best ? { frame: best.frame, rect: pageRectToInnerDocument(best.frame.mapping, rect) } : null;
+}
+
+/// Whether an existing frame target still names the document its iframe shows.
+export function frameTargetShown(frames: readonly EditableFrame[], frame: { iframeId: string; document: DocumentTarget }): boolean {
+  return frames.some(item => item.iframe.id === frame.iframeId && sameFrameDocument(item.document, frame.document));
+}
+
 /// The frame a request box belongs to: the frame under the box's centre. A box that only
 /// clips a frame corner stays a page request.
 export function requestFrame(frames: readonly EditableFrame[], rect: Rect): FramedRequest | null {

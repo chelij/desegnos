@@ -376,6 +376,14 @@ impl GenerationCandidate {
                 framed.insert(frame.document.clone());
             }
         }
+        if format >= 23 {
+            // Documents the request was given are editable even when no request is drawn on them.
+            for included in &snapshot.documents {
+                if let crate::DocumentTarget::SiteFile { .. } = included.document {
+                    framed.insert(included.document.clone());
+                }
+            }
+        }
         let mut seen = BTreeSet::new();
         for document in &self.documents {
             ensure(

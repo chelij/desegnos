@@ -51,6 +51,11 @@ pub struct EarlierRequest {
     pub source_fingerprints: Option<BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_source_fingerprints: Option<BTreeMap<String, String>>,
+    /// Format 23: fingerprints of every editable document this job covered, by document key.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub document_fingerprints: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub base_document_fingerprints: BTreeMap<String, String>,
 }
 
 /// Read request blocks and source hashes, never attachments, source text, or prior context.
@@ -129,6 +134,8 @@ pub fn earlier_requests(
                             summary_targets: Vec::new(),
                             source_fingerprints: None,
                             base_source_fingerprints: None,
+                            document_fingerprints: BTreeMap::new(),
+                            base_document_fingerprints: BTreeMap::new(),
                         })
                     };
                     if let Some(request) = parse() {
@@ -149,10 +156,22 @@ pub fn earlier_requests(
         }
     }
     let summary_targets = snapshot.target_ids().unwrap_or_default();
+    // Every editable document's frozen fingerprint, including pages and site files the request
+    // was given beyond its framed document.
+    let documents: BTreeMap<String, String> = snapshot
+        .dependencies
+        .iter()
+        .filter_map(|(key, hash)| {
+            key.strip_prefix("document:")
+                .map(|key| (key.to_string(), hash.clone()))
+        })
+        .collect();
     for request in &mut requests {
         request.summary_targets = summary_targets.clone();
         request.source_fingerprints = sources.get(&request.page_id).cloned();
         request.base_source_fingerprints = request.source_fingerprints.clone();
+        request.document_fingerprints = documents.clone();
+        request.base_document_fingerprints = documents.clone();
     }
     requests
 }
@@ -326,13 +345,31 @@ impl RequirementsSnapshot {
                 .into_iter()
                 .filter(|name| before.get(*name) != current.get(*name))
                 .collect();
-            if changed.is_empty() {
+            // Included documents changed by hand are protected too, not only the host page.
+            let document_baseline = if r.outcome.starts_with("undone") {
+                &r.base_document_fingerprints
+            } else {
+                &r.document_fingerprints
+            };
+            let changed_documents: Vec<_> = document_baseline
+                .iter()
+                .filter(|(key, hash)| {
+                    crate::DocumentTarget::from_key(key)
+                        .ok()
+                        .and_then(|document| project.document_hash(&document).ok())
+                        .as_deref()
+                        != Some(hash.as_str())
+                })
+                .map(|(key, _)| key)
+                .collect();
+            if changed.is_empty() && changed_documents.is_empty() {
                 continue;
             }
-            let line = format!(
-                "{}\n",
-                serde_json::json!({"page":r.page_id,"changed":changed})
-            );
+            let mut line_value = serde_json::json!({"page":r.page_id,"changed":changed});
+            if !changed_documents.is_empty() {
+                line_value["documents"] = serde_json::json!(changed_documents);
+            }
+            let line = format!("{}\n", line_value);
             if CHANGES_HEADING.chars().count() + changes.chars().count() + line.chars().count() + 4
                 > 1200
             {
@@ -476,6 +513,8 @@ mod tests {
             summary_targets: vec![(p.home_page_id, p.pages[0].regions[0].id)],
             source_fingerprints: None,
             base_source_fingerprints: None,
+            document_fingerprints: BTreeMap::new(),
+            base_document_fingerprints: BTreeMap::new(),
         }
     }
     #[test]
@@ -797,6 +836,8 @@ mod index_tests {
                     summary_targets: vec![(page_id, Uuid::from_u128(region))],
                     source_fingerprints: None,
                     base_source_fingerprints: None,
+                    document_fingerprints: BTreeMap::new(),
+                    base_document_fingerprints: BTreeMap::new(),
                     validation_rejection: None,
                     outcome: if n == 10 {
                         "undone (do not repeat)".into()

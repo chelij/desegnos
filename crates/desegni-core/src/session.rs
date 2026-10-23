@@ -263,6 +263,20 @@ impl Session {
         Ok(())
     }
 
+    /// Give pending requests drawn over an editable frame their framed document. This is
+    /// measured state like refreshed bounds: journaled and durable, but not a history step.
+    pub fn adopt_frame_targets(
+        &mut self,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<()> {
+        let next = self.project.adopt_frame_targets()?;
+        if next.revision != self.project.revision {
+            durable(&next)?;
+            self.project = next;
+        }
+        Ok(())
+    }
+
     pub fn refresh_element_target_bounds(
         &mut self,
         page_id: uuid::Uuid,
