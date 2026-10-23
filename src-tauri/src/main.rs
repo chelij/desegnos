@@ -113,6 +113,8 @@ fn main() {
             website_import::pick_website_folder,
             website_import::website_build,
             workspace::edit_website_folder,
+            workspace::prepare_website_import,
+            workspace::apply_website_import,
             identity::website_brand_source,
             identity::analyze_identity,
             identity::get_identity_analysis,

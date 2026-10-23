@@ -9,6 +9,8 @@ fn main() {
             "pick_website_folder",
             "website_build",
             "edit_website_folder",
+            "prepare_website_import",
+            "apply_website_import",
             "website_brand_source",
             "fetch_identity_source",
             "prepare_identity_selection",

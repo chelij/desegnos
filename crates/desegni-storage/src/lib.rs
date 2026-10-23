@@ -1,3 +1,4 @@
+pub mod website_merge;
 pub mod request_zip;
 pub mod system_tools;
 pub mod website_detection;

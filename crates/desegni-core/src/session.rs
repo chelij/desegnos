@@ -124,6 +124,22 @@ impl Session {
         Ok(())
     }
 
+    pub fn import_website(
+        &mut self,
+        revision: u64,
+        files: &std::collections::BTreeMap<String, Vec<u8>>,
+        remove: &[uuid::Uuid],
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<()> {
+        self.assert_revision(revision)?;
+        let candidate = self.project.import_website(revision, files, remove)?;
+        if candidate.revision != self.project.revision {
+            durable(&candidate)?;
+            self.commit(candidate);
+        }
+        Ok(())
+    }
+
     pub fn import_context(
         &mut self,
         revision: u64,

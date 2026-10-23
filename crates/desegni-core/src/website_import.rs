@@ -401,6 +401,14 @@ pub fn import_website_files(name: &str, files: &BTreeMap<String, Vec<u8>>) -> Re
         .take(100)
         .cloned()
         .collect();
+    import_website_pages(name, files, pages)
+}
+
+pub(crate) fn import_website_pages(
+    name: &str,
+    files: &BTreeMap<String, Vec<u8>>,
+    pages: Vec<String>,
+) -> Result<Project> {
     ensure(
         !pages.is_empty() && pages.len() <= 100,
         "Choose a website folder containing between 1 and 100 HTML pages.",
