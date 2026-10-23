@@ -9,7 +9,10 @@
 }
 .notice-host { container-type: inline-size; flex: none; min-width: 0; position: relative; height: 0; z-index: 30; }
 /* Notices float over the canvas so showing or hiding one never shifts the page. */
-.notice-host > .notice { position: absolute; top: 0; left: 0; right: 0; box-shadow: 0 4px 16px #0006; }
+.notice-host > .notice { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: max-content; max-width: min(760px, calc(100% - 24px)); margin: 6px 0; box-shadow: 0 4px 16px #0006; }
+/* Toasts sit centred just above the floating canvas tools. */
+.notice-host.toast { position: fixed; left: 0; right: 0; bottom: 96px; height: 0; }
+.notice-host.toast > .notice { top: auto; bottom: 0; max-width: min(480px, calc(100% - 24px)); min-height: 40px; padding: 6px 8px 6px 14px; }
 .notice, .area-problem {
   --notice-bg: var(--surface); --notice-fg: var(--text); --notice-border: var(--border);
   color: var(--notice-fg); background: var(--notice-bg); border: 1px solid var(--notice-border);

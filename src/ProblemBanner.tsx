@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ReactElement } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ReactElement } from 'react';
 
 export type ProblemAction = { label: string; onClick: () => void; disabled?: boolean };
 export type NoticeProps = {
@@ -20,6 +20,9 @@ export function noticePriority(notice: NoticeProps): number {
 export function firstNotice<T extends NoticeProps>(entries: T[]): T | undefined {
   return entries.reduce<T | undefined>((best, entry) => !best || noticePriority(entry) > noticePriority(best) ? entry : best, undefined);
 }
+export function isToast(notice?: NoticeProps): boolean {
+  return !!notice && (notice.variant === 'info' || notice.variant === 'success' || !notice.variant) && !notice.action && !notice.secondaryAction;
+}
 const NoticeDisplay = createContext<ReactElement<NoticeProps> | null>(null);
 export function NoticeHost() {
   const notice = useContext(NoticeDisplay);
@@ -29,7 +32,18 @@ export function NoticeHost() {
   useLayoutEffect(() => {
     if (focus) host.current?.querySelector<HTMLButtonElement>(focus === 'primary' ? '.primary' : '.notice-dismiss')?.focus({ preventScroll: true });
   }, [focus, focusKey]);
-  return <div className="notice-host" ref={host}>{notice}</div>;
+  // Plain confirmations are brief toasts above the canvas tools; anything with a choice stays until handled.
+  const toast = isToast(notice?.props);
+  const [held, setHeld] = useState(false);
+  // The dismiss callback is recreated every render; keep the latest without restarting the timer.
+  const dismiss = useRef(notice?.props.dismiss); dismiss.current = notice?.props.dismiss;
+  const toastKey = toast ? `${notice?.props.title ?? ''}:${notice?.props.message}` : null;
+  useEffect(() => {
+    if (!toastKey || held) return;
+    const timer = setTimeout(() => dismiss.current?.(), 4000);
+    return () => clearTimeout(timer);
+  }, [toastKey, held]);
+  return <div className={`notice-host${toast ? ' toast' : ''}`} ref={host} onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)} onFocus={() => setHeld(true)} onBlur={() => setHeld(false)}>{notice}</div>;
 }
 const Notices = createContext<{ update: (id: string, entry: Entry | null) => void } | null>(null);
 
