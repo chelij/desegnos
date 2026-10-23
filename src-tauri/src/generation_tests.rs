@@ -796,13 +796,14 @@ fn omitted_and_invalid_regions_recover_without_applying_unsafe_source() {
         service.begin(&project, prepared.job_id, false).unwrap();
         let mut generated = candidate(&project, &prepared, "Recovered first");
         generated.pages[0].content.html = format!(
-            "<main>UNSAFE OUTSIDE CHANGE</main><section data-desegnos-region=\"{first}\">Recovered first</section><section data-desegnos-region=\"{second}\"{}>Unwanted second</section>",
-            if condition == "outside-scope" {
-                " data-desegnos-id=\"inventedid\""
-            } else {
-                ""
-            }
+            "<main>UNSAFE OUTSIDE CHANGE</main><section data-desegnos-region=\"{first}\">Recovered first</section><section data-desegnos-region=\"{second}\">Unwanted second</section>"
         );
+        if condition == "outside-scope" {
+            generated.pages[0].content.html = generated.pages[0].content.html.replace(
+                "Unwanted second",
+                &format!("<section data-desegnos-region=\"{second}\">Duplicate root</section>"),
+            );
+        }
         if condition == "omitted" {
             generated.regions.pop();
         }
@@ -2452,4 +2453,126 @@ fn runtime_repairs_prepare_only_the_repair_and_rebind_to_current_source() {
     assert_eq!(fresh.areas[0].region_id, region_id);
     assert!(fresh.requirements.markdown.contains("const pause = null;"));
     fresh.requirements.validate_current(&project).unwrap();
+}
+
+#[test]
+fn discarded_validator_conflicts_survive_history_index_and_reach_each_retry_area() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let project = project();
+    let prepared = service.prepare(&project).unwrap();
+    let mut result = candidate(&project, &prepared, "Rejected");
+    // Exact technical messages from the two-area cf37f66e saved job.
+    let reasons = [
+        "Region script needs one uniquely owned root per request.",
+        "Editor element IDs must be valid and unique within the page.",
+    ];
+    let mut record = service.record(&project, prepared.job_id).unwrap();
+    for (region, reason) in result.regions.iter_mut().zip(reasons) {
+        region.status = RegionStatus::Conflict;
+        region.explanation = reason.into();
+        record
+            .view
+            .validation_events
+            .push(desegni_core::ValidationEvent {
+                kind: desegni_core::validation_failure_kind(reason).into(),
+                disposition: "conflicted".into(),
+                region_id: Some(region.region_id),
+                message: reason.into(),
+            });
+    }
+    result.pages.clear();
+    record.view.candidate = Some(result);
+    record.view.status = JobStatus::Discarded;
+    let view = service.persist(record).unwrap();
+    // Simulate an index written by the old version after discarding a blocked job.
+    let mut legacy = service.history_entries(&view);
+    for entry in &mut legacy {
+        entry.outcome = "rejected by user".into();
+        entry.validation_rejection = None;
+    }
+    write_json(&service.history_path(project.id), &legacy).unwrap();
+    drop(service);
+    let mut service = temp.service();
+    let retry = service.prepare(&project).unwrap();
+    for reason in reasons {
+        assert!(retry.requirements.request_history.contains(&format!(
+            "Your previous attempt for this area was rejected because: {reason}"
+        )));
+    }
+    assert!(
+        retry
+            .requirements
+            .request_history
+            .contains("Avoid this by:")
+    );
+    assert!(
+        !retry
+            .requirements
+            .request_history
+            .contains("rejected by user")
+    );
+    retry.requirements.validate_current(&project).unwrap();
+    let entries = service.request_history(&project).unwrap();
+    assert!(
+        entries
+            .iter()
+            .filter(|e| e.job_id == prepared.job_id)
+            .all(
+                |e| e.outcome == "rejected by the app's checks" && e.validation_rejection.is_some()
+            )
+    );
+}
+
+#[test]
+fn history_keeps_provider_failure_and_user_rejection_separate_from_validation() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let project = project();
+    let prepared = service.prepare(&project).unwrap();
+    let mut view = prepared.clone();
+    view.status = JobStatus::Discarded;
+    view.candidate = Some(candidate(&project, &prepared, "Ready result"));
+    assert!(
+        service
+            .history_entries(&view)
+            .iter()
+            .all(|e| e.outcome == "rejected by user" && e.validation_rejection.is_none())
+    );
+    view.status = JobStatus::Failed;
+    view.candidate = None;
+    assert!(
+        service
+            .history_entries(&view)
+            .iter()
+            .all(|e| e.outcome == "failed" && e.validation_rejection.is_none())
+    );
+}
+
+#[test]
+fn whole_reply_validator_rejection_is_not_a_provider_failure() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let project = project();
+    let mut view = service.prepare(&project).unwrap();
+    view.status = JobStatus::Discarded;
+    view.validation_events.push(desegni_core::ValidationEvent {
+        kind: "replyStructure".into(),
+        disposition: "conflicted".into(),
+        region_id: None,
+        message: "The reply contains duplicate or unrequested pages.".into(),
+    });
+    assert!(
+        service.history_entries(&view).iter().all(
+            |e| e.outcome == "rejected by the app's checks" && e.validation_rejection.is_some()
+        )
+    );
+    view.validation_events.clear();
+    view.failure_kind = Some(ErrorKind::Cancelled);
+    assert!(
+        service
+            .history_entries(&view)
+            .iter()
+            .all(|e| e.outcome == "failed" && e.validation_rejection.is_none())
+    );
 }

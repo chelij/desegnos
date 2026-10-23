@@ -756,6 +756,11 @@ impl GenerationService {
             .unwrap_or(0);
         let outcome = match view.status {
             JobStatus::Applied => "applied",
+            JobStatus::Discarded
+                if view.failure_kind.is_some() || view.provider_error.is_some() =>
+            {
+                "failed"
+            }
             JobStatus::Discarded => "rejected by user",
             JobStatus::Failed | JobStatus::Unknown | JobStatus::Cancelled => "failed",
             _ => "drafted",
@@ -775,6 +780,32 @@ impl GenerationService {
                 .map_or(&[], |c| c.regions.as_slice()),
         );
         for entry in &mut entries {
+            // Discarding a blocked result must not turn a validator rejection into user intent.
+            // Only unresolved conflicts count: repaired events and provider errors do not.
+            if view.candidate.as_ref().map_or(
+                matches!(view.status, JobStatus::Blocked | JobStatus::Discarded)
+                    && view.failure_kind.is_none(),
+                |c| {
+                    c.regions.iter().any(|r| {
+                        r.region_id == entry.region_id
+                            && r.status == desegni_core::RegionStatus::Conflict
+                    })
+                },
+            ) && let Some(event) = view
+                .validation_events
+                .iter()
+                .rev()
+                .find(|e| e.disposition == "conflicted" && e.region_id == Some(entry.region_id))
+                .or_else(|| {
+                    view.validation_events.iter().rev().find(|e| {
+                        e.disposition == "conflicted"
+                            && e.region_id.is_none()
+                            && !matches!(e.kind.as_str(), "repairProvider" | "repairStorage")
+                    })
+                })
+            {
+                desegni_core::record_validation_rejection(entry, &event.message);
+            }
             if let Some(base) = view.source_fingerprints.get(&entry.page_id) {
                 entry.base_source_fingerprints = Some(base.clone());
                 entry.source_fingerprints = Some(base.clone());
@@ -832,12 +863,16 @@ impl GenerationService {
             for (_, job_id, status) in observations {
                 for entry in entries.iter_mut().filter(|r| r.job_id == job_id) {
                     match status {
-                        desegni_core::GenerationApplicationStatus::Undone => {
+                        desegni_core::GenerationApplicationStatus::Undone
+                            if entry.validation_rejection.is_none() =>
+                        {
+                            entry.validation_rejection = None;
                             entry.outcome = "undone (do not repeat)".into()
                         }
                         desegni_core::GenerationApplicationStatus::Applied
                             if entry.outcome.starts_with("undone") =>
                         {
+                            entry.validation_rejection = None;
                             entry.outcome = "applied".into()
                         }
                         _ => {}
@@ -849,7 +884,12 @@ impl GenerationService {
         entries.retain(|r| r.project_id == project.id);
         let missing: BTreeSet<_> = entries
             .iter()
-            .filter(|r| r.source_fingerprints.is_none())
+            .filter(|r| {
+                r.source_fingerprints.is_none()
+                    || (r.validation_rejection.is_none()
+                        && (r.outcome == "rejected by user"
+                            || r.outcome.starts_with("needs details")))
+            })
             .map(|r| r.job_id)
             .collect();
         for id in missing {
@@ -857,6 +897,12 @@ impl GenerationService {
                 let enriched = self.history_entries(&view);
                 for entry in entries.iter_mut().filter(|r| r.job_id == id) {
                     if let Some(source) = enriched.iter().find(|r| r.region_id == entry.region_id) {
+                        if source.validation_rejection.is_some()
+                            || entry.outcome == "rejected by user"
+                        {
+                            entry.outcome = source.outcome.clone();
+                            entry.validation_rejection = source.validation_rejection.clone();
+                        }
                         entry.source_fingerprints = source.source_fingerprints.clone();
                         entry.base_source_fingerprints = source.base_source_fingerprints.clone();
                     }
@@ -877,12 +923,17 @@ impl GenerationService {
                         .collect();
                 }
                 match dossier.application_status {
-                    desegni_core::GenerationApplicationStatus::Undone => {
+                    desegni_core::GenerationApplicationStatus::Undone
+                        if entry.validation_rejection.is_none() =>
+                    {
+                        entry.validation_rejection = None;
                         entry.outcome = "undone (do not repeat)".into()
                     }
                     desegni_core::GenerationApplicationStatus::Applied
-                        if !entry.outcome.starts_with("needs details") =>
+                        if !entry.outcome.starts_with("needs details")
+                            && entry.validation_rejection.is_none() =>
                     {
+                        entry.validation_rejection = None;
                         entry.outcome = "applied".into()
                     }
                     _ => {}
@@ -1702,6 +1753,12 @@ impl GenerationService {
                         record.view.candidate = Some(candidate);
                     }
                     Err(error) => {
+                        record.view.validation_events.push(desegni_core::ValidationEvent {
+                            kind: desegni_core::validation_failure_kind(&error.to_string()).into(),
+                            disposition: "conflicted".into(),
+                            region_id: None,
+                            message: error.to_string(),
+                        });
                         record.view.raw_reply = Some(desegni_ai::scrub_diagnostic_reply(&response.text, None));
                         record.view.status = JobStatus::Blocked;
                         record.view.message = format!(

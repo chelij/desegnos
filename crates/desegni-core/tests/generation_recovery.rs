@@ -135,7 +135,7 @@ fn real_accessible_wrapper_is_valid_without_repair() {
 }
 
 #[test]
-fn scope_failure_salvages_others_and_requests_one_precise_repair() {
+fn ai_assigned_identity_is_repaired_before_validation() {
     let (p, s, mut c) = fixture(false);
     let id = c.regions[1].region_id;
     c.pages[0].content.html = c.pages[0].content.html.replace(
@@ -143,22 +143,13 @@ fn scope_failure_salvages_others_and_requests_one_precise_repair() {
         &format!("<section data-desegnos-region='{id}' data-desegnos-id='inventedid'>"),
     );
     let (accepted, events) = recover(&c, &s, &p);
-    assert_eq!(
-        accepted
-            .regions
-            .iter()
-            .filter(|r| r.status == RegionStatus::Implemented)
-            .count(),
-        2
-    );
-    assert!(accepted.can_apply(&s));
-    let follow = s.validation_repair(&events).unwrap().unwrap();
-    assert!(follow.markdown.contains(&id.to_string()));
-    assert!(follow.markdown.contains("editor ID"));
-    assert!(follow.markdown.contains("data-desegnos-id"));
-    assert!(follow.markdown.contains("Excerpt:"));
-    assert!(follow.validation_repair(&events).unwrap().is_none());
-    assert_eq!(MAX_VALIDATION_REPAIR_ROUNDS, 1);
+    assert!(accepted.is_ready());
+    assert!(!accepted.pages[0].content.html.contains("inventedid"));
+    assert!(events.iter().any(|e| e.kind == "elementIdentity"
+        && e.disposition == "repaired"
+        && e.region_id == Some(id)));
+    assert!(s.validation_repair(&events).unwrap().is_none());
+    p.apply_generation(&s, &accepted, &[]).unwrap();
 }
 
 #[test]
@@ -789,4 +780,84 @@ fn runtime_repair_rejects_unbounded_errors() {
                 .is_err()
         );
     }
+}
+
+// Reduced from job cf37f66e: a request wrapper contains pre-existing owned
+// regions, while its new inert script sits next to an inner root. The other
+// request adds book decoration with AI-supplied editor identities.
+#[test]
+fn real_job_shape_repairs_script_placement_and_new_decoration_ids() {
+    let (mut p, _, mut c) = fixture(true);
+    let a = c.regions[0].region_id;
+    let b = c.regions[1].region_id;
+    let third = c.regions[2].region_id;
+    p.pages[0].content.as_mut().unwrap().html = format!(
+        "<section data-desegnos-region='{a}' data-desegnos-id='original0001'><h1 data-desegnos-id='original0002'>Portrait</h1></section><section data-desegnos-region='{b}'>Books</section><section data-desegnos-region='{third}'>Original</section>"
+    );
+    let s = p.prepare_requirements().unwrap();
+    c.job_id = s.job_id;
+    c.requirements_sha256 = s.sha256.clone();
+    c.pages[0].content.html = format!(
+        "<section data-desegnos-region='{a}' data-desegnos-id='original0001'><h1 data-desegnos-id='original0002'>Portrait</h1><div><script type='application/x-desegnos-region' data-desegnos-script='{a}'>root.dataset.ready='1';</script></div></section><section data-desegnos-region='{b}'><span data-desegnos-id='bad ID'>Fold</span><span data-desegnos-id='newduplicate'>Cloth</span><span data-desegnos-id='newduplicate'>Pages</span></section><section data-desegnos-region='{third}'>Updated</section>"
+    );
+    let (accepted, events) = recover(&c, &s, &p);
+    assert!(accepted.is_ready(), "{:?}", events);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.disposition == "repaired" && e.kind == "elementIdentity")
+            .count(),
+        3
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.disposition == "repaired" && e.kind == "regionRoot")
+    );
+    accepted.validate(&s, &p).unwrap();
+    let applied = p.apply_generation(&s, &accepted, &[]).unwrap();
+    let html = &applied.pages[0].content.as_ref().unwrap().html;
+    assert!(html.contains("data-desegnos-id=\"original0001\""));
+    assert!(html.contains("data-desegnos-id=\"original0002\""));
+    assert_eq!(html.matches("data-desegnos-id=\"original0002\"").count(), 1);
+    assert!(!html.contains("bad ID"));
+    assert!(!html.contains("newduplicate"));
+}
+
+#[test]
+fn ambiguous_existing_identity_and_duplicate_scripts_are_not_repaired() {
+    let (mut p, _, mut c) = fixture(true);
+    let id = c.regions[0].region_id;
+    p.pages[0].content.as_mut().unwrap().html = format!(
+        "<section data-desegnos-region='{id}'><p data-desegnos-id='original0001'>Original</p></section>"
+    );
+    let s = p.prepare_requirements().unwrap();
+    c.job_id = s.job_id;
+    c.requirements_sha256 = s.sha256.clone();
+    c.pages[0].content.html = format!(
+        "<section data-desegnos-region='{id}'><p data-desegnos-id='original0001'>Changed</p><p data-desegnos-id='original0001'>Also changed</p><script type='application/x-desegnos-region' data-desegnos-script='{id}'>root.dataset.a=1;</script><script type='application/x-desegnos-region' data-desegnos-script='{id}'>root.dataset.b=1;</script></section>"
+    );
+    let (accepted, events) = recover(&c, &s, &p);
+    assert_eq!(accepted.regions[0].status, RegionStatus::Conflict);
+    assert!(!events.iter().any(|e| e.disposition == "repaired"));
+}
+
+#[test]
+fn inert_script_beside_its_unique_root_is_moved_before_scope_validation() {
+    let (p, s, mut c) = fixture(false);
+    let id = c.regions[0].region_id;
+    c.pages[0].content.html.push_str(&format!(
+        "<script type='application/x-desegnos-region' data-desegnos-script='{id}'>root.dataset.ready='1';</script>"));
+    let (accepted, events) = recover(&c, &s, &p);
+    assert!(accepted.is_ready(), "{events:?}");
+    assert!(
+        events.iter().any(|e| e.kind == "regionRoot"
+            && e.disposition == "repaired"
+            && e.region_id == Some(id))
+    );
+    accepted.validate(&s, &p).unwrap();
+    p.apply_generation(&s, &accepted, &[])
+        .unwrap()
+        .validate()
+        .unwrap();
 }

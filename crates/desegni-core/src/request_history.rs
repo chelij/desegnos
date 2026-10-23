@@ -8,6 +8,9 @@ use uuid::Uuid;
 
 const HEADING: &str = "\n## Earlier requests for these areas (context only — the current requests are the authority)\n\n```jsonl\n";
 pub const REQUEST_HISTORY_CHARS: usize = 3000;
+const RETRY_HEADING: &str = "\n## Previous validation rejections for retried areas\n\nThese are app checks, not user rejections. Correct each listed area while preserving the current scope.\n\n```jsonl\n";
+const REJECTION_CHARS: usize = 600;
+const RETRY_HISTORY_CHARS: usize = crate::MAX_GENERATION_REGIONS * 4500;
 const CHANGES_HEADING: &str = "\n## Changes you made since the last result\n\nPreserve these edits in the current page source, including text, images, removals, styles and layout, unless the current request explicitly changes them. Component names below identify changed source, not permission to expand scope.\n\n```jsonl\n";
 
 /// Small fingerprints keep historical source out of the bounded request-history index.
@@ -37,6 +40,8 @@ pub struct EarlierRequest {
     pub requested_at: i64,
     pub request: String,
     pub outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_rejection: Option<String>,
     pub summary: String,
     /// The complete original scope of the job-wide summary. Empty for older indexes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -116,6 +121,7 @@ pub fn earlier_requests(
                             requested_at,
                             request: clip(request, 300),
                             outcome,
+                            validation_rejection: None,
                             summary: clip(
                                 &summary.split_whitespace().collect::<Vec<_>>().join(" "),
                                 200,
@@ -181,6 +187,31 @@ fn clip(value: &str, max: usize) -> String {
     }
     text
 }
+/// Preserve the validator's wording, including punctuation, up to the per-area limit.
+pub fn record_validation_rejection(request: &mut EarlierRequest, reason: &str) {
+    request.outcome = "rejected by the app's checks".into();
+    request.validation_rejection = Some(clip(reason, REJECTION_CHARS));
+}
+
+fn prevention_rule(reason: &str) -> &'static str {
+    if reason.contains("Region script") {
+        "Use one inert inline script per request UUID, directly inside its uniquely identified owning root; preserve other requests' scripts."
+    } else if reason.contains("editor")
+        || reason.contains("element ID")
+        || reason.contains("data-desegnos-id")
+    {
+        "Preserve every existing editor ID on its original element; leave data-desegnos-id off new elements and never copy an existing ID."
+    } else if reason.contains("CSS") || reason.contains("stylesheet") {
+        "Preserve existing shared CSS and add only rules scoped to this area's root or selected elements."
+    } else if reason.contains("JavaScript") || reason.contains("shared script") {
+        "Preserve shared JavaScript byte-for-byte; put local behavior in one inert region script directly inside its owning root."
+    } else if reason.contains("root") {
+        "Return exactly one uniquely identified root for this request and preserve existing selected roots and their IDs."
+    } else {
+        "Change only this area's authorized roots; preserve unrelated markup, existing IDs, shared code and required source fields."
+    }
+}
+
 fn nearby(a: Rect, b: Rect) -> bool {
     const GAP: f64 = 32.;
     a.x <= b.x + b.width + GAP
@@ -237,6 +268,35 @@ impl RequirementsSnapshot {
                 r.region_id,
             )
         });
+        // Exact area identity, never proximity: a nearby area's failure is not this retry's.
+        // Reserve separate bounded space so five older records cannot crowd out a rejection.
+        let mut retry = String::new();
+        for (page, area) in &targets {
+            if let Some(reason) = records
+                .iter()
+                .find(|r| r.page_id == page.id && r.region_id == area.id)
+                .and_then(|r| r.validation_rejection.as_deref())
+            {
+                let reason = clip(reason, REJECTION_CHARS);
+                let instruction = format!(
+                    "Your previous attempt for this area was rejected because: {reason} Avoid this by: {}",
+                    prevention_rule(&reason)
+                );
+                retry.push_str(&format!(
+                    "{}\n",
+                    serde_json::json!({"page":page.id,"area":area.id,"instruction":instruction})
+                ));
+            }
+        }
+        let retry = if retry.is_empty() {
+            retry
+        } else {
+            format!("{RETRY_HEADING}{retry}```\n")
+        };
+        ensure(
+            retry.chars().count() <= RETRY_HISTORY_CHARS,
+            "The retry history exceeds its limit.",
+        )?;
         let mut changes = String::new();
         let mut compared = std::collections::BTreeSet::new();
         // Compare only the newest relevant result for each page. A later result on a
@@ -312,7 +372,8 @@ impl RequirementsSnapshot {
                 && r.summary_targets.iter().all(|target| ids.contains(target)))
             .then(|| clip(&r.summary, 200));
             let entry = serde_json::json!({"page":r.page_id,"area":r.region_id,"when":relative(now,r.requested_at),
-                "request":clip(&r.request,300),"outcome":clip(&r.outcome,320),"summary":summary});
+                "request":clip(&r.request,300),"outcome":clip(&r.outcome,320),"summary":summary,
+                "validationReason":r.validation_rejection.as_deref().map(|reason| clip(reason, REJECTION_CHARS))});
             let line = format!("{}\n", entry);
             if changes.chars().count()
                 + HEADING.chars().count()
@@ -329,9 +390,9 @@ impl RequirementsSnapshot {
             }
         }
         self.set_request_history(if section.is_empty() {
-            changes
+            format!("{retry}{changes}")
         } else {
-            format!("{changes}{HEADING}{section}```\n")
+            format!("{retry}{changes}{HEADING}{section}```\n")
         })?;
         Ok(self)
     }
@@ -340,8 +401,10 @@ impl RequirementsSnapshot {
         ensure(
             section.is_empty()
                 || (self.format_version()? >= 19
-                    && (section.starts_with(HEADING) || section.starts_with(CHANGES_HEADING))
-                    && section.chars().count() <= REQUEST_HISTORY_CHARS),
+                    && (section.starts_with(HEADING)
+                        || section.starts_with(CHANGES_HEADING)
+                        || section.starts_with(RETRY_HEADING))
+                    && section.chars().count() <= REQUEST_HISTORY_CHARS + RETRY_HISTORY_CHARS),
             "The request history is invalid.",
         )?;
         ensure(
@@ -408,12 +471,58 @@ mod tests {
             requested_at: n * 3600,
             request: format!("Exact request {n}: café\nplease keep this"),
             outcome: "applied".into(),
+            validation_rejection: None,
             summary: format!("Changed the photo {n}."),
             summary_targets: vec![(p.home_page_id, p.pages[0].regions[0].id)],
             source_fingerprints: None,
             base_source_fingerprints: None,
         }
     }
+    #[test]
+    fn retries_use_only_latest_exact_area_rejection_and_bound_technical_text() {
+        let p = project();
+        let mut rejected = record(&p, 1);
+        record_validation_rejection(
+            &mut rejected,
+            &format!(
+                "Editor element IDs must be valid and unique within the page. {}",
+                "é".repeat(4000)
+            ),
+        );
+        assert_eq!(
+            rejected
+                .validation_rejection
+                .as_ref()
+                .unwrap()
+                .chars()
+                .count(),
+            REJECTION_CHARS
+        );
+        let render = |records: &[EarlierRequest]| {
+            p.prepare_requirements()
+                .unwrap()
+                .with_earlier_requests(&p, records, 7200)
+                .unwrap()
+        };
+        let retry = render(&[rejected.clone()]);
+        assert!(
+            retry
+                .request_history
+                .contains("Your previous attempt for this area was rejected because:")
+        );
+        assert!(retry.request_history.contains("Avoid this by:"));
+        assert!(retry.request_history.chars().count() <= REQUEST_HISTORY_CHARS + 1200);
+        retry.validate_current(&p).unwrap();
+        let newer = record(&p, 2);
+        assert!(
+            !render(&[rejected.clone(), newer])
+                .request_history
+                .contains(RETRY_HEADING)
+        );
+        rejected.region_id = Uuid::new_v4();
+        assert!(!render(&[rejected]).request_history.contains(RETRY_HEADING));
+    }
+
     #[test]
     fn manual_edits_compare_current_source_and_preserve_snapshot_validation() {
         let mut p = project();
@@ -688,6 +797,7 @@ mod index_tests {
                     summary_targets: vec![(page_id, Uuid::from_u128(region))],
                     source_fingerprints: None,
                     base_source_fingerprints: None,
+                    validation_rejection: None,
                     outcome: if n == 10 {
                         "undone (do not repeat)".into()
                     } else {

@@ -195,6 +195,30 @@ pub fn recover_generation_reply(
             }
         }
     }
+    if !snapshot.is_element_fix() && snapshot.format_version()? >= 18 {
+        if let Some(pages) = value["pages"].as_array_mut() {
+            for generated in pages {
+                let Some(page) = generated["pageId"]
+                    .as_str()
+                    .and_then(|id| Uuid::parse_str(id).ok())
+                    .and_then(|id| project.page(id).ok())
+                else {
+                    continue;
+                };
+                if let Some(html) = generated["content"]["html"].as_str() {
+                    if let Ok(repaired) = repair_mechanical_structure(
+                        html,
+                        page,
+                        &targets,
+                        &value_regions_implemented,
+                        &mut events,
+                    ) {
+                        generated["content"]["html"] = repaired.into();
+                    }
+                }
+            }
+        }
+    }
     if !snapshot.is_element_fix() {
         let mut failed_pages = vec![];
         let mut seen = std::collections::BTreeSet::new();
@@ -341,6 +365,110 @@ pub fn recover_generation_reply(
         return Ok((candidate, events));
     }
     salvage(candidate, snapshot, project, events)
+}
+
+/// Only metadata on demonstrably new nodes and inert script placement are repaired here.
+/// The usual scope, syntax and ownership validators still approve the reconstructed result.
+fn repair_mechanical_structure(
+    html: &str,
+    page: &Page,
+    targets: &[(Uuid, Uuid)],
+    implemented: &std::collections::BTreeSet<Uuid>,
+    events: &mut Vec<ValidationEvent>,
+) -> Result<String> {
+    let doc = crate::editing::parse(html)?;
+    let before = crate::editing::parse(page.content.as_ref().map_or("", |c| c.html.as_str()))?;
+    let attr = ELEMENT_ID_ATTRIBUTE;
+    let old_ids: std::collections::BTreeSet<_> = before
+        .select(&format!("[{attr}]"))
+        .nodes()
+        .iter()
+        .filter_map(|n| n.attr(attr).map(|id| id.to_string()))
+        .collect();
+    let mut changed = false;
+    for region in page
+        .regions
+        .iter()
+        .filter(|r| targets.contains(&(page.id, r.id)) && implemented.contains(&r.id))
+    {
+        let mut roots = if region.has_targets() {
+            region
+                .targets()
+                .iter()
+                .filter_map(|t| crate::editing::locate(&doc, t).ok())
+                .collect::<Vec<_>>()
+        } else {
+            doc.select(&selector(region.id)).nodes().to_vec()
+        };
+        roots.dedup_by_key(|n| n.id);
+        if roots.is_empty() {
+            continue;
+        }
+        for node in doc.select(&format!("[{attr}]")).nodes() {
+            if !roots
+                .iter()
+                .any(|root| crate::stable_targets::contains(*root, *node))
+            {
+                continue;
+            }
+            let id = node.attr(attr).unwrap().to_string();
+            // A reused existing ID cannot prove which copy is the user's element.
+            // Leave every such copy intact for ordinary validation to reject safely.
+            let new_identity = !old_ids.contains(&id);
+            if new_identity {
+                node.remove_attr(attr);
+                changed = true;
+                event(
+                    events,
+                    "elementIdentity",
+                    "repaired",
+                    Some(region.id),
+                    format!(
+                        "Removed AI-assigned editor ID {:?} from a new element; a fresh unique ID is assigned on application.",
+                        id.chars().take(80).collect::<String>()
+                    ),
+                );
+            }
+        }
+        if roots.len() != 1 {
+            continue;
+        }
+        let scripts = doc.select(&format!("script[data-desegnos-script=\"{}\"]", region.id));
+        if scripts.nodes().len() != 1 {
+            continue;
+        }
+        let script = scripts.nodes()[0];
+        let root = roots[0];
+        let unchanged = before
+            .select(&format!("script[data-desegnos-script=\"{}\"]", region.id))
+            .nodes()
+            .iter()
+            .any(|old| old.html() == script.html());
+        if !unchanged
+            && script.attr("type").as_deref() == Some(crate::region_scripts::SCRIPT_TYPE)
+            && script.attr("src").is_none()
+            && script.parent().is_some_and(|p| p.id != root.id)
+            && !crate::stable_targets::contains(script, root)
+        {
+            // The explicit UUID and unique selected root establish ownership, even when
+            // the model placed this inert source beside the root or in a nested wrapper.
+            script.remove_from_parent();
+            root.append_child(&script);
+            changed = true;
+            event(
+                events,
+                "regionRoot",
+                "repaired",
+                Some(region.id),
+                "Moved the inert region script directly inside its uniquely owned root.".into(),
+            );
+        }
+    }
+    if changed {
+        crate::editing::serialized(&doc)
+    } else {
+        Ok(html.into())
+    }
 }
 
 fn recovery_targets(region: &Region) -> Vec<&ElementTarget> {
