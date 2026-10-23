@@ -1117,6 +1117,9 @@ dependencies = [
  "desegni-ai",
  "desegni-core",
  "desegni-storage",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "open",
  "rustix",
  "serde",
@@ -1127,6 +1130,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-wdio-webdriver",
  "time",
+ "tokio",
  "uuid",
  "webkit2gtk",
 ]

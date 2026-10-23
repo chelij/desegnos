@@ -470,6 +470,12 @@ function Editor() {
       setRecentProjects(await native<RecentProject[]>('forget_recent_project', { path }));
     }, false);
   }
+  async function openInBrowser() {
+    await synchronize(); await settle();
+    setError('');
+    try { await native<string>('open_in_browser'); setNotice('Opened in your browser.'); }
+    catch (error) { setError(errorMessage(error)); }
+  }
   async function exportWebsite() {
     await synchronize(); await settle();
     setExporting(true); setError('');
@@ -995,6 +1001,7 @@ function Editor() {
     { id: 'page-divider', label: '', separator: true },
     { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => { setLive(value => !value); setLiveDevice('desktop'); } },
     { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
+    { id: 'open-in-browser', label: 'Open in browser', disabled: !project?.pages.some(page => page.content), action: () => run(openInBrowser) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
     { id: 'ai-divider', label: '', separator: true },
@@ -1090,6 +1097,7 @@ function Editor() {
         <div className="segmented" role="group" aria-label="Live device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
         {liveDevice !== 'desktop' && (liveDevice === 'tablet' ? 768 : 390) !== page.viewport.width && <span className="live-note">Add requests at page width</span>}
         {liveDevice === 'phone' && <button type="button" title="Fix on phones" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
+        <button type="button" title="Serve this site locally and open it in your browser" onClick={() => run(openInBrowser)}>Open in browser</button>
         <button type="button" onClick={() => setLive(false)}>Exit live</button>
       </div>}
       {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}

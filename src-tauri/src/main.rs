@@ -14,6 +14,7 @@ mod identity;
 mod image_drop;
 #[cfg(target_os = "linux")]
 mod linux_startup;
+mod local_site;
 mod preview;
 mod preview_health;
 mod project_location;
@@ -62,6 +63,9 @@ fn main() {
             }
         })
         .setup(|app| {
+            app.manage(std::sync::Mutex::new(local_site::LocalSite::for_app(
+                app.handle(),
+            )));
             app.manage(std::sync::Mutex::new(Workspace::initialize(app.handle())?));
             app.manage(std::sync::Mutex::new(export::ExportService::default()));
             let generation =
@@ -103,6 +107,7 @@ fn main() {
             export::export_website,
             usage::record_usage,
             workspace::open_preview_link,
+            local_site::open_in_browser,
             export::open_export_folder,
             identity::pick_identity_source,
             identity::fetch_identity_source,
@@ -185,6 +190,13 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("Desegnos could not start its native application")
         .run(|app, event| {
+            if let tauri::RunEvent::Exit = event
+                && let Ok(mut site) = app
+                    .state::<std::sync::Mutex<local_site::LocalSite>>()
+                    .lock()
+            {
+                site.stop();
+            }
             if let tauri::RunEvent::ExitRequested { api, .. } = event
                 && app
                     .state::<preview_health::PreviewHealth>()

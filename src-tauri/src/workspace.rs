@@ -194,6 +194,8 @@ pub struct Workspace {
     parked: Vec<OpenProject>,
     /// Open projects in tab order.
     order: Vec<Uuid>,
+    /// Reports the active project revision to the browser site server.
+    site: Option<crate::local_site::RevisionWatch>,
 }
 
 /// A project kept open in the background while another one is active.
@@ -303,6 +305,11 @@ impl Workspace {
 
     pub fn initialize(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
         let mut workspace = Self::from_directory(app.path().app_local_data_dir()?)?;
+        workspace.site = app
+            .state::<Mutex<crate::local_site::LocalSite>>()
+            .lock()
+            .ok()
+            .map(|site| site.watch());
         if let Ok(documents) = app.path().document_dir() {
             workspace.system_project_location =
                 crate::project_location::default_from_documents(&documents);
@@ -332,6 +339,7 @@ impl Workspace {
             website_import: None,
             parked: vec![],
             order: vec![],
+            site: None,
         };
         state.refresh_recoveries();
         Ok(state)
@@ -518,6 +526,15 @@ impl Workspace {
     }
 
     pub(super) fn view(&self) -> WorkspaceView {
+        // Every published view reports the active revision, which is how the browser
+        // site server learns that the served project changed.
+        if let Some(site) = &self.site {
+            site.observe(
+                self.session
+                    .as_ref()
+                    .map(|session| (session.project().id, session.project().revision)),
+            );
+        }
         WorkspaceView {
             project: self.session.as_ref().map(|s| s.project().clone()),
             path: self
