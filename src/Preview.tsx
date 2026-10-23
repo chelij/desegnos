@@ -5,6 +5,7 @@ import { native } from './api';
 import { siteLayerTree, siteLayerStyles, siteCopyStyles, type SiteLayer } from './siteLayers';
 import { translatedStyle } from './elementEditing';
 import { measurableDocument, needsReferenceMeasure, pendingFrameHeight, promotionHeight } from './previewMeasurement';
+import { hardenStaticFrames, staticBase, staticDocument, staticPolicy } from './previewDocument';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
 import type { ElementSelection, ElementTarget, ElementStyleEdit, LayerDirection, ElementVisual, Page, PreviewDescriptor, Rect, SiteContent } from './types';
 
@@ -26,7 +27,6 @@ export type ElementMover = { preview: (x: number, y: number) => ElementSelection
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
 export type CanvasPreviewHandle = { measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
-const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline' https: http: data:; img-src data: https: http:; connect-src 'none'; font-src data: https: http:; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   pageId: string; draftId?: string | null; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
@@ -371,7 +371,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={!staticView ? { label: 'Retry preview', onClick: () => setRetry(value => value + 1) } : undefined} />}
     {frames.map(candidate => {
       const staging = candidate === pending;
-      const sourceDocument = staticView && candidate.source ? `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${staticPolicy}"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${candidate.source.html}</body></html>` : undefined;
+      const sourceDocument = staticView && candidate.source ? staticDocument(candidate.source.html, staticBase(candidate.descriptor)) : undefined;
       // The hidden frame is laid out at the extent the visible frame already has, so a
       // viewport-relative page inside it keeps the layout the canvas is showing.
       const frameHeight = staging ? pendingFrameHeight(visibleExtent, candidate.pageId, referenceHeight) : extent;
@@ -391,6 +391,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
             if (sourceDocument && candidate.source) {
               const doc = node.contentDocument;
               if (!doc?.head || !doc.body || doc.URL !== 'about:srcdoc' || doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') !== staticPolicy) throw new Error('This page left its editable preview. Reopen the page to select elements.');
+              // Frames render in the still canvas but never gain scripting.
+              hardenStaticFrames(doc);
               const style = Document.prototype.createElement.call(doc, 'style'); style.textContent = candidate.source.css; doc.head.append(style);
               const still = Document.prototype.createElement.call(doc, 'style'); still.setAttribute('data-desegnos-editor-paused', ''); still.textContent = '*,*::before,*::after{animation-play-state:paused!important;transition:none!important}'; doc.head.append(still);
               await doc.fonts.ready;

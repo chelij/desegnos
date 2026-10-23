@@ -40,7 +40,18 @@ pub fn configure_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
 
 const MAX_PREVIEW_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PREVIEW_SESSIONS: usize = 8;
-const PREVIEW_CSP: &str = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
+/// Site files are served by their own session under both platform URL forms; https is for
+/// pages that embed an external site. Both stay on the preview scheme and hosts, which only
+/// this application answers.
+const EMBED_SOURCES: &str =
+    "desegni-preview: http://*.desegni-preview.localhost http://desegni-preview.localhost https:";
+/// The policy a generated page is served with before its session adds its own script and
+/// style sources. Frames and fetches reach this session's files and an https embed.
+fn preview_policy() -> String {
+    format!(
+        "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src {EMBED_SOURCES}; frame-src {EMBED_SOURCES}; child-src {EMBED_SOURCES}; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'"
+    )
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -332,6 +343,18 @@ impl PreviewRegistry {
                     );
                 }
             }
+            // Framed site files are served by this session too, so they carry the same bridge
+            // as the page that framed them: scripts run and links stay inside the preview.
+            for (path, resource) in &package.files {
+                if resource.content_type.starts_with("text/html") {
+                    bridges.entry(path.clone()).or_insert_with(|| {
+                        format!(
+                            "<script src=\"/{bridge_name}\" crossorigin=\"anonymous\" data-file-mode=\"true\" data-session=\"{session_id}\" data-page=\"{page_id}\" data-path=\"/{}\" data-routes=\"{{}}\"></script>",
+                            attribute(path)
+                        )
+                    });
+                }
+            }
         }
         while self.sessions.len() >= MAX_PREVIEW_SESSIONS {
             let Some(expired) = self.order.pop_front() else {
@@ -546,7 +569,7 @@ fn site_response(
         "'none'"
     };
     let policy = format!(
-        "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegni-preview: http: https: data:; img-src desegni-preview: http: https: data:; font-src desegni-preview: http: https: data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri desegni-preview: http: https:; form-action 'none'; media-src desegni-preview: http: https: data:; worker-src 'none'"
+        "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegni-preview: http: https: data:; img-src desegni-preview: http: https: data:; font-src desegni-preview: http: https: data:; connect-src {EMBED_SOURCES}; frame-src {EMBED_SOURCES}; child-src {EMBED_SOURCES}; object-src 'none'; base-uri desegni-preview: http: https:; form-action 'none'; media-src desegni-preview: http: https: data:; worker-src 'none'"
     );
     let decorate = |mut result: Response<Vec<u8>>| {
         result.headers_mut().insert(
@@ -694,7 +717,7 @@ fn response(status: StatusCode, content_type: &'static str, bytes: Vec<u8>) -> R
     Response::builder()
         .status(status)
         .header("content-type", content_type)
-        .header("content-security-policy", PREVIEW_CSP)
+        .header("content-security-policy", preview_policy())
         .header("x-content-type-options", "nosniff")
         .header("cache-control", "no-store")
         .header("accept-ranges", "bytes")
@@ -714,7 +737,7 @@ fn source_response(
     let origins = format!(
         "desegni-preview://localhost/{session_id}/ http://desegni-preview.localhost/{session_id}/ https://desegni-preview.localhost/{session_id}/"
     );
-    let policy = PREVIEW_CSP.replace(
+    let policy = preview_policy().replace(
         "style-src 'unsafe-inline'",
         &format!("style-src 'unsafe-inline' {origins}"),
     );
@@ -863,6 +886,99 @@ mod tests {
         );
     }
 
+    /// A site page that frames its own files keeps them on the same session: the framed
+    /// document is served with the bridge and the scripting policy of a top-level page.
+    #[test]
+    fn framed_site_files_are_served_by_their_session_with_the_bridge() {
+        let files = BTreeMap::from([
+            (
+                "index.html".into(),
+                b"<!doctype html><html><head><title>Home</title></head><body><iframe src=\"components/llama-wrap-preview.html\"></iframe><iframe src=\"play/solopong/index.html\"></iframe><iframe src=\"https://player.example.com/embed\"></iframe></body></html>".to_vec(),
+            ),
+            (
+                "play/solopong/index.html".into(),
+                b"<!doctype html><html><head><title>Solo Pong</title></head><body><canvas></canvas></body></html>".to_vec(),
+            ),
+            (
+                "components/llama-wrap-preview.html".into(),
+                b"<!doctype html><div class=\"llama\">Wrap</div>".to_vec(),
+            ),
+        ]);
+        let project = desegni_core::import_website_files("Embeds", &files).unwrap();
+        // The wrap file is a fragment, so it stays a site file rather than becoming a page.
+        assert_eq!(
+            project.website.as_ref().unwrap().page_files.len(),
+            files.len() - 1
+        );
+        let mut registry = PreviewRegistry::default();
+        let live = registry
+            .register(&project, None, project.home_page_id, true)
+            .unwrap();
+        let origin = live.url.trim_end_matches("/index.html").to_owned();
+        let get = |path: &str| {
+            registry.serve(
+                &Request::get(format!("{origin}/{path}"))
+                    .body(vec![])
+                    .unwrap(),
+            )
+        };
+        let home = get("index.html");
+        assert_eq!(home.status(), StatusCode::OK);
+        let csp = home.headers()["content-security-policy"].to_str().unwrap();
+        for directive in ["frame-src", "child-src"] {
+            assert!(
+                csp.contains(&format!("{directive} {EMBED_SOURCES}")),
+                "{directive}: {csp}"
+            );
+        }
+        assert!(csp.contains(&format!("connect-src {EMBED_SOURCES}")));
+        for path in [
+            "play/solopong/index.html",
+            "components/llama-wrap-preview.html",
+        ] {
+            let framed = get(path);
+            assert_eq!(framed.status(), StatusCode::OK, "{path}");
+            assert_eq!(framed.headers()["content-type"], "text/html; charset=utf-8");
+            let html = String::from_utf8(framed.body().clone()).unwrap();
+            assert!(
+                html.contains(&format!("src=\"/desegnos-{}.js\"", live.session_id)),
+                "{path} is served without the bridge"
+            );
+            let framed_csp = framed.headers()["content-security-policy"]
+                .to_str()
+                .unwrap();
+            assert!(framed_csp.contains("script-src 'unsafe-inline'"));
+            assert!(framed_csp.contains(&format!("frame-src {EMBED_SOURCES}")));
+        }
+        for path in [
+            "%2e%2e/Cargo.toml",
+            "..%2fCargo.toml",
+            "components/%2e%2e/%2e%2e/Cargo.toml",
+        ] {
+            assert_eq!(get(path).status(), StatusCode::NOT_FOUND, "{path}");
+        }
+        // A paused session serves the same files with scripting removed.
+        let paused = registry
+            .register(&project, None, project.home_page_id, false)
+            .unwrap();
+        let origin = paused.url.trim_end_matches("/index.html");
+        let framed = registry.serve(
+            &Request::get(format!("{origin}/components/llama-wrap-preview.html"))
+                .body(vec![])
+                .unwrap(),
+        );
+        assert_eq!(framed.status(), StatusCode::OK);
+        assert!(
+            !String::from_utf8_lossy(framed.body())
+                .contains(&format!("desegnos-{}.js", paused.session_id))
+        );
+        let csp = framed.headers()["content-security-policy"]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("script-src 'none'"));
+        assert!(csp.contains(&format!("frame-src {EMBED_SOURCES}")));
+    }
+
     fn project() -> Project {
         let mut project = Project::new(
             "Preview checks".into(),
@@ -947,9 +1063,14 @@ mod tests {
         let csp = document.headers()["content-security-policy"]
             .to_str()
             .unwrap();
-        assert!(csp.contains("connect-src 'none'"));
         assert!(csp.contains("form-action 'none'"));
         assert!(!csp.contains("unsafe-eval"));
+        // A live or paused page may still frame its own files and an https embed; the
+        // policy fails closed for everything else.
+        assert!(csp.contains(&format!("frame-src {EMBED_SOURCES}")));
+        assert!(csp.contains(&format!("child-src {EMBED_SOURCES}")));
+        assert!(csp.contains(&format!("connect-src {EMBED_SOURCES}")));
+        assert!(!csp.contains("frame-src 'none'") && !csp.contains("connect-src 'none'"));
         for suffix in ["site.js", "../../Cargo.toml", "%2e%2e", "site.css?token=x"] {
             let url = descriptor.url.replace("index.html", suffix);
             assert_eq!(
