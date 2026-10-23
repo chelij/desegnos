@@ -263,7 +263,6 @@ pub struct IdentityService {
     directory: PathBuf,
     sources: BTreeMap<Uuid, IdentitySource>,
     website_files: BTreeMap<Uuid, BTreeMap<String, Vec<u8>>>,
-    website_roots: BTreeMap<Uuid, PathBuf>,
     latest: Option<AnalysisRecord>,
     active: Option<(Uuid, CancellationToken)>,
     startup_error: Option<String>,
@@ -874,7 +873,6 @@ impl IdentityService {
                 directory,
                 sources: BTreeMap::new(),
                 website_files: BTreeMap::new(),
-                website_roots: BTreeMap::new(),
                 latest: None,
                 active: None,
                 startup_error: Some(reason),
@@ -890,7 +888,6 @@ impl IdentityService {
             directory,
             sources: BTreeMap::new(),
             website_files: BTreeMap::new(),
-            website_roots: BTreeMap::new(),
             latest: None,
             active: None,
             startup_error: None,
@@ -979,7 +976,6 @@ impl IdentityService {
                 .ok_or("Close the current identity analysis before importing more sources.")?;
             self.sources.remove(&id);
             self.website_files.remove(&id);
-            self.website_roots.remove(&id);
         }
         let view = (&source).into();
         self.sources.insert(source.id, source);
@@ -991,13 +987,9 @@ impl IdentityService {
             .cloned()
             .ok_or_else(|| "Choose the source again to import its pages.".into())
     }
-    pub(crate) fn website_root(&self, id: Uuid) -> Option<&PathBuf> {
-        self.website_roots.get(&id)
-    }
     pub(crate) fn retain_project_site(
         &mut self,
         name: &str,
-        path: PathBuf,
         files: BTreeMap<String, Vec<u8>>,
     ) -> NativeResult<IdentitySourceManifest> {
         let source = desegni_storage::identity_source_from_files(
@@ -1006,20 +998,7 @@ impl IdentityService {
             vec![],
         )
         .map_err(error)?;
-        self.retain_folder_source(normalize_source(source)?, files, Some(path))
-    }
-    fn retain_folder_source(
-        &mut self,
-        source: IdentitySource,
-        files: BTreeMap<String, Vec<u8>>,
-        root: Option<PathBuf>,
-    ) -> NativeResult<IdentitySourceManifest> {
-        let id = source.id;
-        let view = self.retain_website_source(source, files)?;
-        if let Some(root) = root {
-            self.website_roots.insert(id, root);
-        }
-        Ok(view)
+        self.retain_website_source(normalize_source(source)?, files)
     }
     fn retain_website_source(
         &mut self,
@@ -1028,7 +1007,6 @@ impl IdentityService {
     ) -> NativeResult<IdentitySourceManifest> {
         let id = source.id;
         let view = self.retain_source(source)?;
-        self.website_roots.remove(&id);
         self.website_files.insert(id, files);
         Ok(view)
     }
@@ -1592,7 +1570,6 @@ pub async fn pick_identity_source(
             return Ok::<_, String>(Some((
                 normalize_source(collect_identity_source(&paths[0]).map_err(error)?)?,
                 BTreeMap::new(),
-                None,
             )));
         }
         let files =
@@ -1615,28 +1592,16 @@ pub async fn pick_identity_source(
                 .map_err(error)?,
             )?
         };
-        let root = if paths.len() == 1 && paths[0].is_dir() {
-            let detected = desegni_storage::detect_website_folder(&paths[0]).map_err(error)?;
-            Some(
-                detected
-                    .and_then(|site| site.output)
-                    .unwrap_or(paths[0].clone())
-                    .canonicalize()
-                    .map_err(error)?,
-            )
-        } else {
-            None
-        };
-        Ok(Some((source, files, root)))
+        Ok(Some((source, files)))
     })
     .await
     .map_err(error)??;
     selection
-        .map(|(source, files, root)| {
+        .map(|(source, files)| {
             state
                 .lock()
                 .map_err(error)?
-                .retain_folder_source(source, files, root)
+                .retain_website_source(source, files)
         })
         .transpose()
 }
@@ -1795,12 +1760,6 @@ pub async fn website_brand_source(
         Ok::<_, String>((
             normalize_source(collect_identity_source(&path).map_err(error)?)?,
             files,
-            desegni_storage::detect_website_folder(&path)
-                .map_err(error)?
-                .and_then(|site| site.output)
-                .unwrap_or(path)
-                .canonicalize()
-                .map_err(error)?,
         ))
     })
     .await
@@ -1808,5 +1767,5 @@ pub async fn website_brand_source(
     state
         .lock()
         .map_err(error)?
-        .retain_folder_source(source.0, source.1, Some(source.2))
+        .retain_website_source(source.0, source.1)
 }

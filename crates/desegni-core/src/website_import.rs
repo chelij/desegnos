@@ -642,6 +642,17 @@ pub struct ImportedWebsite {
     pub framework: Option<String>,
     pub skipped: Vec<String>,
 }
+/// Page scripts stay inside the document. Appending them after `</html>` produced pages that
+/// browsers render but that no HTML parser, including this importer, accepts.
+fn insert_page_script(html: &mut String, tag: &str) {
+    let lower = html.to_ascii_lowercase();
+    let at = lower
+        .rfind("</body>")
+        .or_else(|| lower.rfind("</html>"))
+        .unwrap_or(html.len());
+    html.insert_str(at, tag);
+}
+
 impl Project {
     pub fn website_files(&self) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
         let Some(site) = &self.website else {
@@ -688,10 +699,13 @@ impl Project {
                     }
                 }
                 if !resolved.javascript.is_empty() {
-                    html.push_str(&format!(
-                        "<script>{}</script>",
-                        resolved.javascript.replace("</script", "<\\/script")
-                    ));
+                    insert_page_script(
+                        &mut html,
+                        &format!(
+                            "<script>{}</script>",
+                            resolved.javascript.replace("</script", "<\\/script")
+                        ),
+                    );
                 }
                 let runtime = crate::region_script_runtime(&resolved.html)?;
                 if !runtime.is_empty() {
@@ -700,8 +714,11 @@ impl Project {
                     let resource = path
                         .rsplit_once('/')
                         .map_or(name.clone(), |(directory, _)| format!("{directory}/{name}"));
+                    insert_page_script(
+                        &mut html,
+                        &format!("<script defer src=\"{name}\"></script>"),
+                    );
                     files.insert(resource, runtime.into_bytes());
-                    html.push_str(&format!("<script defer src=\"{name}\"></script>"));
                 }
                 files.insert(path, html.into_bytes());
             }
@@ -795,10 +812,13 @@ impl Project {
                 }
             }
             if !javascript.is_empty() {
-                document.push_str(&format!(
-                    "<script>{}</script>",
-                    javascript.replace("</script", "<\\/script")
-                ));
+                insert_page_script(
+                    &mut document,
+                    &format!(
+                        "<script>{}</script>",
+                        javascript.replace("</script", "<\\/script")
+                    ),
+                );
             }
             let runtime = crate::region_script_runtime(&document)?;
             if !runtime.is_empty() {
@@ -806,8 +826,11 @@ impl Project {
                 let resource = path
                     .rsplit_once('/')
                     .map_or(name.clone(), |(directory, _)| format!("{directory}/{name}"));
+                insert_page_script(
+                    &mut document,
+                    &format!("<script defer src=\"{name}\"></script>"),
+                );
                 files.insert(resource, PreviewFile::Inline(runtime.into_bytes().into()));
-                document.push_str(&format!("<script defer src=\"{name}\"></script>"));
             }
             ensure(
                 document.len() <= text_limit,

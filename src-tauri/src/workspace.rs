@@ -2491,72 +2491,88 @@ mod tests {
         assert!(restarted.recovery_error.is_none());
     }
 
+    fn region() -> &'static str {
+        "a41bd1d5-0a1e-4f0e-9e2f-8a3c1d6b7e90"
+    }
+    fn imported_site_project() -> Project {
+        let files = std::collections::BTreeMap::from([
+            (
+                "index.html".into(),
+                format!(
+                    "<!doctype html><html><head><title>Imported site</title></head><body><main><h1>Home</h1></main><script type=\"application/x-desegnos-region\" data-desegnos-script=\"{}\">document.title = 'Region';</script></body></html>",
+                    region()
+                )
+                .into_bytes(),
+            ),
+            ("styles.css".into(), b"h1 { color: blue; }".to_vec()),
+        ]);
+        desegni_core::import_website_files("Imported site", &files).unwrap()
+    }
+    fn saved_site(temp: &Temp) -> (Workspace, std::path::PathBuf) {
+        let mut workspace = Workspace::from_directory(temp.0.join("profile")).unwrap();
+        let project = imported_site_project();
+        let path =
+            desegni_storage::create_project_folder(&temp.0, &project.name, project.id).unwrap();
+        let file = ProjectFile::acquire(&path).unwrap();
+        file.save(&project).unwrap();
+        workspace.start(project, Some(file), Some(0)).unwrap();
+        let root = path.parent().unwrap().to_path_buf();
+        (workspace, root)
+    }
+
     #[test]
-    fn own_site_import_adopts_snapshot_after_durable_page_review_but_other_sources_do_not() {
-        for own_site in [true, false] {
-            let temp = Temp::new();
-            let mut workspace = Workspace::from_directory(temp.0.join("profile")).unwrap();
-            let project = project("Import outside edits");
-            let path =
-                desegni_storage::create_project_folder(&temp.0, &project.name, project.id).unwrap();
-            let file = ProjectFile::acquire(&path).unwrap();
-            file.save(&project).unwrap();
-            workspace.start(project, Some(file), Some(0)).unwrap();
-            let root = path.parent().unwrap();
-            let files = std::collections::BTreeMap::from([
-                ("index.html".into(), b"<h1>Outside home</h1>".to_vec()),
-                (
-                    "new/index.html".into(),
-                    b"<h1>Outside addition</h1>".to_vec(),
-                ),
-            ]);
-            fs::create_dir(root.join("new")).unwrap();
-            for (path, bytes) in &files {
-                fs::write(root.join(path), bytes).unwrap();
-            }
-            let source_root = if own_site {
-                root.canonicalize().unwrap()
-            } else {
-                temp.0.clone()
-            };
-            let review = workspace
-                .prepare_site_import(files.clone(), Some(source_root))
+    fn own_site_export_stays_readable_so_import_changes_can_run() {
+        let temp = Temp::new();
+        let (mut workspace, root) = saved_site(&temp);
+        // The region runtime script must live inside the document, not after `</html>`.
+        let html = fs::read_to_string(root.join("index.html")).unwrap();
+        assert!(html.contains("<script defer src=\"desegnos-regions-"));
+        assert!(html.trim_end().ends_with("</body></html>"));
+        let files = desegni_storage::project_folder::read_website_files(&root)
+            .unwrap()
+            .files;
+        let selection = workspace.prepare_site_import(files).unwrap().unwrap();
+        assert_eq!(selection.review.updated, ["/"]);
+    }
+
+    #[test]
+    fn importing_the_changed_own_site_is_not_an_outside_edit_but_plain_save_still_is() {
+        let temp = Temp::new();
+        let (mut workspace, root) = saved_site(&temp);
+        let edited = format!(
+            "<!doctype html><html><head><title>Imported site</title></head><body><main><h1>Outside home</h1></main><script type=\"application/x-desegnos-region\" data-desegnos-script=\"{}\">document.title = 'Outside';</script></body></html>",
+            region()
+        );
+        fs::write(root.join("index.html"), &edited).unwrap();
+        let current = workspace.project().unwrap().clone();
+        workspace
+            .save_snapshot_checked(&current, None, false)
+            .unwrap();
+        assert_eq!(workspace.view().outside_edits.changed_paths, ["index.html"]);
+        assert_eq!(fs::read_to_string(root.join("index.html")).unwrap(), edited);
+        // "Import changes" reads the project's own site and adopts exactly those bytes.
+        let files = desegni_storage::project_folder::read_website_files(&root)
+            .unwrap()
+            .files;
+        let selection = workspace.prepare_site_import(files).unwrap().unwrap();
+        workspace.apply_site_import(selection.token, &[]).unwrap();
+        assert!(workspace.project().unwrap().pages.iter().any(|page| {
+            page.content
+                .as_ref()
+                .is_some_and(|content| content.html.contains("Outside home"))
+        }));
+        let current = workspace.project().unwrap().clone();
+        workspace
+            .save_snapshot_checked(&current, None, false)
+            .unwrap();
+        let outside = workspace.view().outside_edits;
+        assert_eq!(outside.changed_paths, Vec::<String>::new(), "{outside:?}");
+        assert_eq!(outside.kept_stale_paths, Vec::<String>::new());
+        assert!(
+            fs::read_to_string(root.join("index.html"))
                 .unwrap()
-                .unwrap();
-            assert!(review.review.updated.iter().any(|p| p == "/"));
-            assert!(review.review.added.iter().any(|p| p == "/new"));
-            workspace.apply_site_import(review.token, &[]).unwrap();
-            assert_eq!(workspace.project().unwrap().pages.len(), 2);
-            assert!(workspace.project().unwrap().pages.iter().any(|p| {
-                p.content
-                    .as_ref()
-                    .is_some_and(|c| c.html.contains("Outside home"))
-            }));
-            let manifest: serde_json::Value =
-                serde_json::from_slice(&fs::read(root.join(".desegnos-site.json")).unwrap())
-                    .unwrap();
-            assert_eq!(
-                manifest["files"]["index.html"] == desegni_core::digest(&files["index.html"]),
-                own_site
-            );
-            let project = workspace.project().unwrap().clone();
-            workspace
-                .save_snapshot_checked(&project, None, false)
-                .unwrap();
-            let outside = workspace.view().outside_edits;
-            assert_eq!(outside.changed_paths.is_empty(), own_site);
-            if own_site {
-                assert_eq!(
-                    fs::read(root.join("index.html")).unwrap(),
-                    desegni_core::compile_website(&project).unwrap().files["index.html"]
-                );
-            } else {
-                assert_eq!(
-                    fs::read(root.join("index.html")).unwrap(),
-                    files["index.html"]
-                );
-            }
-        }
+                .contains("desegnos-regions-")
+        );
     }
 
     #[test]
@@ -3919,7 +3935,6 @@ struct WebsiteImportSnapshot {
     project_id: Uuid,
     revision: u64,
     files: std::collections::BTreeMap<String, Vec<u8>>,
-    own_site_path: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -3952,7 +3967,7 @@ pub fn project_site_import_source(
     identity
         .lock()
         .map_err(message)?
-        .retain_project_site(&state.project()?.name, root, files)
+        .retain_project_site(&state.project()?.name, files)
 }
 
 #[tauri::command]
@@ -3983,24 +3998,17 @@ pub async fn prepare_website_import(
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
     source_id: Uuid,
 ) -> NativeResult<Option<WebsiteImportSelection>> {
-    let (files, source_root) = {
+    let files = {
         let identity = identity.lock().map_err(message)?;
-        (
-            identity.website_files(source_id)?,
-            identity.website_root(source_id).cloned(),
-        )
+        identity.website_files(source_id)?
     };
-    state
-        .lock()
-        .map_err(message)?
-        .prepare_site_import(files, source_root)
+    state.lock().map_err(message)?.prepare_site_import(files)
 }
 
 impl Workspace {
     fn prepare_site_import(
         &mut self,
         files: std::collections::BTreeMap<String, Vec<u8>>,
-        source_root: Option<PathBuf>,
     ) -> NativeResult<Option<WebsiteImportSelection>> {
         if !files.keys().any(|name| {
             name.to_ascii_lowercase().ends_with(".html")
@@ -4016,26 +4024,11 @@ impl Workspace {
         let (project_id, revision) = (project.id, project.revision);
         let review = project.review_website_import(&files).map_err(message)?;
         let token = Uuid::new_v4();
-        let own_site_path = self
-            .file
-            .as_ref()
-            .filter(|file| file.is_project_folder())
-            .filter(|file| {
-                source_root.as_ref().is_some_and(|root| {
-                    file.path()
-                        .parent()
-                        .and_then(|p| p.canonicalize().ok())
-                        .as_ref()
-                        == Some(root)
-                })
-            })
-            .map(|file| file.path().to_owned());
         self.website_import = Some(WebsiteImportSnapshot {
             token,
             project_id,
             revision,
             files,
-            own_site_path,
         });
         Ok(Some(WebsiteImportSelection { token, review }))
     }
@@ -4074,11 +4067,11 @@ impl Workspace {
                 journal.append(p)
             })
             .map_err(message)?;
-        if let Some(own_path) = &snapshot.own_site_path {
-            if let Some(file) = file.as_ref().filter(|f| f.path() == own_path) {
-                file.mark_imported_site_owned(&snapshot.files)
-                    .map_err(message)?;
-            }
+        // Adopt only the bytes this import captured. The manifest check hashes the folder first,
+        // so a source that merely resembles the project stays foreign.
+        if let Some(file) = file.as_ref().filter(|f| f.is_project_folder()) {
+            file.mark_imported_site_owned(&snapshot.files)
+                .map_err(message)?;
         }
         *website_import = None;
         self.prepared = None;

@@ -53,8 +53,9 @@ fn checked_import(files: &BTreeMap<String, Vec<u8>>) -> Result<Project> {
                 "An HTML file is too large to import.",
             )?;
             crate::source::validate_html_before_repair(html)
-                .map_err(|_| crate::Error("An HTML file could not be parsed.".into()))?;
-            crate::editing::parse_document(html, true)?;
+                .map_err(|_| crate::Error(format!("{path} could not be read as a web page.")))?;
+            crate::editing::parse_document(html, true)
+                .map_err(|_| crate::Error(format!("{path} could not be read as a web page.")))?;
             ensure(
                 routes.insert(crate::source_page_path(path).to_lowercase()),
                 "Two imported files have the same page path.",

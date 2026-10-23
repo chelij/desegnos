@@ -253,6 +253,24 @@ fn file_hash(root: &Path, relative: &str) -> Result<Option<String>> {
     Ok(Some(digest(&bytes)))
 }
 
+/// Only bytes the project already accounts for count as ours: recorded, in-flight, backed up,
+/// or exactly what this save is about to write. Writing identical bytes loses nothing.
+fn owned_file(
+    actual: Option<&String>,
+    relative: &str,
+    desired: &str,
+    manifest: &SiteManifest,
+    pending: &BTreeMap<String, String>,
+) -> bool {
+    actual.is_none()
+        || actual.is_some_and(|hash| {
+            hash == desired
+                || Some(hash) == manifest.files.get(relative)
+                || Some(hash) == pending.get(relative)
+                || Some(hash) == manifest.originals.get(relative)
+        })
+}
+
 /// Only called after the archive commits. Failure becomes a save warning, never a lost save.
 pub(crate) fn sync_project_site(
     path: &Path,
@@ -340,10 +358,13 @@ pub(crate) fn sync_project_site(
         let mut backup = None;
         for (relative, hash) in &desired {
             let actual = file_hash(root, relative)?;
-            let owned = actual.is_none()
-                || actual.as_ref() == manifest.files.get(relative)
-                || actual.as_ref() == previous_pending.get(relative)
-                || actual.as_ref() == manifest.originals.get(relative);
+            let owned = owned_file(
+                actual.as_ref(),
+                relative,
+                hash,
+                &manifest,
+                &previous_pending,
+            );
             if !owned && overwrite {
                 backup_outside_file(root, relative, &mut backup)?;
                 outside.backed_up = true;
@@ -364,11 +385,13 @@ pub(crate) fn sync_project_site(
             }
             // Recheck immediately before replacing; fresh names use no-replace publication.
             let actual = file_hash(root, relative)?;
-            if actual.is_some()
-                && actual.as_ref() != manifest.files.get(relative)
-                && actual.as_ref() != previous_pending.get(relative)
-                && actual.as_ref() != manifest.originals.get(relative)
-            {
+            if !owned_file(
+                actual.as_ref(),
+                relative,
+                hash,
+                &manifest,
+                &previous_pending,
+            ) {
                 return Err(Error(format!(
                     "{relative} changed while saving. Its bytes were preserved; save again to retry."
                 )));

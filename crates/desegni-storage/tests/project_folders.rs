@@ -610,6 +610,64 @@ fn imported_snapshot_marks_current_bytes_owned_but_not_later_edits() {
     );
 }
 
+#[test]
+fn reimporting_the_project_site_marks_its_current_bytes_owned() {
+    let temp = Temp::new();
+    let region = Uuid::new_v4();
+    let project = desegni_core::import_website_files(
+        "Imported studio",
+        &BTreeMap::from([
+            (
+                "index.html".into(),
+                format!(
+                    "<!doctype html><html><head><title>Studio</title></head><body><main><h1>Home</h1></main><script type=\"application/x-desegnos-region\" data-desegnos-script=\"{region}\">document.title = 'Region';</script></body></html>"
+                )
+                .into_bytes(),
+            ),
+            ("styles.css".into(), b"h1 { color: blue; }".to_vec()),
+        ]),
+    )
+    .unwrap();
+    let file = managed(&temp, &project);
+    file.save(&project).unwrap();
+    let root = file.path().parent().unwrap();
+    // The saved page carries the region runtime script and still parses on re-import.
+    let saved = fs::read_to_string(root.join("index.html")).unwrap();
+    assert!(saved.contains("<script defer src=\"desegnos-regions-"));
+    let files = desegni_storage::project_folder::read_website_files(root)
+        .unwrap()
+        .files;
+    project.review_website_import(&files).unwrap();
+    file.mark_imported_site_owned(&files).unwrap();
+    file.save(&project).unwrap();
+    assert_eq!(file.outside_edits(), Default::default());
+    assert!(file.site_warnings().is_empty());
+    // A later edit that was not imported still counts as an outside change.
+    fs::write(root.join("styles.css"), b"h1 { color: red; }").unwrap();
+    file.save(&project).unwrap();
+    assert_eq!(file.outside_edits().changed_paths, ["styles.css"]);
+    assert_eq!(
+        fs::read(root.join("styles.css")).unwrap(),
+        b"h1 { color: red; }"
+    );
+}
+
+#[test]
+fn bytes_matching_the_next_save_are_not_outside_edits() {
+    let temp = Temp::new();
+    let project = project();
+    let file = managed(&temp, &project);
+    let root = file.path().parent().unwrap();
+    // Nothing is recorded yet, but the folder already holds exactly what Desegnos would write.
+    for (path, bytes) in compile_website(&project).unwrap().files {
+        fs::create_dir_all(root.join(&path).parent().unwrap()).unwrap();
+        fs::write(root.join(&path), bytes).unwrap();
+    }
+    file.save(&project).unwrap();
+    assert_eq!(file.outside_edits(), Default::default());
+    assert!(file.site_warnings().is_empty());
+}
+
 #[cfg(unix)]
 #[test]
 fn unavailable_backup_preserves_outside_bytes_and_can_be_retried() {
