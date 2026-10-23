@@ -128,7 +128,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
       { id: 'source', label: showSource ? 'Hide source code' : 'Source code', disabled: !candidate?.pages.length, action: () => { setTab('review'); setShowSource(value => !value); } },
       { id: 'attempts', label: 'Attempts', action: () => setTab('attempts') },
       { id: 'refresh', label: 'Refresh job', disabled: !!operation, action: () => { void controller.refresh(); } },
-      ...(canRetry ? [{ id: 'retry-snapshot', label: 'Retry original request', disabled: !!operation, action: () => { retryTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setConfirmRetry(true); } }] : []),
+      ...(canRetry ? [{ id: 'retry-snapshot', label: 'Retry with current page', disabled: !!operation, action: () => { retryTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setConfirmRetry(true); } }] : []),
     ] },
     { id: 'settings', label: 'AI settings', action: openSettings },
     ...(canDiscard ? [{ id: 'discard', label: job?.status === 'prepared' ? 'Discard request' : 'Discard result', disabled: !!operation, action: () => { void controller.discard().catch(() => {}); } }] : []),
@@ -210,7 +210,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
         </div>
       </>}
     </div>
-    {confirmRetry && job && <section ref={retryConfirmation} aria-label="Confirm retry" className="dialog-body"><strong>Try the same requests again?</strong><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
+    {confirmRetry && job && <section ref={retryConfirmation} aria-label="Confirm retry" className="dialog-body"><strong>Try these requests with the current page?</strong><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
       <p>{usesChatgpt ? 'The retry counts toward that account’s ChatGPT plan or credits balance. Earlier attempts may also have used your plan or credits.' : `Estimated job cost: ${money(job.estimateUsd)}. Earlier attempts may also have been charged.`}</p>
       {usageError && <p className="message error" role="alert">{usageError}</p>}
       <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { dismissRetry(); void controller.retry().catch(() => {}); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={dismissRetry}>Keep current job</button></div></section>}

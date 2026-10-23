@@ -125,6 +125,10 @@ pub struct GenerationJobView {
     base_revision: u64,
     requirements: RequirementsSnapshot,
     #[serde(default)]
+    source_fingerprints: BTreeMap<Uuid, BTreeMap<String, String>>,
+    #[serde(default)]
+    applied_source_fingerprints: BTreeMap<Uuid, BTreeMap<String, String>>,
+    #[serde(default)]
     context: Option<RequirementsSnapshot>,
     #[serde(default)]
     draft_feedback: Vec<desegni_core::ValidationEvent>,
@@ -756,7 +760,7 @@ impl GenerationService {
             JobStatus::Failed | JobStatus::Unknown | JobStatus::Cancelled => "failed",
             _ => "drafted",
         };
-        desegni_core::earlier_requests(
+        let mut entries = desegni_core::earlier_requests(
             &view.requirements,
             created,
             outcome,
@@ -769,7 +773,24 @@ impl GenerationService {
             view.candidate
                 .as_ref()
                 .map_or(&[], |c| c.regions.as_slice()),
-        )
+        );
+        for entry in &mut entries {
+            if let Some(base) = view.source_fingerprints.get(&entry.page_id) {
+                entry.base_source_fingerprints = Some(base.clone());
+                entry.source_fingerprints = Some(base.clone());
+            }
+            if let Some(applied) = view.applied_source_fingerprints.get(&entry.page_id) {
+                entry.source_fingerprints = Some(applied.clone());
+            } else if view.status == JobStatus::Applied {
+                // Older jobs predate stored post-apply fingerprints.
+                entry.source_fingerprints = view
+                    .candidate
+                    .as_ref()
+                    .and_then(|c| c.pages.iter().find(|p| p.page_id == entry.page_id))
+                    .map(|p| desegni_core::source_fingerprints(Some(&p.content)));
+            }
+        }
+        entries
     }
 
     pub(crate) fn request_history(
@@ -826,6 +847,22 @@ impl GenerationService {
             entries
         };
         entries.retain(|r| r.project_id == project.id);
+        let missing: BTreeSet<_> = entries
+            .iter()
+            .filter(|r| r.source_fingerprints.is_none())
+            .map(|r| r.job_id)
+            .collect();
+        for id in missing {
+            if let Ok(view) = self.saved_job(project.id, id) {
+                let enriched = self.history_entries(&view);
+                for entry in entries.iter_mut().filter(|r| r.job_id == id) {
+                    if let Some(source) = enriched.iter().find(|r| r.region_id == entry.region_id) {
+                        entry.source_fingerprints = source.source_fingerprints.clone();
+                        entry.base_source_fingerprints = source.base_source_fingerprints.clone();
+                    }
+                }
+            }
+        }
         // Undo/redo lives in the durable project dossier. Capture it before a newer job replaces it.
         if let Some(dossier) = &project.latest_generation {
             for entry in entries.iter_mut().filter(|r| r.job_id == dossier.job_id) {
@@ -1182,33 +1219,55 @@ impl GenerationService {
         account_id: Option<Uuid>,
         draft: Option<desegni_core::GenerationDraft>,
     ) -> NativeResult<GenerationJobView> {
+        self.prepare_requests(project, account_id, draft, None)
+    }
+
+    fn prepare_requests(
+        &mut self,
+        project: &Project,
+        account_id: Option<Uuid>,
+        draft: Option<desegni_core::GenerationDraft>,
+        previous: Option<&GenerationJobView>,
+    ) -> NativeResult<GenerationJobView> {
+        let provider = previous.map_or(self.provider, |v| v.provider);
+        let authentication = previous.map_or(self.authentication, |v| v.authentication);
+        let settings = previous.map_or_else(|| self.settings.clone(), |v| v.settings.clone());
         if let Some(error) = &self.configuration_error {
             return Err(error.clone());
         }
         if let Some(error) = &self.authentication_error {
             return Err(error.clone());
         }
-        if (self.authentication == AuthenticationMethod::Chatgpt) != account_id.is_some()
+        if (authentication == AuthenticationMethod::Chatgpt) != account_id.is_some()
             || account_id.is_some_and(|id| id.is_nil())
         {
             return Err("Choose a connected ChatGPT account with plan usage enabled before preparing this request.".into());
         }
         self.client.as_ref().map_err(Clone::clone)?;
-        if self
-            .latest(project)?
-            .is_some_and(|view| view.status.active())
-        {
+        if self.latest(project)?.is_some_and(|view| {
+            view.status.active() && previous.is_none_or(|old| old.job_id != view.job_id)
+        }) {
             return Err("Apply or discard the existing generation review, or cancel its running request, before starting another.".into());
         }
-        let capabilities = self.provider.capabilities_for(
-            self.authentication,
-            &self.settings,
+        let capabilities = provider.capabilities_for(
+            authentication,
+            &settings,
             self.selected_image_cache_id(account_id)
                 .as_ref()
                 .and_then(|id| self.image_access.get(id)),
         );
         let history = self.request_history(project)?;
-        let requirements = if let Some(draft) = &draft {
+        let retry_targets: Vec<_> = previous
+            .map(|view| view.requirements.target_ids())
+            .transpose()
+            .map_err(message)?
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect();
+        let requirements = if previous.is_some() {
+            project.prepare_targeted_requirements(capabilities, &retry_targets)
+        } else if let Some(draft) = &draft {
             project.prepare_targeted_requirements(capabilities, &draft.region_ids)
         } else {
             project.prepare_requirements_with_capabilities(capabilities)
@@ -1221,17 +1280,11 @@ impl GenerationService {
             )
         })
         .map_err(message)?;
-        let requirements_targets: BTreeSet<_> = project
-            .pages
-            .iter()
-            .flat_map(|page| page.regions.iter())
-            .filter(|region| {
-                !region.prompt.trim().is_empty()
-                    && draft.as_ref().map_or(!region.completed, |draft| {
-                        draft.region_ids.contains(&region.id)
-                    })
-            })
-            .map(|region| region.id)
+        let requirements_targets: BTreeSet<_> = requirements
+            .target_ids()
+            .map_err(message)?
+            .into_iter()
+            .map(|(_, region_id)| region_id)
             .collect();
         let draft_feedback: Vec<_> = draft
             .as_ref()
@@ -1251,18 +1304,30 @@ impl GenerationService {
                     })
                     .collect()
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| {
+                previous.map_or_else(Vec::new, |view| {
+                    view.draft_feedback
+                        .iter()
+                        .filter(|event| {
+                            event
+                                .region_id
+                                .is_some_and(|id| requirements_targets.contains(&id))
+                        })
+                        .cloned()
+                        .collect()
+                })
+            });
         let repair = requirements
             .validation_repair(&draft_feedback)
             .map_err(message)?;
         let estimate = self
-            .adapter(self.provider)?
+            .adapter(provider)?
             .estimate(
-                self.authentication,
+                authentication,
                 repair.as_ref().unwrap_or(&requirements),
                 project.generation_mode,
                 &desegni_core::result_schema(&requirements),
-                &self.settings,
+                &settings,
             )
             .map_err(message)?;
         let record = JobRecord {
@@ -1272,6 +1337,22 @@ impl GenerationService {
                 job_id: requirements.job_id,
                 project_id: project.id,
                 base_revision: project.revision,
+                source_fingerprints: project
+                    .pages
+                    .iter()
+                    .filter(|page| {
+                        requirements
+                            .dependencies
+                            .contains_key(&format!("source:{}", page.id))
+                    })
+                    .map(|page| {
+                        (
+                            page.id,
+                            desegni_core::source_fingerprints(page.content.as_ref()),
+                        )
+                    })
+                    .collect(),
+                applied_source_fingerprints: BTreeMap::new(),
                 requirements,
                 context: None,
                 draft_feedback,
@@ -1300,16 +1381,16 @@ impl GenerationService {
                     })
                     .collect(),
                 generation_mode: project.generation_mode,
-                provider: self.provider,
-                settings: self.settings.clone(),
-                authentication: self.authentication,
+                provider,
+                settings,
+                authentication,
                 chatgpt_account_id: account_id,
                 failure_kind: None,
                 provider_error: None,
                 status: JobStatus::Prepared,
                 estimate_usd: estimate.estimate_usd,
                 received_bytes: 0,
-                message: if self.authentication == AuthenticationMethod::Chatgpt {
+                message: if authentication == AuthenticationMethod::Chatgpt {
                     "Sending uses this ChatGPT account's plan allowance or credits.".into()
                 } else {
                     "Ready to send.".into()
@@ -1351,6 +1432,19 @@ impl GenerationService {
             || (retry && !record.view.status.retryable())
         {
             return Err("This generation cannot be submitted from its current state.".into());
+        }
+        // A user submission after an edit gets a new immutable packet. Keep the old
+        // job and its attempts intact; only unchanged retries reuse the frozen job.
+        if record.view.base_revision != project.revision
+            || record.view.requirements.validate_current(project).is_err()
+        {
+            let fresh = self.prepare_requests(
+                project,
+                record.view.chatgpt_account_id,
+                None,
+                Some(&record.view),
+            )?;
+            return self.begin(project, fresh.job_id, false);
         }
         record
             .view
@@ -2497,6 +2591,7 @@ async fn submit(
         } else {
             begin()?
         };
+    let job_id = view.job_id;
     let request = view.clone();
     tauri::async_runtime::spawn(async move {
         let ordinal = request.attempts.len();
@@ -2956,6 +3051,18 @@ pub fn apply_generation(
     for draft in &mut record.view.drafts {
         draft.rebase_after_apply(workspace.project()?);
     }
+    record.view.applied_source_fingerprints = workspace
+        .project()?
+        .pages
+        .iter()
+        .filter(|page| record.view.source_fingerprints.contains_key(&page.id))
+        .map(|page| {
+            (
+                page.id,
+                desegni_core::source_fingerprints(page.content.as_ref()),
+            )
+        })
+        .collect();
     record.view.status = JobStatus::Applied;
     let total = record
         .view
@@ -3259,6 +3366,13 @@ pub fn generation_draft(
             }
             drop(file);
             workspace.apply_draft(&view.requirements, &draft)?;
+            if let Some(page_id) = draft.page_id {
+                let page = workspace.project()?.page(page_id).map_err(message)?;
+                view.applied_source_fingerprints.insert(
+                    page_id,
+                    desegni_core::source_fingerprints(page.content.as_ref()),
+                );
+            }
             for retained in &mut view.drafts {
                 if retained.page_id == draft.page_id && retained.code == draft.code {
                     retained.applied = true;

@@ -90,7 +90,8 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
       current.jobId = prepared.jobId;
       signal.throwIfAborted();
       automatic.current = prepared.jobId;
-      await perform('start_generation', 'Starting generation…', { jobId: prepared.jobId }, signal);
+      const started = await perform('start_generation', 'Starting generation…', { jobId: prepared.jobId }, signal);
+      current.jobId = started.jobId; automatic.current = started.jobId;
     } finally {
       finish();
       if (!signal.aborted && flow.current === current) setRunning(false);
@@ -121,7 +122,11 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     let finish!: () => void;
     const current = { controller: new AbortController(), jobId: job!.jobId, done: new Promise<void>(resolve => { finish = resolve; }) };
     flow.current = current; setStopped(false); automatic.current = current.jobId;
-    try { return await perform(command, label, { jobId: current.jobId }, current.controller.signal); }
+    try {
+      const submitted = await perform(command, label, { jobId: current.jobId }, current.controller.signal);
+      current.jobId = submitted.jobId; automatic.current = submitted.jobId;
+      return submitted;
+    }
     finally { finish(); }
   }
   const args = () => ({ jobId: job!.jobId });
