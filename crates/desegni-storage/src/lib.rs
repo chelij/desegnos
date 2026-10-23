@@ -108,6 +108,7 @@ pub struct ProjectFile {
     _lock: Arc<File>,
     stamp: Mutex<Option<FileStamp>>,
     site_warnings: Mutex<Vec<String>>,
+    outside_edits: Mutex<project_folder::OutsideEdits>,
     managed: AtomicBool,
 }
 
@@ -169,6 +170,7 @@ impl ProjectFile {
             _lock: Arc::new(lock),
             stamp: Mutex::new(None),
             site_warnings: Mutex::new(vec![]),
+            outside_edits: Mutex::new(Default::default()),
             managed: AtomicBool::new(managed),
         })
     }
@@ -227,12 +229,25 @@ impl ProjectFile {
     }
 
     fn sync_site(&self, project: &Project) {
-        let warnings = match project_folder::sync_project_site(
+        let _ = self.sync_site_mode(project, false);
+    }
+
+    pub fn overwrite_site(&self, project: &Project) -> Result<()> {
+        self.sync_site_mode(project, true)
+    }
+
+    fn sync_site_mode(&self, project: &Project, overwrite: bool) -> Result<()> {
+        let result = project_folder::sync_project_site(
             &self.path,
             project,
             self.is_project_folder(),
-        ) {
-            Ok(warnings) => warnings,
+            overwrite,
+        );
+        let warnings = match &result {
+            Ok(outside) => {
+                *self.outside_edits.lock().map_err(io)? = outside.clone();
+                vec![]
+            }
             Err(error) => vec![format!("Website files could not be synced: {error}")],
         };
         if project_folder::is_project_folder(&self.path) {
@@ -241,6 +256,20 @@ impl ProjectFile {
         if let Ok(mut saved) = self.site_warnings.lock() {
             *saved = warnings;
         }
+        result.map(|_| ())
+    }
+
+    pub fn outside_edits(&self) -> project_folder::OutsideEdits {
+        self.outside_edits
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn mark_imported_site_owned(&self, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+        project_folder::mark_imported_site_owned(&self.path, files)?;
+        *self.outside_edits.lock().map_err(io)? = Default::default();
+        Ok(())
     }
 
     pub fn site_warnings(&self) -> Vec<String> {
@@ -402,6 +431,7 @@ impl ProjectFile {
             _lock: Arc::clone(&self._lock),
             stamp: Mutex::new(None),
             site_warnings: Mutex::new(vec![]),
+            outside_edits: Mutex::new(Default::default()),
             managed: AtomicBool::new(project_folder::is_project_folder(&self.path)),
         };
         let document = file.load_document()?;

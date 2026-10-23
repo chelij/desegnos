@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-project-site-import-source"
+description = "Enables the project_site_import_source command without any pre-configured scope."
+commands.allow = ["project_site_import_source"]
+
+[[permission]]
+identifier = "deny-project-site-import-source"
+description = "Denies the project_site_import_source command without any pre-configured scope."
+commands.deny = ["project_site_import_source"]

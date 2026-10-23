@@ -15,7 +15,7 @@ try {
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--types', 'vite/client', '--jsx', 'react-jsx', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/ImportContext.tsx'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const code = (await readFile(join(temporary, 'ImportContext.js'), 'utf8')).replace(/^import .*;$/gm, '').replace(/^export /gm, '');
-  function setup(connected = true, previous = false) {
+  function setup(connected = true, previous = false, ownSite = false) {
     let cursor = 0;
     const state = [], dependencies = [], effects = [], calls = [], kept = [];
     const useState = initial => { const index = cursor++; if (!(index in state)) state[index] = initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; };
@@ -35,7 +35,7 @@ try {
     const Component = new Function(...Object.keys(bindings), `${code}\nreturn ImportContext;`)(...Object.values(bindings));
     const render = () => {
       cursor = 0;
-      const tree = Component({ busy: false, settings: { credential: { configured: connected }, settings: {}, providers: [], chatgpt: { accounts: [] } }, openSettings() {}, importInto: async (...args) => kept.push(args), close() { throw Error('Merged panel must stay open'); }, pages: { homePageId: 'home', revision: 1, beforePick() {}, apply() {} } });
+      const tree = Component({ initialSource: ownSite ? source : null, busy: false, settings: { credential: { configured: connected }, settings: {}, providers: [], chatgpt: { accounts: [] } }, openSettings() {}, importInto: async (...args) => kept.push(args), close() { throw Error('Merged panel must stay open'); }, pages: { homePageId: 'home', revision: 1, beforePick() {}, apply() {} } });
       effects.splice(0).forEach(effect => effect());
       return tree;
     };
@@ -68,6 +68,17 @@ try {
     const tree = render();
     assert.ok(button(tree, 'Keep brand choices'));
     assert.equal(all(tree).find(node => node.type === 'page-review'), undefined);
+  });
+  await test('own website source opens Pages review immediately without a picker or AI', async () => {
+    const { render, calls } = setup(false, false, true);
+    const tree = render(); await settle();
+    assert.equal(all(tree).find(node => node.type === 'page-review').props.sourceId, 'shared');
+    assert.equal(calls.filter(call => /pick|fetch/.test(call.command)).length, 0);
+    const app = await readFile(join(root, 'src/App.tsx'), 'utf8');
+    assert.match(app, /native<import\('\.\/types'\)\.IdentitySource>\('project_site_import_source'\)/);
+    assert.match(app, /initialSource=\{importSource\}/);
+    assert.match(app, /'overwrite_project_site', \{ projectId: workspace.project.id, revision: workspace.project.revision \}/);
+    assert.match(app, /Saved\. Outside edits were moved to \.desegnos-outside-edits\./);
   });
   await test('menu has one import entry and preserves project-folder and start-brand routes', async () => {
     const app = await readFile(join(root, 'src/App.tsx'), 'utf8');

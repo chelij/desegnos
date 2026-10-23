@@ -11,6 +11,8 @@ fn main() {
             "edit_website_folder",
             "prepare_website_import",
             "apply_website_import",
+            "project_site_import_source",
+            "overwrite_project_site",
             "website_brand_source",
             "fetch_identity_source",
             "prepare_identity_selection",

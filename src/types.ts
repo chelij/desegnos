@@ -50,7 +50,7 @@ export type WebsiteExport = { path: string; indexPath: string; pageCount: number
 export type HistoryView = { sessionId: string; start: number; position: number; end: number; version: number };
 export type OpenProjectSummary = { id: string; name: string; dirty: boolean; active: boolean; pages: { id: string; name: string }[] };
 export type WorkspaceView = { openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
-  siteWarnings?: string[]; projectFolder?: boolean;
+  siteWarnings?: string[]; outsideEdits?: OutsideEdits; projectFolder?: boolean;
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null; migrationNotice: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;
   regionCount: number; pageCount: number; dependencies: Record<string, string> };
@@ -136,3 +136,5 @@ export type GenerationHistory = { jobs: { jobId: string; createdAt: string | nul
 export type WebsiteFolderSelection = { id: string; name: string; website: { path: string; framework: string | null; output: string | null; fresh: boolean; pages: string[]; buildCommand: string[] | null; installCommand: string | null; buildUnavailable: string | null } | null };
 
 export type ArchiveReport = { name: string; added: number; skipped: { name: string; reason: string }[] };
+
+export type OutsideEdits = { changedPaths: string[]; keptStalePaths: string[]; backedUp: boolean };

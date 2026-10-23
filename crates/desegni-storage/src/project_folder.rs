@@ -3,7 +3,7 @@ use crate::{ProjectFile, io, website_export};
 use desegni_core::{Error, Project, Result, SiteContent, compile_website, digest};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::Read,
     path::{Component, Path, PathBuf},
@@ -12,6 +12,14 @@ use uuid::Uuid;
 
 const MANIFEST: &str = ".desegnos-site.json";
 const MAX_SITE_BYTES: u64 = 128 * 1024 * 1024;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OutsideEdits {
+    pub changed_paths: Vec<String>,
+    pub kept_stale_paths: Vec<String>,
+    pub backed_up: bool,
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -250,14 +258,15 @@ pub(crate) fn sync_project_site(
     path: &Path,
     project: &Project,
     managed: bool,
-) -> Result<Vec<String>> {
+    overwrite: bool,
+) -> Result<OutsideEdits> {
     let root = path
         .parent()
         .ok_or_else(|| Error("Missing project folder.".into()))?;
     // Legacy standalone archives deliberately keep saving in place without claiming their parent.
     match fs::symlink_metadata(root.join(MANIFEST)) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound && !managed => {
-            return Ok(vec![]);
+            return Ok(OutsideEdits::default());
         }
         Err(error) => return Err(io(error)),
         Ok(_) => {}
@@ -273,17 +282,7 @@ pub(crate) fn sync_project_site(
         )));
     }
     website_export::parent_directory(root)?;
-    let lock_path = website_export::checked_path(root, ".desegnos-site.lock")?;
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(lock_path)
-        .map_err(io)?;
-    lock.try_lock().map_err(|_| {
-        Error("Another window is updating the website. Save again to retry.".into())
-    })?;
+    let _lock = site_lock(root)?;
     // Reload after taking the shared folder lock.
     manifest = read_manifest(root)?;
     // An explicit archive replacement can change its identity. Its tracked website paths
@@ -337,17 +336,22 @@ pub(crate) fn sync_project_site(
         // Retain earlier pending hashes until each file is checked, for crash recovery.
         let previous_pending = manifest.pending.clone();
         let mut allowed = BTreeMap::new();
-        let mut warnings = Vec::new();
+        let mut outside = OutsideEdits::default();
+        let mut backup = None;
         for (relative, hash) in &desired {
             let actual = file_hash(root, relative)?;
             let owned = actual.is_none()
                 || actual.as_ref() == manifest.files.get(relative)
                 || actual.as_ref() == previous_pending.get(relative)
                 || actual.as_ref() == manifest.originals.get(relative);
-            if owned {
+            if !owned && overwrite {
+                backup_outside_file(root, relative, &mut backup)?;
+                outside.backed_up = true;
+            }
+            if owned || overwrite {
                 allowed.insert(relative.clone(), hash.clone());
             } else {
-                warnings.push(format!("{relative} was kept because it was added or edited outside Desegnos. Move it aside, then save again to sync this page."));
+                outside.changed_paths.push(relative.clone());
             }
         }
         manifest.pending.extend(allowed.clone());
@@ -377,7 +381,7 @@ pub(crate) fn sync_project_site(
             crate::sync_parent(&destination)?;
             manifest.files.insert(relative.clone(), hash.clone());
         }
-        let stale: Vec<_> = manifest
+        let stale: BTreeSet<_> = manifest
             .files
             .keys()
             .chain(previous_pending.keys())
@@ -393,7 +397,20 @@ pub(crate) fn sync_project_site(
                 fs::remove_file(website_export::checked_path(root, &relative)?).map_err(io)?;
                 crate::sync_parent(&root.join(&relative))?;
             } else if actual.is_some() {
-                warnings.push(format!("{relative} is no longer part of this website, but was kept because it was edited outside Desegnos."));
+                if overwrite {
+                    backup_outside_file(root, &relative, &mut backup)?;
+                    outside.backed_up = true;
+                } else {
+                    outside.kept_stale_paths.push(relative.clone());
+                    // Keep the old ownership hash so later saves can still find this stale file.
+                    if let Some(hash) = previous_pending.get(&relative) {
+                        manifest
+                            .files
+                            .entry(relative.clone())
+                            .or_insert_with(|| hash.clone());
+                    }
+                    continue;
+                }
             }
             manifest.files.remove(&relative);
         }
@@ -402,10 +419,77 @@ pub(crate) fn sync_project_site(
         // original file later is an external edit, even if its bytes match that backup.
         manifest.originals.clear();
         write_manifest(root, &manifest)?;
-        Ok(warnings)
+        Ok(outside)
     })();
     let _ = fs::remove_dir_all(stage);
     result
+}
+
+fn site_lock(root: &Path) -> Result<File> {
+    let lock_path = website_export::checked_path(root, ".desegnos-site.lock")?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)
+        .map_err(io)?;
+    lock.try_lock().map_err(|_| {
+        Error("Another window is updating the website. Save again to retry.".into())
+    })?;
+    Ok(lock)
+}
+
+fn backup_outside_file(root: &Path, relative: &str, backup: &mut Option<PathBuf>) -> Result<()> {
+    if backup.is_none() {
+        let base = website_export::checked_path(root, ".desegnos-outside-edits")?;
+        fs::create_dir_all(&base).map_err(io)?;
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(io)?
+            .as_millis();
+        let folder = base.join(format!("{timestamp}-{}", Uuid::new_v4()));
+        fs::create_dir(&folder).map_err(io)?;
+        crate::sync_parent(&folder)?;
+        *backup = Some(folder);
+    }
+    let destination = website_export::checked_path(backup.as_ref().unwrap(), relative)?;
+    fs::create_dir_all(destination.parent().unwrap()).map_err(io)?;
+    let source = website_export::checked_path(root, relative)?;
+    // Move without replacing any existing backup, then flush both directory entries.
+    File::open(&source).map_err(io)?.sync_all().map_err(io)?;
+    crate::commit_new_file(&source, &destination)?;
+    crate::sync_parent(&destination)?;
+    crate::sync_parent(&source)
+}
+
+/// Adopt only the exact bytes captured by a successful import. Later edits stay foreign.
+pub(crate) fn mark_imported_site_owned(
+    path: &Path,
+    files: &BTreeMap<String, Vec<u8>>,
+) -> Result<()> {
+    let root = path
+        .parent()
+        .ok_or_else(|| Error("Missing project folder.".into()))?;
+    let _lock = site_lock(root)?;
+    let mut manifest = read_manifest(root)?;
+    if path
+        .file_name()
+        .is_none_or(|name| name != manifest.project_file.as_str())
+    {
+        return Err(Error("This website belongs to another project.".into()));
+    }
+    for (relative, bytes) in files {
+        if !valid_site_path(relative) {
+            continue;
+        }
+        let hash = digest(bytes);
+        if file_hash(root, relative)?.as_ref() == Some(&hash) {
+            manifest.files.insert(relative.clone(), hash);
+            manifest.pending.remove(relative);
+        }
+    }
+    write_manifest(root, &manifest)
 }
 
 /// Select only immediate archives; newest first, with deterministic tie breaking.

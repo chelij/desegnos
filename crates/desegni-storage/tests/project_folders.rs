@@ -188,9 +188,9 @@ fn foreign_collisions_and_external_edits_warn_without_losing_the_project_save() 
         "Original user file"
     );
     assert!(
-        file.site_warnings()
-            .iter()
-            .any(|s| s.contains("index.html"))
+        file.outside_edits()
+            .changed_paths
+            .contains(&"index.html".to_owned())
     );
     fs::remove_file(root.join("index.html")).unwrap();
     file.save(&project).unwrap();
@@ -203,9 +203,9 @@ fn foreign_collisions_and_external_edits_warn_without_losing_the_project_save() 
     );
     assert_eq!(load_project(file.path()).unwrap(), project);
     assert!(
-        file.site_warnings()
-            .iter()
-            .any(|s| s.contains("index.html"))
+        file.outside_edits()
+            .changed_paths
+            .contains(&"index.html".to_owned())
     );
 }
 
@@ -333,9 +333,9 @@ fn import_plain_folder_preserves_original_bytes_pages_styles_scripts_and_picture
         b"Owner edited this file"
     );
     assert!(
-        file.site_warnings()
-            .iter()
-            .any(|s| s.contains("index.html"))
+        file.outside_edits()
+            .changed_paths
+            .contains(&"index.html".to_owned())
     );
 }
 
@@ -491,4 +491,143 @@ fn symlink_site_paths_cannot_overwrite_or_delete_files_outside_the_project() {
             .iter()
             .any(|s| s.contains("symbolic link"))
     );
+}
+
+#[test]
+fn outside_edits_are_structured_and_stale_paths_survive_repeated_saves() {
+    let temp = Temp::new();
+    let mut project = project();
+    let file = managed(&temp, &project);
+    file.save(&project).unwrap();
+    let root = file.path().parent().unwrap();
+    fs::write(root.join("index.html"), b"outside home").unwrap();
+    fs::write(root.join("styles.css"), b"outside styles").unwrap();
+    project.pages[0].content.as_mut().unwrap().css.clear();
+    for _ in 0..2 {
+        file.save(&project).unwrap();
+        let outside = file.outside_edits();
+        assert_eq!(outside.changed_paths, ["index.html"]);
+        assert_eq!(outside.kept_stale_paths, ["styles.css"]);
+        assert!(!outside.backed_up);
+        assert!(file.site_warnings().is_empty());
+        assert_eq!(fs::read(root.join("index.html")).unwrap(), b"outside home");
+        assert_eq!(
+            fs::read(root.join("styles.css")).unwrap(),
+            b"outside styles"
+        );
+    }
+}
+
+#[test]
+fn overwrite_backs_up_exact_bytes_syncs_and_updates_manifest() {
+    let temp = Temp::new();
+    let mut project = project()
+        .apply(
+            0,
+            Command::AddPage {
+                name: "About".into(),
+                path: "/about".into(),
+            },
+        )
+        .unwrap();
+    project.pages[1].content = project.pages[0].content.clone();
+    let file = managed(&temp, &project);
+    file.save(&project).unwrap();
+    let root = file.path().parent().unwrap();
+    let outside = BTreeMap::from([
+        ("index.html", b"outside home\0\xff".to_vec()),
+        ("styles.css", b"outside styles".to_vec()),
+        ("about/index.html", b"nested outside page".to_vec()),
+    ]);
+    for (path, bytes) in &outside {
+        fs::write(root.join(path), bytes).unwrap();
+    }
+    project.pages[0].content.as_mut().unwrap().css.clear();
+    project.pages.pop();
+    file.save(&project).unwrap();
+    file.overwrite_site(&project).unwrap();
+    assert!(file.outside_edits().backed_up);
+    let backups: Vec<_> = fs::read_dir(root.join(".desegnos-outside-edits"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .collect();
+    assert_eq!(backups.len(), 1);
+    for (path, bytes) in &outside {
+        assert_eq!(fs::read(backups[0].join(path)).unwrap(), *bytes);
+    }
+    assert!(!root.join("styles.css").exists());
+    assert!(!root.join("about/index.html").exists());
+    let desired = compile_website(&project).unwrap().files;
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(".desegnos-site.json")).unwrap()).unwrap();
+    assert_eq!(manifest["files"].as_object().unwrap().len(), desired.len());
+    for (path, bytes) in desired {
+        assert_eq!(fs::read(root.join(&path)).unwrap(), bytes);
+        assert_eq!(manifest["files"][&path], desegni_core::digest(&bytes));
+    }
+    file.save(&project).unwrap();
+    assert_eq!(file.outside_edits(), Default::default());
+    assert_eq!(
+        fs::read(backups[0].join("index.html")).unwrap(),
+        outside["index.html"]
+    );
+}
+
+#[test]
+fn imported_snapshot_marks_current_bytes_owned_but_not_later_edits() {
+    let temp = Temp::new();
+    let project = project();
+    let file = managed(&temp, &project);
+    file.save(&project).unwrap();
+    let root = file.path().parent().unwrap();
+    let imported = BTreeMap::from([
+        ("index.html".into(), b"<h1>Imported home</h1>".to_vec()),
+        ("nested/new.html".into(), b"<h1>New</h1>".to_vec()),
+    ]);
+    fs::create_dir(root.join("nested")).unwrap();
+    for (path, bytes) in &imported {
+        fs::write(root.join(path), bytes).unwrap();
+    }
+    file.save(&project).unwrap();
+    file.mark_imported_site_owned(&imported).unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join(".desegnos-site.json")).unwrap()).unwrap();
+    for (path, bytes) in &imported {
+        assert_eq!(manifest["files"][path], desegni_core::digest(bytes));
+    }
+    file.save(&project).unwrap();
+    assert!(file.outside_edits().changed_paths.is_empty());
+    assert!(file.outside_edits().kept_stale_paths.is_empty());
+    assert!(!root.join("nested/new.html").exists());
+    // A disk change after snapshot capture must never acquire import ownership.
+    fs::write(root.join("index.html"), b"Later outside edit").unwrap();
+    file.mark_imported_site_owned(&imported).unwrap();
+    file.save(&project).unwrap();
+    assert_eq!(file.outside_edits().changed_paths, ["index.html"]);
+    assert_eq!(
+        fs::read(root.join("index.html")).unwrap(),
+        b"Later outside edit"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn unavailable_backup_preserves_outside_bytes_and_can_be_retried() {
+    use std::os::unix::fs::symlink;
+    let temp = Temp::new();
+    let project = project();
+    let file = managed(&temp, &project);
+    file.save(&project).unwrap();
+    let root = file.path().parent().unwrap();
+    fs::write(root.join("index.html"), b"Outside edits").unwrap();
+    let foreign = temp.0.join("foreign");
+    fs::create_dir(&foreign).unwrap();
+    symlink(&foreign, root.join(".desegnos-outside-edits")).unwrap();
+    assert!(file.overwrite_site(&project).is_err());
+    assert_eq!(fs::read(root.join("index.html")).unwrap(), b"Outside edits");
+    assert_eq!(fs::read_dir(&foreign).unwrap().count(), 0);
+    fs::remove_file(root.join(".desegnos-outside-edits")).unwrap();
+    file.overwrite_site(&project).unwrap();
+    file.save(&project).unwrap();
+    assert_eq!(file.outside_edits(), Default::default());
 }

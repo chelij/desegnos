@@ -109,6 +109,7 @@ pub struct WorkspaceView {
     open_projects: Vec<OpenProjectSummary>,
     any_dirty: bool,
     site_warnings: Vec<String>,
+    outside_edits: desegni_storage::project_folder::OutsideEdits,
     project_folder: bool,
 }
 
@@ -554,6 +555,11 @@ impl Workspace {
                 || self.session.as_ref().is_some_and(|s| {
                     Some(s.project().revision) != self.saved_revision || self.needs_migration_save
                 }),
+            outside_edits: self
+                .file
+                .as_ref()
+                .map(ProjectFile::outside_edits)
+                .unwrap_or_default(),
             site_warnings: self
                 .file
                 .as_ref()
@@ -2424,6 +2430,74 @@ mod tests {
     }
 
     #[test]
+    fn own_site_import_adopts_snapshot_after_durable_page_review_but_other_sources_do_not() {
+        for own_site in [true, false] {
+            let temp = Temp::new();
+            let mut workspace = Workspace::from_directory(temp.0.join("profile")).unwrap();
+            let project = project("Import outside edits");
+            let path =
+                desegni_storage::create_project_folder(&temp.0, &project.name, project.id).unwrap();
+            let file = ProjectFile::acquire(&path).unwrap();
+            file.save(&project).unwrap();
+            workspace.start(project, Some(file), Some(0)).unwrap();
+            let root = path.parent().unwrap();
+            let files = std::collections::BTreeMap::from([
+                ("index.html".into(), b"<h1>Outside home</h1>".to_vec()),
+                (
+                    "new/index.html".into(),
+                    b"<h1>Outside addition</h1>".to_vec(),
+                ),
+            ]);
+            fs::create_dir(root.join("new")).unwrap();
+            for (path, bytes) in &files {
+                fs::write(root.join(path), bytes).unwrap();
+            }
+            let source_root = if own_site {
+                root.canonicalize().unwrap()
+            } else {
+                temp.0.clone()
+            };
+            let review = workspace
+                .prepare_site_import(files.clone(), Some(source_root))
+                .unwrap()
+                .unwrap();
+            assert!(review.review.updated.iter().any(|p| p == "/"));
+            assert!(review.review.added.iter().any(|p| p == "/new"));
+            workspace.apply_site_import(review.token, &[]).unwrap();
+            assert_eq!(workspace.project().unwrap().pages.len(), 2);
+            assert!(workspace.project().unwrap().pages.iter().any(|p| {
+                p.content
+                    .as_ref()
+                    .is_some_and(|c| c.html.contains("Outside home"))
+            }));
+            let manifest: serde_json::Value =
+                serde_json::from_slice(&fs::read(root.join(".desegnos-site.json")).unwrap())
+                    .unwrap();
+            assert_eq!(
+                manifest["files"]["index.html"] == desegni_core::digest(&files["index.html"]),
+                own_site
+            );
+            let project = workspace.project().unwrap().clone();
+            workspace
+                .save_snapshot_checked(&project, None, false)
+                .unwrap();
+            let outside = workspace.view().outside_edits;
+            assert_eq!(outside.changed_paths.is_empty(), own_site);
+            if own_site {
+                assert_eq!(
+                    fs::read(root.join("index.html")).unwrap(),
+                    desegni_core::compile_website(&project).unwrap().files["index.html"]
+                );
+            } else {
+                assert_eq!(
+                    fs::read(root.join("index.html")).unwrap(),
+                    files["index.html"]
+                );
+            }
+        }
+    }
+
+    #[test]
     fn successful_save_clears_recovery_offer_and_preserves_actual_archive() {
         let temp = Temp::new();
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
@@ -3633,6 +3707,7 @@ struct WebsiteImportSnapshot {
     project_id: Uuid,
     revision: u64,
     files: std::collections::BTreeMap<String, Vec<u8>>,
+    own_site_path: Option<PathBuf>,
 }
 
 #[derive(Serialize)]
@@ -3643,33 +3718,115 @@ pub struct WebsiteImportSelection {
 }
 
 #[tauri::command]
+pub fn project_site_import_source(
+    state: WorkspaceState<'_>,
+    identity: State<'_, Mutex<crate::identity::IdentityService>>,
+) -> NativeResult<crate::identity::IdentitySourceManifest> {
+    let state = state.lock().map_err(message)?;
+    let file = state
+        .file
+        .as_ref()
+        .filter(|f| f.is_project_folder())
+        .ok_or("Save in a project folder first.")?;
+    let root = file
+        .path()
+        .parent()
+        .ok_or("Missing project folder.")?
+        .canonicalize()
+        .map_err(message)?;
+    let files = desegni_storage::project_folder::read_website_files(&root)
+        .map_err(message)?
+        .files;
+    identity
+        .lock()
+        .map_err(message)?
+        .retain_project_site(&state.project()?.name, root, files)
+}
+
+#[tauri::command]
+pub fn overwrite_project_site(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    revision: u64,
+) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    let project = state.project()?.clone();
+    if project.id != project_id || project.revision != revision {
+        return Err("The project changed. Save again.".into());
+    }
+    let file = state
+        .file
+        .as_ref()
+        .filter(|f| f.is_project_folder())
+        .ok_or("Save in a project folder first.")?;
+    file.save_checked(&project).map_err(message)?;
+    file.overwrite_site(&project).map_err(message)?;
+    state.finish_save(&project, SaveDestination::Current)?;
+    Ok(state.view())
+}
+
+#[tauri::command]
 pub async fn prepare_website_import(
     state: WorkspaceState<'_>,
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
     source_id: Uuid,
 ) -> NativeResult<Option<WebsiteImportSelection>> {
-    let files = identity.lock().map_err(message)?.website_files(source_id)?;
-    if !files.keys().any(|name| {
-        name.to_ascii_lowercase().ends_with(".html") || name.to_ascii_lowercase().ends_with(".htm")
-    }) {
-        return Ok(None);
+    let (files, source_root) = {
+        let identity = identity.lock().map_err(message)?;
+        (
+            identity.website_files(source_id)?,
+            identity.website_root(source_id).cloned(),
+        )
+    };
+    state
+        .lock()
+        .map_err(message)?
+        .prepare_site_import(files, source_root)
+}
+
+impl Workspace {
+    fn prepare_site_import(
+        &mut self,
+        files: std::collections::BTreeMap<String, Vec<u8>>,
+        source_root: Option<PathBuf>,
+    ) -> NativeResult<Option<WebsiteImportSelection>> {
+        if !files.keys().any(|name| {
+            name.to_ascii_lowercase().ends_with(".html")
+                || name.to_ascii_lowercase().ends_with(".htm")
+        }) {
+            return Ok(None);
+        }
+        let project = self
+            .session
+            .as_ref()
+            .ok_or("Open a project first.")?
+            .project();
+        let (project_id, revision) = (project.id, project.revision);
+        let review = project.review_website_import(&files).map_err(message)?;
+        let token = Uuid::new_v4();
+        let own_site_path = self
+            .file
+            .as_ref()
+            .filter(|file| file.is_project_folder())
+            .filter(|file| {
+                source_root.as_ref().is_some_and(|root| {
+                    file.path()
+                        .parent()
+                        .and_then(|p| p.canonicalize().ok())
+                        .as_ref()
+                        == Some(root)
+                })
+            })
+            .map(|file| file.path().to_owned());
+        self.website_import = Some(WebsiteImportSnapshot {
+            token,
+            project_id,
+            revision,
+            files,
+            own_site_path,
+        });
+        Ok(Some(WebsiteImportSelection { token, review }))
     }
-    let mut state = state.lock().map_err(message)?;
-    let project = state
-        .session
-        .as_ref()
-        .ok_or("Open a project first.")?
-        .project();
-    let (project_id, revision) = (project.id, project.revision);
-    let review = project.review_website_import(&files).map_err(message)?;
-    let token = Uuid::new_v4();
-    state.website_import = Some(WebsiteImportSnapshot {
-        token,
-        project_id,
-        revision,
-        files,
-    });
-    Ok(Some(WebsiteImportSelection { token, review }))
 }
 
 #[tauri::command]
@@ -3679,27 +3836,40 @@ pub fn apply_website_import(
     remove: Vec<Uuid>,
 ) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session,
-        journal,
-        website_import,
-        ..
-    } = &mut *state;
-    let snapshot = website_import
-        .as_ref()
-        .filter(|s| s.token == token)
-        .ok_or("Choose the website again.")?;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != snapshot.project_id {
-        return Err("Choose the website again for this project.".into());
+    state.apply_site_import(token, &remove)
+}
+
+impl Workspace {
+    fn apply_site_import(&mut self, token: Uuid, remove: &[Uuid]) -> NativeResult<WorkspaceView> {
+        let Workspace {
+            session,
+            journal,
+            website_import,
+            file,
+            ..
+        } = self;
+        let snapshot = website_import
+            .as_ref()
+            .filter(|s| s.token == token)
+            .ok_or("Choose the website again.")?;
+        let session = session.as_mut().ok_or("Open a project first.")?;
+        if session.project().id != snapshot.project_id {
+            return Err("Choose the website again for this project.".into());
+        }
+        let journal = journal.as_ref().ok_or("Recovery is unavailable.")?;
+        session
+            .import_website(snapshot.revision, &snapshot.files, remove, |p| {
+                journal.append(p)
+            })
+            .map_err(message)?;
+        if let Some(own_path) = &snapshot.own_site_path {
+            if let Some(file) = file.as_ref().filter(|f| f.path() == own_path) {
+                file.mark_imported_site_owned(&snapshot.files)
+                    .map_err(message)?;
+            }
+        }
+        *website_import = None;
+        self.prepared = None;
+        Ok(self.view())
     }
-    let journal = journal.as_ref().ok_or("Recovery is unavailable.")?;
-    session
-        .import_website(snapshot.revision, &snapshot.files, &remove, |p| {
-            journal.append(p)
-        })
-        .map_err(message)?;
-    *website_import = None;
-    state.prepared = None;
-    Ok(state.view())
 }

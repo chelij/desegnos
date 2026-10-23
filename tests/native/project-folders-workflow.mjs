@@ -119,7 +119,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
     await writeFile(index, 'Owner-edited HTML');
     project = (await driver.invoke('edit_project', { revision: project.revision, command: { type: 'set_grid', enabled: false } })).project;
     await driver.button('Save'); const state = await savedState(driver, path);
-    assert.ok(state.siteWarnings.some(s => s.includes('index.html')));
+    assert.ok(state.outsideEdits.changedPaths.includes('index.html'));
     await waitFor(() => driver.execute(() => [...document.querySelectorAll('.notice-warning')].some(node => node.textContent.includes('index.html'))), 'The site warning was not visible');
     await verifyArchive(path, project, await driver.invoke('get_project_notes'));
     assert.equal(await readFile(index, 'utf8'), 'Owner-edited HTML');
@@ -128,7 +128,7 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
     await driver.button('Save');
     await waitFor(() => driver.execute(() => [...document.querySelectorAll('.notice-warning')].some(node => node.textContent.includes('index.html'))), 'A repeated sync failure did not show its warning again');
     await rm(index); await driver.button('Save');
-    await waitFor(async () => (await workspace()).siteWarnings.length === 0, 'Retry did not finish syncing');
+    await waitFor(async () => (await workspace()).outsideEdits.changedPaths.length === 0, 'Retry did not finish syncing');
   });
 
   await step('Save As cancellation is inert and a saved copy gets its own live project folder', async () => {

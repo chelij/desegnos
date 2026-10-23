@@ -34,7 +34,7 @@ function skippedFile(value: string) {
     : reason;
   return `${name}: ${explanation}`;
 }
-type Props = { pages?: { homePageId: string; revision: number; beforePick: () => Promise<void>; apply: (token: string, remove: string[]) => Promise<void> }; initialFolder?: WebsiteFolderSelection | null; editWebsite: (folderId: string) => Promise<void>; busy: boolean; settings: AiSettingsView | null; openSettings: () => void; importInto: (analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) => Promise<void>; close: () => void };
+type Props = { pages?: { homePageId: string; revision: number; beforePick: () => Promise<void>; apply: (token: string, remove: string[]) => Promise<void> }; initialSource?: IdentitySource | null; initialFolder?: WebsiteFolderSelection | null; editWebsite: (folderId: string) => Promise<void>; busy: boolean; settings: AiSettingsView | null; openSettings: () => void; importInto: (analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) => Promise<void>; close: () => void };
 
 function ReviewCard({ name, checked, disabled, toggle, children, className = '', finding, source, linked }: {
   name: string; checked: boolean; disabled: boolean; toggle: () => void; children: ReactNode; className?: string;
@@ -62,14 +62,14 @@ function ReviewGroup({ name, className = '', disabled, choose, children }: { nam
   </section>;
 }
 
-export function ImportContext({ busy, settings, openSettings, importInto, close, initialFolder, editWebsite, pages }: Props) {
+export function ImportContext({ busy, settings, openSettings, importInto, close, initialFolder, initialSource, editWebsite, pages }: Props) {
   const [folder, setFolder] = useState<WebsiteFolderSelection | null>(initialFolder ?? null);
   const [brand, setBrand] = useState(false);
   const editMode = !!folder?.website && !brand;
   async function readBrand(value: WebsiteFolderSelection) {
     await run(async () => { const source = await native<IdentitySource>('website_brand_source', { folderId: value.id }); if (mounted.current) { acceptSource(source); setBrand(true); } });
   }
-  const [source, setSource] = useState<IdentitySource | null>(null);
+  const [source, setSource] = useState<IdentitySource | null>(initialSource ?? null);
   const [previousBrand, setPreviousBrand] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const [automatic, setAutomatic] = useState(true);

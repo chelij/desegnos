@@ -5,7 +5,7 @@
   "permissions": [
     "allow-get-project-location", "allow-pick-project-location", "allow-set-project-location", "allow-move-into-project-folder",
     "allow-unpack-request-zip", "allow-export-website", "allow-open-export-folder",
-    "allow-pick-website-folder", "allow-website-build", "allow-edit-website-folder", "allow-prepare-website-import", "allow-apply-website-import", "allow-website-brand-source",
+    "allow-pick-website-folder", "allow-website-build", "allow-edit-website-folder", "allow-prepare-website-import", "allow-apply-website-import", "allow-project-site-import-source", "allow-overwrite-project-site", "allow-website-brand-source",
     "allow-pick-identity-source", "allow-fetch-identity-source", "allow-prepare-identity-selection", "allow-close-project", "allow-switch-project", "allow-import-context", "allow-analyze-identity", "allow-get-identity-analysis", "allow-cancel-identity-analysis",
     "core:default", "core:window:allow-destroy", "allow-get-workspace", "allow-get-recent-projects", "allow-forget-recent-project", "allow-open-recent-project", "allow-create-project", "allow-edit-project",
     "allow-inspect-element", "allow-edit-element", "allow-undo-element", "allow-edit-page-source", "allow-get-page-source-map", "allow-open-found-source", "allow-copy-layer", "allow-cut-layer", "allow-paste-layer", "allow-refresh-element-bounds", "allow-refresh-element-target-bounds",

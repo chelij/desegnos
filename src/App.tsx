@@ -1,3 +1,4 @@
+import { OutsideEditsNotice } from './OutsideEditsNotice';
 import { needsAiSettings, ProblemBanner, Notice, NoticeProvider, NoticeHost } from './ProblemBanner.js';
 import { summarizeOutsideChanges } from './noticeSummary.js';
 import { userError } from './userErrors.js';
@@ -109,9 +110,10 @@ function Editor() {
   const [showCheck, setShowCheck] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [importSource, setImportSource] = useState<import('./types').IdentitySource | null>(null);
   const [importFolder, setImportFolder] = useState<WebsiteFolderSelection | null>(null);
   const [importAsNew, setImportAsNew] = useState(false);
-  function startBrandImport() { setImportFolder(null); setImportAsNew(true); setShowNew(false); setShowImport(true); }
+  function startBrandImport() { setImportSource(null); setImportFolder(null); setImportAsNew(true); setShowNew(false); setShowImport(true); }
   async function editWebsite(folderId: string) {
     await synchronize(); await settle();
     await queue(async () => {
@@ -290,11 +292,27 @@ function Editor() {
         outcome = await queue(() => native<SaveOutcome>('resolve_save_conflict', { token: conflict.token, choice }));
       }
       if (outcome.status === 'cancelled') return null;
-      accept(outcome.workspace); setDismissedSiteWarnings(''); setNotice('Project saved.'); void refreshRecent().catch(() => {});
+      accept(outcome.workspace); setDismissedSiteWarnings(''); setNotice(outcome.workspace.outsideEdits && (outcome.workspace.outsideEdits.changedPaths.length || outcome.workspace.outsideEdits.keptStalePaths.length) ? '' : 'Project saved.'); void refreshRecent().catch(() => {});
       return outcome.workspace;
     };
     saveFlight.current = operation().finally(() => { saveFlight.current = null; });
     return saveFlight.current;
+  }
+  async function importOutsideChanges() {
+    await synchronize(); await settle();
+    await queue(async () => {
+      const source = await native<import('./types').IdentitySource>('project_site_import_source');
+      setImportSource(source); setImportFolder(null); setImportAsNew(false); setShowImport(true);
+    });
+  }
+  async function overwriteOutsideChanges() {
+    await synchronize(); await settle();
+    await queue(async workspace => {
+      if (!workspace?.project) return;
+      const next = await native<WorkspaceView>('overwrite_project_site', { projectId: workspace.project.id, revision: workspace.project.revision });
+      accept(next); setDismissedSiteWarnings('');
+      setNotice(next.outsideEdits?.backedUp ? 'Saved. Outside edits were moved to .desegnos-outside-edits.' : 'Project saved.');
+    });
   }
   async function replace(label: string, run: Replacement['run']) {
     await synchronize();
@@ -400,7 +418,7 @@ function Editor() {
     await openAlongside(async discard => {
       await queue(async () => {
         const opened = await requestProjectOpen(() => native<WorkspaceView | { website: WebsiteFolderSelection } | null>('open_project', { discard, folder, path: path ?? null, discardRecovery }));
-        if (opened && 'website' in opened) { setImportFolder(opened.website); setImportAsNew(false); setShowNew(false); setShowImport(true); return; }
+        if (opened && 'website' in opened) { setImportSource(null); setImportFolder(opened.website); setImportAsNew(false); setShowNew(false); setShowImport(true); return; }
         if (opened) { accept(opened); setSelected(null); setNotice('Project opened.'); setShowNew(false); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
       });
     });
@@ -895,7 +913,7 @@ function Editor() {
     { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
     { id: 'page-check', label: fixCount ? `Check page (${fixCount})` : 'Check page', disabled: !project?.pages.some(item => item.content), action: () => setShowCheck(true) },
     { id: 'style-guide', label: 'Style guide', disabled: !project, action: () => setShowStyleGuide(true) },
-    { id: 'import', label: 'Import…', disabled: !project, action: () => { setImportFolder(null); setImportAsNew(false); setShowImport(true); } },
+    { id: 'import', label: 'Import…', disabled: !project, action: () => { setImportSource(null); setImportFolder(null); setImportAsNew(false); setShowImport(true); } },
     { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
     { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
@@ -914,7 +932,7 @@ function Editor() {
       {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
         <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
-        {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import…</button>}
+        {project && <button type="button" onClick={() => { setImportSource(null); setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import…</button>}
         {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo} onClick={() => run(() => travel('redo_project'))}>Redo</button>
           <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
         {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live view'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
@@ -988,11 +1006,12 @@ function Editor() {
     </>}
     {showShortcuts && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></WorkspaceSurface>}
     {showNew && <WorkspaceSurface place={project ? 'panel' : 'start'} title="New project" startHeading={false} close={() => setShowNew(false)}><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} /></WorkspaceSurface>}
-    {!!view?.siteWarnings?.length && dismissedSiteWarnings !== `${project?.id}:${view.siteWarnings.join('\n')}` && <Notice variant="warning" title="Project saved" message={[...new Set(view.siteWarnings)].join(' ')} dismiss={() => setDismissedSiteWarnings(`${project?.id}:${view.siteWarnings?.join('\n')}`)} />}
+    {view?.outsideEdits && dismissedSiteWarnings !== `${project?.id}:${JSON.stringify(view.outsideEdits)}` && <OutsideEditsNotice edits={view.outsideEdits} busy={pending > 0} importChanges={() => run(importOutsideChanges)} overwrite={() => run(overwriteOutsideChanges)} dismiss={() => setDismissedSiteWarnings(`${project?.id}:${JSON.stringify(view.outsideEdits)}`)} />}
+    {!!view?.siteWarnings?.length && <Notice variant="warning" message={view.siteWarnings.join(' ')} /> }
     {showProjectLocation && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
     {showRecovery && view && <WorkspaceSurface place={project ? 'panel' : 'start'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
-    {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importAsNew}`} initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} pages={project && !importAsNew ? { homePageId: project.homePageId, revision: project.revision, beforePick: async () => { await synchronize(); await settle(); }, apply: async (token, remove) => {
+    {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importAsNew}:${importSource?.id ?? ''}`} initialSource={importSource} initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} pages={project && !importAsNew ? { homePageId: project.homePageId, revision: project.revision, beforePick: async () => { await synchronize(); await settle(); }, apply: async (token, remove) => {
       await synchronize(); await settle();
       await queue(async () => { accept(await native<WorkspaceView>('apply_website_import', { token, remove })); });
     } } : undefined} /></WorkspaceSurface>}
