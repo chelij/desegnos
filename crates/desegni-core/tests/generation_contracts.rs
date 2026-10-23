@@ -52,6 +52,7 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
         Appearance::Light,
     )
     .unwrap();
+    project.generation_mode = GenerationMode::Strict;
     let home = project.home_page_id;
     project = describe(project, home, "An accessible native counter control.");
     project = describe(project, home, "Explain the counter below its button.");
@@ -396,7 +397,7 @@ fn current_conflicts_keep_other_pages_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 20"));
+    assert!(snapshot.markdown.contains("Requirements format: 21"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -438,7 +439,7 @@ fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid
                 .unwrap()
                 .javascript
                 .push_str("\nconsole.log('changed');"),
-            "mode" => changed.generation_mode = GenerationMode::Strict,
+            "mode" => changed.generation_mode = GenerationMode::Fuzzy,
             "identity" => changed.brief.brand_name = "Changed identity".into(),
             "prompt" => changed.pages[0].regions[0]
                 .prompt
@@ -1389,8 +1390,8 @@ fn direct_local_source_edits_invalidate_an_already_frozen_generation() {
 }
 
 #[test]
-fn selected_element_generation_preserves_surrounding_content_in_both_modes() {
-    for mode in [GenerationMode::Fuzzy, GenerationMode::Strict] {
+fn precise_selected_element_generation_preserves_surrounding_content() {
+    for mode in [GenerationMode::Strict] {
         let (mut project, _, _) = fixture();
         project.generation_mode = mode;
         for page in &mut project.pages {

@@ -283,7 +283,9 @@ impl GenerationCandidate {
                 pages == ready_pages,
                 "Return source for exactly the pages with implemented regions.",
             )?;
-            self.validate_conflicting_regions(snapshot, project)?;
+            if !snapshot.is_flexible() {
+                self.validate_conflicting_regions(snapshot, project)?;
+            }
             let requests = self.image_generation_requests()?;
             if !requests.is_empty() {
                 ensure(

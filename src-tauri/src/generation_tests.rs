@@ -785,6 +785,7 @@ fn omitted_and_invalid_regions_recover_without_applying_unsafe_source() {
         let temp = Temp::new();
         let mut service = temp.service();
         let mut project = project();
+        project.generation_mode = GenerationMode::Strict;
         let first = project.pages[0].regions[0].id;
         let second = project.pages[0].regions[1].id;
         // Map both existing areas so recovery can prove what must stay unchanged.
@@ -1751,7 +1752,7 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, before.revision);
     fresh.requirements.validate_current(&before).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 20);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 21);
     assert_eq!(
         fresh.source_fingerprints.get(&before.pages[0].id),
         Some(&desegni_core::source_fingerprints(
@@ -1816,7 +1817,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_while_begin_submits_current_
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, project.revision);
     fresh.requirements.validate_current(&project).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 20);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 21);
     assert_eq!(
         fresh.source_fingerprints.get(&project.pages[0].id),
         Some(&desegni_core::source_fingerprints(

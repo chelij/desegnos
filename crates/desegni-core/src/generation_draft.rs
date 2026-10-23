@@ -37,6 +37,17 @@ pub fn retain_generation_drafts(
     if text.len() > MAX_GENERATION_BYTES {
         return vec![];
     }
+    if recovered.is_some_and(|candidate| candidate.is_ready())
+        && !events.is_empty()
+        && events.iter().all(|event| {
+            matches!(
+                event.disposition.as_str(),
+                "normalised" | "repaired" | "advisory"
+            )
+        })
+    {
+        return vec![];
+    }
     let value = serde_json::from_str::<serde_json::Value>(text).ok();
     let targets = snapshot.target_ids().unwrap_or_default();
     let mut drafts = vec![];
@@ -324,21 +335,24 @@ impl GenerationDraft {
         let mut normalized = self.clone();
         if let Some(content) = &mut normalized.content {
             validate_page_source(content).map_err(|e| Error(e.to_string()))?;
-            let doc = crate::editing::parse(&content.html)?;
-            let mut seen = std::collections::BTreeSet::new();
-            let mut changed = false;
-            for node in doc.select(&format!("[{ELEMENT_ID_ATTRIBUTE}]")).nodes() {
-                let id = node
-                    .attr(ELEMENT_ID_ATTRIBUTE)
-                    .expect("selected")
-                    .to_string();
-                if !self.base_editor_ids.contains(&id) || !seen.insert(id) {
-                    node.remove_attr(ELEMENT_ID_ATTRIBUTE);
-                    changed = true;
-                }
+            let mut base = project
+                .page(
+                    self.page_id
+                        .ok_or_else(|| Error("The draft has no page.".into()))?,
+                )?
+                .clone();
+            if let Some(content) = &self.base_content {
+                base.content = Some(content.clone());
             }
-            if changed {
-                content.html = crate::editing::body(&doc)?.inner_html().to_string();
+            let repaired = crate::generation_recovery::repair_page_metadata(
+                &content.html,
+                &base,
+                &mut vec![],
+            )?;
+            if repaired != content.html {
+                content.html = crate::editing::body(&crate::editing::parse(&repaired)?)?
+                    .inner_html()
+                    .to_string();
             }
         }
         ensure(

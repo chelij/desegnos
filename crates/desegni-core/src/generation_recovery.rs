@@ -68,9 +68,20 @@ pub fn recover_generation_reply(
     project: &Project,
 ) -> Result<(GenerationCandidate, Vec<ValidationEvent>)> {
     if snapshot.format_version()? < 17 {
-        let candidate = GenerationCandidate::from_reply(text, snapshot, project)?;
+        let mut candidate = GenerationCandidate::from_reply(text, snapshot, project)?;
+        let mut events = vec![];
+        for generated in &mut candidate.pages {
+            generated.content.html = repair_page_metadata(
+                &generated.content.html,
+                project.page(generated.page_id)?,
+                &mut events,
+            )?;
+        }
         candidate.validate(snapshot, project)?;
-        return Ok((candidate, vec![]));
+        if snapshot.is_flexible() {
+            record_outside_changes(&candidate, snapshot, project, &mut events)?;
+        }
+        return Ok((candidate, events));
     }
     ensure(
         text.len() <= MAX_GENERATION_BYTES,
@@ -206,13 +217,18 @@ pub fn recover_generation_reply(
                     continue;
                 };
                 if let Some(html) = generated["content"]["html"].as_str() {
-                    if let Ok(repaired) = repair_mechanical_structure(
-                        html,
-                        page,
-                        &targets,
-                        &value_regions_implemented,
-                        &mut events,
-                    ) {
+                    let repaired = if snapshot.is_flexible() {
+                        repair_page_metadata(html, page, &mut events)
+                    } else {
+                        repair_mechanical_structure(
+                            html,
+                            page,
+                            &targets,
+                            &value_regions_implemented,
+                            &mut events,
+                        )
+                    };
+                    if let Ok(repaired) = repaired {
                         generated["content"]["html"] = repaired.into();
                     }
                 }
@@ -267,78 +283,93 @@ pub fn recover_generation_reply(
     }
     let text = serde_json::to_string(&value).map_err(|e| Error(e.to_string()))?;
     let mut candidate = GenerationCandidate::from_reply(&text, snapshot, project)?;
+    for generated in &mut candidate.pages {
+        generated.content.html = repair_page_metadata(
+            &generated.content.html,
+            project.page(generated.page_id)?,
+            &mut events,
+        )?;
+    }
     candidate.validate_identity(snapshot)?;
     // Filter shared code even when HTML already validates. A model cannot authorize a
     // global rule by returning all requested regions as implemented.
     let original_candidate = candidate.clone();
-    for (id, reason) in shared_dependencies(&candidate, snapshot, project)? {
-        if let Some(region) = candidate
-            .regions
-            .iter_mut()
-            .find(|r| r.region_id == id && r.status == RegionStatus::Implemented)
-        {
-            region.status = RegionStatus::Conflict;
-            region.explanation = format!("Area {id}: {reason}").chars().take(4096).collect();
-            event(
-                &mut events,
-                validation_failure_kind(&region.explanation),
-                "conflicted",
-                Some(id),
-                region.explanation.clone(),
-            );
+    if !snapshot.is_flexible() {
+        for (id, reason) in shared_dependencies(&candidate, snapshot, project)? {
+            if let Some(region) = candidate
+                .regions
+                .iter_mut()
+                .find(|r| r.region_id == id && r.status == RegionStatus::Implemented)
+            {
+                region.status = RegionStatus::Conflict;
+                region.explanation = format!("Area {id}: {reason}").chars().take(4096).collect();
+                event(
+                    &mut events,
+                    validation_failure_kind(&region.explanation),
+                    "conflicted",
+                    Some(id),
+                    region.explanation.clone(),
+                );
+            }
+        }
+        for generated in &mut candidate.pages {
+            if original_candidate.implemented_whole_page(snapshot, project.page(generated.page_id)?)
+            {
+                continue;
+            }
+            let old = page_source(project, generated.page_id);
+            let (css, dropped) = scoped_stylesheet(
+                &old.css,
+                &generated.content.css,
+                &original_candidate,
+                &candidate.regions,
+                generated.page_id,
+                project.page(generated.page_id)?,
+            )?;
+            if !dropped && generated.content.css != css {
+                event(
+                    &mut events,
+                    "formatting",
+                    "normalised",
+                    None,
+                    format!(
+                        "Normalised stylesheet formatting on page {}.",
+                        generated.page_id
+                    ),
+                );
+            }
+            generated.content.css = css;
+            if dropped {
+                event(
+                    &mut events,
+                    "sharedCss",
+                    "salvaged",
+                    None,
+                    format!(
+                        "Dropped CSS outside accepted areas on page {}.",
+                        generated.page_id
+                    ),
+                );
+            }
+            if generated.content.javascript != old.javascript {
+                generated.content.javascript = old.javascript;
+                event(
+                    &mut events,
+                    "sharedJavascript",
+                    "salvaged",
+                    None,
+                    format!(
+                        "Kept JavaScript unchanged on page {}; the change could affect other areas.",
+                        generated.page_id
+                    ),
+                );
+            }
         }
     }
-    for generated in &mut candidate.pages {
-        if original_candidate.implemented_whole_page(snapshot, project.page(generated.page_id)?) {
-            continue;
-        }
-        let old = page_source(project, generated.page_id);
-        let (css, dropped) = scoped_stylesheet(
-            &old.css,
-            &generated.content.css,
-            &original_candidate,
-            &candidate.regions,
-            generated.page_id,
-            project.page(generated.page_id)?,
-        )?;
-        if !dropped && generated.content.css != css {
-            event(
-                &mut events,
-                "formatting",
-                "normalised",
-                None,
-                format!(
-                    "Normalised stylesheet formatting on page {}.",
-                    generated.page_id
-                ),
-            );
-        }
-        generated.content.css = css;
-        if dropped {
-            event(
-                &mut events,
-                "sharedCss",
-                "salvaged",
-                None,
-                format!(
-                    "Dropped CSS outside accepted areas on page {}.",
-                    generated.page_id
-                ),
-            );
-        }
-        if generated.content.javascript != old.javascript {
-            generated.content.javascript = old.javascript;
-            event(
-                &mut events,
-                "sharedJavascript",
-                "salvaged",
-                None,
-                format!(
-                    "Kept JavaScript unchanged on page {}; the change could affect other areas.",
-                    generated.page_id
-                ),
-            );
-        }
+    if snapshot.is_flexible() {
+        candidate.validate(snapshot, project)?;
+        record_outside_changes(&candidate, snapshot, project, &mut events)?;
+        return Ok((candidate, events));
     }
     if !events
         .iter()
@@ -367,8 +398,7 @@ pub fn recover_generation_reply(
     salvage(candidate, snapshot, project, events)
 }
 
-/// Only metadata on demonstrably new nodes and inert script placement are repaired here.
-/// The usual scope, syntax and ownership validators still approve the reconstructed result.
+/// Precise mode additionally repairs inert script placement when ownership is clear.
 fn repair_mechanical_structure(
     html: &str,
     page: &Page,
@@ -376,15 +406,9 @@ fn repair_mechanical_structure(
     implemented: &std::collections::BTreeSet<Uuid>,
     events: &mut Vec<ValidationEvent>,
 ) -> Result<String> {
-    let doc = crate::editing::parse(html)?;
+    let html = repair_page_metadata(html, page, events)?;
+    let doc = crate::editing::parse(&html)?;
     let before = crate::editing::parse(page.content.as_ref().map_or("", |c| c.html.as_str()))?;
-    let attr = ELEMENT_ID_ATTRIBUTE;
-    let old_ids: std::collections::BTreeSet<_> = before
-        .select(&format!("[{attr}]"))
-        .nodes()
-        .iter()
-        .filter_map(|n| n.attr(attr).map(|id| id.to_string()))
-        .collect();
     let mut changed = false;
     for region in page
         .regions
@@ -403,32 +427,6 @@ fn repair_mechanical_structure(
         roots.dedup_by_key(|n| n.id);
         if roots.is_empty() {
             continue;
-        }
-        for node in doc.select(&format!("[{attr}]")).nodes() {
-            if !roots
-                .iter()
-                .any(|root| crate::stable_targets::contains(*root, *node))
-            {
-                continue;
-            }
-            let id = node.attr(attr).unwrap().to_string();
-            // A reused existing ID cannot prove which copy is the user's element.
-            // Leave every such copy intact for ordinary validation to reject safely.
-            let new_identity = !old_ids.contains(&id);
-            if new_identity {
-                node.remove_attr(attr);
-                changed = true;
-                event(
-                    events,
-                    "elementIdentity",
-                    "repaired",
-                    Some(region.id),
-                    format!(
-                        "Removed AI-assigned editor ID {:?} from a new element; a fresh unique ID is assigned on application.",
-                        id.chars().take(80).collect::<String>()
-                    ),
-                );
-            }
         }
         if roots.len() != 1 {
             continue;
@@ -467,8 +465,245 @@ fn repair_mechanical_structure(
     if changed {
         crate::editing::serialized(&doc)
     } else {
+        Ok(html)
+    }
+}
+
+/// Repair bookkeeping against the accepted source before any scope comparison. New copies
+/// receive IDs on apply, after validation, so provider IDs never become authoritative.
+pub(crate) fn repair_page_metadata(
+    html: &str,
+    page: &Page,
+    events: &mut Vec<ValidationEvent>,
+) -> Result<String> {
+    use std::collections::BTreeMap;
+    // Do not let DOM normalization hide malformed source while repairing metadata.
+    crate::source::validate_html_before_repair(html)?;
+    let doc = crate::editing::parse(html)?;
+    let before = crate::editing::parse(page.content.as_ref().map_or("", |c| c.html.as_str()))?;
+    let mut changed = false;
+    // A pending request is editor state. Restore its marker on the retained element, or
+    // restore its original subtree when the model removed that element altogether.
+    for region in page.regions.iter().filter(|r| !r.completed) {
+        let old = before.select(&selector(region.id));
+        if old.nodes().len() != 1 || !doc.select(&selector(region.id)).nodes().is_empty() {
+            continue;
+        }
+        let old = old.nodes()[0];
+        let retained = old.attr(ELEMENT_ID_ATTRIBUTE).and_then(|id| {
+            let nodes = doc.select(&format!("[{ELEMENT_ID_ATTRIBUTE}=\"{id}\"]"));
+            (nodes.nodes().len() == 1).then(|| nodes.nodes()[0])
+        });
+        if let Some(node) = retained {
+            node.set_attr("data-desegnos-region", &region.id.to_string());
+        } else {
+            // Prefer the original parent and next sibling to preserve document placement.
+            let parent = old
+                .parent()
+                .and_then(|p| p.attr(ELEMENT_ID_ATTRIBUTE))
+                .and_then(|id| {
+                    let nodes = doc.select(&format!("[{ELEMENT_ID_ATTRIBUTE}=\"{id}\"]"));
+                    (nodes.nodes().len() == 1).then(|| nodes.nodes()[0])
+                })
+                .unwrap_or(crate::editing::body(&doc)?);
+            let next = old
+                .next_element_sibling()
+                .and_then(|node| node.attr(ELEMENT_ID_ATTRIBUTE))
+                .and_then(|id| {
+                    let nodes = doc.select(&format!("[{ELEMENT_ID_ATTRIBUTE}=\"{id}\"]"));
+                    (nodes.nodes().len() == 1).then(|| nodes.nodes()[0])
+                })
+                .filter(|node| node.parent().is_some_and(|p| p.id == parent.id));
+            if let Some(next) = next {
+                next.before_html(old.html().to_string());
+            } else {
+                parent.append_html(old.html().to_string());
+            }
+        }
+        changed = true;
+        event(
+            events,
+            "regionRoot",
+            "repaired",
+            Some(region.id),
+            "Restored a pending request marker.".into(),
+        );
+    }
+    for attr in [ELEMENT_ID_ATTRIBUTE, "data-desegnos-region"] {
+        let originals: BTreeMap<_, _> = before
+            .select(&format!("[{attr}]"))
+            .nodes()
+            .iter()
+            .filter_map(|node| node.attr(attr).map(|id| (id.to_string(), *node)))
+            .collect();
+        let mut groups = BTreeMap::<String, Vec<dom_query::NodeRef<'_>>>::new();
+        for node in doc.select(&format!("[{attr}]")).nodes() {
+            groups
+                .entry(node.attr(attr).unwrap().to_string())
+                .or_default()
+                .push(*node);
+        }
+        for (id, nodes) in groups {
+            let original = originals.get(&id).copied();
+            let score = |node: dom_query::NodeRef<'_>| -> usize {
+                original
+                    .filter(|old| node.node_name() == old.node_name())
+                    .map_or(0, |old| {
+                        100 + usize::from(node.text() == old.text()) * 40
+                            + usize::from(node.attr("class") == old.attr("class")) * 10
+                            + usize::from(
+                                node.parent().and_then(|p| p.attr(ELEMENT_ID_ATTRIBUTE))
+                                    == old.parent().and_then(|p| p.attr(ELEMENT_ID_ATTRIBUTE)),
+                            ) * 5
+                            + usize::from(
+                                node.prev_element_sibling()
+                                    .and_then(|p| p.attr(ELEMENT_ID_ATTRIBUTE))
+                                    == old
+                                        .prev_element_sibling()
+                                        .and_then(|p| p.attr(ELEMENT_ID_ATTRIBUTE)),
+                            )
+                    })
+            };
+            // max_by_key picks the last tie; reverse to retain document order on ties.
+            let keep = (0..nodes.len())
+                .rev()
+                .max_by_key(|i| score(nodes[*i]))
+                .unwrap();
+            if attr == "data-desegnos-region"
+                && nodes.len() > 1
+                && nodes.iter().enumerate().any(|(i, node)| {
+                    i != keep
+                        && score(*node) == score(nodes[keep])
+                        && node.html() != nodes[keep].html()
+                })
+            {
+                // Distinct equally plausible roots do not establish one request owner.
+                continue;
+            }
+            let valid = if attr == ELEMENT_ID_ATTRIBUTE {
+                crate::stable_targets::valid_id(&id) && original.is_some()
+            } else {
+                Uuid::parse_str(&id).is_ok_and(|id| page.regions.iter().any(|r| r.id == id))
+            };
+            for (index, node) in nodes.iter().enumerate() {
+                if index == keep && valid {
+                    continue;
+                }
+                // Invalid region IDs are genuine integrity errors, not invented requests.
+                if attr != ELEMENT_ID_ATTRIBUTE && !valid {
+                    continue;
+                }
+                node.remove_attr(attr);
+                changed = true;
+                event(
+                    events,
+                    if attr == ELEMENT_ID_ATTRIBUTE {
+                        "elementIdentity"
+                    } else {
+                        "regionRoot"
+                    },
+                    "repaired",
+                    None,
+                    if attr == ELEMENT_ID_ATTRIBUTE {
+                        "Repaired an editor ID; new copies receive fresh unique IDs on apply."
+                    } else {
+                        "Removed a duplicate area marker from a copied element."
+                    }
+                    .into(),
+                );
+            }
+        }
+    }
+    if changed {
+        crate::editing::serialized(&doc)
+    } else {
         Ok(html.into())
     }
+}
+
+fn record_outside_changes(
+    candidate: &GenerationCandidate,
+    snapshot: &RequirementsSnapshot,
+    project: &Project,
+    events: &mut Vec<ValidationEvent>,
+) -> Result<()> {
+    let targets = snapshot.target_ids()?;
+    let mut labels = Vec::new();
+    let mut add = |label: String| {
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    };
+    for generated in &candidate.pages {
+        let page = project.page(generated.page_id)?;
+        if candidate.implemented_whole_page(snapshot, page) {
+            continue;
+        }
+        let old = compact_site_content(&page_source(project, page.id));
+        let new = compact_site_content(&generated.content);
+        if old.css != new.css {
+            add("page styles".into());
+        }
+        let before = crate::editing::parse(&old.html)?;
+        let after = crate::editing::parse(&new.html)?;
+        let scripts = |doc: &dom_query::Document| {
+            doc.select("script")
+                .nodes()
+                .iter()
+                .map(|n| n.html().to_string())
+                .collect::<Vec<_>>()
+        };
+        if old.javascript != new.javascript || scripts(&before) != scripts(&after) {
+            add("page script".into());
+        }
+        for (index, region) in page.regions.iter().enumerate() {
+            let selectors: Vec<_> = if region.has_targets() {
+                region
+                    .targets()
+                    .iter()
+                    .map(|t| format!("[{ELEMENT_ID_ATTRIBUTE}=\"{}\"]", t.id))
+                    .collect()
+            } else {
+                vec![selector(region.id)]
+            };
+            if !targets.contains(&(page.id, region.id))
+                && selectors
+                    .iter()
+                    .any(|s| before.select(s).html() != after.select(s).html())
+            {
+                add(format!("Box {}", index + 1));
+            }
+            // Compare the remaining page separately so named boxes are not also
+            // redundantly reported as generic page content.
+            {
+                for s in selectors {
+                    for doc in [&before, &after] {
+                        for node in doc.select(&s).nodes() {
+                            node.remove_from_parent();
+                        }
+                    }
+                }
+            }
+        }
+        for doc in [&before, &after] {
+            for node in doc.select("script").nodes() {
+                node.remove_from_parent();
+            }
+        }
+        if before.root().html() != after.root().html() {
+            add("page content".into());
+        }
+    }
+    if !labels.is_empty() {
+        event(
+            events,
+            "outsideChanges",
+            "advisory",
+            None,
+            format!("Also changed: {}", labels.join(", ")),
+        );
+    }
+    Ok(())
 }
 
 fn recovery_targets(region: &Region) -> Vec<&ElementTarget> {

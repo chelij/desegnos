@@ -2,7 +2,7 @@ use desegni_core::*;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 fn project() -> Project {
-    let p = Project::new(
+    let mut p = Project::new(
         "Stable selections".into(),
         Viewport {
             width: 1200,
@@ -11,6 +11,7 @@ fn project() -> Project {
         Appearance::Light,
     )
     .unwrap();
+    p.generation_mode = GenerationMode::Strict;
     p.edit_page_source(0,p.home_page_id,&PageSourceEdit{html:Some("<main><article><h2>First</h2></article><article><h2>Second</h2></article><p>Unrelated</p></main>".into()),..Default::default()}).unwrap()
 }
 fn target(p: &Project, suffix: &str) -> ElementTarget {
@@ -179,7 +180,7 @@ fn multi_target_scope_accepts_only_selected_subtrees_and_preserves_shared_source
     let b = target(&p, "article:nth-of-type(2)");
     let p = describe(p, &[a.clone(), b]);
     let snapshot = p.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 20);
+    assert_eq!(snapshot.format_version().unwrap(), 21);
     assert!(snapshot.markdown.contains("\"elements\""));
     let original = &p.pages[0].content.as_ref().unwrap().html;
     let c = candidate(
@@ -626,7 +627,7 @@ fn migration_preserves_frozen_receipts_but_never_rebinds_them_to_changed_source(
     assert_eq!(serde_json::to_vec(&snapshot).unwrap(), receipt);
     let new = preserved.prepare_requirements().unwrap();
     assert_ne!(new.sha256, snapshot.sha256);
-    assert_eq!(new.format_version().unwrap(), 20);
+    assert_eq!(new.format_version().unwrap(), 21);
     assert_eq!(
         preserved.pages[0].regions[0].prompt,
         original.pages[0].regions[0].prompt

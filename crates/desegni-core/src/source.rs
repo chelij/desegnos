@@ -383,6 +383,19 @@ fn validate_css(
     }
 }
 
+/// Metadata repair may serialize a DOM; check HTML syntax first so serialization cannot
+/// erase parse errors. CSS and script diagnostics stay with the ordinary page validators.
+pub(crate) fn validate_html_before_repair(html: &str) -> crate::Result<()> {
+    let (_, diagnostics, _) = parse_html(html);
+    if diagnostics.is_empty() {
+        Ok(())
+    } else {
+        Err(Error(
+            SourceEditError::from_diagnostics(diagnostics).to_string(),
+        ))
+    }
+}
+
 pub fn validate_page_source(content: &SiteContent) -> SourceEditResult<()> {
     validate_page_source_for_website(content, false)
 }

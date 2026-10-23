@@ -288,6 +288,35 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         project: &Project,
     ) -> Result<()> {
+        if snapshot.is_flexible() {
+            for page in &self.pages {
+                let doc = crate::editing::parse(&page.content.html)?;
+                crate::stable_targets::validate_ids(&doc)?;
+                let original = project.page(page.page_id)?;
+                let before = crate::editing::parse(
+                    original.content.as_ref().map_or("", |c| c.html.as_str()),
+                )?;
+                let mut seen = BTreeSet::new();
+                for node in doc.select("[data-desegnos-region]").nodes() {
+                    let id = node
+                        .attr("data-desegnos-region")
+                        .and_then(|id| Uuid::parse_str(&id).ok());
+                    ensure(
+                        id.is_some_and(|id| {
+                            (original.regions.iter().any(|r| r.id == id)
+                                || before
+                                    .select(&format!("[data-desegnos-region=\"{id}\"]"))
+                                    .nodes()
+                                    .len()
+                                    == 1)
+                                && seen.insert(id)
+                        }),
+                        "The page contains invalid or duplicate area IDs.",
+                    )?;
+                }
+            }
+            return crate::region_scripts::validate(self, snapshot, project);
+        }
         if snapshot.format_version()? < 14 {
             return self.validate_scope_exact(snapshot, project);
         }
@@ -1253,6 +1282,7 @@ mod wrapper_tests {
                 region
             })
             .collect();
+        project.generation_mode = crate::GenerationMode::Strict;
         let snapshot = project.prepare_requirements().unwrap();
         let roots: String = project.pages[0]
             .regions

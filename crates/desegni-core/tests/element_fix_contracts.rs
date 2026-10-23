@@ -4,7 +4,7 @@ use uuid::Uuid;
 const PICTURE_BYTES: usize = 4096;
 
 fn project() -> Project {
-    let p = Project::new(
+    let mut p = Project::new(
         "Element fixes".into(),
         Viewport {
             width: 1200,
@@ -13,6 +13,7 @@ fn project() -> Project {
         Appearance::Dark,
     )
     .unwrap();
+    p.generation_mode = GenerationMode::Strict;
     let picture = format!(
         "data:image/webp;base64,{}",
         "QUFB".repeat(PICTURE_BYTES / 4)
@@ -106,7 +107,7 @@ fn fixture() -> (Project, ElementTarget, RequirementsSnapshot) {
 #[test]
 fn an_element_fix_sends_only_the_selection_stylesheet_and_outline() {
     let (_, image, s) = fixture();
-    assert_eq!(s.format_version().unwrap(), 20);
+    assert_eq!(s.format_version().unwrap(), 21);
     assert!(s.markdown.contains("## Selected elements"));
     assert!(!s.markdown.contains("## Existing affected page sources"));
     assert!(
@@ -241,7 +242,7 @@ fn new_areas_and_phone_fixes_still_send_the_full_page() {
         )
         .unwrap();
     let s = p.prepare_requirements().unwrap();
-    assert_eq!(s.format_version().unwrap(), 20);
+    assert_eq!(s.format_version().unwrap(), 21);
     assert!(s.markdown.contains("## Existing affected page sources"));
 }
 
@@ -316,7 +317,7 @@ fn format_fourteen_sends_compact_sources_and_keeps_results_readable() {
     let image = target(&p, "img:nth-of-type(1)");
     let p = describe(p, image.clone(), "remove that background");
     let s = p.prepare_requirements().unwrap();
-    assert_eq!(s.format_version().unwrap(), 20);
+    assert_eq!(s.format_version().unwrap(), 21);
     assert!(s.is_element_fix());
     let sent = s.markdown.split("\n## Selected elements\n").nth(1).unwrap();
     assert!(

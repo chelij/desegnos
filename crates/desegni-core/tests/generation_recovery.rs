@@ -5,6 +5,7 @@ use uuid::Uuid;
 fn fixture(existing: bool) -> (Project, RequirementsSnapshot, GenerationCandidate) {
     let saved: Value = serde_json::from_str(include_str!("fixtures/requirements8.json")).unwrap();
     let mut project: Project = serde_json::from_value(saved["project"].clone()).unwrap();
+    project.generation_mode = GenerationMode::Strict;
     project.schema_version = SCHEMA_VERSION;
     let template = project.pages[0].regions[0].clone();
     project.pages[0].regions = (0..3)
@@ -145,9 +146,11 @@ fn ai_assigned_identity_is_repaired_before_validation() {
     let (accepted, events) = recover(&c, &s, &p);
     assert!(accepted.is_ready());
     assert!(!accepted.pages[0].content.html.contains("inventedid"));
-    assert!(events.iter().any(|e| e.kind == "elementIdentity"
-        && e.disposition == "repaired"
-        && e.region_id == Some(id)));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.kind == "elementIdentity" && e.disposition == "repaired")
+    );
     assert!(s.validation_repair(&events).unwrap().is_none());
     p.apply_generation(&s, &accepted, &[]).unwrap();
 }
@@ -839,7 +842,7 @@ fn real_job_shape_repairs_script_placement_and_new_decoration_ids() {
 }
 
 #[test]
-fn ambiguous_existing_identity_and_duplicate_scripts_are_not_repaired() {
+fn duplicate_existing_identity_is_repaired_but_precise_duplicate_scripts_still_conflict() {
     let (mut p, _, mut c) = fixture(true);
     let id = c.regions[0].region_id;
     p.pages[0].content.as_mut().unwrap().html = format!(
@@ -853,7 +856,11 @@ fn ambiguous_existing_identity_and_duplicate_scripts_are_not_repaired() {
     );
     let (accepted, events) = recover(&c, &s, &p);
     assert_eq!(accepted.regions[0].status, RegionStatus::Conflict);
-    assert!(!events.iter().any(|e| e.disposition == "repaired"));
+    assert!(
+        events
+            .iter()
+            .any(|e| e.kind == "elementIdentity" && e.disposition == "repaired")
+    );
 }
 
 #[test]

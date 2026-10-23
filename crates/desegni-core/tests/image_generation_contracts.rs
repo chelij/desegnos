@@ -7,6 +7,7 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
         serde_json::from_str(include_str!("fixtures/requirements8.json")).unwrap();
     let mut project: Project = serde_json::from_value(old["project"].clone()).unwrap();
     project.schema_version = SCHEMA_VERSION;
+    project.generation_mode = GenerationMode::Strict;
     // This fixture has one new rectangular area.
     project.pages[0].content = None;
     let snapshot = project
@@ -45,7 +46,7 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
 #[test]
 fn new_capabilities_and_contract_are_explicit_and_legacy_serialization_is_identical() {
     let (project, snapshot, _) = fixture();
-    assert_eq!(snapshot.format_version().unwrap(), 20);
+    assert_eq!(snapshot.format_version().unwrap(), 21);
     assert!(snapshot.markdown.contains("data-desegnos-generate"));
     assert!(
         snapshot

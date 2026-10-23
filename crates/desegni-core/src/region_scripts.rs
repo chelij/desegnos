@@ -54,6 +54,26 @@ pub(crate) fn validate(
     snapshot: &RequirementsSnapshot,
     project: &Project,
 ) -> Result<()> {
+    if snapshot.is_flexible() {
+        for page in &candidate.pages {
+            let doc = crate::editing::parse(&page.content.html)?;
+            for script in doc.select(SELECTOR).nodes() {
+                ensure(
+                    script.attr("type").as_deref() == Some(SCRIPT_TYPE)
+                        && script.attr("src").is_none(),
+                    "Region script must be an inert, inline source block.",
+                )?;
+                ensure(
+                    script
+                        .attr("data-desegnos-script")
+                        .is_some_and(|id| uuid::Uuid::parse_str(&id).is_ok()),
+                    "Region script needs its request UUID.",
+                )?;
+                parse_code(script.text().as_ref())?;
+            }
+        }
+        return Ok(());
+    }
     let targets = snapshot.target_ids()?;
     for generated in &candidate.pages {
         let page = project.page(generated.page_id)?;

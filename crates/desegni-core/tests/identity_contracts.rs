@@ -204,7 +204,7 @@ fn requirements_reference_original_identity_images_without_transcribing_their_by
     assert!(markdown.contains(&imported.assets[0].id.to_string()));
     assert!(!markdown.contains("data:image/"));
     let snapshot = project.prepare_requirements().unwrap();
-    assert!(snapshot.markdown.contains("Requirements format: 20"));
+    assert!(snapshot.markdown.contains("Requirements format: 21"));
     assert!(!snapshot.markdown.contains(&imported.assets[0].data_uri));
     assert!(
         snapshot
@@ -242,7 +242,7 @@ fn requirements_reference_original_identity_images_without_transcribing_their_by
             .prepare_requirements()
             .unwrap()
             .markdown
-            .contains("Requirements format: 20")
+            .contains("Requirements format: 21")
     );
 }
 
@@ -481,8 +481,8 @@ fn invalid_project_references_and_damaged_image_bytes_cannot_apply_or_partially_
 }
 
 #[test]
-fn flexible_and_strict_reject_unsolicited_content_outside_new_request_roots() {
-    for mode in [GenerationMode::Fuzzy, GenerationMode::Strict] {
+fn precise_rejects_unsolicited_content_outside_new_request_roots() {
+    for mode in [GenerationMode::Strict] {
         let mut project = described(blank());
         project.generation_mode = mode;
         let root = format!(
@@ -841,7 +841,7 @@ fn selected_source_pages_create_routes_and_keep_generation_context_on_each_page(
             .unwrap();
     }
     let snapshot = project.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 20);
+    assert_eq!(snapshot.format_version().unwrap(), 21);
     snapshot.validate_current(&project).unwrap();
     let catalogue = project
         .generation_page_catalogue(&project.pages.iter().map(|page| page.id).collect::<Vec<_>>())
