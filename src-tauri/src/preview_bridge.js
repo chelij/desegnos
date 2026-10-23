@@ -27,10 +27,14 @@
     const href = link.getAttribute('href');
     if (href.startsWith('#')) return;
     event.preventDefault();
+    // Honour target="<frame name>" so links can load into an iframe on the page.
+    const name = link.getAttribute('target');
+    const frame = name && !/^_(self|top|parent|blank)$/i.test(name) ? document.querySelector(`iframe[name="${CSS.escape(name)}"]`) : null;
+    const go = url => { if (frame) frame.src = url; else location.href = url; };
     try {
       if (script.dataset.fileMode === 'true') {
         const destination = new URL(href, document.baseURI);
-        if (destination.origin === location.origin && destination.host === location.host) { location.href = destination.href; return; }
+        if (destination.origin === location.origin && destination.host === location.host) { go(destination.href); return; }
         if (/^https?:$/.test(destination.protocol)) parent.postMessage({ type: 'desegni-preview-link', sessionId, pageId, url: destination.href.slice(0, 2048) }, '*');
         return;
       }
@@ -47,7 +51,7 @@
         report('This link has no page in the frozen preview.');
         return;
       }
-      location.href = new URL('../' + target + '/index.html' + destination.hash, location.href).href;
+      go(new URL('../' + target + '/index.html' + destination.hash, location.href).href);
     } catch {
       report('This preview link has an invalid destination.');
     }
