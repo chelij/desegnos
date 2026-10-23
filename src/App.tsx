@@ -27,7 +27,6 @@ import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from
 import { FirstRunTips } from './Onboarding';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
-import { ImportWebsite } from './ImportWebsite';
 import type { WebsiteFolderSelection } from './types';
 import { pendingDrafts } from './generationDraftState';
 import { GenerationLog } from './GenerationLog';
@@ -110,7 +109,6 @@ function Editor() {
   const [showCheck, setShowCheck] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [showWebsiteImport, setShowWebsiteImport] = useState(false);
   const [importFolder, setImportFolder] = useState<WebsiteFolderSelection | null>(null);
   const [importAsNew, setImportAsNew] = useState(false);
   function startBrandImport() { setImportFolder(null); setImportAsNew(true); setShowNew(false); setShowImport(true); }
@@ -890,7 +888,6 @@ function Editor() {
     { id: 'page-divider', label: '', separator: true },
     { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => { setLive(value => !value); setLiveDevice('desktop'); } },
     { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
-    { id: 'import-website', label: 'Import website…', disabled: !project, action: () => setShowWebsiteImport(true) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
     { id: 'ai-divider', label: '', separator: true },
@@ -898,7 +895,7 @@ function Editor() {
     { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
     { id: 'page-check', label: fixCount ? `Check page (${fixCount})` : 'Check page', disabled: !project?.pages.some(item => item.content), action: () => setShowCheck(true) },
     { id: 'style-guide', label: 'Style guide', disabled: !project, action: () => setShowStyleGuide(true) },
-    { id: 'import-context', label: 'Import context…', disabled: !project, action: () => { setImportFolder(null); setImportAsNew(false); setShowImport(true); } },
+    { id: 'import', label: 'Import…', disabled: !project, action: () => { setImportFolder(null); setImportAsNew(false); setShowImport(true); } },
     { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
     { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
@@ -917,7 +914,7 @@ function Editor() {
       {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
         <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
-        {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import context</button>}
+        {project && <button type="button" onClick={() => { setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import…</button>}
         {project && <><button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" disabled={!view?.canUndo} onClick={() => run(() => travel('undo_project'))}>Undo</button><button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" disabled={!view?.canRedo} onClick={() => run(() => travel('redo_project'))}>Redo</button>
           <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
         {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live view'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
@@ -995,11 +992,10 @@ function Editor() {
     {showProjectLocation && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
     {showRecovery && view && <WorkspaceSurface place={project ? 'panel' : 'start'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
-    {showWebsiteImport && project && <WorkspaceSurface place="panel" title="Import website" close={() => setShowWebsiteImport(false)}><ImportWebsite key={project.id} homePageId={project.homePageId} busy={pending > 0} beforePick={async () => { await synchronize(); await settle(); }} apply={async (token, remove) => {
-      await synchronize();
-      await queue(async () => { accept(await native<WorkspaceView>('apply_website_import', { token, remove })); setShowWebsiteImport(false); });
-    }} /></WorkspaceSurface>}
-    {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import context" close={() => setShowImport(false)}><ImportContext initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} /></WorkspaceSurface>}
+    {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importAsNew}`} initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} pages={project && !importAsNew ? { homePageId: project.homePageId, revision: project.revision, beforePick: async () => { await synchronize(); await settle(); }, apply: async (token, remove) => {
+      await synchronize(); await settle();
+      await queue(async () => { accept(await native<WorkspaceView>('apply_website_import', { token, remove })); });
+    } } : undefined} /></WorkspaceSurface>}
     {showStyleGuide && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Style guide" close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></WorkspaceSurface>}
     {showNotes && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project brief" close={() => setShowNotes(null)}><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
     {showGridSettings && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Grid and rulers" close={() => setShowGridSettings(false)}><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {

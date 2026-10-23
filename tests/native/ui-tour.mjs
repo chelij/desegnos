@@ -224,9 +224,9 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
   }, async () => {
     if (!await driver.execute(() => !!document.querySelector('.ai-account-options [role="menu"]'))) await driver.button('Account options');
   });
-  await surface(8, 'import-context', 'Import context step 1: source choices', async () => { await driver.button('Import context'); await driver.ready('.import-context'); });
+  await surface(8, 'import-context', 'Import context step 1: source choices', async () => { await driver.button('Import…'); await driver.ready('.import-context'); });
   await surface(9, 'import-review', 'Choose what to keep: brand colours, fonts and pages', async () => {
-    await driver.button('Import context');
+    await driver.button('Import…');
     await driver.fill('Website address', `${provider.endpoint.replace(/\/v1$/, '')}/brand-site/`);
     await driver.button('Open website');
     await driver.ready('//button[normalize-space(.)="Read my brand"]', 'xpath');
@@ -236,7 +236,9 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
     await capture(25, 'import-review-pages', 'Choose what to keep: imported page choices and content', async () => {
       await driver.execute(() => document.querySelector('.identity-review-section:last-of-type')?.scrollIntoView({ block: 'center' }));
     });
-    await driver.button('Add to project');
+    await driver.button('Keep brand choices');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.import-context') && !document.querySelector('.import-context button[type="submit"]')), 'Brand choices were not kept');
+    await driver.button('Cancel');
     await driver.page(pageId);
   });
   for (const [number, name, title, button] of [[10, 'project-brief', 'Project brief', 'Project dossier'], [11, 'style-guide', 'Style guide'], [12, 'keyboard-shortcuts', 'Keyboard shortcuts'], [13, 'grid-settings', 'Grid and rulers', 'Grid and rulers'], [14, 'add-page', 'Add page', 'Add page'], [15, 'rename-page', 'Page settings', 'Page settings'], [16, 'rename-project', 'Rename project']]) {

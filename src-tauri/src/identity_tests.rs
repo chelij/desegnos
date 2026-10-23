@@ -1012,3 +1012,23 @@ fn reviewed_pages_create_only_selected_routes_with_their_own_content() {
             .is_err()
     );
 }
+
+#[test]
+fn shared_import_retains_original_page_files_separately_from_brand_evidence() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let source = temp.source();
+    let files = BTreeMap::from([
+        ("index.html".into(), b"<h1>Original page</h1>".to_vec()),
+        ("app.js".into(), b"console.log('preserved')".to_vec()),
+    ]);
+    let manifest = service
+        .retain_website_source(source.clone(), files.clone())
+        .unwrap();
+    assert_eq!(manifest.id, source.id);
+    assert_eq!(service.website_files(source.id).unwrap(), files);
+    // Reserving a brand analysis does not consume the page snapshot.
+    reserve(&mut service, &source);
+    assert_eq!(service.website_files(source.id).unwrap(), files);
+    assert!(service.website_files(Uuid::new_v4()).is_err());
+}

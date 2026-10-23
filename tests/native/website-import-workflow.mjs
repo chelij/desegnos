@@ -76,8 +76,7 @@ export async function websiteImportWorkflow(driver, physical, step, evidence) {
     const build = join(output, 'Stopped Astro'); await mkdir(join(build, 'src/pages'), { recursive: true }); await mkdir(join(build, 'node_modules'));
     await writeFile(join(build, 'package.json'), JSON.stringify({ dependencies: { astro: '*' }, scripts: { build: `node -e "console.log('Compiling fixture');setTimeout(()=>{},60000)"` } }));
     await writeFile(join(build, 'src/pages/index.astro'), '<h1>Source</h1>');
-    await driver.button('Import context');
-    await chooseFolder(physical, () => driver.button('Choose folder'), build, output, 'stopped-build');
+    await chooseFolder(physical, () => driver.menu(['Open project folder…']), build, output, 'stopped-build');
     await driver.button('Build site'); await driver.button('Stop');
     await waitFor(() => driver.execute(() => document.querySelector('.website-choice')?.textContent.includes('Build stopped.')), 'Stopping did not finish the build');
     await driver.button('Cancel');

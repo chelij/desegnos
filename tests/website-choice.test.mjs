@@ -22,8 +22,8 @@ try {
   const { WebsiteChoice } = await import(pathToFileURL(join(temporary, 'WebsiteChoice.js')).href);
   const website = { path: '/site', framework: 'Vite', output: '/site/dist', fresh: false,
     pages: ['index.html'], buildCommand: ['npm', 'run', 'build'], installCommand: null, buildUnavailable: 'Needs Node.js to rebuild.' };
-  const render = site => renderToStaticMarkup(React.createElement(WebsiteChoice, {
-    folder: { id: 'folder', name: 'Site', website: site }, brand: false, disabled: false,
+  const render = (site, brand = false) => renderToStaticMarkup(React.createElement(WebsiteChoice, {
+    folder: { id: 'folder', name: 'Site', website: site }, brand, disabled: false,
     chooseBrand() {}, async edit() {}, update() {},
   }));
   await test('missing Node hides Build site and offers existing output with a warning', () => {
@@ -31,6 +31,13 @@ try {
     assert.ok(html.includes('This website cannot be updated on this computer.'));
     assert.ok(html.includes('may be out of date'));
     assert.ok(html.includes('Open website for editing'));
+    assert.ok(!html.includes('>Build site<'));
+  });
+  await test('project-folder opening still offers brand-only review without build actions', () => {
+    const html = render(website, true);
+    assert.ok(html.includes('Use it for my brand only'));
+    assert.ok(html.includes('aria-pressed="true"'));
+    assert.ok(!html.includes('Open website for editing'));
     assert.ok(!html.includes('>Build site<'));
   });
   await test('missing tool without output offers no build or open button', () => {

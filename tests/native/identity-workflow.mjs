@@ -102,26 +102,25 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     blankProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id !== originalProject.id && value; }, 'The blank project did not open');
     // The source project stays open in its own tab group.
     const openIds = (await workspace(driver)).openProjects.map(open => open.id); assert.ok(openIds.includes(originalProject.id) && openIds.at(-1) === blankProject.id, JSON.stringify(openIds));
-    await driver.button('Import context');
+    await driver.button('Import…');
     await waitFor(() => driver.execute(() => !!document.querySelector('.workspace-surface .import-context')), 'Import context did not open');
-    assert.equal(await driver.execute(() => [...document.querySelectorAll('.workspace-surface button')].find(button => button.textContent.trim() === 'Add to project')?.disabled), true);
-    assert.match(await driver.execute(() => document.querySelector('.import-context').textContent), /1\. Where is your brand\?.*Read your brand first/s);
+    assert.equal(await driver.execute(() => [...document.querySelectorAll('.workspace-surface button')].some(button => button.textContent.trim() === 'Keep brand choices')), false);
+    assert.match(await driver.execute(() => document.querySelector('.import-context').textContent), /Source.*Website address/s);
     await physical.captureWindow(join(output, 'new-project-choice-window.png'));
   });
 
   await step('Native identity pickers review website folders, ZIPs and Desegnos projects without writing or contacting AI', async () => {
-    await chooseFile(physical, () => driver.button('Choose folder'), null, output, 'cancel-folder-picker', true);
+    await chooseFile(physical, () => driver.button('Choose folder…'), null, output, 'cancel-folder-picker', true);
     assert.equal(await driver.execute(() => document.querySelector('.identity-source-name')?.textContent ?? null), null);
-    await chooseFolder(physical, () => driver.button('Choose folder'), fixtures.directory, output, 'website-folder-picker');
-    await driver.button('Use it for my brand only');
+    await chooseFolder(physical, () => driver.button('Choose folder…'), fixtures.directory, output, 'website-folder-picker');
     const folderNames = await importedSource(driver, 'Northstar website');
     for (const name of ['brand/IDENTITY.md', 'brand/tokens.css', 'brand/logo.png', 'brand/logo.svg', 'index.html']) assert.ok(folderNames.some(value => value.includes(name)), `The folder review omitted ${name}`);
     assert.equal(folderNames.some(value => value.includes('.env')), false);
     assert.equal(await driver.execute(() => document.querySelector('.identity-skipped')?.textContent.includes('.env')), true);
-    await chooseFile(physical, () => driver.button('Choose project or ZIP'), fixtures.archive, output, 'website-zip-picker');
+    await chooseFile(physical, () => driver.button('Choose ZIP or HTML files…'), fixtures.archive, output, 'website-zip-picker');
     const zipNames = await importedSource(driver, 'Northstar website.zip');
     assert.deepEqual(zipNames, folderNames);
-    await chooseFile(physical, () => driver.button('Choose project or ZIP'), sourceProjectPath, output, 'desegnos-project-picker');
+    await chooseFile(physical, () => driver.button('Choose ZIP or HTML files…'), sourceProjectPath, output, 'desegnos-project-picker');
     const projectNames = await importedSource(driver, basename(sourceProjectPath));
     assert.ok(projectNames.some(value => value.includes('PROJECT.md')));
     assert.ok(projectNames.some(value => value.includes('styles.css')));
@@ -131,14 +130,12 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     assert.deepEqual(await snapshot(fixtures.directory), originals.folder);
     assert.equal(hash(await readFile(fixtures.archive)), originals.zip);
     assert.equal(hash(await readFile(sourceProjectPath)), sourceProjectHash);
-    await chooseFolder(physical, () => driver.button('Choose folder'), fixtures.directory, output, 'analysis-folder-picker');
-    await driver.button('Use it for my brand only');
+    await chooseFolder(physical, () => driver.button('Choose folder…'), fixtures.directory, output, 'analysis-folder-picker');
     await importedSource(driver, 'Northstar website');
   });
 
   await step('Astro sources start with a fitting brand selection; manual over-selection is blocked and Pick for me restores it', async () => {
-    await chooseFolder(physical, () => driver.button('Choose folder'), fixtures.astro, output, 'astro-folder-picker');
-    await driver.button('Use it for my brand only');
+    await chooseFolder(physical, () => driver.button('Choose folder…'), fixtures.astro, output, 'astro-folder-picker');
     const names = await importedSource(driver, 'Astro brand');
     assert.ok(names[0].includes('src/styles/global.css'));
     assert.ok(names[1].includes('src/layouts/Base.astro'));
@@ -149,9 +146,6 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     assert.ok(automatic[0] && automatic[1]); assert.ok(automatic.some(value => !value));
     assert.equal(await driver.execute(() => document.querySelector('.identity-file-review').open), false);
     assert.equal(await driver.execute(() => [...document.querySelectorAll('.import-context button')].some(button => /AI settings/.test(button.textContent))), false);
-    assert.match(await driver.execute(() => document.querySelector('.identity-source-name').parentElement.textContent), /pages, 1 stylesheet/);
-    const headingGap = await driver.execute(() => { const heading = document.querySelector('.identity-read-heading h2').getBoundingClientRect(); const summary = document.querySelector('.identity-source-name').parentElement.getBoundingClientRect(); return summary.top - heading.bottom; });
-    assert.ok(headingGap >= 0 && headingGap <= 2, `Unexpected gap below Read it: ${headingGap}`);
     assert.doesNotMatch(await driver.execute(() => document.querySelector('.import-context').textContent), /We'll look at|most useful parts|Bring your brand/);
     assert.match(await driver.execute(() => document.querySelector('.import-context').textContent), /Sent to OpenAI \(API key\)/);
     await physical.captureWindow(join(output, 'astro-simple-import-window.png'));
@@ -167,8 +161,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.button('Pick for me');
     await driver.ready('//button[normalize-space(.)="Read my brand"]', 'xpath');
     assert.equal(await driver.execute(() => !!document.querySelector('.identity-import [role="alert"]')), false);
-    await chooseFolder(physical, () => driver.button('Choose folder'), fixtures.directory, output, 'restore-brand-folder-picker');
-    await driver.button('Use it for my brand only');
+    await chooseFolder(physical, () => driver.button('Choose folder…'), fixtures.directory, output, 'restore-brand-folder-picker');
     await importedSource(driver, 'Northstar website');
   });
 
@@ -185,8 +178,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     // A bare address is supported. Leaving it in the source field must not make
     // the browser block the later Add to project form submission.
     await driver.fill('Website address', 'example.com');
-    await chooseFolder(physical, () => driver.button('Choose folder'), fixtures.directory, output, 'restore-folder-after-url');
-    await driver.button('Use it for my brand only');
+    await chooseFolder(physical, () => driver.button('Choose folder…'), fixtures.directory, output, 'restore-folder-after-url');
     await importedSource(driver, 'Northstar website');
   });
 
@@ -195,9 +187,9 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.button('Read my brand');
     cancelled = await waitFor(async () => { const value = await analysis(driver); return value?.status === 'analyzing' && provider.identityRequests().some(record => record.metadata.jobId === value.jobId) && value; }, 'The frozen identity request did not reach the controlled provider');
     await driver.ready('.identity-progress[role="status"]');
-    assert.equal(await driver.execute(() => document.querySelector('.import-context').textContent.includes('Read your brand first')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.identity-result')), false);
     assert.match(await driver.execute(() => document.querySelector('.identity-progress').textContent), /Reading your brand…/);
-    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface button[disabled][type="submit"]')), true);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface button[type="submit"]')), false);
     const before = provider.identityRequests().length;
     await assert.rejects(() => driver.invoke('analyze_identity', { sourceId: cancelled.sourceId, fileIds: cancelled.fileIds }), /already|running|finish|analysis/i);
     assert.equal(provider.identityRequests().length, before);
@@ -214,7 +206,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     const value = await completedAnalysis(driver, ['failed', 'unknown']);
     assert.equal(value.candidate ?? null, null); assert.ok(value.error || value.message);
     await waitFor(() => driver.execute(() => !!document.querySelector('.identity-import [role="alert"]')?.textContent), 'The identity failure was hidden from the user');
-    assert.equal(await driver.execute(() => document.querySelector('.workspace-surface button[type="submit"]')?.disabled), true);
+    assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface button[type="submit"]')), false);
     assert.deepEqual((await workspace(driver)).project, blankProject);
   });
 
@@ -319,7 +311,9 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
   });
 
   await step('Selected identity is added to the open blank website and preserves only chosen decisions and the actual logo', async () => {
-    await driver.button('Add to project');
+    await driver.button('Keep brand choices');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.import-context') && !document.querySelector('.import-context button[type="submit"]')), 'Brand choices were not kept');
+    await driver.button('Cancel');
     finalProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id === blankProject.id && value.importedIdentity && value; }, 'The imported context was not added to the open project');
     assert.equal(finalProject.name, 'Imported Northstar website'); assert.equal(finalProject.schemaVersion, 8);
     assert.equal(finalProject.appearance, 'light'); assert.equal(finalProject.pages[0].appearance, 'light');

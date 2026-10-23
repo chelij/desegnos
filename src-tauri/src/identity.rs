@@ -262,6 +262,7 @@ struct LatestAnalysis {
 pub struct IdentityService {
     directory: PathBuf,
     sources: BTreeMap<Uuid, IdentitySource>,
+    website_files: BTreeMap<Uuid, BTreeMap<String, Vec<u8>>>,
     latest: Option<AnalysisRecord>,
     active: Option<(Uuid, CancellationToken)>,
     startup_error: Option<String>,
@@ -871,6 +872,7 @@ impl IdentityService {
             Self {
                 directory,
                 sources: BTreeMap::new(),
+                website_files: BTreeMap::new(),
                 latest: None,
                 active: None,
                 startup_error: Some(reason),
@@ -885,6 +887,7 @@ impl IdentityService {
         let mut service = Self {
             directory,
             sources: BTreeMap::new(),
+            website_files: BTreeMap::new(),
             latest: None,
             active: None,
             startup_error: None,
@@ -972,9 +975,26 @@ impl IdentityService {
                 })
                 .ok_or("Close the current identity analysis before importing more sources.")?;
             self.sources.remove(&id);
+            self.website_files.remove(&id);
         }
         let view = (&source).into();
         self.sources.insert(source.id, source);
+        Ok(view)
+    }
+    pub(crate) fn website_files(&self, id: Uuid) -> NativeResult<BTreeMap<String, Vec<u8>>> {
+        self.website_files
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| "Choose the source again to import its pages.".into())
+    }
+    fn retain_website_source(
+        &mut self,
+        source: IdentitySource,
+        files: BTreeMap<String, Vec<u8>>,
+    ) -> NativeResult<IdentitySourceManifest> {
+        let id = source.id;
+        let view = self.retain_source(source)?;
+        self.website_files.insert(id, files);
         Ok(view)
     }
     fn reserve(
@@ -1511,29 +1531,65 @@ pub async fn pick_identity_source(
     kind: IdentitySourceKind,
 ) -> NativeResult<Option<IdentitySourceManifest>> {
     trusted(&window)?;
-    let source = tauri::async_runtime::spawn_blocking(move || {
+    let selection = tauri::async_runtime::spawn_blocking(move || {
         let dialog = app.dialog().file();
         let picked = match kind {
             IdentitySourceKind::File => dialog
                 .add_filter(
-                    "Desegnos project or website ZIP",
-                    &["desegnos", "desegni", "zip"],
+                    "Project, ZIP or HTML files",
+                    &["desegnos", "desegni", "zip", "html", "htm"],
                 )
-                .blocking_pick_file(),
-            IdentitySourceKind::Folder => dialog.blocking_pick_folder(),
+                .blocking_pick_files(),
+            IdentitySourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
         };
-        picked
-            .map(|picked| {
-                let source =
-                    collect_identity_source(&picked.into_path().map_err(error)?).map_err(error)?;
-                normalize_source(source)
-            })
-            .transpose()
+        let Some(picked) = picked else {
+            return Ok(None);
+        };
+        let paths = picked
+            .into_iter()
+            .map(|path| path.into_path().map_err(error))
+            .collect::<NativeResult<Vec<_>>>()?;
+        let project = paths.len() == 1
+            && paths[0]
+                .extension()
+                .is_some_and(|ext| ext == "desegnos" || ext == "desegni");
+        if project {
+            return Ok::<_, String>(Some((
+                normalize_source(collect_identity_source(&paths[0]).map_err(error)?)?,
+                BTreeMap::new(),
+            )));
+        }
+        let files =
+            desegni_storage::website_merge::read_website_selection(&paths).map_err(error)?;
+        let name = paths[0].file_name().unwrap_or_default().to_string_lossy();
+        let source = if paths.len() == 1
+            && (paths[0].is_dir()
+                || paths[0]
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("zip")))
+        {
+            normalize_source(collect_identity_source(&paths[0]).map_err(error)?)?
+        } else {
+            normalize_source(
+                desegni_storage::identity_source_from_files(
+                    &name,
+                    files.clone().into_iter().collect(),
+                    vec![],
+                )
+                .map_err(error)?,
+            )?
+        };
+        Ok(Some((source, files)))
     })
     .await
     .map_err(error)??;
-    source
-        .map(|source| state.lock().map_err(error)?.retain_source(source))
+    selection
+        .map(|(source, files)| {
+            state
+                .lock()
+                .map_err(error)?
+                .retain_website_source(source, files)
+        })
         .transpose()
 }
 /// Brand import from a website address. Fetching follows the same public-network rules as
@@ -1552,6 +1608,7 @@ pub async fn fetch_identity_source(
     #[cfg(not(all(debug_assertions, feature = "native-tests")))]
     let fixture: Option<desegni_ai::WebUrl> = None;
     let site = desegni_ai::fetch_website(&url, fixture.as_ref()).await?;
+    let files = site.files.clone().into_iter().collect();
     let source = tauri::async_runtime::spawn_blocking(move || {
         desegni_storage::identity_source_from_files_attributed(
             &site.name,
@@ -1564,7 +1621,10 @@ pub async fn fetch_identity_source(
     })
     .await
     .map_err(error)??;
-    state.lock().map_err(error)?.retain_source(source)
+    state
+        .lock()
+        .map_err(error)?
+        .retain_website_source(source, files)
 }
 #[tauri::command]
 pub fn get_identity_analysis(
@@ -1682,9 +1742,17 @@ pub async fn website_brand_source(
     trusted(&window)?;
     let path = imports.lock().map_err(error)?.path(folder_id)?;
     let source = tauri::async_runtime::spawn_blocking(move || {
-        normalize_source(collect_identity_source(&path).map_err(error)?)
+        let files = desegni_storage::website_merge::read_website_selection(&[path.clone()])
+            .map_err(error)?;
+        Ok::<_, String>((
+            normalize_source(collect_identity_source(&path).map_err(error)?)?,
+            files,
+        ))
     })
     .await
     .map_err(error)??;
-    state.lock().map_err(error)?.retain_source(source)
+    state
+        .lock()
+        .map_err(error)?
+        .retain_website_source(source.0, source.1)
 }

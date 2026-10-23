@@ -3644,53 +3644,23 @@ pub struct WebsiteImportSelection {
 
 #[tauri::command]
 pub async fn prepare_website_import(
-    app: AppHandle,
     state: WorkspaceState<'_>,
-    kind: String,
+    identity: State<'_, Mutex<crate::identity::IdentityService>>,
+    source_id: Uuid,
 ) -> NativeResult<Option<WebsiteImportSelection>> {
-    let (project_id, revision) = {
-        let state = state.lock().map_err(message)?;
-        let project = state
-            .session
-            .as_ref()
-            .ok_or("Open a project first.")?
-            .project();
-        (project.id, project.revision)
-    };
-    let paths = tauri::async_runtime::spawn_blocking(move || {
-        let dialog = app.dialog().file().set_title("Import website");
-        match kind.as_str() {
-            "folder" => Ok(dialog.blocking_pick_folder().map(|p| vec![p])),
-            "files" => Ok(dialog
-                .add_filter("Website", &["html", "htm", "zip"])
-                .blocking_pick_files()),
-            _ => Err("Choose a folder, ZIP, or HTML files.".to_string()),
-        }
-    })
-    .await
-    .map_err(message)??;
-    let Some(paths) = paths else {
+    let files = identity.lock().map_err(message)?.website_files(source_id)?;
+    if !files.keys().any(|name| {
+        name.to_ascii_lowercase().ends_with(".html") || name.to_ascii_lowercase().ends_with(".htm")
+    }) {
         return Ok(None);
-    };
-    let paths = paths
-        .into_iter()
-        .map(|p| p.into_path().map_err(message))
-        .collect::<NativeResult<Vec<_>>>()?;
-    let files = tauri::async_runtime::spawn_blocking(move || {
-        desegni_storage::website_merge::read_website_selection(&paths)
-    })
-    .await
-    .map_err(message)?
-    .map_err(message)?;
+    }
     let mut state = state.lock().map_err(message)?;
     let project = state
         .session
         .as_ref()
         .ok_or("Open a project first.")?
         .project();
-    if project.id != project_id || project.revision != revision {
-        return Err("The project changed; choose the website again.".into());
-    }
+    let (project_id, revision) = (project.id, project.revision);
     let review = project.review_website_import(&files).map_err(message)?;
     let token = Uuid::new_v4();
     state.website_import = Some(WebsiteImportSnapshot {
