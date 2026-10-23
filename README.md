@@ -2,6 +2,8 @@
 
 Create a website by describing what belongs on the page. Place requests on the canvas, generate a design with your AI connection, then edit and export it. Desegnos is a Rust desktop app with an open canvas and no sidebars.
 
+For a source-level guide to the codebase, see the [project map](docs/PROJECT_MAP.md).
+
 ## Create your first website
 
 1. Choose **Blank website**, **Use my existing brand**, or **Open project**. Recent projects appear on the start screen.
