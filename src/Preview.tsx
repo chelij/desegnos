@@ -29,9 +29,9 @@ const staticPolicy = "default-src 'none'; script-src 'none'; script-src-attr 'no
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   pageId: string; draftId?: string | null; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
-  fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
+  onRuntimeProblems?: (errors: string[]) => void; fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
   content?: SiteContent; onReady?: () => void; referenceHeight?: number; onHeight?: (height: number) => void;
-}>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady, fixRuntimeErrors, aiDisabled, observationsVersion }, ref) {
+}>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady, onRuntimeProblems, fixRuntimeErrors, aiDisabled, observationsVersion }, ref) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [extent, setExtent] = useState(referenceHeight);
   const [descriptor, setDescriptor] = useState<PreviewDescriptor | null>(null);
@@ -39,6 +39,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [observations, setObservations] = useState<string[]>([]);
+  useEffect(() => { onRuntimeProblems?.(observations); }, [observations, onRuntimeProblems]);
   // A web link clicked in the preview, waiting for the user to open it in their browser.
   const [outsideLink, setOutsideLink] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
@@ -334,8 +335,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     {!staticView && outsideLink && <div className="message info preview-link" role="status"><span>This link leaves your site: <strong title={outsideLink}>{outsideLink.replace(/^https?:\/\//, '').slice(0, 80)}</strong></span>
       <button className="primary" onClick={() => { const url = outsideLink; setOutsideLink(null); void native('open_preview_link', { url }).catch(error => setObservations(previous => [...previous.slice(-9), error instanceof Error ? error.message : String(error)])); }}>Open in browser</button>
       <button aria-label="Dismiss link" onClick={() => setOutsideLink(null)}>×</button></div>}
-    {!staticView && !error && observations.length > 0 && <ProblemBanner className="preview-problem" message={runtimeError(observations[0])}
-      instruction="Open the page source and correct the script."
+    {!onRuntimeProblems && !staticView && !error && observations.length > 0 && <ProblemBanner className="preview-problem" message={runtimeError(observations[0])}
       action={!draftId && !jobId && fixRuntimeErrors ? { label: 'Fix with AI', disabled: aiDisabled, onClick: () => fixRuntimeErrors(observations) } : undefined}
       dismiss={() => setObservations([])} />}
   </div>;

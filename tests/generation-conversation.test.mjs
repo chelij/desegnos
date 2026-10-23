@@ -12,7 +12,7 @@ try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--jsx', 'react-jsx', '--moduleResolution', 'bundler', '--types', 'vite/client', '--skipLibCheck', '--outDir', temporary, 'src/GenerationLog.tsx'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  for (const name of ['GenerationLog', 'GenerationDrafts', 'generationDraftState']) {
+  for (const name of ['GenerationLog']) {
     let source = await readFile(join(temporary, `${name}.js`), 'utf8');
     source = source.replace(/^import .* from '\.\/WorkspaceSurface';$/m, 'const WorkspaceSurface = ({ children }) => children;')
       .replace(/^import .* from '\.\/api';$/m, "const native = () => { throw new Error('Rendering must not call the native bridge'); };")
@@ -33,8 +33,8 @@ try {
     const conflicted = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation }] } };
     const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: conflicted }));
     const visible = html.split('<summary>Technical details</summary>')[0];
-    assert.match(visible, /The AI added a script that affects the wrong part of the page\./);
-    assert.match(visible, /class="primary">Try again/);
+    assert.match(visible, /Needs attention/);
+    assert.equal((visible.match(/>Try again</g) ?? []).length, 1);
     assert.match(html, /<summary>Technical details<\/summary>/);
     assert.match(html, /Excerpt/);
     assert.doesNotMatch(visible, /data-desegnos-|Excerpt|private|script root|12345678-1234/);
@@ -42,12 +42,11 @@ try {
   });
   await test('conversation presents one ordered review without the legacy generation card or raw source', () => {
     const html = renderToStaticMarkup(React.createElement(GenerationLog, props));
-    const order = ['Sent to the AI', 'AI reply', 'Finish your draft', 'generation-draft', 'Design feedback', 'Suggested rules', 'Request details', 'token-footer'];
+    const order = ['Sent to the AI', 'AI reply', 'Design feedback', 'Suggested rules', 'Request details', 'token-footer'];
     let previous = -1;
     for (const marker of order) { const position = html.indexOf(marker); assert.ok(position > previous, `${marker} is missing or out of order`); previous = position; }
     assert.equal((html.match(/<summary>Request details<\/summary>/g) ?? []).length, 1);
-    assert.match(html, /Build remaining draft/);
-    assert.match(html, /Change request/);
+    assert.doesNotMatch(html, /Build remaining draft|Change request|Ask AI to fix|problem-banner|Needs details/);
     assert.doesNotMatch(html, /generation-status|generation-dialog|Copy code|PRIVATE GENERATED SOURCE/);
   });
   await test('preparation does not mount the old generation header inside the conversation', () => {

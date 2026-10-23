@@ -14,6 +14,8 @@ pub struct GenerationDraft {
     pub content: Option<SiteContent>,
     pub base_sha256: Option<String>,
     #[serde(default)]
+    pub base_content: Option<SiteContent>,
+    #[serde(default)]
     pub base_editor_ids: Vec<String>,
     pub reason: String,
     pub dismissed: bool,
@@ -52,6 +54,7 @@ pub fn retain_generation_drafts(
             code: text.into(),
             content: None,
             base_sha256: None,
+            base_content: None,
             base_editor_ids: vec![],
             reason: "The reply contains too many pages.".into(),
             dismissed: false,
@@ -121,6 +124,13 @@ pub fn retain_generation_drafts(
                 region_ids,
                 code: serde_json::to_string(page).expect("JSON serializes"),
                 content,
+                base_content: id.and_then(|id| project.page(id).ok()).map(|p| {
+                    p.content.clone().unwrap_or(SiteContent {
+                        html: String::new(),
+                        css: String::new(),
+                        javascript: String::new(),
+                    })
+                }),
                 base_sha256: id
                     .and_then(|id| project.page(id).ok())
                     .and_then(|p| source_hash(p.content.as_ref())),
@@ -143,6 +153,7 @@ pub fn retain_generation_drafts(
             code: text.into(),
             content: None,
             base_sha256: None,
+            base_content: None,
             base_editor_ids: vec![],
             reason: events
                 .first()
@@ -195,7 +206,7 @@ fn draft_content(value: &serde_json::Value, page: &Page) -> Option<SiteContent> 
 }
 
 impl GenerationDraft {
-    /// Native callers use this immediately before Preview/Apply, including past jobs.
+    /// Strict preview/review checks, including past jobs. Explicit apply validates below.
     pub fn check_source(&self, project: &Project) -> Result<()> {
         ensure(
             !self.applied && !self.dismissed,
@@ -291,6 +302,226 @@ impl GenerationDraft {
         Ok(())
     }
 
+    pub fn for_region(&self, region_id: Uuid) -> Result<Self> {
+        ensure(
+            self.region_ids.contains(&region_id),
+            "This draft does not contain that area.",
+        )?;
+        let mut draft = self.clone();
+        draft.region_ids = vec![region_id];
+        let token = format!("{}{}", self.id.simple(), region_id.simple());
+        draft.id = Uuid::parse_str(&digest(token.as_bytes())[..32]).expect("digest is a UUID");
+        if self.base_content.is_some() && self.region_ids.len() > 1 {
+            draft.base_sha256 = None;
+        }
+        Ok(draft)
+    }
+
+    /// Reconstruct against today's page, never replacing unrelated newer source.
+    pub fn rebased_content(&self, project: &Project) -> Result<SiteContent> {
+        // Editor bookkeeping supplied by the AI is not authority. Preserve known identities
+        // once and let the ordinary source transaction assign fresh identities to new items.
+        let mut normalized = self.clone();
+        if let Some(content) = &mut normalized.content {
+            validate_page_source(content).map_err(|e| Error(e.to_string()))?;
+            let doc = crate::editing::parse(&content.html)?;
+            let mut seen = std::collections::BTreeSet::new();
+            let mut changed = false;
+            for node in doc.select(&format!("[{ELEMENT_ID_ATTRIBUTE}]")).nodes() {
+                let id = node
+                    .attr(ELEMENT_ID_ATTRIBUTE)
+                    .expect("selected")
+                    .to_string();
+                if !self.base_editor_ids.contains(&id) || !seen.insert(id) {
+                    node.remove_attr(ELEMENT_ID_ATTRIBUTE);
+                    changed = true;
+                }
+            }
+            if changed {
+                content.html = crate::editing::body(&doc)?.inner_html().to_string();
+            }
+        }
+        ensure(
+            !self.applied && !self.dismissed,
+            "This draft is no longer available.",
+        )?;
+        let page = project.page(
+            self.page_id
+                .ok_or_else(|| Error("This reply cannot be reconstructed. Try again.".into()))?,
+        )?;
+        ensure(
+            !self.region_ids.is_empty()
+                && self
+                    .region_ids
+                    .iter()
+                    .all(|id| page.regions.iter().any(|r| r.id == *id)),
+            "The draft's requested areas no longer exist. Try again.",
+        )?;
+        let content = normalized
+            .content
+            .as_ref()
+            .ok_or_else(|| Error("This reply cannot be reconstructed. Try again.".into()))?;
+        // Explicit application uses the same valid-page boundary as a manual source edit.
+        // Scope/behavior heuristics remain diagnostics, rather than overriding this choice.
+        validate_page_source(content).map_err(|e| Error(e.to_string()))?;
+        crate::source::validate_draft_html(&content.html)?;
+        let output = normalized.content.as_ref().expect("checked");
+        if self.base_sha256.is_some() && source_hash(page.content.as_ref()) == self.base_sha256 {
+            return Ok(output.clone());
+        }
+        let base = self.base_content.as_ref().ok_or_else(|| Error(
+            "The page was edited after the AI made this draft, and its original source is unavailable. Try again.".into()))?;
+        let empty = SiteContent {
+            html: String::new(),
+            css: String::new(),
+            javascript: String::new(),
+        };
+        let current = page.content.as_ref().unwrap_or(&empty);
+        let mut html = current.html.clone();
+        if base.html != output.html {
+            let before = crate::editing::parse(&base.html)?;
+            let after = crate::editing::parse(&output.html)?;
+            let now = crate::editing::parse(&current.html)?;
+            let mut selectors = Vec::new();
+            for region in page
+                .regions
+                .iter()
+                .filter(|r| self.region_ids.contains(&r.id))
+            {
+                let root = format!("[data-desegnos-region=\"{}\"]", region.id);
+                let old_roots = before.select(&root).nodes().len();
+                let new_roots = after.select(&root).nodes().len();
+                if old_roots <= 1 && new_roots <= 1 && old_roots + new_roots > 0 {
+                    selectors.push(root);
+                } else {
+                    selectors.extend(region.targets().iter().map(|target| {
+                        if target.id.is_empty() {
+                            target.selector.clone()
+                        } else {
+                            format!("[{ELEMENT_ID_ATTRIBUTE}=\"{}\"]", target.id)
+                        }
+                    }));
+                }
+                // Region behavior can be supplied beside its root rather than inside it.
+                let script = format!("script[data-desegnos-script=\"{}\"]", region.id);
+                let scripts = after.select(&script);
+                if before.select(&script).nodes().len() > 0 || scripts.nodes().len() > 0 {
+                    let inside_selected_root = scripts.nodes().len() == 1
+                        && selectors.iter().any(|selector| {
+                            let root = after.select(selector);
+                            root.nodes().len() == 1
+                                && crate::stable_targets::contains(
+                                    root.nodes()[0],
+                                    scripts.nodes()[0],
+                                )
+                        });
+                    if inside_selected_root {
+                        let existing = now.select(&script);
+                        if existing.nodes().len() == 1
+                            && !selectors.iter().any(|selector| {
+                                let root = now.select(selector);
+                                root.nodes().len() == 1
+                                    && crate::stable_targets::contains(
+                                        root.nodes()[0],
+                                        existing.nodes()[0],
+                                    )
+                            })
+                        {
+                            existing.nodes()[0].remove_from_parent();
+                        }
+                    } else {
+                        selectors.push(script);
+                    }
+                }
+            }
+            ensure(
+                !selectors.is_empty(),
+                "The page was edited after the AI made this draft, and its area cannot be located. Try again.",
+            )?;
+            for selector in selectors {
+                let old = before.select(&selector);
+                let new = after.select(&selector);
+                let target = now.select(&selector);
+                if old.nodes().len() == 1 && target.nodes().len() == 1 && new.nodes().is_empty() {
+                    target.nodes()[0].remove_from_parent();
+                    continue;
+                }
+                let owned_script = selector.starts_with("script[");
+                if owned_script && target.nodes().is_empty() && new.nodes().is_empty() {
+                    continue;
+                }
+                if (old.nodes().is_empty() || owned_script)
+                    && target.nodes().is_empty()
+                    && new.nodes().len() == 1
+                {
+                    crate::editing::body(&now)?.append_html(new.nodes()[0].html());
+                    continue;
+                }
+                ensure(
+                    old.nodes().len() == 1 && new.nodes().len() == 1 && target.nodes().len() == 1,
+                    "The page was edited after the AI made this draft, and its area cannot be located uniquely. Try again.",
+                )?;
+                if old.nodes()[0].html() != new.nodes()[0].html() {
+                    // A rejected root may contain another request. Preserve newer content in
+                    // that request even when the caller explicitly overrides the enclosing one.
+                    for outside in page
+                        .regions
+                        .iter()
+                        .filter(|r| !self.region_ids.contains(&r.id))
+                    {
+                        let mut outside_selectors =
+                            vec![format!("[data-desegnos-region=\"{}\"]", outside.id)];
+                        outside_selectors.extend(outside.targets().iter().map(|target| {
+                            if target.id.is_empty() {
+                                target.selector.clone()
+                            } else {
+                                format!("[{ELEMENT_ID_ATTRIBUTE}=\"{}\"]", target.id)
+                            }
+                        }));
+                        for outside_selector in outside_selectors {
+                            let kept = now.select(&outside_selector);
+                            if kept.nodes().len() != 1 {
+                                continue;
+                            }
+                            let supplied = after.select(&outside_selector);
+                            if supplied.nodes().len() == 1
+                                && supplied.nodes()[0].id != new.nodes()[0].id
+                                && crate::stable_targets::contains(
+                                    new.nodes()[0],
+                                    supplied.nodes()[0],
+                                )
+                            {
+                                supplied.nodes()[0].replace_with_html(kept.nodes()[0].html());
+                            } else if supplied.nodes().is_empty() {
+                                let prior = before.select(&outside_selector);
+                                if prior.nodes().len() == 1
+                                    && prior.nodes()[0].id != old.nodes()[0].id
+                                    && crate::stable_targets::contains(
+                                        old.nodes()[0],
+                                        prior.nodes()[0],
+                                    )
+                                {
+                                    new.nodes()[0].append_html(kept.nodes()[0].html());
+                                }
+                            }
+                        }
+                    }
+                    target.nodes()[0].replace_with_html(new.nodes()[0].html());
+                }
+            }
+            html = crate::editing::body(&now)?.inner_html().to_string();
+        }
+        Ok(SiteContent {
+            html,
+            css: merge_draft_text(&base.css, &output.css, &current.css)?,
+            javascript: merge_draft_text(
+                &base.javascript,
+                &output.javascript,
+                &current.javascript,
+            )?,
+        })
+    }
+
     pub fn confirmation(&self, project: &Project) -> String {
         let protected = project
             .decisions
@@ -311,14 +542,6 @@ impl GenerationDraft {
         }
         text
     }
-
-    /// An automatic apply changes the page to the safe salvage, not to an unrelated edit.
-    pub fn rebase_after_apply(&mut self, project: &Project) {
-        self.base_sha256 = self
-            .page_id
-            .and_then(|id| project.page(id).ok())
-            .and_then(|p| source_hash(p.content.as_ref()));
-    }
 }
 
 impl Project {
@@ -336,9 +559,8 @@ impl Project {
         if self.applied_job_ids.contains(&draft.id) {
             return Ok(self.clone());
         }
-        draft.check(self)?;
+        let content = draft.rebased_content(self)?;
         let page_id = draft.page_id.expect("checked");
-        let content = draft.content.as_ref().expect("checked");
         let mut next = self
             .edit_page_source(
                 self.revision,
@@ -350,6 +572,18 @@ impl Project {
                 },
             )
             .map_err(|e| Error(e.to_string()))?;
+        for region in &mut next
+            .pages
+            .iter_mut()
+            .find(|page| page.id == page_id)
+            .expect("checked")
+            .regions
+        {
+            if draft.region_ids.contains(&region.id) {
+                region.completed = true;
+                region.runtime_errors.clear();
+            }
+        }
         // Even an identical source consumes the draft once and creates one history transaction.
         if next.revision == self.revision {
             next.revision = self
@@ -387,4 +621,38 @@ impl Project {
         next.validate()?;
         Ok(next)
     }
+}
+
+// A single changed span handles shared styles/behavior without replacing newer text.
+// Ambiguous or overlapping edits refuse rather than silently losing user work.
+fn merge_draft_text(base: &str, output: &str, current: &str) -> Result<String> {
+    if base == output || current == output {
+        return Ok(current.into());
+    }
+    if base == current {
+        return Ok(output.into());
+    }
+    if let Some(addition) = output.strip_prefix(base) {
+        return Ok(format!("{current}{addition}"));
+    }
+    let prefix = base
+        .chars()
+        .zip(output.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum::<usize>();
+    let suffix = base[prefix..]
+        .chars()
+        .rev()
+        .zip(output[prefix..].chars().rev())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a.len_utf8())
+        .sum::<usize>();
+    let old = &base[prefix..base.len() - suffix];
+    let new = &output[prefix..output.len() - suffix];
+    ensure(
+        !old.is_empty() && current.matches(old).count() == 1,
+        "The page was edited after the AI made this draft, and the same styles or behavior were changed. Try again.",
+    )?;
+    Ok(current.replacen(old, new, 1))
 }

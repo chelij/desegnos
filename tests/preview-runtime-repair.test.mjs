@@ -31,6 +31,10 @@ try {
       assert.doesNotMatch(renderToStaticMarkup(React.createElement(PreviewFrame, { ...props, ...extra })), /Fix with AI/);
     }
   });
+  await test('canvas-owned runtime problems suppress the preview banner', () => {
+    const html = renderToStaticMarkup(React.createElement(PreviewFrame, { ...props, onRuntimeProblems() {} }));
+    assert.doesNotMatch(html, /Fix with AI|preview-problem|role="alert"/);
+  });
   await test('AI connection and generation gating disable the repair action', () => {
     const html = renderToStaticMarkup(React.createElement(PreviewFrame, { ...props, aiDisabled: true }));
     assert.match(html, /class="primary" disabled="">Fix with AI/);

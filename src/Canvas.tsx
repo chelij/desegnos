@@ -1,5 +1,7 @@
 import { ProblemBanner } from './ProblemBanner.js';
-import { userError } from './userErrors.js';
+import { areaProblems, placeCallouts } from './generationProblems';
+import type { GenerationController } from './useGeneration';
+import { userError, runtimeError, generationError, generationPageError } from './userErrors.js';
 import { isWholePage } from './wholePageScope';
 import { forwardRef, useImperativeHandle, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -49,6 +51,7 @@ function requestPromptRect(rect: Rect, zoom: number): Rect {
 }
 
 type CanvasProps = {
+  generation?: GenerationController;
   archiveReports?: Record<string, import('./types').ArchiveReport[]>; projectId?: string;
   pendingImagesChanged: (count: number) => void; canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
   fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
@@ -61,7 +64,21 @@ type CanvasProps = {
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => void; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+  const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
+  const [problemErrors, setProblemErrors] = useState<Record<string, string>>({});
+  const [problemBusy, setProblemBusy] = useState(false);
+  const [runtimeProblems, setRuntimeProblems] = useState<string[]>([]);
+  useEffect(() => { setRuntimeProblems([]); }, [page.id]);
+  const problems = areaProblems(generation?.job ?? null, page);
+  const dismissProblem = (key: string) => setDismissedProblems(previous => [...previous, key]);
+  async function applyProblem(regionId: string, draftId: string, key: string) {
+    if (!generation?.job) return;
+    setProblemBusy(true);
+    try { await generation.draftAction(generation.job.jobId, draftId, 'apply', undefined, regionId); }
+    catch (error) { setProblemErrors(previous => ({ ...previous, [key]: String(error) })); }
+    finally { setProblemBusy(false); }
+  }
   const toolbar = useRef<HTMLDivElement>(null);
   const measurement = useRef<HTMLDivElement>(null);
   const [measurementPosition, setMeasurementPosition] = useState<Point | null>(null);
@@ -371,7 +388,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
     stage.current!.setPointerCapture(event.pointerId); setCursor(null);
   }
   function beginPan(event: PointerEvent) {
-    if (event.target instanceof Element && event.target.closest('.canvas-empty-hint button')) return;
+    if (event.target instanceof Element && event.target.closest('.canvas-empty-hint button, .area-problem')) return;
     if (event.button === 1 || event.button === 0 && (panKey.current || tool === 'pan')) startPan(event, false);
   }
   function begin(event: PointerEvent, kind: Gesture['kind'], region?: Region) {
@@ -1075,6 +1092,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
   return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers && !liveView ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''} ${repicking ? 'repicking' : ''} ${liveView ? 'live' : ''}`}
     onKeyDownCapture={event => { if (!(event.target instanceof Element && event.target.closest('.workspace-surface')) && event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
     <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 8 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
+    {(() => {
+      const key = `page:${generation?.job?.jobId ?? 'start'}:${page.id}`;
+      const failed = (!problems.length && generation?.error) || (generation?.job && ['failed', 'unknown', 'blocked'].includes(generation.job.status) && !problems.length && !generation.job.drafts?.some(d => d.applied || d.dismissed) ? generationPageError(generation.job.message) : '');
+      if (runtimeProblems.length && !dismissedProblems.includes(`runtime:${key}`)) return <div className="canvas-page-problem" role="alert"><span>{runtimeError(runtimeProblems[0])}</span><button disabled={aiDisabled} onClick={() => fixRuntimeErrors?.(runtimeProblems)}>Fix with AI</button><button aria-label="Dismiss problem" onClick={() => dismissProblem(`runtime:${key}`)}>×</button></div>;
+      if (!failed || dismissedProblems.includes(key)) return null;
+      return <div className="canvas-page-problem" role="alert"><span>{userError(failed)}</span><button disabled={aiDisabled} onClick={() => { void generation?.prepare().catch(() => {}); }}>Try again</button><button aria-label="Dismiss problem" onClick={() => dismissProblem(key)}>×</button></div>;
+    })()}
     {gridSettings.rulers && !liveView && <><div className="ruler-corner" aria-hidden="true">{rulerUnit === 'percent' ? '%' : 'px'}</div>
       <Ruler axis="x" unit={rulerUnit} start={visible.x} length={measurements.width} reference={page.viewport.width} zoom={zoom} cursor={cursor?.x} selection={selectedRect ? [selectedRect.x, selectedRect.x + selectedRect.width] : undefined} />
       <Ruler axis="y" unit={rulerUnit} start={visible.y} length={measurements.height} reference={page.viewport.height} zoom={zoom} cursor={cursor?.y} selection={selectedRect ? [selectedRect.y, selectedRect.y + selectedRect.height] : undefined} /></>}
@@ -1112,7 +1136,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
           </div>}
           {liveView && page.content && <div className={`live-canvas-page${tool === 'request' || panReady || panning ? ' passive' : ''}`} data-testid="live-canvas-page" style={positioned({ x: 0, y: 0, width: liveView.width, height: liveHeight })}>
             <div className="live-canvas-content" style={{ width: liveView.width, height: liveHeight, transform: `scale(${zoom})` }}>
-              <PreviewFrame fixRuntimeErrors={fixRuntimeErrors} aiDisabled={aiDisabled} observationsVersion={observationsVersion} pageId={page.id} revision={`live:${acceptedVersion}`} runScripts title={`${page.name} live`} />
+              <PreviewFrame onRuntimeProblems={setRuntimeProblems} fixRuntimeErrors={fixRuntimeErrors} aiDisabled={aiDisabled} observationsVersion={observationsVersion} pageId={page.id} revision={`live:${acceptedVersion}`} runScripts title={`${page.name} live`} />
             </div>
           </div>}
           <div className={`screen-guide ${page.content ? 'has-preview' : ''}`} data-testid="screen-guide" style={positioned({ x: 0, y: 0, ...page.viewport })} aria-hidden="true">
@@ -1134,6 +1158,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ar
           </div>}
           {extras.map(item => <div key={item.element.id ?? item.element.selector} data-testid="multi-element-selection" data-element-id={item.element.id} className="element-selection multi-selection" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }} aria-hidden="true" />)}
           {inlineText && <InlineTextEditor key={`${inlineText.selection.element.sourceSha256}:${inlineText.index}`} text={inlineText} origin={origin} zoom={zoom} layer={overlayLayer + 4} disabled={editingElement} finish={finishText} />}
+          {placeCallouts(problems, page.regions.map(region => region.rect), origin, zoom, dismissedProblems).map(position => {
+            const problem = problems.find(item => item.key === position.key)!;
+            const error = problemErrors[problem.key];
+            const busy = problemBusy || !!generation?.operation || generation?.canStop;
+            return <div key={problem.key} role="alert" className="area-problem" style={{ left: position.x, top: position.y, width: position.width, height: position.height, zIndex: overlayLayer + 5 }} onPointerDown={event => event.stopPropagation()}>
+              <span>{error ? generationError(error, page.regions.find(r => r.id === problem.regionId)?.prompt) : problem.message}</span>
+              <div><button disabled={busy || !problem.draftId || !!error} onClick={() => { void applyProblem(problem.regionId, problem.draftId!, problem.key); }}>Apply anyway</button>
+              <button disabled={busy || aiDisabled} onClick={() => { void generation?.prepare(undefined, [problem.regionId]).catch(() => {}); }}>Try again</button>
+              {!problem.stale && !error && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>}
+              <button aria-label="Dismiss problem" onClick={() => dismissProblem(problem.key)}>×</button></div>
+            </div>;
+          })}
           {changing.map(({ rect, shape }, index) => shape && shape.kind !== 'rect' ? <RegionOutline key={index} shape={shape} rect={rect} bounds={bounds} zoom={zoom} layer={overlayLayer + 2} draft /> : <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
           {!editBusy && !liveView && placeholders.map(item => <button key={item.element.selector} type="button" className="image-drop-target" style={{ ...paintStyle(item.rect, bounds, zoom), zIndex: overlayLayer + 1 }}
             onPointerDown={event => event.stopPropagation()} onClick={event => { if (event.shiftKey || event.ctrlKey || event.metaKey) toggleElement(item); else if (repicking && repick) { const id = repicking; setRepicking(null); void repick(id, item).catch(error => setElementError(String(error))); } else { chooseElement(item); browseImage(item); } }} title="Drop a picture here, or click to choose one">

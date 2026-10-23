@@ -2385,6 +2385,7 @@ fn repair_draft_uses_current_source_instead_of_its_stale_base_and_retained_code(
         code: "STALE DRAFT SOURCE MUST NOT BE SENT".into(),
         content: original.pages[0].content.clone(),
         base_sha256: Some("stale-base".into()),
+        base_content: original.pages[0].content.clone(),
         base_editor_ids: vec![],
         reason: "Keep the change inside the requested area".into(),
         dismissed: false,

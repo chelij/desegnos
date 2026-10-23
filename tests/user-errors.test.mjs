@@ -29,11 +29,14 @@ try {
   await test('generation diagnostics stay intact while their display is plain', () => {
     const diagnostic = 'Area 561acc85-1234-1234-1234-123456789012 ([data-desegnos-region=secret]): Region script root contains another region. Excerpt: <section id="private">';
     const job = { message: diagnostic };
-    assert.equal(generationError(job.message), 'The AI added a script that affects the wrong part of the page. Try again.');
+    assert.equal(generationError(job.message), '“this request” would also change content outside this area.');
     assert.equal(job.message, diagnostic);
-    assert.equal(generationError('CSS selector reaches outside its box'), 'The AI added styles that affect the wrong part of the page. Try again.');
-    assert.equal(generationError('Invalid candidate schema'), "The AI sent a reply Desegnos couldn't use. Try again.");
-    assert.equal(generationError('Source revision changed'), 'The page has changed since this draft was made. Try again.');
+    assert.equal(generationError('Region script contains another region', 'Add scrolling chat', 'Box 20'), '“Add scrolling chat” would also change Box 20.');
+    assert.equal(generationError('Editor IDs must be unique', 'Add chat'), 'Two items ended up with the same name, so editing one could change the other.');
+    assert.equal(generationError('CSS selector reaches outside its box'), '“this request” would also change content outside this area.');
+    assert.equal(generationError('Region script cannot be parsed', 'Add chat'), 'The AI did not produce a usable page for “Add chat”.');
+    assert.equal(generationError('Invalid candidate schema'), 'The AI did not produce a usable page for “this request”.');
+    assert.equal(generationError('Source revision changed'), 'The page was edited after the AI made this draft.');
   });
   await test('native and caught errors hide internal details and keep plain instructions', () => {
     assert.equal(userError(''), '');

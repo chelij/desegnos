@@ -1,4 +1,3 @@
-import { needsAiSettings, ProblemBanner } from './ProblemBanner.js';
 import { userError, generationError } from './userErrors.js';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
@@ -56,7 +55,7 @@ export function GenerationFeedback({ controller, compact = false, children, open
   if (!job && !operation && !error && !controller.stopped) return null;
   const minutes = elapsedSeconds ?? 0;
   const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your page…' : 'Building your page…',
-    ready: 'Updating your page…', blocked: 'Needs details', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
+    ready: 'Updating your page…', blocked: 'Needs attention', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your page…', applied: 'Page updated' };
   const heading = operation === 'Stopping…' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
   return <section className={`generation-status${compact ? ' compact' : ''}`} data-job-status={job?.status} aria-label="Generation status">
@@ -66,10 +65,6 @@ export function GenerationFeedback({ controller, compact = false, children, open
       </p>}
 
     </div>{children && <div className="generation-status-actions">{children}</div>}
-    {(error || job && (['blocked', 'failed', 'unknown'].includes(job.status) || job.candidate?.regions.some(item => item.status === 'conflict'))) && <ProblemBanner
-      key={`${job?.jobId}:${job?.status}:${error}`}
-      message={error ? userError(error) : job?.status === 'blocked' || job?.candidate?.regions.some(item => item.status === 'conflict') ? generationError(job?.candidate?.regions.find(item => item.status === 'conflict')?.explanation ?? job?.message ?? '') : userError(job?.message || 'The AI could not finish this request. Try again.')}
-      action={openSettings && needsAiSettings(error || job?.message || '') ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!operation || controller.canStop, onClick: () => { void controller.prepare().catch(() => {}); } }} />}
 
   </section>;
 }
@@ -145,8 +140,8 @@ export function GenerationDetails({ controller, project, settings, openSettings,
         {job?.status === 'prepared' && <button className="primary" disabled={!!operation} onClick={() => { void controller.start().catch(() => {}); }}>Send and generate</button>}
         {controller.canStop && <button onClick={() => { void controller.cancel().catch(() => {}); }}>Cancel generation</button>}
       </GenerationFeedback><div className="generation-dialog">
-      {usageError && <ProblemBanner message={userError(usageError)} />}
-      {job?.dossierError && <ProblemBanner message={userError(job.dossierError)} />}
+      {usageError && <p role="status">{userError(usageError)}</p>}
+      {job?.dossierError && <p role="status">{userError(job.dossierError)}</p>}
       {!job ? <><p>{operation ? 'Preparing…' : 'No generation request is prepared.'}</p><div className="form-actions">
         <button onClick={openSettings}>AI settings</button>{!operation && <button onClick={() => { void controller.prepare().catch(() => {}); }}>Prepare request again</button>}
       </div></> : <>
@@ -183,13 +178,13 @@ export function GenerationDetails({ controller, project, settings, openSettings,
           <strong>Attempt {attempt.ordinal} · {readable(attempt.status)}</strong><p className="small">Started {attempt.startedAt}{attempt.finishedAt ? ` · Finished ${attempt.finishedAt}` : ''}</p>
           {attempt.responseId && <p className="small response-id">Response: {attempt.responseId}</p>}{attempt.usage && <p className="small">{attempt.usage.inputTokens} input · {attempt.usage.outputTokens} output · {attempt.usage.totalTokens} total tokens</p>}
         </li>)}</ol>}</section>}
-        <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><ProblemBanner message="The AI could not finish this request." action={{ label: 'Try again', disabled: !!operation, onClick: () => { void controller.prepare().catch(() => {}); } }} />{job.message && <details><summary>Technical details</summary><p className="small">{job.message}</p></details>}</>}</> : <>
+        <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><p>Needs attention</p>{job.message && <details><summary>Technical details</summary><p className="small">{job.message}</p></details>}</>}</> : <>
           {job.status === 'applied' && conflicts.length > 0 && <p>Applied {candidate.regions.length - conflicts.length} of {candidate.regions.length} areas</p>}
-          {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft"><ProblemBanner message={generationError(conflicts[0]?.explanation ?? job.message)} action={{ label: 'Try again', disabled: !!operation, onClick: () => { void controller.prepare().catch(() => {}); } }} />
+          {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft">
             <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
               const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
               return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
-                {request && !request.completed && <button onClick={() => editRequest(region.regionId)}>Change request</button>}</li>;
+                <span>Needs attention</span></li>;
             })}</ul>
             <details><summary>Technical details</summary><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></details>
           </section> : <><h3>Your page</h3><p>{candidate.summary}</p></>}
@@ -212,13 +207,13 @@ export function GenerationDetails({ controller, project, settings, openSettings,
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
           {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready changes' : 'Apply changes'}</button>}
-          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>{conflicts.length > 0 ? 'Build remaining draft' : job.status === 'blocked' ? 'Build draft' : 'Try again'}</button>}
+          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare().catch(() => {}); }}>Try again</button>}
         </div>
       </>}
     </div>
     {confirmRetry && job && <section ref={retryConfirmation} aria-label="Confirm retry" className="dialog-body"><strong>Try these requests with the current page?</strong><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
       <p>{usesChatgpt ? 'The retry counts toward that account’s ChatGPT plan or credits balance. Earlier attempts may also have used your plan or credits.' : `Estimated job cost: ${money(job.estimateUsd)}. Earlier attempts may also have been charged.`}</p>
-      {usageError && <ProblemBanner message={userError(usageError)} />}
+      {usageError && <p role="status">{userError(usageError)}</p>}
       <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { dismissRetry(); void controller.retry().catch(() => {}); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={dismissRetry}>Keep current job</button></div></section>}
   </>;
 }

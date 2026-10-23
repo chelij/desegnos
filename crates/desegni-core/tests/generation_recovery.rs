@@ -461,8 +461,6 @@ fn blocked_draft_source_remains_copyable_and_cannot_apply() {
     let (project, snapshot, draft) = retained_css_draft();
     for html in [
         "<script src='https://example.com/code.js'></script>",
-        "<button onclick=\"import('https://example.com/code.js')\">Run</button>",
-        "<p data-desegnos-id='newidentity'>Invented ID</p>",
         "<div><span></div>",
     ] {
         let mut unsafe_draft = draft.clone();
@@ -498,7 +496,19 @@ fn stale_draft_revalidates_current_page_and_restored_source_fits_again() {
             .to_string()
             .contains("no longer fits")
     );
-    assert!(changed.apply_generation_draft(&snapshot, &draft).is_err());
+    let rebased = changed.apply_generation_draft(&snapshot, &draft).unwrap();
+    assert!(
+        rebased.pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .contains("Later edit")
+    );
+    assert_eq!(
+        rebased.pages[0].content.as_ref().unwrap().css,
+        "body{color:red}"
+    );
     changed.pages[0].content = project.pages[0].content.clone();
     draft.check(&changed).unwrap();
     // Revision-only changes elsewhere do not make this page stale.
@@ -532,7 +542,7 @@ fn protected_items_are_named_in_draft_confirmation() {
 }
 
 #[test]
-fn local_dom_javascript_is_overridable_but_code_loaders_are_copy_only() {
+fn explicit_apply_accepts_parseable_javascript_rejected_by_behavior_heuristics() {
     let (project, snapshot, draft) = retained_css_draft();
     let mut local = draft.clone();
     local.content.as_mut().unwrap().javascript = "document.querySelector('button').addEventListener('click', () => { document.body.classList.toggle('open'); });".into();
@@ -547,7 +557,11 @@ fn local_dom_javascript_is_overridable_but_code_loaders_are_copy_only() {
         let mut blocked = draft.clone();
         blocked.content.as_mut().unwrap().javascript = javascript.into();
         assert!(blocked.check(&project).is_err(), "{javascript}");
-        assert!(project.apply_generation_draft(&snapshot, &blocked).is_err());
+        let applied = project.apply_generation_draft(&snapshot, &blocked).unwrap();
+        assert_eq!(
+            applied.pages[0].content.as_ref().unwrap().javascript,
+            javascript
+        );
     }
 }
 
@@ -860,4 +874,270 @@ fn inert_script_beside_its_unique_root_is_moved_before_scope_validation() {
         .unwrap()
         .validate()
         .unwrap();
+}
+
+#[test]
+fn stale_area_draft_keeps_newer_edits_in_other_areas() {
+    let (project, snapshot, mut draft) = retained_css_draft();
+    let first = project.pages[0].regions[0].id;
+    draft.region_ids = vec![first];
+    let second = project.pages[0].regions[1].id;
+    draft.content.as_mut().unwrap().html = project.pages[0]
+        .content
+        .as_ref()
+        .unwrap()
+        .html
+        .replacen("Original", "AI chat", 1);
+    let mut changed = project.clone();
+    changed.revision += 1;
+    changed.pages[0].content.as_mut().unwrap().html =
+        changed.pages[0].content.as_ref().unwrap().html.replace(
+            &format!("data-desegnos-region='{second}'>Original"),
+            &format!("data-desegnos-region='{second}'>My newer heading"),
+        );
+    let next = changed.apply_generation_draft(&snapshot, &draft).unwrap();
+    let html = &next.pages[0].content.as_ref().unwrap().html;
+    assert!(html.contains("AI chat"));
+    assert!(html.contains("My newer heading"));
+    assert!(
+        next.pages[0]
+            .regions
+            .iter()
+            .find(|r| r.id == first)
+            .unwrap()
+            .completed
+    );
+    assert!(
+        !next.pages[0]
+            .regions
+            .iter()
+            .find(|r| r.id == second)
+            .unwrap()
+            .completed
+    );
+}
+
+#[test]
+fn unparseable_draft_does_not_change_session_or_journal() {
+    let (project, snapshot, mut draft) = retained_css_draft();
+    draft.content.as_mut().unwrap().html = "<div><span></div>".into();
+    let mut session = Session::new(project.clone()).unwrap();
+    assert!(
+        session
+            .apply_generation_draft(&snapshot, &draft, |_| panic!("invalid draft written"))
+            .is_err()
+    );
+    assert_eq!(session.project(), &project);
+    assert!(!session.can_undo());
+}
+
+#[test]
+fn blocked_identity_draft_applies_as_one_undoable_change_with_fresh_editor_ids() {
+    let (project, snapshot, mut draft) = retained_css_draft();
+    draft.content.as_mut().unwrap().html =
+        "<p data-desegnos-id='duplicated'>Chat</p><p data-desegnos-id='duplicated'>Messages</p>"
+            .into();
+    assert!(draft.check(&project).is_err());
+    let mut session = Session::new(project.clone()).unwrap();
+    let mut writes = 0;
+    session
+        .apply_generation_draft(&snapshot, &draft, |_| {
+            writes += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(writes, 1);
+    assert!(
+        session.project().pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .contains("Messages")
+    );
+    assert!(
+        !session.project().pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .contains("duplicated")
+    );
+    assert!(
+        session.project().pages[0]
+            .regions
+            .iter()
+            .all(|r| r.completed)
+    );
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages[0].content, project.pages[0].content);
+    assert!(!session.can_undo());
+}
+
+#[test]
+fn scoped_draft_only_applies_one_area_and_can_apply_the_next_independently() {
+    let (project, snapshot, draft) = retained_css_draft();
+    let first = project.pages[0].regions[0].id;
+    let second = project.pages[0].regions[1].id;
+    let mut draft = draft;
+    draft.content.as_mut().unwrap().html = project.pages[0]
+        .content
+        .as_ref()
+        .unwrap()
+        .html
+        .replace("Original", "AI result");
+    let next = project
+        .apply_generation_draft(&snapshot, &draft.for_region(first).unwrap())
+        .unwrap();
+    assert_eq!(
+        next.pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .matches("AI result")
+            .count(),
+        1
+    );
+    assert!(next.pages[0].regions[0].completed);
+    assert!(!next.pages[0].regions[1].completed);
+    let final_page = next
+        .apply_generation_draft(&snapshot, &draft.for_region(second).unwrap())
+        .unwrap();
+    assert_eq!(
+        final_page.pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .matches("AI result")
+            .count(),
+        2
+    );
+    assert!(final_page.pages[0].regions[1].completed);
+}
+
+#[test]
+fn scoped_draft_can_create_its_area_on_an_empty_page() {
+    let (project, snapshot, candidate) = fixture(false);
+    let text = serde_json::to_string(&candidate).unwrap();
+    let drafts = retain_generation_drafts(&text, &snapshot, &project, None, &[]);
+    let id = project.pages[0].regions[0].id;
+    let draft = drafts[0].for_region(id).unwrap();
+    let next = project.apply_generation_draft(&snapshot, &draft).unwrap();
+    let html = &next.pages[0].content.as_ref().unwrap().html;
+    assert_eq!(html.matches("Updated").count(), 1);
+    assert!(next.pages[0].regions[0].completed);
+    assert!(!next.pages[0].regions[1].completed);
+}
+
+#[test]
+fn missing_stale_target_refuses_without_touching_other_content() {
+    let (project, snapshot, mut draft) = retained_css_draft();
+    draft.region_ids = vec![project.pages[0].regions[0].id];
+    draft.content.as_mut().unwrap().html = project.pages[0]
+        .content
+        .as_ref()
+        .unwrap()
+        .html
+        .replacen("Original", "Chat", 1);
+    let mut current = project.clone();
+    current.pages[0].content.as_mut().unwrap().html = "<p>My replacement page</p>".into();
+    let error = current
+        .apply_generation_draft(&snapshot, &draft)
+        .unwrap_err();
+    assert!(error.to_string().contains("Try again"));
+    assert!(
+        current.pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .contains("My replacement page")
+    );
+}
+
+#[test]
+fn stale_enclosing_area_keeps_newer_content_in_a_nested_other_request() {
+    let (mut project, _, _) = fixture(true);
+    let first = project.pages[0].regions[0].id;
+    let other = project.pages[0].regions[1].id;
+    project.pages[0].content.as_mut().unwrap().html = format!(
+        "<section data-desegnos-region='{first}'>Old chat<section data-desegnos-region='{other}'>Heading</section></section>"
+    );
+    let snapshot = project.prepare_requirements().unwrap();
+    let value = json!({"pages":[{"pageId":project.pages[0].id,"content":{
+        "html":format!("<section data-desegnos-region='{first}'>AI chat<section data-desegnos-region='{other}'>AI heading</section></section>"),
+        "css":"", "javascript":""}}]});
+    let draft = retain_generation_drafts(&value.to_string(), &snapshot, &project, None, &[])
+        .remove(0)
+        .for_region(first)
+        .unwrap();
+    let mut current = project.clone();
+    current.pages[0].content.as_mut().unwrap().html = current.pages[0]
+        .content
+        .as_ref()
+        .unwrap()
+        .html
+        .replace("Heading", "My newer heading");
+    let next = current.apply_generation_draft(&snapshot, &draft).unwrap();
+    let html = &next.pages[0].content.as_ref().unwrap().html;
+    assert!(html.contains("AI chat"));
+    assert!(html.contains("My newer heading"));
+    assert!(!html.contains("AI heading"));
+}
+
+#[test]
+fn scoped_draft_keeps_its_behavior_when_the_script_is_beside_the_area() {
+    let (project, snapshot, mut draft) = retained_css_draft();
+    let first = project.pages[0].regions[0].id;
+    draft.content.as_mut().unwrap().html.push_str(&format!("<script type='application/x-desegnos-region' data-desegnos-script='{first}'>root.dataset.chat = 'ready';</script>"));
+    let next = project
+        .apply_generation_draft(&snapshot, &draft.for_region(first).unwrap())
+        .unwrap();
+    assert!(
+        next.pages[0]
+            .content
+            .as_ref()
+            .unwrap()
+            .html
+            .contains("root.dataset.chat")
+    );
+    assert!(!next.pages[0].regions[1].completed);
+}
+
+#[test]
+fn scoped_draft_moves_owned_scripts_without_duplicates_or_missing_behavior() {
+    for inside_before in [true, false] {
+        let (mut project, _, _) = fixture(true);
+        let id = project.pages[0].regions[0].id;
+        let script = format!(
+            "<script type='application/x-desegnos-region' data-desegnos-script='{id}'>root.dataset.chat = 'ready';</script>"
+        );
+        let html = |inside| {
+            if inside {
+                format!("<section data-desegnos-region='{id}'>Chat{script}</section>")
+            } else {
+                format!("<section data-desegnos-region='{id}'>Chat</section>{script}")
+            }
+        };
+        project.pages[0].content.as_mut().unwrap().html = html(inside_before);
+        let snapshot = project.prepare_requirements().unwrap();
+        let value = json!({"pages":[{"pageId":project.pages[0].id,"content":{"html":html(!inside_before),"css":"","javascript":""}}]});
+        let draft = retain_generation_drafts(&value.to_string(), &snapshot, &project, None, &[])
+            .remove(0)
+            .for_region(id)
+            .unwrap();
+        let next = project.apply_generation_draft(&snapshot, &draft).unwrap();
+        assert_eq!(
+            next.pages[0]
+                .content
+                .as_ref()
+                .unwrap()
+                .html
+                .matches("root.dataset.chat")
+                .count(),
+            1
+        );
+    }
 }

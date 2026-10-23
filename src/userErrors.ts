@@ -13,15 +13,16 @@ export function runtimeError(error: string): string {
   return 'A script on this page stopped working.';
 }
 
-export function generationError(reason: string): string {
+export function generationError(reason: string, request = 'this request', affected?: string): string {
   reason = reason.split(/\bExcerpt:/i)[0];
-  if (/changed|revision|stale/i.test(reason)) return 'The page has changed since this draft was made. Try again.';
-  if (/dynamic|executable|script|JavaScript|shared behavior/i.test(reason)) return 'The AI added a script that affects the wrong part of the page. Try again.';
-  if (/CSS outside|CSS selector|stylesheet|sharedCss/i.test(reason)) return 'The AI added styles that affect the wrong part of the page. Try again.';
-  if (/target|selector|missing.*(?:element|region)|not found/i.test(reason)) return "The AI couldn't find the part of the page to change. Try again.";
-  if (/outside|scope|another region|overlap/i.test(reason)) return 'The AI changed the wrong part of the page. Try again.';
-  if (/JSON|schema|parse|reply|response|format/i.test(reason)) return "The AI sent a reply Desegnos couldn't use. Try again.";
-  return "The AI's changes couldn't be added to the page. Try again.";
+  const subject = request.trim().replace(/[\n\r]+/g, ' ').slice(0, 100).replace(/[.!?]+$/, '') || 'this request';
+  if (/cannot be located|original source is unavailable|same styles or behavior|cannot be reconstructed|could not be decoded/i.test(reason)) return `The saved result for “${subject}” cannot be merged into this page.`;
+  if (/page.*(?:changed|edited)|revision|stale|edited after/i.test(reason)) return 'The page was edited after the AI made this draft.';
+  if (/duplicate|(?:ids?|names?).*unique|unique.*(?:ids?|names?)|same.*(?:id|name)/i.test(reason)) return 'Two items ended up with the same name, so editing one could change the other.';
+  if (/JSON|schema|parse|reply|response|format|writing mistake/i.test(reason)) return `The AI did not produce a usable page for “${subject}”.`;
+  if (/dynamic|executable|script|JavaScript|shared behavior|CSS outside|CSS selector|stylesheet|sharedCss|outside|scope|another region|overlap/i.test(reason)) return `“${subject}” would also change ${affected ?? 'content outside this area'}.`;
+  if (/target|selector|missing.*(?:element|region)|not found/i.test(reason)) return `The page item needed for “${subject}” could not be found.`;
+  return `The AI could not complete “${subject}” as requested.`;
 }
 
 function isPlain(value: string): boolean {
@@ -70,4 +71,8 @@ export function userError(error: unknown): string {
   if (isPlain(value)) return value;
   for (const [pattern, message] of messages) if (pattern.test(value)) return message;
   return 'Something went wrong. Try again.';
+}
+
+export function generationPageError(reason: string): string {
+  return reason ? userError(reason) : 'The AI could not finish this request.';
 }

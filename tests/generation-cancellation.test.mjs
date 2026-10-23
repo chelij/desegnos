@@ -45,6 +45,15 @@ try {
     ]);
   });
 
+  await test('apply anyway targets one area and accepts the updated workspace', async () => {
+    const calls = [], accepted = [];
+    const workspace = { project: { revision: 42 } };
+    const render = setup(async (command, args) => { calls.push({ command, args }); return { job: prepared, workspace }; }, value => accepted.push(value));
+    await render().draftAction('saved-job', 'draft', 'apply', undefined, 'area');
+    assert.deepEqual(calls, [{ command: 'generation_draft', args: { jobId: 'saved-job', draftId: 'draft', action: 'apply', confirmedRevision: undefined, regionId: 'area' } }]);
+    assert.deepEqual(accepted, [workspace]);
+  });
+
   await test('runtime repair uses the standard lifecycle with only its current request targeted', async () => {
     const calls = [];
     const render = setup(async (command, args) => { calls.push({ command, args }); return prepared; });

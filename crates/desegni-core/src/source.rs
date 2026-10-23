@@ -541,8 +541,8 @@ fn authored_span(children: &[Child]) -> Option<Span> {
     (start != u32::MAX).then(|| Span::new(swc_common::BytePos(start), swc_common::BytePos(end)))
 }
 
-/// Overrides accept local DOM behavior, but never code loaders or reflection. Unknown
-/// capabilities stay copy-only: arbitrary JavaScript cannot be proven safe by URL matching.
+/// Strict draft previews accept local DOM behavior but reject code loaders or reflection.
+/// Explicit draft application uses the ordinary page-source parser instead.
 pub(crate) fn validate_draft_javascript(text: &str) -> crate::Result<()> {
     validate_behavior_javascript(text, false)
 }

@@ -3115,9 +3115,6 @@ pub fn apply_generation(
         let _ = service.persist(record);
         return Err(error);
     }
-    for draft in &mut record.view.drafts {
-        draft.rebase_after_apply(workspace.project()?);
-    }
     record.view.applied_source_fingerprints = workspace
         .project()?
         .pages
@@ -3388,6 +3385,7 @@ pub fn generation_draft(
     draft_id: Uuid,
     action: String,
     confirmed_revision: Option<u64>,
+    region_id: Option<Uuid>,
 ) -> NativeResult<DraftReview> {
     trusted(&window)?;
     let mut workspace = workspace.lock().map_err(message)?;
@@ -3398,7 +3396,13 @@ pub fn generation_draft(
         .iter()
         .position(|d| d.id == draft_id)
         .ok_or("The draft is unavailable.")?;
-    let draft = view.drafts[index].clone();
+    let mut draft = view.drafts[index].clone();
+    let _ = confirmed_revision; // Apply uses the locked current page, including newer edits.
+    if action == "apply" {
+        if let Some(region_id) = region_id {
+            draft = draft.for_region(region_id).map_err(message)?;
+        }
+    }
     let revision = workspace.project()?.revision;
     let blocked = draft.check(workspace.project()?).err().map(message);
     let previewable = draft.check_source(workspace.project()?).is_ok();
@@ -3414,12 +3418,9 @@ pub fn generation_draft(
             true
         }
         "apply" => {
-            if confirmed_revision != Some(revision) {
-                return Err("The page changed. Review the draft again before applying.".into());
-            }
-            if let Some(reason) = &blocked {
-                return Err(reason.clone());
-            }
+            draft
+                .rebased_content(workspace.project()?)
+                .map_err(message)?;
             let checkpoint = service
                 .job_directory(view.project_id, job_id)
                 .join(format!("before-draft-{}-{revision}.desegni", draft.id));
@@ -3440,10 +3441,35 @@ pub fn generation_draft(
                     desegni_core::source_fingerprints(page.content.as_ref()),
                 );
             }
+            if let Some(candidate) = &mut view.candidate {
+                for outcome in &mut candidate.regions {
+                    if draft.region_ids.contains(&outcome.region_id) {
+                        outcome.status = desegni_core::RegionStatus::Implemented;
+                    }
+                }
+            }
             for retained in &mut view.drafts {
                 if retained.page_id == draft.page_id && retained.code == draft.code {
-                    retained.applied = true;
+                    if let Some(region_id) = region_id {
+                        retained.region_ids.retain(|id| *id != region_id);
+                        retained.applied = retained.region_ids.is_empty();
+                    } else {
+                        retained.applied = true;
+                    }
                 }
+            }
+            if view.areas.iter().all(|area| {
+                workspace
+                    .project()
+                    .ok()
+                    .and_then(|p| p.page(area.page_id).ok())
+                    .is_some_and(|page| {
+                        page.regions
+                            .iter()
+                            .any(|r| r.id == area.region_id && r.completed)
+                    })
+            }) {
+                view.status = JobStatus::Applied;
             }
             true
         }

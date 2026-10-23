@@ -204,3 +204,11 @@
 .delete-inline > span { white-space: nowrap; }
 .delete-inline details { font-size: 11px; }
 .delete-inline details[open] { flex-basis: 100%; }
+
+.area-problem, .canvas-page-problem { background: #fff3d2; color: #2c2000; border: 2px solid #795600; border-radius: 7px; padding: 10px; box-sizing: border-box; box-shadow: 0 2px 8px #0004; font-size: 13px; line-height: 18px; }
+.area-problem { position: absolute; display: flex; flex-direction: column; justify-content: space-between; pointer-events: auto; }
+.area-problem > span { overflow-wrap: anywhere; }
+.area-problem > div, .canvas-page-problem { display: flex; gap: 6px; align-items: center; }
+.area-problem button, .canvas-page-problem button { background: #fff; color: #2c2000; border: 1px solid #795600; padding: 3px 7px; white-space: nowrap; }
+.canvas-page-problem { position: absolute; top: 34px; left: 40px; right: 16px; z-index: 100000; }
+.canvas-page-problem > span { flex: 1; }

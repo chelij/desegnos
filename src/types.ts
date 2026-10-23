@@ -83,7 +83,7 @@ export type GenerationCandidate = {
   decisionProposals: DecisionProposal[];
   criticism: DesignCriticism[];
 };
-export type GenerationDraft = { id: string; pageId: string | null; regionIds: string[]; code: string; content: SiteContent | null; reason: string; dismissed: boolean; applied: boolean };
+export type GenerationDraft = { baseContent?: SiteContent | null; id: string; pageId: string | null; regionIds: string[]; code: string; content: SiteContent | null; reason: string; dismissed: boolean; applied: boolean };
 export type DraftReview = { job: GenerationJobView; workspace: WorkspaceView | null; revision: number; blocked: string | null; previewable: boolean; confirmation: string };
 export type GenerationJobView = { drafts?: GenerationDraft[]; jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; context?: RequirementsSnapshot | null; earlierContexts?: RequirementsSnapshot[]; firstExchange?: { summary: string; regions: GenerationCandidate['regions']; usage: TokenUsage | null } | null; repairRounds?: number; repairAreaCount?: number; validationEvents?: { kind: string; disposition: string; regionId: string | null; message: string }[]; rawReply?: string | null; createdAt?: string | null; areas: { pageId: string; regionId: string; rect: Rect; shape?: RegionShape }[]; generationMode: GenerationMode;
   settings: ProviderSettings; status: GenerationStatus; estimateUsd: number; receivedBytes: number; message: string; candidate: GenerationCandidate | null;
