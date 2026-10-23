@@ -1,4 +1,3 @@
-import { ProblemBanner } from './ProblemBanner.js';
 export type PendingRecovery = { code: 'pendingRecovery'; projectId: string; path: string };
 
 export function isPendingRecovery(error: unknown): error is PendingRecovery {
@@ -7,10 +6,16 @@ export function isPendingRecovery(error: unknown): error is PendingRecovery {
     && 'path' in error && typeof error.path === 'string';
 }
 
-export function RecoveryBanner({ busy, recover, openSaved, dismiss }: {
-  busy: boolean; recover: () => void; openSaved: () => void; dismiss: () => void;
-}) {
-  return <ProblemBanner variant="warning" message="This project has unsaved changes from an earlier session."
-    action={{ label: 'Recover', disabled: busy, onClick: recover }} dismiss={dismiss}
-    secondaryAction={{ label: 'Open saved version', disabled: busy, onClick: openSaved }} />;
+export type RecoveryChoices = { path: string; busy: boolean; recover: () => void; openSaved: () => void; dismiss: () => void };
+
+// Shown where the user acted: on the recent project card they clicked, or in the recent projects area.
+export function RecoveryChoice({ variant = 'row', busy, recover, openSaved, dismiss }: RecoveryChoices & { variant?: 'card' | 'row' }) {
+  return <div className={`recovery-choice recovery-choice-${variant}`} role="alert">
+    <span className="recovery-message" title="Unsaved changes from an earlier session">Unsaved changes from an earlier session</span>
+    <span className="recovery-actions">
+      <button type="button" className="primary" disabled={busy} onClick={recover}>Recover</button>
+      <button type="button" disabled={busy} onClick={openSaved}>Open saved version</button>
+    </span>
+    <button type="button" className="recovery-dismiss" aria-label="Dismiss recovery choice" title="Dismiss" onClick={dismiss}>×</button>
+  </div>;
 }
