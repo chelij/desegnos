@@ -4,7 +4,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { native, edit } from './api';
 import { Canvas, type CanvasHandle, type RequestPatch } from './Canvas';
 import { CanvasTools, type CanvasTool, type RequestShapeKind } from './CanvasTools';
-import { WorkspaceSurface, WorkspaceSurfaces, SurfaceHost } from './WorkspaceSurface';
+import { WorkspaceSurface, WorkspaceSurfaces, SurfaceHost, isTextField } from './WorkspaceSurface';
 import { RecoveryBanner, isPendingRecovery, type PendingRecovery } from './RecoveryBanner';
 import { SaveConflictDialog, type SaveConflict, type SaveOutcome, type SaveChoice } from './SaveConflict';
 import { regionTargets, sameTargets } from './elementTargets';
@@ -609,16 +609,15 @@ function Editor() {
   }
   const working = generation.canStop || activeGeneration(generation.job) || !!generation.operation;
   useEffect(() => {
-    if (!generation.canStop) return;
-    const stop = (event: KeyboardEvent) => {
-      if (document.querySelector('.workspace-surface') || event.key !== 'Escape' || event.defaultPrevented || (event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable="true"], .cm-editor, [role="textbox"]'))) return;
+    // Escape leaves a text box once fields have had their own Escape handling.
+    const leave = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || !isTextField(event.target)) return;
       event.preventDefault();
-      event.stopPropagation();
-      void generation.cancel();
+      (document.activeElement as HTMLElement | null)?.blur();
     };
-    window.addEventListener('keydown', stop, true);
-    return () => window.removeEventListener('keydown', stop, true);
-  }, [generation.canStop, generation.cancel]);
+    window.addEventListener('keydown', leave);
+    return () => window.removeEventListener('keydown', leave);
+  }, []);
   useEffect(() => { setRetryResult(false); }, [resultReview?.jobId]);
   useEffect(() => { if (generation.visible) { setShowLog(true); generation.close(); } }, [generation.visible]);
   const draftCount = pendingDrafts(generation.job).length;

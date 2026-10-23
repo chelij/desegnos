@@ -10,6 +10,10 @@ const Surfaces = createContext<{
   enter: (entry: Entry) => () => void;
 } | null>(null);
 
+export function isTextField(target: EventTarget | null) {
+  return target instanceof HTMLElement && !!target.closest('input:not([type=checkbox], [type=radio], [type=button], [type=submit], [type=reset], [type=range], [type=color], [type=file]), textarea, [contenteditable="true"], [contenteditable=""], .cm-editor, [role="textbox"]');
+}
+
 export function WorkspaceSurfaces({ children }: { children: ReactNode }) {
   const [hosts, setHosts] = useState<Partial<Record<Place, HTMLElement>>>({});
   const entries = useRef<Entry[]>([]);
@@ -34,7 +38,8 @@ export function WorkspaceSurfaces({ children }: { children: ReactNode }) {
   }, []);
   useLayoutEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      // A focused text box takes the first Escape; the app then leaves it.
+      if (event.key !== 'Escape' || event.defaultPrevented || isTextField(event.target)) return;
       // Let open menus and native select controls handle their own Escape first.
       if (document.querySelector('.editor-menu')) return;
       const entry = entries.current.at(-1);
