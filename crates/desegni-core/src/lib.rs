@@ -27,6 +27,8 @@ mod source;
 mod stable_targets;
 mod website;
 mod website_import;
+mod website_merge;
+pub use website_merge::{WebsiteImportPage, WebsiteImportReview};
 
 pub use attachments::*;
 pub use code_format::{compact_site_content, format_site_content};

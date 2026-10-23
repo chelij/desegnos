@@ -27,6 +27,7 @@ import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from
 import { FirstRunTips } from './Onboarding';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
+import { ImportWebsite } from './ImportWebsite';
 import type { WebsiteFolderSelection } from './types';
 import { pendingDrafts } from './generationDraftState';
 import { GenerationLog } from './GenerationLog';
@@ -109,6 +110,7 @@ function Editor() {
   const [showCheck, setShowCheck] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showWebsiteImport, setShowWebsiteImport] = useState(false);
   const [importFolder, setImportFolder] = useState<WebsiteFolderSelection | null>(null);
   const [importAsNew, setImportAsNew] = useState(false);
   function startBrandImport() { setImportFolder(null); setImportAsNew(true); setShowNew(false); setShowImport(true); }
@@ -888,6 +890,7 @@ function Editor() {
     { id: 'page-divider', label: '', separator: true },
     { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => { setLive(value => !value); setLiveDevice('desktop'); } },
     { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
+    { id: 'import-website', label: 'Import website…', disabled: !project, action: () => setShowWebsiteImport(true) },
     { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
     { id: 'ai-divider', label: '', separator: true },
@@ -992,6 +995,10 @@ function Editor() {
     {showProjectLocation && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
     {showRecovery && view && <WorkspaceSurface place={project ? 'panel' : 'start'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
+    {showWebsiteImport && project && <WorkspaceSurface place="panel" title="Import website" close={() => setShowWebsiteImport(false)}><ImportWebsite key={project.id} homePageId={project.homePageId} busy={pending > 0} beforePick={async () => { await synchronize(); await settle(); }} apply={async (token, remove) => {
+      await synchronize();
+      await queue(async () => { accept(await native<WorkspaceView>('apply_website_import', { token, remove })); setShowWebsiteImport(false); });
+    }} /></WorkspaceSurface>}
     {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import context" close={() => setShowImport(false)}><ImportContext initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} /></WorkspaceSurface>}
     {showStyleGuide && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Style guide" close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></WorkspaceSurface>}
     {showNotes && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project brief" close={() => setShowNotes(null)}><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}

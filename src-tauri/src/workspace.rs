@@ -188,6 +188,7 @@ pub struct Workspace {
     needs_migration_save: bool,
     recent_error: Option<String>,
     pending_save: Option<PendingSaveConflict>,
+    website_import: Option<WebsiteImportSnapshot>,
     /// Other open projects, each with its own undo history, file and recovery journal.
     parked: Vec<OpenProject>,
     /// Open projects in tab order.
@@ -327,6 +328,7 @@ impl Workspace {
             needs_migration_save: false,
             recent_error: None,
             pending_save: None,
+            website_import: None,
             parked: vec![],
             order: vec![],
         };
@@ -3624,4 +3626,110 @@ pub(super) fn open_archive_for_tests(directory: PathBuf, path: &std::path::Path)
     let mut workspace = Workspace::from_directory(directory).unwrap();
     workspace.open_document(file, document, false).unwrap();
     workspace
+}
+
+struct WebsiteImportSnapshot {
+    token: Uuid,
+    project_id: Uuid,
+    revision: u64,
+    files: std::collections::BTreeMap<String, Vec<u8>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebsiteImportSelection {
+    token: Uuid,
+    review: desegni_core::WebsiteImportReview,
+}
+
+#[tauri::command]
+pub async fn prepare_website_import(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+    kind: String,
+) -> NativeResult<Option<WebsiteImportSelection>> {
+    let (project_id, revision) = {
+        let state = state.lock().map_err(message)?;
+        let project = state
+            .session
+            .as_ref()
+            .ok_or("Open a project first.")?
+            .project();
+        (project.id, project.revision)
+    };
+    let paths = tauri::async_runtime::spawn_blocking(move || {
+        let dialog = app.dialog().file().set_title("Import website");
+        match kind.as_str() {
+            "folder" => Ok(dialog.blocking_pick_folder().map(|p| vec![p])),
+            "files" => Ok(dialog
+                .add_filter("Website", &["html", "htm", "zip"])
+                .blocking_pick_files()),
+            _ => Err("Choose a folder, ZIP, or HTML files.".to_string()),
+        }
+    })
+    .await
+    .map_err(message)??;
+    let Some(paths) = paths else {
+        return Ok(None);
+    };
+    let paths = paths
+        .into_iter()
+        .map(|p| p.into_path().map_err(message))
+        .collect::<NativeResult<Vec<_>>>()?;
+    let files = tauri::async_runtime::spawn_blocking(move || {
+        desegni_storage::website_merge::read_website_selection(&paths)
+    })
+    .await
+    .map_err(message)?
+    .map_err(message)?;
+    let mut state = state.lock().map_err(message)?;
+    let project = state
+        .session
+        .as_ref()
+        .ok_or("Open a project first.")?
+        .project();
+    if project.id != project_id || project.revision != revision {
+        return Err("The project changed; choose the website again.".into());
+    }
+    let review = project.review_website_import(&files).map_err(message)?;
+    let token = Uuid::new_v4();
+    state.website_import = Some(WebsiteImportSnapshot {
+        token,
+        project_id,
+        revision,
+        files,
+    });
+    Ok(Some(WebsiteImportSelection { token, review }))
+}
+
+#[tauri::command]
+pub fn apply_website_import(
+    state: WorkspaceState<'_>,
+    token: Uuid,
+    remove: Vec<Uuid>,
+) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session,
+        journal,
+        website_import,
+        ..
+    } = &mut *state;
+    let snapshot = website_import
+        .as_ref()
+        .filter(|s| s.token == token)
+        .ok_or("Choose the website again.")?;
+    let session = session.as_mut().ok_or("Open a project first.")?;
+    if session.project().id != snapshot.project_id {
+        return Err("Choose the website again for this project.".into());
+    }
+    let journal = journal.as_ref().ok_or("Recovery is unavailable.")?;
+    session
+        .import_website(snapshot.revision, &snapshot.files, &remove, |p| {
+            journal.append(p)
+        })
+        .map_err(message)?;
+    *website_import = None;
+    state.prepared = None;
+    Ok(state.view())
 }
