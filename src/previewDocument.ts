@@ -29,11 +29,16 @@ type FrameElement = { getAttribute(name: string): string | null; setAttribute(na
 
 /// The canvas frame is sandboxed without allow-scripts, so every document inside it inherits
 /// that promise, and a framed site file is served with `script-src 'none'`. Author
-/// `allow-scripts` is narrowed too, so a framed page cannot claim scripting back. Frames that
-/// ask for nothing keep their attributes: rewriting them would reload the frame the canvas is
-/// about to show.
+/// `allow-scripts` is narrowed too, so a framed page cannot claim scripting back. Other
+/// author restrictions stay, because the live overlay reads them to keep the same narrowing
+/// when it runs the frame. Frames that ask for nothing keep their attributes: rewriting them
+/// would reload the frame the canvas is about to show.
 export function hardenStaticFrames(doc: { querySelectorAll(selector: string): ArrayLike<FrameElement> }) {
   for (const frame of Array.from(doc.querySelectorAll('iframe'))) {
-    if (frame.getAttribute('sandbox')?.includes('allow-scripts')) frame.setAttribute('sandbox', 'allow-same-origin');
+    const sandbox = frame.getAttribute('sandbox');
+    if (!sandbox?.split(/\s+/).includes('allow-scripts')) continue;
+    const kept = sandbox.split(/\s+/).filter(token => token && token !== 'allow-scripts' && token !== 'allow-same-origin' &&
+      token !== 'allow-popups-to-escape-sandbox' && !token.startsWith('allow-top-navigation'));
+    frame.setAttribute('sandbox', ['allow-same-origin', ...new Set(kept)].join(' '));
   }
 }

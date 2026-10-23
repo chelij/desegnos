@@ -11,6 +11,12 @@
   }
   addEventListener('error', event => report(event.message || 'A preview resource could not be loaded.'));
   addEventListener('unhandledrejection', event => report(event.reason?.message || event.reason || 'A preview operation failed.'));
+  // Escape leaves an interactive frame overlay. The editor cannot see key events inside
+  // this document, so the frame reports the one key that belongs to the editor.
+  addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    parent.postMessage({ type: 'desegni-preview-escape', sessionId, pageId }, '*');
+  }, true);
   document.addEventListener('submit', event => {
     event.preventDefault();
     report('Form submission is paused. This preview has no enabled external form binding.');

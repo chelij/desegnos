@@ -16,7 +16,9 @@ import { LayersPopover, LayerIcon } from './Layers';
 import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, type MenuItem } from './Menus';
-import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type InlineText } from './Preview';
+import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type FrameView, type InlineText } from './Preview';
+import { FrameOverlay, useLiveFrameSession } from './FrameOverlays';
+import { overlayPlacement, placeOverlays } from './previewFrames';
 import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
@@ -91,6 +93,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const [layersReady, setLayersReady] = useState(false);
   const [layerBusy, setLayerBusy] = useState(false);
   const [siteHeight, setSiteHeight] = useState(page.viewport.height);
+  // Frames read from the promoted static document, and the one the user is playing.
+  const [frameView, setFrameView] = useState<FrameView>({ pageUrl: null, frames: [] });
+  const [interactingFrame, setInteractingFrame] = useState<string | null>(null);
   useEffect(() => setSiteHeight(page.viewport.height), [page.id, page.content?.html, page.content?.css, page.content?.javascript, page.viewport.width, page.viewport.height]);
   const stage = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
@@ -249,7 +254,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const acceptedVersion = useMemo(() => JSON.stringify([page.content, page.viewport, page.appearance]),
     [page.content?.html, page.content?.css, page.content?.javascript, page.viewport.width, page.viewport.height, page.appearance]);
   const acceptedVersionRef = useRef(acceptedVersion); acceptedVersionRef.current = acceptedVersion;
-  useLayoutEffect(() => { setContext(null); plainClicks.current = 0; lastPlainClick.current = null; if (elementDrag.current) cancel(); inlineTicket.current++; inlineTextRef.current = null; setInlineText(null); }, [acceptedVersion]);
+  useLayoutEffect(() => { setContext(null); plainClicks.current = 0; lastPlainClick.current = null; if (elementDrag.current) cancel(); inlineTicket.current++; inlineTextRef.current = null; setInlineText(null); setInteractingFrame(null); setFrameView({ pageUrl: null, frames: [] }); }, [acceptedVersion]);
 
   function measure() {
     const node = scroll.current;
@@ -790,6 +795,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   function beginWorkspace(event: PointerEvent) {
     if (event.button === 2) { contextMenu(event); return; }
     if (event.target !== event.currentTarget || event.button !== 0) return;
+    if (interactingFrame) setInteractingFrame(null);
     if (panKey.current || tool === 'pan') { startPan(event, false); return; }
     // Live mode: the page itself takes clicks; the canvas only pans or places new requests.
     if (liveView) { if (tool === 'request' && liveRequests) begin(event, 'new'); else startPan(event, false); return; }
@@ -862,6 +868,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     // replaced; the frame loading now owns the selection.
     if (revision !== undefined && revision !== acceptedVersionRef.current) return;
     refreshLayers();
+    setFrameView(page.content ? site.current?.frameOverlays() ?? { pageUrl: null, frames: [] } : { pageUrl: null, frames: [] });
     setExtras(extrasRef.current.flatMap(item => { const found = site.current?.find(item.element); return found ? [{ ...found, rect: settled ? found.rect : item.rect }] : []; }));
     for (const item of pendingImages.current) site.current?.previewImage(item.selection.element, item.src);
     setPlaceholders(page.content ? (site.current?.placeholders() ?? []).filter(item => !pendingImages.current.some(pending => sameTarget(pending.selection.element, item.element))) : []);
@@ -967,7 +974,19 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   }, [tool, page.id]);
   function activateAt(client: Point) {
     const at = point(client);
-    if (page.content) { const hit = site.current?.pick(at.x, at.y); if (hit && hit.element.tag !== 'body') { chooseElement(hit); void editTextAt(at); return; } }
+    if (page.content) {
+      const hit = site.current?.pick(at.x, at.y);
+      if (hit && hit.element.tag !== 'body') {
+        // The second click on an already selected frame starts interacting with it,
+        // the same place the toolbar's Interact button goes.
+        const current = elementRef.current;
+        if (hit.element.tag === 'iframe' && current && sameTarget(current.element, hit.element)) {
+          const frame = liveOverlays.find(item => item.selector === hit.element.selector);
+          if (frame) { setInteractingFrame(value => value === frame.key ? null : frame.key); return; }
+        }
+        chooseElement(hit); void editTextAt(at); return;
+      }
+    }
     const snapped = geometryForGesture({ kind: 'new', start: at, initial: { ...at, width: 0, height: 0 } }, at, page.viewport, gridSettings);
     add(requestAt({ x: snapped.x, y: snapped.y }, zoom));
   }
@@ -990,7 +1009,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   }
   function keyboard(event: KeyboardEvent, region?: Region, resize = false) {
     if ((event.ctrlKey || event.metaKey) && event.key !== 'Escape') return;
-    if (event.key === 'Escape') { setRepicking(null); event.preventDefault(); event.stopPropagation(); panKey.current = false; setPanReady(false); if (!gesture.current && !pan.current && !elementDrag.current) { select(null); deselectElement(); } cancel(); return; }
+    if (event.key === 'Escape') { setRepicking(null); setInteractingFrame(null); event.preventDefault(); event.stopPropagation(); panKey.current = false; setPanReady(false); if (!gesture.current && !pan.current && !elementDrag.current) { select(null); deselectElement(); } cancel(); return; }
     if (event.key === 'ContextMenu' || event.key === 'F10' && event.shiftKey) {
       event.preventDefault();
       const box = stage.current!.getBoundingClientRect();
@@ -1038,6 +1057,21 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     measure(); const observer = new ResizeObserver(measure); observer.observe(node); return () => observer.disconnect();
   }, [!!element, !!selected, !!inlineText]);
   const visible = { x: bounds.left + measurements.left / zoom, y: bounds.top + measurements.top / zoom };
+  // Frames on screen get a live overlay; the rest wait until the canvas is scrolled to them.
+  const frameViewport = { x: visible.x, y: visible.y, width: measurements.width / zoom, height: measurements.height / zoom };
+  const visibleFrames = useMemo(() => page.content && !liveView ? placeOverlays(frameView.frames, frameViewport) : [],
+    [frameView, frameViewport.x, frameViewport.y, frameViewport.width, frameViewport.height, liveView, page.content]);
+  const frameSession = useLiveFrameSession(page.id, acceptedVersion, visibleFrames.length > 0);
+  const liveOverlays = frameSession ? visibleFrames : [];
+  const overlaySelection = element?.element.tag === 'iframe' && !extras.length ? liveOverlays.find(frame => frame.selector === element.element.selector) ?? null : null;
+  const interacting = !!overlaySelection && interactingFrame === overlaySelection.key;
+  const overlayKeys = liveOverlays.map(frame => frame.key).join('|');
+  useEffect(() => { if (interactingFrame && !(tool === 'select' && interacting)) setInteractingFrame(null); }, [interactingFrame, tool, interacting]);
+  // Hide the still copy of every frame the live overlay covers, and show it again when
+  // the overlay goes away (live mode, a new revision, or the frame leaves the page).
+  useEffect(() => {
+    site.current?.hideStaticFrames(liveOverlays.map(frame => frame.key));
+  }, [frameView, frameSession?.url, overlayKeys, acceptedVersion]);
   const selectedRect = preview ?? element?.rect ?? page.regions.find(region => region.id === selected)?.rect;
   const aligningRegion = gesture.current?.region?.id ?? selected;
   const guides = alignmentLines(selectedRect, page.viewport, page.regions.filter(region => region.id !== aligningRegion).map(region => region.rect), zoom);
@@ -1185,6 +1219,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
               <PreviewFrame onRuntimeProblems={setRuntimeProblems} fixRuntimeErrors={fixRuntimeErrors} aiDisabled={aiDisabled} observationsVersion={observationsVersion} pageId={page.id} revision={`live:${acceptedVersion}`} runScripts title={`${page.name} live`} />
             </div>
           </div>}
+          {!liveView && frameSession && liveOverlays.map(frame => <FrameOverlay key={frame.key} frame={frame} live={frameSession} pageId={page.id} staticPageUrl={frameView.pageUrl} zoom={zoom}
+            interactive={tool === 'select' && interactingFrame === frame.key && !!element && element.element.selector === frame.selector}
+            placement={{ ...overlayPlacement(frame.rect, origin, zoom), zIndex: 1 }} title={`${page.name} interactive frame`} stop={() => setInteractingFrame(null)} />)}
           <div className={`screen-guide ${page.content ? 'has-preview' : ''}`} data-testid="screen-guide" style={positioned({ x: 0, y: 0, ...page.viewport })} aria-hidden="true">
             <span className="screen-guide-label">Screen · {page.viewport.width} × {page.viewport.height}</span>
           </div>
@@ -1245,6 +1282,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         <button className="ask-ai" title="Choose a picture from your computer, or drop one onto the image" disabled={editBusy} onClick={() => browseImage(elementRef.current)}>Replace image</button>
         <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
       </> : element && <>
+        {element.element.tag === 'iframe' && overlaySelection && <button className="ask-ai" aria-pressed={interacting} title={interacting ? 'Stop playing this frame' : 'Play this frame in place'}
+          onClick={() => setInteractingFrame(value => value === overlaySelection.key ? null : overlaySelection.key)}>{interacting ? 'Done' : 'Interact'}</button>}
         <button className="ask-ai" title="Change text, links and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>
         <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
         {element.element.selector !== 'body' && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}

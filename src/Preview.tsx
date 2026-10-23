@@ -6,6 +6,7 @@ import { siteLayerTree, siteLayerStyles, siteCopyStyles, type SiteLayer } from '
 import { translatedStyle } from './elementEditing';
 import { measurableDocument, needsReferenceMeasure, pendingFrameHeight, promotionHeight } from './previewMeasurement';
 import { hardenStaticFrames, staticBase, staticDocument, staticPolicy } from './previewDocument';
+import { collectFrame, frameKey, resolveFrameSource, type CollectedFrame } from './previewFrames';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
 import type { ElementSelection, ElementTarget, ElementStyleEdit, LayerDirection, ElementVisual, Page, PreviewDescriptor, Rect, SiteContent } from './types';
 
@@ -26,7 +27,8 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
 export type ElementMover = { preview: (x: number, y: number) => ElementSelection | null; style: (x: number, y: number) => string; cancel: () => void };
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
-export type CanvasPreviewHandle = { measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type FrameView = { pageUrl: string | null; frames: CollectedFrame[] };
+export type CanvasPreviewHandle = { frameOverlays: () => FrameView; hideStaticFrames: (keys: readonly string[]) => void; measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   pageId: string; draftId?: string | null; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
@@ -57,6 +59,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   // layouts that are not on screen.
   const shown = useRef<{ pageId: string; revision: number | string; session: string; document: Document } | null>(null);
   const invalidated = useRef(false);
+  // The inline opacity we replaced while a static frame sits under its live overlay.
+  const previousOpacity = useRef(new WeakMap<Element, string>()).current;
   const registeredVersion = useRef<{ pageId: string; revision: number | string } | null>(null);
   // Canvas documents share DOM access only while all scripts remain forbidden by sandbox.
   // Interactive previews keep their separate opaque-origin, explicitly enabled sandbox.
@@ -178,6 +182,51 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     return { node, original: original ?? '', origin, restore, set, offset };
   }
   useImperativeHandle(ref, () => ({
+    // The frames the canvas can show live, read from the promoted document. A frame the
+    // canvas hides under its overlay keeps reporting itself so the overlay stays put.
+    frameOverlays(): FrameView {
+      const doc = measurable();
+      if (!doc || doc.URL !== 'about:srcdoc') return { pageUrl: null, frames: [] };
+      const pageUrl = descriptor?.url ?? null;
+      const frames: CollectedFrame[] = [];
+      Array.from(doc.querySelectorAll('iframe')).forEach((node, index) => {
+        const box = node.getBoundingClientRect();
+        const style = getComputedStyle(node);
+        const frame = collectFrame({
+          rect: { x: box.x, y: box.y, width: box.width, height: box.height },
+          display: style.display,
+          visibility: style.visibility,
+          src: node.getAttribute('src'), sandbox: node.getAttribute('sandbox'), allow: node.getAttribute('allow'),
+          allowFullscreen: node.hasAttribute('allowfullscreen'),
+        }, pageUrl, index);
+        if (frame) frames.push({ ...frame, selector: identify(node, true)?.target.selector ?? null });
+      });
+      return { pageUrl, frames };
+    },
+    hideStaticFrames(keys) {
+      const doc = measurable();
+      if (!doc || doc.URL !== 'about:srcdoc') return;
+      const wanted = new Set(keys);
+      const pageUrl = descriptor?.url ?? null;
+      Array.from(doc.querySelectorAll('iframe')).forEach((node, index) => {
+        const key = frameKey(index, resolveFrameSource(node.getAttribute('src'), pageUrl));
+        const hidden = node.hasAttribute('data-desegnos-frame-overlay');
+        if (wanted.has(key) && !hidden) {
+          // Hide the still render without touching its box or hit testing: the canvas still
+          // picks the frame element with elementFromPoint. `visibility: hidden` would make
+          // the click fall through to whatever is behind the frame.
+          previousOpacity.set(node, node.style.getPropertyValue('opacity'));
+          node.setAttribute('data-desegnos-frame-overlay', '');
+          node.style.setProperty('opacity', '0', 'important');
+        } else if (!wanted.has(key) && hidden) {
+          node.removeAttribute('data-desegnos-frame-overlay');
+          node.style.removeProperty('opacity');
+          const previous = previousOpacity.get(node);
+          if (previous) node.style.setProperty('opacity', previous);
+          previousOpacity.delete(node);
+        }
+      });
+    },
     previewImage(target, src) {
       const node = findNode(target);
       if (!node || node.localName !== 'img') return false;

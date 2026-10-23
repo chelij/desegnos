@@ -76,14 +76,17 @@ try {
   await test('frames asking for scripts are narrowed so the still canvas never runs them', () => {
     const authored = frame('allow-scripts');
     const combined = frame('allow-scripts allow-same-origin');
+    const narrowed = frame('allow-scripts allow-forms allow-popups');
     const sameOrigin = frame('allow-same-origin');
     const plain = frame(undefined);
-    hardenStaticFrames({ querySelectorAll: () => [authored, combined, sameOrigin, plain] });
+    hardenStaticFrames({ querySelectorAll: () => [authored, combined, narrowed, sameOrigin, plain] });
     assert.equal(authored.attrs.sandbox, 'allow-same-origin');
     assert.equal(combined.attrs.sandbox, 'allow-same-origin');
+    // Author narrowing is kept for the live overlay that reads this attribute.
+    assert.equal(narrowed.attrs.sandbox, 'allow-same-origin allow-forms allow-popups');
     assert.equal(sameOrigin.attrs.sandbox, 'allow-same-origin');
     assert.equal(plain.attrs.sandbox, undefined);
-    for (const node of [authored, combined, sameOrigin, plain]) assert.ok(!(node.attrs.sandbox ?? '').includes('allow-scripts'));
+    for (const node of [authored, combined, narrowed, sameOrigin, plain]) assert.ok(!(node.attrs.sandbox ?? '').includes('allow-scripts'));
   });
 } finally {
   await rm(temporary, { recursive: true, force: true });

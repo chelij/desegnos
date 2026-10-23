@@ -29,6 +29,13 @@
 .free-workspace .canvas.dark .accepted-canvas-preview { background: #17191c; }
 .free-workspace .screen-guide-label { position: absolute; left: 0; top: -25px; white-space: nowrap; padding: 2px 5px; color: var(--muted); background: var(--canvas-bed); font-size: 11px; line-height: 1.4; }
 .free-workspace .accepted-canvas-preview .static-preview { position: absolute; inset: 0; }
+/* A live copy of a frame in the still page. It takes input only while the user is
+   interacting with that frame; otherwise clicks fall through to the canvas picker. */
+.free-workspace .frame-overlay { position: absolute; overflow: hidden; pointer-events: none; }
+.free-workspace .frame-overlay iframe { display: block; border: 0; background: #fff; pointer-events: none; }
+.free-workspace .frame-overlay.interactive { pointer-events: auto; outline: 2px solid var(--annotation-focus); outline-offset: -1px; }
+.free-workspace .frame-overlay.interactive iframe { pointer-events: auto; }
+.free-workspace .frame-overlay:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .free-workspace .canvas-grid { background-image: linear-gradient(to right, var(--workspace-grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--workspace-grid-line) 1px, transparent 1px); }
 .free-workspace .annotation-draft { background: var(--annotation-surface); outline-offset: -2px; }
 .free-workspace .annotation textarea:focus-visible, .free-workspace .annotation-grip:focus-visible { outline-width: 3px; outline-offset: -3px; }
