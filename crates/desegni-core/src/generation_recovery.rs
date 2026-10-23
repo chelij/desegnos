@@ -21,8 +21,12 @@ pub fn validation_failure_kind(message: &str) -> &'static str {
     let message = message.to_ascii_lowercase();
     if message.contains("css") || message.contains("stylesheet") {
         "cssScope"
+    } else if message.contains("shared")
+        && (message.contains("javascript") || message.contains("script"))
+    {
+        "sharedJavascript"
     } else if message.contains("javascript") || message.contains("script") {
-        "scriptScope"
+        "sourceSyntax"
     } else if message.contains("editor id")
         || message.contains("element id")
         || message.contains("data-desegnos-id")

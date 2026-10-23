@@ -447,7 +447,7 @@ fn cursor_portrait_can_listen_across_the_page_and_write_only_its_root() {
 }
 
 #[test]
-fn outside_writes_and_global_event_cancellation_become_drafts() {
+fn outside_writes_and_global_event_cancellation_are_accepted() {
     for action in [
         "document.body.style.background = 'red';",
         "const body = document.body; body.classList.add('changed');",
@@ -470,13 +470,9 @@ fn outside_writes_and_global_event_cancellation_become_drafts() {
         let code = CURSOR_PORTRAIT.replace("const box =", &format!("{action} const box ="));
         let (p, s, text) = behavior_fixture(&code);
         let (candidate, events) = recover_generation_reply(&text, &s, &p).unwrap();
-        assert!(candidate.pages.is_empty(), "applied: {action}");
-        let drafts = retain_generation_drafts(&text, &s, &p, Some(&candidate), &events);
-        assert_eq!(drafts.len(), 1, "{action}");
-        assert!(!drafts[0].applied, "{action}");
-        if action.contains("style.background") {
-            assert!(format!("{events:?}").contains("This script changes things outside its box"));
-        }
+        assert_eq!(candidate.pages.len(), 1, "{action}: {events:?}");
+        assert_eq!(candidate.regions[0].status, RegionStatus::Implemented);
+        candidate.validate(&s, &p).unwrap();
     }
 }
 
@@ -491,7 +487,7 @@ fn root_queries_without_matching_descendants_are_allowed() {
 }
 
 #[test]
-fn unsafe_or_outside_region_scripts_are_retained_as_unapplied_drafts() {
+fn region_scripts_can_use_page_and_browser_apis() {
     for code in [
         "document.querySelector('p').remove();",
         "root.parentNode.querySelector('p').remove();", // Reaches the paragraph outside this shelf.
@@ -514,27 +510,20 @@ fn unsafe_or_outside_region_scripts_are_retained_as_unapplied_drafts() {
     ] {
         let (p, s, text) = behavior_fixture(code);
         let (candidate, events) = recover_generation_reply(&text, &s, &p).unwrap();
-        assert!(candidate.pages.is_empty(), "unsafe script applied: {code}");
-        let drafts = retain_generation_drafts(&text, &s, &p, Some(&candidate), &events);
-        assert_eq!(drafts.len(), 1, "{code}");
-        assert!(!drafts[0].applied);
-        assert!(
-            drafts[0].code.contains(code)
-                || drafts[0]
-                    .content
-                    .as_ref()
-                    .is_some_and(|c| c.html.contains(code))
-        );
-        assert!(
-            p.pages[0]
-                .content
-                .as_ref()
-                .unwrap()
-                .html
-                .find("data-desegnos-script")
-                .is_none()
-        );
+        assert_eq!(candidate.pages.len(), 1, "{code}: {events:?}");
+        assert_eq!(candidate.regions[0].status, RegionStatus::Implemented);
+        candidate.validate(&s, &p).unwrap();
     }
+}
+
+#[test]
+fn malformed_region_script_is_retained_as_an_unapplied_draft() {
+    let (p, s, text) = behavior_fixture("const = ;");
+    let (candidate, events) = recover_generation_reply(&text, &s, &p).unwrap();
+    assert!(candidate.pages.is_empty());
+    let drafts = retain_generation_drafts(&text, &s, &p, Some(&candidate), &events);
+    assert_eq!(drafts.len(), 1);
+    assert!(!drafts[0].applied);
 }
 
 #[test]
@@ -556,7 +545,7 @@ fn export_runs_region_functions_after_unchanged_page_script() {
             && runtime.contains("block.parentElement")
     );
     assert!(
-        runtime.contains("})(root, scopedWindow, scopedDocument, scopedWindow.setTimeout, scopedWindow.requestAnimationFrame)")
+        runtime.contains("})(regionRoot, window, document, window.setTimeout.bind(window), window.requestAnimationFrame.bind(window))")
             && runtime.contains("catch (error)")
     );
     assert!(runtime.contains("root.querySelector('h1')"));

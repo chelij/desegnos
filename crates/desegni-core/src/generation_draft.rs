@@ -249,10 +249,7 @@ impl GenerationDraft {
                 .is_some_and(|kind| kind.contains("json"))
             {
                 if script.attr("type").as_deref() == Some(crate::region_scripts::SCRIPT_TYPE) {
-                    crate::source::validate_behavior_javascript(
-                        &format!("(function(root, window){{\n{}\n}})", script.text()),
-                        true,
-                    )?;
+                    crate::region_scripts::parse_code(script.text().as_ref())?;
                 } else {
                     crate::source::validate_draft_javascript(script.text().as_ref())?;
                 }

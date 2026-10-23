@@ -5,15 +5,13 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 const template = readFileSync(new URL('../crates/desegni-core/src/region_script_runtime.js', import.meta.url), 'utf8');
-const validator = readFileSync(new URL('../crates/desegni-core/src/region_scripts.rs', import.meta.url), 'utf8');
-const events = validator.match(/const GLOBAL_READ_EVENTS:[\s\S]*?= &\[([\s\S]*?)\];/)[1].match(/"[^"]+"/g).map(JSON.parse);
 const runtime = code => template.replace('__REGION_SELECTOR__', '"#source"')
-  .replace('__GLOBAL_READ_EVENTS__', JSON.stringify(events)).replace('__REGION_CODE__', code);
+  .replace('__REGION_CODE__', code);
 const run = code => `<script>${runtime(code)}</script>`;
 const folder = mkdtempSync(join(tmpdir(), 'desegni-region-runtime-'));
 try {
   writeFileSync(join(folder, 'test.html'), `<!doctype html>
-    <section id="root"><img><button>Inside</button><script id="source" type="application/x-desegnos-region"></script></section>
+    <section id="root"><img><button>Inside</button><section data-desegnos-region="nested"></section><script id="source" type="application/x-desegnos-region"></script></section>
     <p id="outside">Outside</p><pre id="result"></pre>
     <script>
       const errors = [];
@@ -66,22 +64,27 @@ try {
       } catch (error) { document.querySelector('#result').textContent = 'FAIL: ' + error.stack; }
     </script>
     ${run(`document.body.style.backgroundColor = 'red';`)}
-    ${run(`document.querySelectorAll('p').forEach(node => node.remove());`)}
+    ${run(`document.querySelectorAll('p').forEach(node => node.textContent = 'Changed');`)}
     ${run(`root.closest('body').classList.add('changed');`)}
     ${run(`root.appendChild(document.querySelector('#outside'));`)}
-    ${run(`document.addEventListener('wheel', e => { e.preventDefault(); e.stopPropagation(); });`)}
+    ${run(`document.addEventListener('arbitrary-event', e => { e.preventDefault(); e.stopPropagation(); });`)}
+    ${run(`const node = document.createElement('iframe'); node.setAttribute('title', 'Created'); root.appendChild(node);`)}
+    ${run(`throw new Error('expected wrapper error');`)}
+    ${run(`root.dataset.afterError = 'yes';`)}
     <script>
       try {
-        check(document.body.style.backgroundColor === '', 'outside style write blocked');
-        check(document.querySelector('#outside') === outside, 'outside collection callback write blocked');
-        check(!document.body.classList.contains('changed'), 'closest outside write blocked');
-        check(outside.parentElement === document.body, 'moving outside nodes blocked');
-        const wheel = new WheelEvent('wheel', { bubbles: true, cancelable: true });
+        check(document.body.style.backgroundColor === 'red', 'outside style write allowed');
+        check(outside.textContent === 'Changed', 'outside collection callback write allowed');
+        check(document.body.classList.contains('changed'), 'closest outside write allowed');
+        check(outside.parentElement === root, 'moving outside nodes allowed');
+        const wheel = new Event('arbitrary-event', { bubbles: true, cancelable: true });
         let bubbled = false;
-        window.addEventListener('wheel', () => bubbled = true);
+        window.addEventListener('arbitrary-event', () => bubbled = true);
         outside.dispatchEvent(wheel);
-        check(!wheel.defaultPrevented && bubbled, 'unguarded global event cancellation blocked at runtime');
-        check(errors.length === 4, 'four outside writes rejected: ' + errors.join('\\n'));
+        check(wheel.defaultPrevented && !bubbled, 'arbitrary global events can be cancelled');
+        check(root.querySelector('iframe').title === 'Created', 'element creation allowed');
+        check(root.dataset.afterError === 'yes', 'later scripts run after an error');
+        check(errors.length === 1 && errors[0].includes('expected wrapper error'), 'wrapper reports script errors');
         if (!document.querySelector('#result').textContent) document.querySelector('#result').textContent = 'PASS';
       } catch (error) { document.querySelector('#result').textContent = 'FAIL: ' + error.stack; }
     </script>`);

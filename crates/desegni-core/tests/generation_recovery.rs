@@ -609,7 +609,7 @@ fn local_shared_javascript_change_is_retained_as_draft_while_other_pages_apply()
     assert_eq!(safe.regions.last().unwrap().status, RegionStatus::Conflict);
     assert!(events.iter().any(|e| {
         e.region_id == Some(id)
-            && e.kind == "scriptScope"
+            && e.kind == "sharedJavascript"
             && e.disposition == "conflicted"
             && e.message
                 .contains("Local requests must preserve shared JavaScript byte-for-byte.")
