@@ -24,7 +24,8 @@
 .editor-menu > .menu-separator { margin: 4px 8px; border-top: 1px solid var(--border-soft); }
 
 .page-strip { display: flex; align-items: stretch; gap: 4px; padding: 5px 10px 0; border-bottom: 1px solid var(--border); background: var(--background); flex-shrink: 0; min-width: 0; }
-.page-tabs { display: flex; align-items: stretch; gap: 3px; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+.page-tabs { display: flex; align-items: stretch; gap: 3px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.page-tabs::-webkit-scrollbar { display: none; }
 .project-tab-row > .parked-tab, .page-tab-shell > .page-tab { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-shrink: 0; min-width: 110px; max-width: 220px; min-height: 35px; padding: 6px 12px; border: 1px solid transparent; border-bottom: 0; border-radius: 5px 5px 0 0; background: var(--background); color: var(--muted); font-size: 13px; }
 .project-tab-row > .parked-tab > span:first-child, .page-tab-shell > .page-tab > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-tab-row > .parked-tab[aria-selected="true"], .page-tab-shell > .page-tab[aria-selected="true"] { border-color: var(--border); background: var(--surface); color: var(--text); }

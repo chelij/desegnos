@@ -599,6 +599,18 @@ function Editor() {
   const region = page?.regions.find(region => region.id === selected) ?? null;
   const pageIdsKey = project?.pages.map(item => item.id).join(',') ?? '';
   const openPageIds = project ? visiblePageTabs(openPages[project.id], project.pages.map(item => item.id)) : [];
+  // The strip scrolls without a scrollbar (it overlapped the tabs and took their clicks): wheel scrolls sideways, the active tab stays in view.
+  const tabStrip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = tabStrip.current; if (!strip) return;
+    const wheel = (event: WheelEvent) => {
+      if (strip.scrollWidth <= strip.clientWidth || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
+      event.preventDefault(); strip.scrollLeft += event.deltaY;
+    };
+    strip.addEventListener('wheel', wheel, { passive: false });
+    return () => strip.removeEventListener('wheel', wheel);
+  }, [!!project]);
+  useEffect(() => { if (page) document.getElementById(`page-tab-${page.id}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [page?.id]);
   // Restore a project's open page tabs the first time it becomes active, then drop tabs for
   // pages that no longer exist. A project with no saved tabs shows all of its pages.
   useEffect(() => {
@@ -1031,7 +1043,7 @@ function Editor() {
       <SurfaceHost place="start" />
       {!showNew && <NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} settings={aiSettings} openSettings={() => setShowAiSettings(true)} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} />}
     </main> : <>
-      <div className="page-strip"><div className="page-tabs" role="tablist" aria-label="Project pages">
+      <div className="page-strip"><div className="page-tabs" ref={tabStrip} role="tablist" aria-label="Project pages">
         {(view.openProjects?.length ? view.openProjects : [{ id: project.id, name: project.name, dirty: !!view.dirty, active: true, pages: [] }]).map((open, groupIndex, groups) => <div key={open.id} data-project-id={open.id} className={`project-tab-group${open.active ? ' active' : ''}${groups.length > 1 ? ' labelled' : ''}`} style={{ '--project-colour': PROJECT_COLOURS[groupIndex % PROJECT_COLOURS.length] } as CSSProperties} role="group" aria-label={`Project ${open.name}`}>
           {groups.length > 1 && <div className="project-tab-head"><span className="project-tab-label" title={open.name}>{open.name}{open.dirty ? ' •' : ''}</span>
             <button type="button" className="project-tab-close" aria-label={`Close ${open.name}`} title={`Close ${open.name}`} onClick={() => { if (open.dirty) setCloseChoice(open.id); else run(() => closeProjectTab(open.id, false)); }}>×</button></div>}
