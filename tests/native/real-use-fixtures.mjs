@@ -42,7 +42,7 @@ async function holdsUnsavedWork(record, projectPath, journal) {
   } catch { return true; }
 }
 
-export async function seedRealUse(dataHome, evidence) {
+export async function seedRealUse(dataHome, evidence, { recoveries = true } = {}) {
   const source = process.env.DESEGNI_REAL_USE_SOURCE ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), APP);
   const target = join(dataHome, APP), copies = join(evidence, 'real-projects');
   await mkdir(target, { recursive: true, mode: 0o700 }); await mkdir(copies, { recursive: true });
@@ -62,7 +62,7 @@ export async function seedRealUse(dataHome, evidence) {
     const copy = await copyProject(entry.path);
     if (copy) manifest.projects.push({ name: entry.name, path: copy, bytes: (await stat(copy)).size });
   }
-  for (const name of (await readdir(source).catch(() => [])).filter(name => name.endsWith('.recovery.json'))) {
+  for (const name of (recoveries ? await readdir(source).catch(() => []) : []).filter(name => name.endsWith('.recovery.json'))) {
     let record;
     try { record = JSON.parse(await readFile(join(source, name), 'utf8')); } catch { continue; }
     try { await copyFile(join(source, record.journalFile), join(target, record.journalFile)); } catch { continue; }

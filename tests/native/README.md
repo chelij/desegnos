@@ -97,3 +97,22 @@ uses disposable project files, the six-picture fixture and the synthetic provide
 it never sends paid AI requests or changes application source.
 For a focused recapture, set `DESEGNI_UI_TOUR_SURFACES=2` (or comma-separated
 surface numbers from the index); existing index entries for other surfaces remain.
+
+## Canvas flash regression
+
+`DESEGNI_FLASH_LABEL=after node scripts/native-test.mjs --flash-only` captures the copied
+owner project `chelib-redesign` and a small fixture at 60 Hz through trusted X11 drags.
+The scope uses `seedRealUse` without recovery prompts, verifies the source archive's
+SHA-256 before/after, and never opens the original. It checks a continuously visible
+canvas document, the committed offset, no snap after drop, selection alignment,
+cancelled dragging, Undo/Redo, and live reloads with startup script errors. Only the
+debug native-test binary is built; `--skip-build` reuses it.
+
+Evidence goes to `test-results/flash/<label>/`: lossless owned-window videos, DOM/size/
+notice traces, live-reload samples and source integrity. To capture an unfixed baseline,
+set `DESEGNI_FLASH_LABEL=before DESEGNI_FLASH_ASSERT=0`. Then run
+`python tests/native/analyze-flash.py test-results/flash/before test-results/flash/after`
+to retain exact anomalous frame indices and PNG strips. The analyzer uses installed
+FFmpeg, Pillow and NumPy; its fixed unchanged regions match these two fixtures and
+exclude the moved element, drag measurements and notices. The ordinary native report
+and desktop-cleanup checks remain in the run's `test-results/native/` directory.

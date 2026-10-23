@@ -282,10 +282,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   function point(client: Point): Point {
     return clientToCanvas(client, stage.current!.getBoundingClientRect(), zoom, { x: boundsRef.current.left, y: boundsRef.current.top });
   }
-  function cancel(resetClicks = true) {
+  function cancel(resetClicks = true, restoreElement = true) {
     if (resetClicks) { plainClicks.current = 0; lastPlainClick.current = null; }
     const pointerId = gesture.current?.pointerId ?? pan.current?.pointerId ?? elementDrag.current?.pointerId;
-    if (elementDrag.current) { elementDrag.current.mover?.cancel(); elementDrag.current.resizer?.cancel(); if (elementDrag.current.pageId === pageRef.current.id && elementDrag.current.version === acceptedVersionRef.current) storeElement(elementDrag.current.original); else deselectElement(); elementDrag.current = null; }
+    if (elementDrag.current) {
+      const drag = elementDrag.current;
+      if (restoreElement) {
+        drag.mover?.cancel(); drag.resizer?.cancel();
+        if (drag.pageId === pageRef.current.id && drag.version === acceptedVersionRef.current) storeElement(drag.original);
+        else deselectElement();
+      }
+      elementDrag.current = null;
+    }
     gesture.current = null; pan.current = null; lastPointer.current = null;
     if (pointerId !== undefined && stage.current?.hasPointerCapture(pointerId)) stage.current.releasePointerCapture(pointerId);
     setPreview(null); setDragging(false); setPanning(false);
@@ -863,8 +871,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       try {
         if (drag.active && (drag.resizer ? !sameRect(drag.rect, drag.original.rect) : drag.x || drag.y)) css = drag.resizer ? drag.resizer.style(drag.rect) : drag.mover!.style(drag.x, drag.y);
       } catch (error) { setElementError(String(error)); }
-      cancel(drag.active || !!drag.corner);
-      if (css !== null) void applyElement({ kind: 'update', texts: [], attributes: {}, style: css }, drag.original).catch(() => {});
+      // Retain the gesture's final pixels and bounds until the committed preview swaps in.
+      const placed = elementRef.current;
+      cancel(drag.active || !!drag.corner, css === null);
+      if (css !== null) void applyElement({ kind: 'update', texts: [], attributes: {}, style: css }, placed ?? drag.original).catch(() => { drag.mover?.cancel(); drag.resizer?.cancel(); refreshElement(); });
       else if (!drag.active && !drag.corner) {
         finishPlainClick({ x: event.clientX, y: event.clientY }, !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey, event.shiftKey || event.ctrlKey || event.metaKey);
       }

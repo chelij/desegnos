@@ -27,6 +27,7 @@ import { realUseWorkflow } from '../tests/native/real-use-workflow.mjs';
 import { seedRealUse } from '../tests/native/real-use-fixtures.mjs';
 import { websiteImportWorkflow } from '../tests/native/website-import-workflow.mjs';
 import { uiTour } from '../tests/native/ui-tour.mjs';
+import { flashWorkflow } from '../tests/native/flash-workflow.mjs';
 import { projectFoldersWorkflow } from '../tests/native/project-folders-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -195,7 +196,10 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'ui-tour') {
+    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'flash') {
+      await flashWorkflow(driver, physical, step, evidence);
+      report.passed = true; return;
+    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'ui-tour') {
       report.scope = 'Screenshot tour of workspace surfaces in both themes and widths.';
       report.tour = await uiTour(driver, physical, step, evidence, provider, async () => {
         await stop('SIGKILL');
@@ -340,15 +344,16 @@ async function runIsolated() {
 
 async function main() {
   if (args.includes('--help')) {
-    console.log('node scripts/native-test.mjs [--skip-build] [--ui-tour-only|--code-meta-only|--project-folders-only|--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only|--real-use-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
+    console.log('node scripts/native-test.mjs [--skip-build] [--flash-only|--ui-tour-only|--code-meta-only|--project-folders-only|--ux-audit-only|--identity-only|--canvas-input-only|--layers-only|--source-edit-only|--cleanup-extras-only|--image-resize-only|--real-use-only] [--binary /absolute/test-build/desegnos]\nBuilds the explicit native-tests feature, then runs real native UI and crash recovery checks on a guarded isolated Xvfb display. The default covers the current UX core loop and brand import. --ux-audit-only excludes the separately verified brand-import flow. --identity-only covers brand import and recovery. --layers-only covers request and website stacking, the real system clipboard, history, export and recovery.');
     return;
   }
   if (process.platform !== 'linux') throw new Error('This runner requires the guarded Linux Xvfb route. Native Windows/macOS isolation must be configured on those runners.');
   const skipBuild = args.includes('--skip-build');
   const binaryIndex = args.indexOf('--binary');
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
-  const known = new Set(['--ui-tour-only', '--code-meta-only', '--website-import-only', '--project-folders-only', '--image-resize-only', '--real-use-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
+  const known = new Set(['--flash-only', '--ui-tour-only', '--code-meta-only', '--website-import-only', '--project-folders-only', '--image-resize-only', '--real-use-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
+  if (args.includes('--flash-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'flash';
   if (args.includes('--ui-tour-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'ui-tour';
   if (args.includes('--code-meta-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'code-meta';
   if (args.includes('--website-import-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'website-import';
@@ -382,8 +387,8 @@ async function main() {
   const documents = join(scratch, 'Documents');
   await mkdir(documents, { mode: 0o700 });
   await writeFile(join(profile.config, 'user-dirs.dirs'), `XDG_DOCUMENTS_DIR="${documents}"\n`, { mode: 0o600 });
-  if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'real-use') {
-    const seeded = await seedRealUse(profile.data, evidence);
+  if (['real-use', 'flash'].includes(process.env.DESEGNI_NATIVE_TEST_SCOPE)) {
+    const seeded = await seedRealUse(profile.data, evidence, { recoveries: process.env.DESEGNI_NATIVE_TEST_SCOPE !== 'flash' });
     console.log(`Real-use data: ${seeded.projects.length} projects, ${seeded.recoveries.length} recoveries from ${seeded.source}`);
   }
   const original = await desktopState();

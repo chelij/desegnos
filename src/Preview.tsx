@@ -33,9 +33,15 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   content?: SiteContent; onReady?: () => void; referenceHeight?: number; onHeight?: (height: number) => void;
 }>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady, onRuntimeProblems, fixRuntimeErrors, aiDisabled, observationsVersion }, ref) {
   const frame = useRef<HTMLIFrameElement>(null);
+  const stagingFrame = useRef<HTMLIFrameElement>(null);
   const [extent, setExtent] = useState(referenceHeight);
-  const [descriptor, setDescriptor] = useState<PreviewDescriptor | null>(null);
-  const [previewSource, setPreviewSource] = useState<SiteContent | null>(null);
+  type PreparedFrame = { descriptor: PreviewDescriptor; source: SiteContent | null; pageId: string; revision: number | string; runScripts: boolean };
+  const [visible, setVisible] = useState<PreparedFrame | null>(null);
+  const descriptor = visible?.descriptor ?? null;
+  const [pending, setPending] = useState<PreparedFrame | null>(null);
+  const pendingRef = useRef(pending); pendingRef.current = pending;
+  const visibleSession = useRef<string | null>(null); visibleSession.current = descriptor?.sessionId ?? null;
+  const readyDocument = useRef<{ document: Document; session: string; height: number } | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [observations, setObservations] = useState<string[]>([]);
@@ -51,7 +57,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   // Interactive previews keep their separate opaque-origin, explicitly enabled sandbox.
   function identify(node: Element | null, exact = true): { node: Element; target: ElementTarget } | null {
     const doc = frame.current?.contentDocument;
-    if (!doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || !node || !descriptor?.sourceSha256 || !doc.body.contains(node)) return null;
+    if (registeredVersion.current?.pageId !== pageId || registeredVersion.current?.revision !== revision || !doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || !node || !descriptor?.sourceSha256 || !doc.body.contains(node)) return null;
     if (!exact) node = Element.prototype.closest.call(node, 'button, a, input, select, textarea, label, summary') ?? node;
     if (!/^[A-Za-z][A-Za-z0-9-]{0,79}$/.test(node.localName)) return null;
     const parts: string[] = [];
@@ -81,7 +87,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
 
   function findNode(target: ElementTarget): Element | null {
     const doc = frame.current?.contentDocument;
-    if (!doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || (!target.id && target.sourceSha256 !== descriptor?.sourceSha256)) return null;
+    if (registeredVersion.current?.pageId !== pageId || registeredVersion.current?.revision !== revision || !doc || invalidated.current || mounted.current?.document !== doc || mounted.current.session !== descriptor?.sessionId || doc.URL !== 'about:srcdoc' || (!target.id && target.sourceSha256 !== descriptor?.sourceSha256)) return null;
     try { const node = Document.prototype.querySelector.call(doc, target.id ? `[data-desegnos-id="${CSS.escape(target.id)}"]` : target.selector); return node && (target.id || node.localName === target.tag) ? node : null; } catch { return null; }
   }
   function visual(target: ElementTarget): ElementVisual | null {
@@ -268,12 +274,13 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   const rate = useRef({ started: 0, count: 0 });
   // Errors reported by the current load; null while a reload is pending.
   const reported = useRef<string[] | null>(null);
+  const stagedProblems = useRef<{ session: string; errors: string[] } | null>(null);
   useEffect(() => {
     let active = true;
     let registered: string | null = null;
-    picked.current = null; mounted.current = null; invalidated.current = false; setExtent(referenceHeight);
+    setPending(null);
     // Keep the last errors until the reloaded page reports again, so the banner doesn't blink on every edit.
-    setDescriptor(null); setError(''); setLoading(true); reported.current = null;
+    setError(''); setLoading(true); reported.current = null;
     if (registeredVersion.current?.pageId !== pageId) setObservations([]);
     void native<PreviewDescriptor>('create_preview', { pageId, jobId, draftId, runScripts }).then(async value => {
       if (!active) { void native('release_preview', { sessionId: value.sessionId }).catch(() => {}); return; }
@@ -288,58 +295,98 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
         const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
         if (digest !== value.sourceSha256) throw new Error('The page changed while opening its preview. Reopen the page.');
       }
-      if (active) { registeredVersion.current = { pageId, revision }; setPreviewSource(value.content ?? content ?? null); setDescriptor(value); }
-    }).catch(error => { if (active) { setError(error instanceof Error ? error.message : String(error)); setLoading(false); } });
-    return () => { active = false; if (registered) void native('release_preview', { sessionId: registered }).catch(() => {}); };
+      if (active) {
+        stagedProblems.current = { session: value.sessionId, errors: [] };
+        setPending({ descriptor: value, source: value.content ?? content ?? null, pageId, revision, runScripts });
+      }
+    }).catch(error => { if (registered && registered !== visibleSession.current) void native('release_preview', { sessionId: registered }).catch(() => {}); if (active) { setError(error instanceof Error ? error.message : String(error)); setLoading(false); } });
+    return () => { active = false; if (registered && registered !== visibleSession.current) void native('release_preview', { sessionId: registered }).catch(() => {}); };
   }, [pageId, jobId, draftId, runScripts, revision, retry]);
+  // The old session remains alive until its replacement is painted and committed.
+  useEffect(() => () => { if (descriptor) void native('release_preview', { sessionId: descriptor.sessionId }).catch(() => {}); }, [descriptor]);
+  useLayoutEffect(() => {
+    if (!visible) return;
+    registeredVersion.current = { pageId: visible.pageId, revision: visible.revision };
+    mounted.current = readyDocument.current;
+    picked.current = null; invalidated.current = false;
+    if (staticView && readyDocument.current) { setExtent(readyDocument.current.height); onHeight?.(readyDocument.current.height); }
+    onReady?.();
+  }, [visible]);
   useEffect(() => {
     if (!descriptor || staticView) return;
-    reported.current = [];
+    reported.current = stagedProblems.current?.session === descriptor.sessionId ? stagedProblems.current.errors : [];
+    if (reported.current.length) setObservations(reported.current);
     const settle = setTimeout(() => { if (reported.current?.length === 0) setObservations([]); }, 2000);
+    return () => clearTimeout(settle);
+  }, [descriptor, staticView]);
+  useEffect(() => {
+    if (staticView) return;
     function receive(event: MessageEvent) {
-      if (event.source !== frame.current?.contentWindow || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
+      const staging = !!pending && event.source === stagingFrame.current?.contentWindow;
+      const source = staging ? pending?.descriptor : descriptor;
+      if (!source || (!staging && event.source !== frame.current?.contentWindow) || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
       const now = performance.now();
       if (now - rate.current.started > 1000) rate.current = { started: now, count: 0 };
       if (++rate.current.count > 10) return;
       const value = event.data as Record<string, unknown>;
-      if (value.type === 'desegni-preview-link' && value.sessionId === descriptor!.sessionId && value.pageId === pageId &&
-        typeof value.url === 'string' && /^https?:\/\//.test(value.url) && value.url.length <= 2048 && Object.keys(value).length === 4) { setOutsideLink(value.url); return; }
-      if (value.type !== 'desegni-preview-error' || value.sessionId !== descriptor!.sessionId || value.pageId !== pageId ||
+      if (value.type === 'desegni-preview-link' && value.sessionId === source.sessionId && value.pageId === pageId &&
+        typeof value.url === 'string' && /^https?:\/\//.test(value.url) && value.url.length <= 2048 && Object.keys(value).length === 4) { if (!staging) setOutsideLink(value.url); return; }
+      if (value.type !== 'desegni-preview-error' || value.sessionId !== source.sessionId || value.pageId !== pageId ||
         typeof value.message !== 'string' || value.message.length > 4096 || Object.keys(value).length !== 4) return;
       const message = value.message;
-      const fresh = reported.current ?? [];
-      if (!fresh.includes(message)) reported.current = [...fresh.slice(-9), message];
-      setObservations(reported.current ?? []);
+      const fresh = (staging ? stagedProblems.current?.errors : reported.current) ?? [];
+      const errors = fresh.includes(message) ? fresh : [...fresh.slice(-9), message];
+      if (staging) stagedProblems.current = { session: source.sessionId, errors };
+      else { reported.current = errors; setObservations(errors); }
     }
     window.addEventListener('message', receive);
-    return () => { clearTimeout(settle); window.removeEventListener('message', receive); };
-  }, [descriptor, pageId, staticView]);
+    return () => window.removeEventListener('message', receive);
+  }, [descriptor, pending, pageId, staticView]);
   useLayoutEffect(() => {
     if (!staticView || !mounted.current || invalidated.current) return;
     Document.prototype.getAnimations?.call(mounted.current.document).forEach(animation => animation.pause());
   }, [staticView, extent]);
-  const sourceDocument = staticView && previewSource ? `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${staticPolicy}"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${previewSource.html}</body></html>` : undefined;
-  return <div data-source-hash={descriptor?.sourceSha256 ?? undefined} data-preview-ready={staticView && !loading && !error && registeredVersion.current?.revision === revision && mounted.current?.session === descriptor?.sessionId ? 'true' : undefined} className={staticView ? 'preview-frame static-preview' : 'preview-frame'}>
-    {loading && !staticView && <p role="status" className="preview-status">Preparing preview…</p>}
+  const frames = [visible, pending].filter((item): item is PreparedFrame => !!item);
+  return <div style={staticView ? undefined : { position: 'relative' }} data-source-hash={descriptor?.sourceSha256 ?? undefined} data-preview-ready={staticView && !loading && !error && visible?.pageId === pageId && visible.revision === revision && readyDocument.current?.session === descriptor?.sessionId ? 'true' : undefined} className={staticView ? 'preview-frame static-preview' : 'preview-frame'}>
+    {loading && !staticView && !visible && <p role="status" className="preview-status">Preparing preview…</p>}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={!staticView ? { label: 'Retry preview', onClick: () => setRetry(value => value + 1) } : undefined} />}
-    {descriptor && <iframe key={`${descriptor.sessionId}:${runScripts}`} ref={frame} inert={staticView || !!draftId || undefined} src={sourceDocument ? undefined : descriptor.url} srcDoc={sourceDocument} sandbox={sourceDocument ? 'allow-same-origin' : runScripts ? 'allow-scripts' : ''} referrerPolicy="no-referrer" title={title}
-      style={sourceDocument ? { height: extent } : undefined} tabIndex={staticView || draftId ? -1 : undefined} aria-hidden={staticView || undefined} onLoad={event => {
-        if (event.currentTarget !== frame.current) return;
-        setLoading(false);
-        if (!sourceDocument || !previewSource) return;
-        try {
-          const doc = frame.current?.contentDocument;
-          if (invalidated.current || !doc?.head || !doc.body || doc.URL !== 'about:srcdoc' || (mounted.current && mounted.current.document !== doc) || doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') !== staticPolicy) throw new Error('The page navigated away from its editable preview.');
-          mounted.current = { document: doc, session: descriptor.sessionId };
-          const style = Document.prototype.createElement.call(doc, 'style'); style.textContent = previewSource.css; doc.head.append(style);
-          const still = Document.prototype.createElement.call(doc, 'style'); still.setAttribute('data-desegnos-editor-paused', ''); still.textContent = '*,*::before,*::after{animation-play-state:paused!important;transition:none!important}'; doc.head.append(still);
-          // Measure once against the reference viewport. Observing our own iframe resize would create a vh/percentage-height feedback loop.
-          const height = Math.min(100000, Math.max(referenceHeight, doc.body.scrollHeight, doc.documentElement.scrollHeight));
-          Document.prototype.getAnimations?.call(doc).forEach(animation => animation.pause());
-          setExtent(height); onHeight?.(height); onReady?.();
-        } catch { invalidated.current = true; mounted.current = null; picked.current = null; setError('This page left its editable preview. Reopen the page to select elements.'); onReady?.(); }
-      }}
-      onError={() => { setError('The preview document could not be loaded.'); setLoading(false); }} />}
+    {frames.map(candidate => {
+      const staging = candidate === pending;
+      const sourceDocument = staticView && candidate.source ? `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${staticPolicy}"><meta name="viewport" content="width=device-width, initial-scale=1"></head><body>${candidate.source.html}</body></html>` : undefined;
+      return <iframe key={candidate.descriptor.sessionId} ref={node => { if (staging) stagingFrame.current = node; else frame.current = node; }} inert={staging || staticView || !!draftId || undefined}
+        src={sourceDocument ? undefined : candidate.descriptor.url} srcDoc={sourceDocument} sandbox={sourceDocument ? 'allow-same-origin' : candidate.runScripts ? 'allow-scripts' : ''} referrerPolicy="no-referrer" title={title}
+        style={{ ...(sourceDocument ? { height: staging ? referenceHeight : extent } : {}), ...(staging ? { position: 'absolute', inset: 0, visibility: 'hidden', pointerEvents: 'none' } as CSSProperties : {}) }}
+        tabIndex={staging || staticView || draftId ? -1 : undefined} aria-hidden={staging || staticView || undefined} onLoad={async event => {
+          const node = event.currentTarget;
+          // A later navigation of the editable document must never regain DOM access.
+          if (!staging) {
+            if (staticView && node.contentDocument !== mounted.current?.document) { invalidated.current = true; mounted.current = null; setError('This page left its editable preview. Reopen the page to select elements.'); }
+            return;
+          }
+          if (pendingRef.current !== candidate) return;
+          try {
+            let prepared: typeof readyDocument.current = null;
+            if (sourceDocument && candidate.source) {
+              const doc = node.contentDocument;
+              if (!doc?.head || !doc.body || doc.URL !== 'about:srcdoc' || doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') !== staticPolicy) throw new Error('This page left its editable preview. Reopen the page to select elements.');
+              const style = Document.prototype.createElement.call(doc, 'style'); style.textContent = candidate.source.css; doc.head.append(style);
+              const still = Document.prototype.createElement.call(doc, 'style'); still.setAttribute('data-desegnos-editor-paused', ''); still.textContent = '*,*::before,*::after{animation-play-state:paused!important;transition:none!important}'; doc.head.append(still);
+              await doc.fonts.ready;
+              // Styles can introduce images and fonts after the srcdoc load event.
+              await Promise.allSettled(Array.from(doc.images, image => image.decode()));
+              Document.prototype.getAnimations?.call(doc).forEach(animation => animation.pause());
+              prepared = { document: doc, session: candidate.descriptor.sessionId, height: Math.min(100000, Math.max(referenceHeight, doc.body.scrollHeight, doc.documentElement.scrollHeight)) };
+              node.style.height = `${prepared.height}px`;
+            }
+            // Keep both documents mounted across a paint opportunity. Promote in one
+            // React commit; onReady then measures the visible document in layout effect.
+            await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+            if (pendingRef.current !== candidate) return;
+            readyDocument.current = prepared;
+            setVisible(candidate); setPending(null); setLoading(false);
+          } catch (error) { if (pendingRef.current === candidate) { setError(error instanceof Error ? error.message : String(error)); setLoading(false); } }
+        }} onError={() => { if (pendingRef.current === candidate) { setError('The preview document could not be loaded.'); setLoading(false); } }} />;
+    })}
     {!staticView && outsideLink && <Notice variant="info" message={`This link leaves your site: ${outsideLink}`} action={{ label: 'Open in browser', onClick: () => { const url = outsideLink; setOutsideLink(null); void native('open_preview_link', { url }).catch(error => setError(String(error))); } }} dismiss={() => setOutsideLink(null)} />}
     {!onRuntimeProblems && !staticView && !error && observations.length > 0 && <ProblemBanner message={runtimeError(observations[0])}
       action={!draftId && !jobId && fixRuntimeErrors ? { label: 'Fix with AI', disabled: aiDisabled, onClick: () => fixRuntimeErrors(observations) } : undefined}
