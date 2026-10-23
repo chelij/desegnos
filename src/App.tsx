@@ -480,9 +480,10 @@ function Editor() {
           event.preventDefault(); document.execCommand(textAction); return;
         }
       }
-      if (event.target instanceof Element && event.target.closest('.workspace-surface')) return;
       const shortcut = editorShortcut(event, editingText);
       if (!shortcut) return;
+      // Side panels keep focus while editing, so app-wide commands still work there.
+      if (event.target instanceof Element && event.target.closest('.workspace-surface') && !['save', 'saveAs', 'open', 'new', 'undo', 'redo', 'zoomIn', 'zoomOut', 'fit', 'actualSize', 'doubleSize', 'nextPage', 'previousPage'].includes(shortcut)) return;
       if (event.repeat && ['new', 'open', 'saveAs', 'help', 'remove'].includes(shortcut)) { event.preventDefault(); return; }
       const project = current.current?.project;
       let action: (() => Promise<unknown>) | undefined;
