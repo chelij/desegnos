@@ -18,6 +18,16 @@ export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: 
 export type Rect = { x: number; y: number; width: number; height: number };
 export type RegionShape = { kind: 'rect' } | { kind: 'ellipse' } | { kind: 'freehand'; points: [number, number][] };
 export type ElementTarget = { id?: string; selector: string; tag: string; label: string; sourceSha256?: string };
+export type DocumentTarget = { kind: 'page'; pageId: string } | { kind: 'siteFile'; path: string };
+export type FrameTarget = { pageId: string; iframeId: string; document: DocumentTarget; rect: Rect };
+export type FrameSource = { kind: 'page'; pageId: string } | { kind: 'siteFile'; path: string } | { kind: 'external'; url: string } | { kind: 'unresolvable'; src: string };
+export type PageFrameTarget = { iframeId: string; src: string; source: FrameSource; document?: DocumentTarget | null; sourceSha256?: string | null };
+export type FrameTargetsArgs = { projectId: string; pageId: string };
+export type InspectElementArgs = { projectId: string; pageId: string; target: ElementTarget; document?: DocumentTarget | null };
+export type EditElementArgs = { projectId: string; pageId: string; revision: number; target: ElementTarget; change: ElementEdit; document?: DocumentTarget | null };
+export type UndoElementArgs = { projectId: string; pageId: string; revision: number; target: ElementTarget; document?: DocumentTarget | null };
+export type CopyLayerArgs = { projectId: string; pageId: string; revision: number; target: LayerTarget; visualStyles: ElementStyleEdit[]; document?: DocumentTarget | null };
+export type PasteLayerArgs = { projectId: string; pageId: string; revision: number; after: ElementTarget | null; document?: DocumentTarget | null };
 export type LayerDirection = 'forward' | 'backward' | 'front' | 'back';
 export type LayerPseudoStyle = { pseudo: 'before' | 'after' | 'marker'; style: string };
 export type ElementStyleEdit = { target: ElementTarget; style: string; pseudoStyles?: LayerPseudoStyle[] };
@@ -31,7 +41,7 @@ export type ElementDetails = { target: ElementTarget; texts: { index: number; te
 export type ElementEditView = { workspace: WorkspaceView; element: ElementTarget | null };
 export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string; textAlign?: string };
 export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; preview?: string; text?: string; url?: string };
-export type Region = { shape?: RegionShape; areaBounds?: { target: ElementTarget; rect: Rect }[]; attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; runtimeErrors?: string[]; wholePage?: boolean; wholePageDisabled?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
+export type Region = { shape?: RegionShape; areaBounds?: { target: ElementTarget; rect: Rect }[]; attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; frameTarget?: FrameTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; runtimeErrors?: string[]; wholePage?: boolean; wholePageDisabled?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
 export type SiteContent = { html: string; css: string; javascript: string };
 export type Page = { id: string; name: string; path: string; included: boolean; viewport: Viewport; appearance: Appearance; regions: Region[]; content: SiteContent | null };
 export type Brief = { purpose: string; audience: string; brandName: string; tone: string };
@@ -79,13 +89,14 @@ export type GenerationCandidate = {
   jobId: string; requirementsSha256: string; summary: string;
   regions: { regionId: string; status: 'implemented' | 'conflict'; explanation: string }[];
   pages: { pageId: string; content: SiteContent }[];
+  documents?: { document: DocumentTarget; content: SiteContent }[];
   componentRequests: { regionId: string; capability: string; resolution: 'native' | 'unavailable'; reason: string }[];
   decisionProposals: DecisionProposal[];
   criticism: DesignCriticism[];
 };
 export type GenerationDraft = { baseContent?: SiteContent | null; id: string; pageId: string | null; regionIds: string[]; code: string; content: SiteContent | null; reason: string; dismissed: boolean; applied: boolean };
 export type DraftReview = { job: GenerationJobView; workspace: WorkspaceView | null; revision: number; blocked: string | null; previewable: boolean; confirmation: string };
-export type GenerationJobView = { drafts?: GenerationDraft[]; jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; context?: RequirementsSnapshot | null; earlierContexts?: RequirementsSnapshot[]; firstExchange?: { summary: string; regions: GenerationCandidate['regions']; usage: TokenUsage | null } | null; repairRounds?: number; repairAreaCount?: number; validationEvents?: { kind: string; disposition: string; regionId: string | null; message: string }[]; rawReply?: string | null; createdAt?: string | null; areas: { pageId: string; regionId: string; rect: Rect; shape?: RegionShape }[]; generationMode: GenerationMode;
+export type GenerationJobView = { drafts?: GenerationDraft[]; jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; context?: RequirementsSnapshot | null; earlierContexts?: RequirementsSnapshot[]; firstExchange?: { summary: string; regions: GenerationCandidate['regions']; usage: TokenUsage | null } | null; repairRounds?: number; repairAreaCount?: number; validationEvents?: { kind: string; disposition: string; regionId: string | null; message: string }[]; rawReply?: string | null; createdAt?: string | null; areas: { pageId: string; regionId: string; rect: Rect; shape?: RegionShape; document?: DocumentTarget | null; frameRect?: Rect | null }[]; generationMode: GenerationMode;
   settings: ProviderSettings; status: GenerationStatus; estimateUsd: number; receivedBytes: number; message: string; candidate: GenerationCandidate | null;
   usage: TokenUsage | null; attempts: GenerationAttempt[]; acceptedDecisionIndices: number[]; recommendedDecisionIndices: number[];
   provider?: ProviderId; authentication: AuthenticationMethod; chatgptAccountId: string | null; failureKind: string | null; dossierError: string | null; providerError: ProviderError | null };
@@ -116,11 +127,12 @@ export type Command =
   | { type: 'retarget_region'; page_id: string; region_id: string; elements: ElementTarget[]; bounds: { target: ElementTarget; rect: Rect }[] }
   | { type: 'set_region_target_removal'; page_id: string; region_id: string; allow_target_removal: boolean }
   | { type: 'set_region_runtime_errors'; page_id: string; region_id: string; errors: string[] }
+  | { type: 'set_region_frame_target'; page_id: string; region_id: string; frame_target: FrameTarget | null }
   | { type: 'set_region_whole_page'; page_id: string; region_id: string; whole_page: boolean }
   | { type: 'set_region_mobile_only'; page_id: string; region_id: string; mobile_only: boolean }
   | { type: 'add_region_attachment'; page_id: string; region_id: string; attachment: RequestAttachment }
   | { type: 'remove_region_attachment'; page_id: string; region_id: string; attachment_id: string }
-  | { type: 'delete_elements'; page_id: string; elements: ElementTarget[] }
+  | { type: 'delete_elements'; page_id: string; elements: ElementTarget[]; document?: DocumentTarget | null }
   | { type: 'update_region'; page_id: string; region_id: string; rect: Rect; prompt: string }
   | { type: 'dismiss_empty_regions'; keep_region_id: string | null }
   | { type: 'arrange_region'; page_id: string; region_id: string; direction: LayerDirection }

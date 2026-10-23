@@ -616,14 +616,31 @@ impl Project {
         selected: &LayerTarget,
         visual_styles: &[ElementStyleEdit],
     ) -> Result<LayerClipboard> {
+        self.copy_layer_in(
+            &crate::DocumentTarget::Page { page_id },
+            selected,
+            visual_styles,
+        )
+    }
+    pub fn copy_layer_in(
+        &self,
+        document: &crate::DocumentTarget,
+        selected: &LayerTarget,
+        visual_styles: &[ElementStyleEdit],
+    ) -> Result<LayerClipboard> {
         self.validate()?;
-        let page = self.page(page_id)?;
         let content = match selected {
             LayerTarget::Request { region_id } => {
                 ensure(
                     visual_styles.is_empty(),
                     "A request copy cannot include site element styles.",
                 )?;
+                let crate::DocumentTarget::Page { page_id } = document else {
+                    return Err(Error(
+                        "Requests belong to a page, not a framed document.".into(),
+                    ));
+                };
+                let page = self.page(*page_id)?;
                 let region = page
                     .regions
                     .iter()
@@ -640,15 +657,12 @@ impl Project {
                     target.selector != "body",
                     "Copy an item inside the page, not the page itself.",
                 )?;
-                let source = page
-                    .content
-                    .as_ref()
-                    .ok_or_else(|| Error("This page has no site to copy.".into()))?;
+                let source = self.document_content(document)?;
                 ensure(
-                    !target.id.is_empty() || source.sha256()? == target.source_sha256,
-                    "The page changed. Select this layer again.",
+                    !target.id.is_empty() || self.document_hash(document)? == target.source_sha256,
+                    "The document changed. Select this layer again.",
                 )?;
-                let doc = self.parse_page_html(&source.html)?;
+                let doc = self.parse_document_target(document, &source.html)?;
                 unique_ids(&doc)?;
                 let root = locate(&doc, target)?;
                 static_subtree(root)?;
@@ -739,26 +753,46 @@ impl Project {
         clipboard: &LayerClipboard,
         insertion: Option<&ElementTarget>,
     ) -> Result<(Self, LayerPasteSelection)> {
+        self.paste_layer_in(
+            revision,
+            &crate::DocumentTarget::Page { page_id },
+            clipboard,
+            insertion,
+        )
+    }
+    pub fn paste_layer_in(
+        &self,
+        revision: u64,
+        document: &crate::DocumentTarget,
+        clipboard: &LayerClipboard,
+        insertion: Option<&ElementTarget>,
+    ) -> Result<(Self, LayerPasteSelection)> {
         self.validate()?;
         ensure(
             revision == self.revision,
             "The project changed. Try pasting again.",
         )?;
         clipboard.validate()?;
-        let page = self.page(page_id)?;
+        let viewport = self.document_viewport(document)?;
         if let Some(insertion) = insertion {
-            self.inspect_element(page_id, insertion)?;
+            self.inspect_element_in(document, insertion)?;
         }
+        let host_page_id = match document {
+            crate::DocumentTarget::Page { page_id } => Some(*page_id),
+            crate::DocumentTarget::SiteFile { .. } => None,
+        };
         if let LayerClipboardContent::Request {
             rect,
             prompt,
             shape,
         } = &clipboard.content
         {
+            let page_id = host_page_id
+                .ok_or_else(|| Error("Requests belong to a page, not a framed document.".into()))?;
             let mut rect = *rect;
             rect.x += 24.0;
             rect.y += 24.0;
-            rect.validate(page.viewport)?;
+            rect.validate(viewport)?;
             let id = Uuid::new_v4();
             let mut next = self.clone();
             next.revision = revision
@@ -786,6 +820,7 @@ impl Project {
                 prompt: prompt.clone(),
                 z_index: 0,
                 element: None,
+                frame_target: None,
                 elements: vec![],
                 allow_target_removal: false,
                 mobile_only: false,
@@ -817,12 +852,18 @@ impl Project {
         else {
             unreachable!()
         };
-        let doc = self.parse_page_html(
-            page.content
-                .as_ref()
-                .map(|content| content.html.as_str())
-                .unwrap_or_default(),
-        )?;
+        let source = match self.document_content(document) {
+            Ok(content) => content,
+            Err(_) if matches!(document, crate::DocumentTarget::Page { .. }) => {
+                crate::SiteContent {
+                    html: String::new(),
+                    css: String::new(),
+                    javascript: String::new(),
+                }
+            }
+            Err(error) => return Err(error),
+        };
+        let doc = self.parse_document_target(document, &source.html)?;
         unique_ids(&doc)?;
         let body = body(&doc)?;
         let anchor = insertion.map(|target| locate(&doc, target)).transpose()?;
@@ -841,16 +882,11 @@ impl Project {
                 && root.try_html().is_some_and(|value| value.as_ref() == html),
             "This layer cannot be pasted into that layout without changing its markup. Select a compatible sibling or paste on the empty page.",
         )?;
-        let hash = page
-            .content
-            .as_ref()
-            .map(crate::SiteContent::sha256)
-            .transpose()?;
-        let tracked = hash
-            .as_deref()
-            .map(|hash| tracked(&doc, page, hash))
-            .transpose()?
-            .unwrap_or_default();
+        let hash = self.document_hash(document).ok();
+        let tracked = match (host_page_id, hash.as_deref()) {
+            (Some(page_id), Some(hash)) => tracked(&doc, self.page(page_id)?, hash)?,
+            _ => vec![],
+        };
         let copied_nodes: Vec<_> = std::iter::once(root).chain(root.descendants_it()).collect();
         for node in copied_nodes {
             node.remove_attr(crate::ELEMENT_ID_ATTRIBUTE);
@@ -860,10 +896,15 @@ impl Project {
             root,
             visual_styles,
             &replacements,
-            page.content
-                .as_ref()
-                .map(|content| content.css.as_str())
-                .unwrap_or_default(),
+            match document {
+                crate::DocumentTarget::Page { page_id } => self
+                    .page(*page_id)?
+                    .content
+                    .as_ref()
+                    .map(|content| content.css.as_str())
+                    .unwrap_or_default(),
+                crate::DocumentTarget::SiteFile { .. } => "",
+            },
         )?;
         offset_root(
             root,
@@ -884,7 +925,7 @@ impl Project {
         }
         unique_ids(&doc)?;
         let (next, selected) =
-            self.finish_element_edit(revision, page_id, &doc, Some(pasted), tracked, css)?;
+            self.finish_document_edit(document, revision, &doc, Some(pasted), tracked, css)?;
         let selected =
             selected.ok_or_else(|| Error("The pasted layer has no selectable element.".into()))?;
         Ok((

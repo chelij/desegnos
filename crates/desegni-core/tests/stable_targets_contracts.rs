@@ -113,6 +113,8 @@ fn candidate(p: &Project, snapshot: &RequirementsSnapshot, html: String) -> Gene
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+
+        documents: vec![],
     }
 }
 #[test]
@@ -180,7 +182,7 @@ fn multi_target_scope_accepts_only_selected_subtrees_and_preserves_shared_source
     let b = target(&p, "article:nth-of-type(2)");
     let p = describe(p, &[a.clone(), b]);
     let snapshot = p.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 21);
+    assert_eq!(snapshot.format_version().unwrap(), 22);
     assert!(snapshot.markdown.contains("\"elements\""));
     let original = &p.pages[0].content.as_ref().unwrap().html;
     let c = candidate(
@@ -330,6 +332,7 @@ fn migration_assigns_and_remaps_without_modifying_original_bytes_or_revision() {
         whole_page: false,
         whole_page_disabled: false,
         attachments: vec![],
+        frame_target: None,
         completed: false,
     });
     p.schema_version = 6;
@@ -374,6 +377,7 @@ fn multi_delete_is_atomic_undoable_and_replacement_keeps_identity() {
     let command = Command::DeleteElements {
         page_id: p.home_page_id,
         elements: vec![a.clone(), b],
+        document: None,
     };
     assert!(
         session
@@ -627,7 +631,7 @@ fn migration_preserves_frozen_receipts_but_never_rebinds_them_to_changed_source(
     assert_eq!(serde_json::to_vec(&snapshot).unwrap(), receipt);
     let new = preserved.prepare_requirements().unwrap();
     assert_ne!(new.sha256, snapshot.sha256);
-    assert_eq!(new.format_version().unwrap(), 21);
+    assert_eq!(new.format_version().unwrap(), 22);
     assert_eq!(
         preserved.pages[0].regions[0].prompt,
         original.pages[0].regions[0].prompt

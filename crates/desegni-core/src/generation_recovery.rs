@@ -1371,6 +1371,8 @@ pub fn conflicted_generation(
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+
+        documents: vec![],
     };
     candidate.validate(snapshot, project)?;
     Ok(candidate)

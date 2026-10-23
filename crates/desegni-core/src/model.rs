@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 pub const MAX_PAGES: usize = 100;
 pub const MAX_PROMPT_CHARS: usize = 16_384;
 
@@ -233,6 +233,10 @@ pub struct Region {
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub element: Option<ElementTarget>,
+    /// This request edits a document shown inside one of the page's iframes; its rect is mapped
+    /// into that document's CSS pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_target: Option<crate::FrameTarget>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub elements: Vec<ElementTarget>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -260,13 +264,20 @@ impl Region {
     /// Coverage uses measured page extents, falling back to the guide.
     /// Phone fixes and element selections stay local unless explicitly overridden.
     pub fn is_whole_page(&self, page: &Page) -> bool {
+        if self.frame_target.is_some() {
+            return false;
+        }
         !self.runtime_errors.is_empty()
             || self.whole_page
             || (!self.whole_page_disabled && self.auto_whole_page(page))
     }
 
     pub fn auto_whole_page(&self, page: &Page) -> bool {
-        if self.mobile_only || self.has_targets() || !self.shape.is_rect() {
+        if self.frame_target.is_some()
+            || self.mobile_only
+            || self.has_targets()
+            || !self.shape.is_rect()
+        {
             return false;
         }
         let width = self
@@ -521,6 +532,13 @@ pub enum Command {
         region_id: Uuid,
         errors: Vec<String>,
     },
+    /// Target a document shown by one of the page's iframes, with the box in its coordinates.
+    SetRegionFrameTarget {
+        page_id: Uuid,
+        region_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_target: Option<crate::FrameTarget>,
+    },
     SetRegionMobileOnly {
         page_id: Uuid,
         region_id: Uuid,
@@ -539,6 +557,9 @@ pub enum Command {
     DeleteElements {
         page_id: Uuid,
         elements: Vec<ElementTarget>,
+        /// The document to delete from; defaults to the current page.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        document: Option<crate::DocumentTarget>,
     },
     UpdateRegion {
         page_id: Uuid,
@@ -1021,6 +1042,7 @@ impl Project {
                     z_index,
                     prompt: String::new(),
                     element: None,
+                    frame_target: None,
                     elements: vec![],
                     allow_target_removal: false,
                     mobile_only: false,
@@ -1054,6 +1076,7 @@ impl Project {
                     z_index,
                     prompt: String::new(),
                     element: None,
+                    frame_target: None,
                     elements: canonical,
                     allow_target_removal: false,
                     mobile_only: false,
@@ -1089,6 +1112,7 @@ impl Project {
                     z_index,
                     prompt: String::new(),
                     element: None,
+                    frame_target: None,
                     elements: targets,
                     allow_target_removal,
                     mobile_only: false,
@@ -1106,6 +1130,14 @@ impl Project {
                 bounds,
                 allow_target_removal,
             } => {
+                ensure(
+                    !next
+                        .page(page_id)?
+                        .regions
+                        .iter()
+                        .any(|region| region.id == region_id && region.frame_target.is_some()),
+                    "A framed request changes only its framed document.",
+                )?;
                 let targets = next.canonical_targets(page_id, &elements)?;
                 let rect = next.target_bounds_union(page_id, &targets, &bounds)?;
                 let region = next
@@ -1145,6 +1177,10 @@ impl Project {
                     .iter_mut()
                     .find(|r| r.id == region_id && !r.completed)
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                ensure(
+                    region.frame_target.is_none() || !whole_page,
+                    "A framed request changes only its framed document.",
+                )?;
                 region.whole_page = whole_page;
                 region.whole_page_disabled = !whole_page;
                 if whole_page {
@@ -1171,7 +1207,7 @@ impl Project {
                     .find(|r| r.id == region_id && !r.completed)
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
                 ensure(
-                    !region.has_targets(),
+                    !region.has_targets() && region.frame_target.is_none(),
                     "Runtime repairs require a page request.",
                 )?;
                 region.runtime_errors = errors;
@@ -1189,9 +1225,43 @@ impl Project {
                     .iter_mut()
                     .find(|r| r.id == region_id && !r.completed)
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                ensure(
+                    region.frame_target.is_none() || !mobile_only,
+                    "A framed request changes only its framed document.",
+                )?;
                 region.mobile_only = mobile_only;
                 if mobile_only {
                     region.whole_page = false;
+                }
+            }
+            Command::SetRegionFrameTarget {
+                page_id,
+                region_id,
+                frame_target,
+            } => {
+                if let Some(frame) = &frame_target {
+                    ensure(
+                        frame.page_id == page_id,
+                        "A framed request must belong to the page that holds its iframe.",
+                    )?;
+                }
+                let region = next
+                    .page_mut(page_id)?
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.id == region_id && !r.completed)
+                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                region.frame_target = frame_target.clone();
+                if frame_target.is_some() {
+                    region.element = None;
+                    region.elements.clear();
+                    region.area_bounds.clear();
+                    region.shape = RegionShape::Rect;
+                    region.allow_target_removal = false;
+                    region.mobile_only = false;
+                    region.runtime_errors.clear();
+                    region.whole_page = false;
+                    region.whole_page_disabled = false;
                 }
             }
             Command::AddRegionAttachment {
@@ -1247,8 +1317,13 @@ impl Project {
                     "That attachment was already removed.",
                 )?;
             }
-            Command::DeleteElements { page_id, elements } => {
-                return self.delete_elements(expected_revision, page_id, &elements);
+            Command::DeleteElements {
+                page_id,
+                elements,
+                document,
+            } => {
+                let document = document.unwrap_or(crate::DocumentTarget::Page { page_id });
+                return self.delete_elements_in(expected_revision, &document, &elements);
             }
             Command::UpdateRegion {
                 page_id,

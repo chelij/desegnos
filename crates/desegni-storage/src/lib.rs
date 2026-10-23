@@ -1,7 +1,7 @@
-pub mod website_merge;
 pub mod request_zip;
 pub mod system_tools;
 pub mod website_detection;
+pub mod website_merge;
 use desegni_core::{
     DecodedProject, Error, Project, Result, SCHEMA_VERSION, decode_project_with_notes,
     decode_project_with_source_hash, digest,
@@ -511,7 +511,7 @@ fn read_project_document(path: &Path) -> Result<(DecodedProject, FileStamp)> {
     }
     let manifest: Manifest = serde_json::from_slice(&entries["manifest.json"]).map_err(io)?;
     if manifest.format != "desegni"
-        || ![1, 2, 3, 4, 5, 6, 7, SCHEMA_VERSION].contains(&manifest.schema_version)
+        || ![1, 2, 3, 4, 5, 6, 7, 8, SCHEMA_VERSION].contains(&manifest.schema_version)
     {
         return Err(Error(
             "This project format is unsupported. The original has not been changed.".into(),

@@ -137,6 +137,7 @@ fn main() {
             create_project,
             edit_project,
             inspect_element,
+            get_frame_targets,
             refresh_element_bounds,
             refresh_element_target_bounds,
             edit_element,

@@ -1,10 +1,10 @@
 /// Requirements contract used for newly prepared requests.
-pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 21;
+pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 22;
 
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
-    MAX_GENERATION_REGIONS, MAX_REQUIREMENTS_BYTES, Page, Project, Region, Result, Scope,
-    candidate_schema, digest, ensure,
+    MAX_GENERATION_REGIONS, MAX_REQUIREMENTS_BYTES, Page, Project, Region, Result, Scope, digest,
+    ensure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -519,6 +519,19 @@ impl Project {
             let mut area = serde_json::json!({"pageId": page.id, "regionId": region.id,
                 "pageName":page.name,"path":page.path,"viewport":page.viewport,"appearance":page.appearance,
                 "placementHint":region.rect,"zIndex":region.z_index,"prompt":region.prompt});
+            let mut placement_rect = region.rect;
+            let mut placement_viewport = page.viewport;
+            if format >= 22
+                && let Some(frame) = &region.frame_target
+            {
+                placement_rect = frame.rect;
+                placement_viewport = self.document_viewport(&frame.document)?;
+                area["frameTarget"] =
+                    serde_json::to_value(frame).map_err(|error| Error(error.to_string()))?;
+                area["hostPlacementHint"] = serde_json::json!(region.rect);
+                area["placementHint"] = serde_json::json!(frame.rect);
+                area["viewport"] = serde_json::json!(placement_viewport);
+            }
             if format >= 15 && !region.shape.is_rect() && !region.has_targets() {
                 area["shape"] = match &region.shape {
                     crate::RegionShape::Ellipse => {
@@ -538,10 +551,10 @@ impl Project {
             }
             if format >= 4 {
                 area["placementPercent"] = serde_json::json!({
-                    "x": region.rect.x * 100.0 / f64::from(page.viewport.width),
-                    "y": region.rect.y * 100.0 / f64::from(page.viewport.height),
-                    "width": region.rect.width * 100.0 / f64::from(page.viewport.width),
-                    "height": region.rect.height * 100.0 / f64::from(page.viewport.height),
+                    "x": placement_rect.x * 100.0 / f64::from(placement_viewport.width),
+                    "y": placement_rect.y * 100.0 / f64::from(placement_viewport.height),
+                    "width": placement_rect.width * 100.0 / f64::from(placement_viewport.width),
+                    "height": placement_rect.height * 100.0 / f64::from(placement_viewport.height),
                 });
             }
             if (5..10).contains(&format)
@@ -591,6 +604,52 @@ impl Project {
             }
             md.push_str(&fenced_json(&area)?);
             md.push('\n');
+        }
+        if format >= 22 {
+            let framed: Vec<_> = targets
+                .iter()
+                .filter_map(|(page, region)| {
+                    region
+                        .frame_target
+                        .as_ref()
+                        .map(|frame| (*page, *region, frame))
+                })
+                .collect();
+            if !framed.is_empty() {
+                md.push_str("\n## Framed document requests\n\nSome requests target a document shown inside an iframe on their page. frameTarget names the host page, the iframe's editor ID, the target document (a project page or an editable site HTML file) and the request box mapped into that document's CSS pixels. Change the request inside that document. The framed document's complete current source is supplied below; return its new source as a pages entry for a page document or as a documents entry for a site HTML file. In Precise mode only the framed document may change: return the host page's HTML, CSS and JavaScript exactly as they are, including the iframe element. In Flexible mode you may also change the host page's iframe element and CSS when the request needs it, and then return the host page source too. Preserve unrelated content in every document, keep existing data-desegnos-id values on retained elements and leave new elements without IDs; Desegnos assigns them afterwards. Account for every framed request once. No other document may change.\n\n");
+                let mut shown = std::collections::BTreeSet::new();
+                for (_, _, frame) in &framed {
+                    if !shown.insert(frame.document.key()) {
+                        continue;
+                    }
+                    let content = self.document_content(&frame.document)?;
+                    let source = match &frame.document {
+                        crate::DocumentTarget::Page { .. } => self.all_asset_references(&content),
+                        crate::DocumentTarget::SiteFile { .. } => content,
+                    };
+                    let requests: Vec<_> = framed
+                        .iter()
+                        .filter(|(_, _, other)| other.document == frame.document)
+                        .map(|(host, request, other)| {
+                            serde_json::json!({
+                                "regionId": request.id,
+                                "hostPageId": host.id,
+                                "rect": other.rect,
+                            })
+                        })
+                        .collect();
+                    md.push_str(&fenced_json(&serde_json::json!({
+                        "document": frame.document,
+                        "hostPageId": frame.page_id,
+                        "iframeId": frame.iframe_id,
+                        "sha256": self.document_hash(&frame.document)?,
+                        "viewport": self.document_viewport(&frame.document)?,
+                        "content": source,
+                        "requests": requests,
+                    }))?);
+                    md.push('\n');
+                }
+            }
         }
         if !flexible && format >= 15 && targets.iter().any(|(_, region)| !region.shape.is_rect()) {
             md.push_str("Shaped areas use placementHint as their bounding box in page CSS pixels. An ellipse is the ellipse inscribed in the box. Freehand points are rounded page-pixel polygon vertices; close the last point to the first, using the even-odd fill rule. An existing element is in scope when its measured box overlaps the actual shape (ellipses use a 32-point polygon), including edge contact; elementsInArea lists those editor IDs. You may change those elements' own content and inline styles, preserving descendants outside the shape and all other elements. Keep existing CSS and JavaScript unchanged; only CSS additions scoped to in-area IDs are allowed. Add new content under the area's data-desegnos-region root. The bounding box alone never authorizes changes in its corners outside the shape.\n\n");
@@ -664,7 +723,7 @@ impl Project {
             }
         } else {
             if format < 12 {
-                md.push_str(&fenced_json(&candidate_schema())?);
+                md.push_str(&fenced_json(&crate::generation::candidate_schema_legacy())?);
             }
         }
         md.push('\n');
@@ -687,6 +746,14 @@ impl Project {
                 region_digest(page, region, format)?,
             );
             dependencies.insert(format!("source:{}", page.id), page_source_digest(page)?);
+            if format >= 22
+                && let Some(frame) = &region.frame_target
+            {
+                dependencies.insert(
+                    format!("document:{}", frame.document.key()),
+                    self.document_hash(&frame.document)?,
+                );
+            }
         }
         dependencies.insert(
             "context".into(),
@@ -911,6 +978,18 @@ impl RequirementsSnapshot {
                 continue;
             }
             let parts: Vec<_> = key.split(':').collect();
+            if parts.len() == 3 && parts[0] == "document" {
+                let target =
+                    crate::DocumentTarget::from_key(&format!("{}:{}", parts[1], parts[2]))?;
+                let digest = project.document_hash(&target).map_err(|_| {
+                    Error("A framed document was removed. Generate new requirements.".into())
+                })?;
+                ensure(
+                    *expected == digest,
+                    "A framed document changed. Generate new requirements.",
+                )?;
+                continue;
+            }
             if parts.len() == 2 && parts[0] == "source" {
                 let page_id = Uuid::parse_str(parts[1])
                     .map_err(|_| Error("Invalid page source dependency.".into()))?;

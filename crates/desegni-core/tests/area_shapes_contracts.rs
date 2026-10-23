@@ -111,6 +111,8 @@ fn candidate(p: &Project, snapshot: &RequirementsSnapshot, html: String) -> Gene
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+
+        documents: vec![],
     }
 }
 
@@ -250,7 +252,7 @@ fn moving_and_resizing_only_changes_bounds_not_relative_points() {
 fn rectangle_requirements_keep_format_fourteen_and_frozen_legacy_validation() {
     let p = project(RegionShape::Rect);
     let snapshot = p.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 21);
+    assert_eq!(snapshot.format_version().unwrap(), 22);
     assert!(!snapshot.markdown.contains("elementsInArea"));
     assert!(!snapshot.markdown.contains("\"shape\""));
     let decoded = decode_project(&serde_json::to_vec(&p).unwrap())
@@ -263,7 +265,7 @@ fn rectangle_requirements_keep_format_fourteen_and_frozen_legacy_validation() {
 fn shaped_requirements_describe_ellipse_and_rounded_page_pixel_polygon() {
     let p = measured(RegionShape::Ellipse);
     let snapshot = p.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 21);
+    assert_eq!(snapshot.format_version().unwrap(), 22);
     assert!(snapshot.markdown.contains("ellipse inscribed in the box"));
     snapshot.validate_current(&p).unwrap();
     let area: serde_json::Value = serde_json::from_str(
@@ -310,7 +312,7 @@ fn shaped_requirements_describe_ellipse_and_rounded_page_pixel_polygon() {
     legacy.markdown =
         legacy
             .markdown
-            .replacen("Requirements format: 21", "Requirements format: 14", 1);
+            .replacen("Requirements format: 22", "Requirements format: 14", 1);
     legacy.sha256 = digest(legacy.markdown.as_bytes());
     assert!(legacy.validate_current(&p).is_err());
 }

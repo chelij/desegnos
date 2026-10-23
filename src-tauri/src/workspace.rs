@@ -1671,12 +1671,28 @@ pub fn get_page_source_map(
     project.page_source_map(page_id)
 }
 
+/// Every iframe on a page, with its editor ID and resolved target document.
+#[tauri::command]
+pub fn get_frame_targets(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+) -> NativeResult<Vec<desegni_core::PageFrameTarget>> {
+    let state = state.lock().map_err(message)?;
+    let project = state.project()?;
+    if project.id != project_id {
+        return Err("Return to the project that owns this page.".into());
+    }
+    project.frame_targets(page_id).map_err(message)
+}
+
 #[tauri::command]
 pub fn inspect_element(
     state: WorkspaceState<'_>,
     project_id: Uuid,
     page_id: Uuid,
     target: desegni_core::ElementTarget,
+    document: Option<desegni_core::DocumentTarget>,
 ) -> NativeResult<desegni_core::ElementDetails> {
     let state = state.lock().map_err(message)?;
     let project = state
@@ -1687,7 +1703,10 @@ pub fn inspect_element(
     if project.id != project_id {
         return Err("Return to the project that owns this element.".into());
     }
-    project.inspect_element(page_id, &target).map_err(message)
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    project
+        .inspect_element_in(&document, &target)
+        .map_err(message)
 }
 
 #[tauri::command]
@@ -1698,6 +1717,7 @@ pub fn edit_element(
     revision: u64,
     target: desegni_core::ElementTarget,
     change: desegni_core::ElementEdit,
+    document: Option<desegni_core::DocumentTarget>,
 ) -> NativeResult<ElementEditView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -1708,8 +1728,9 @@ pub fn edit_element(
         return Err("Return to the project that owns this element.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
     let element = session
-        .edit_element(revision, page_id, &target, &change, |next| {
+        .edit_element_document(revision, &document, &target, &change, |next| {
             journal.append(next)
         })
         .map_err(message)?;
@@ -1727,6 +1748,7 @@ pub fn undo_element(
     page_id: Uuid,
     revision: u64,
     target: desegni_core::ElementTarget,
+    document: Option<desegni_core::DocumentTarget>,
 ) -> NativeResult<ElementEditView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -1737,8 +1759,9 @@ pub fn undo_element(
         return Err("Return to the project that owns this element.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
     let element = session
-        .undo_element(revision, page_id, &target, |next| journal.append(next))
+        .undo_element_document(revision, &document, &target, |next| journal.append(next))
         .map_err(message)?;
     Ok(ElementEditView {
         workspace: state.view(),
@@ -1762,7 +1785,9 @@ pub async fn copy_layer(
     revision: u64,
     target: desegni_core::LayerTarget,
     visual_styles: Vec<desegni_core::ElementStyleEdit>,
+    document: Option<desegni_core::DocumentTarget>,
 ) -> NativeResult<()> {
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
     let packet = {
         let state = state.lock().map_err(message)?;
         let project = state
@@ -1774,7 +1799,7 @@ pub async fn copy_layer(
             return Err("The project changed before the layer was copied. Select it again.".into());
         }
         project
-            .copy_layer(page_id, &target, &visual_styles)
+            .copy_layer_in(&document, &target, &visual_styles)
             .map_err(message)?
             .to_json()
             .map_err(message)?
@@ -1795,6 +1820,7 @@ pub async fn cut_layer(
     revision: u64,
     target: desegni_core::LayerTarget,
     visual_styles: Vec<desegni_core::ElementStyleEdit>,
+    document: Option<desegni_core::DocumentTarget>,
 ) -> NativeResult<WorkspaceView> {
     // Keep the original unless the OS has accepted the complete clipboard
     // packet. A concurrent edit while the transfer runs must never be cut.
@@ -1806,8 +1832,10 @@ pub async fn cut_layer(
         revision,
         target.clone(),
         visual_styles,
+        document.clone(),
     )
     .await?;
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
     let mut state = state.lock().map_err(message)?;
     let Workspace {
         session, journal, ..
@@ -1827,9 +1855,9 @@ pub async fn cut_layer(
             .map_err(message)?,
         desegni_core::LayerTarget::Element { target } => {
             session
-                .edit_element(
+                .edit_element_document(
                     revision,
-                    page_id,
+                    &document,
                     &target,
                     &desegni_core::ElementEdit::Remove,
                     |next| journal.append(next),
@@ -1848,6 +1876,7 @@ pub async fn paste_layer(
     page_id: Uuid,
     revision: u64,
     after: Option<desegni_core::ElementTarget>,
+    document: Option<desegni_core::DocumentTarget>,
 ) -> NativeResult<LayerPasteView> {
     let text = tauri::async_runtime::spawn_blocking(move || crate::clipboard::read(&app))
         .await
@@ -1862,8 +1891,9 @@ pub async fn paste_layer(
         return Err("Return to the project where you want to paste this layer.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
     let selection = session
-        .paste_layer(revision, page_id, &packet, after.as_ref(), |next| {
+        .paste_layer_document(revision, &document, &packet, after.as_ref(), |next| {
             journal.append(next)
         })
         .map_err(message)?;

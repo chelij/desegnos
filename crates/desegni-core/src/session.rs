@@ -22,7 +22,7 @@ const TYPING_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Repeated "undo this element" presses walk further back through one element's versions.
 struct ElementSteps {
-    page_id: uuid::Uuid,
+    document: crate::DocumentTarget,
     element_id: String,
     /// Newest first; index 0 is the version the walk started from.
     versions: Vec<String>,
@@ -30,10 +30,14 @@ struct ElementSteps {
     revision_after: u64,
 }
 
-/// The selected element's outer HTML, or None when that page has no such element.
-fn element_version(project: &Project, page_id: uuid::Uuid, element_id: &str) -> Option<String> {
-    let html = &project.page(page_id).ok()?.content.as_ref()?.html;
-    let doc = crate::editing::parse(html).ok()?;
+/// The selected element's outer HTML, or None when that document has no such element.
+fn element_version(
+    project: &Project,
+    document: &crate::DocumentTarget,
+    element_id: &str,
+) -> Option<String> {
+    let html = project.document_html(document).ok()?;
+    let doc = project.parse_document_target(document, &html).ok()?;
     let nodes = doc.select(&format!(
         "[{}=\"{}\"]",
         crate::ELEMENT_ID_ATTRIBUTE,
@@ -179,10 +183,28 @@ impl Session {
         edit: &crate::ElementEdit,
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<Option<crate::ElementTarget>> {
+        self.edit_element_document(
+            revision,
+            &crate::DocumentTarget::Page { page_id },
+            target,
+            edit,
+            durable,
+        )
+    }
+
+    /// Edit an element in the current page or in an editable framed site HTML file.
+    pub fn edit_element_document(
+        &mut self,
+        revision: u64,
+        document: &crate::DocumentTarget,
+        target: &crate::ElementTarget,
+        edit: &crate::ElementEdit,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<Option<crate::ElementTarget>> {
         self.assert_revision(revision)?;
         let (next, target) =
             self.project
-                .edit_element(self.project.revision, page_id, target, edit)?;
+                .edit_element_in(document, self.project.revision, target, edit)?;
         if next.revision != self.project.revision {
             durable(&next)?;
             self.commit(next);
@@ -198,10 +220,27 @@ impl Session {
         insertion: Option<&crate::ElementTarget>,
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<crate::LayerPasteSelection> {
+        self.paste_layer_document(
+            revision,
+            &crate::DocumentTarget::Page { page_id },
+            clipboard,
+            insertion,
+            durable,
+        )
+    }
+
+    pub fn paste_layer_document(
+        &mut self,
+        revision: u64,
+        document: &crate::DocumentTarget,
+        clipboard: &crate::LayerClipboard,
+        insertion: Option<&crate::ElementTarget>,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<crate::LayerPasteSelection> {
         self.assert_revision(revision)?;
         let (next, selection) =
             self.project
-                .paste_layer(self.project.revision, page_id, clipboard, insertion)?;
+                .paste_layer_in(self.project.revision, document, clipboard, insertion)?;
         durable(&next)?;
         self.commit(next);
         Ok(selection)
@@ -302,31 +341,42 @@ impl Session {
         target: &crate::ElementTarget,
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<Option<crate::ElementTarget>> {
+        self.undo_element_document(
+            revision,
+            &crate::DocumentTarget::Page { page_id },
+            target,
+            durable,
+        )
+    }
+
+    pub fn undo_element_document(
+        &mut self,
+        revision: u64,
+        document: &crate::DocumentTarget,
+        target: &crate::ElementTarget,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<Option<crate::ElementTarget>> {
         self.assert_revision(revision)?;
         ensure(
             !target.id.is_empty(),
             "This element has no earlier version to go back to.",
         )?;
         let continuing = self.element_steps.as_ref().is_some_and(|steps| {
-            steps.page_id == page_id
+            steps.document == *document
                 && steps.element_id == target.id
                 && steps.revision_after == self.project.revision
         });
         if !continuing {
             let mut versions: Vec<String> = Vec::new();
-            let mut last_html: Option<&str> = None;
+            let mut last_html: Option<String> = None;
             for project in std::iter::once(&self.project).chain(self.undo.iter().rev()) {
-                // Snapshots that left this page untouched need no parsing.
-                let html = project
-                    .page(page_id)
-                    .ok()
-                    .and_then(|page| page.content.as_ref())
-                    .map(|content| content.html.as_str());
+                // Snapshots that left this document untouched need no parsing.
+                let html = project.document_html(document).ok();
                 if html.is_some() && html == last_html {
                     continue;
                 }
                 last_html = html;
-                let Some(version) = element_version(project, page_id, &target.id) else {
+                let Some(version) = element_version(project, document, &target.id) else {
                     break;
                 };
                 if versions.last() != Some(&version) {
@@ -334,7 +384,7 @@ impl Session {
                 }
             }
             self.element_steps = Some(ElementSteps {
-                page_id,
+                document: document.clone(),
                 element_id: target.id.clone(),
                 versions,
                 index: 0,
@@ -347,9 +397,9 @@ impl Session {
             .get(steps.index + 1)
             .cloned()
             .ok_or_else(|| Error("This element has no earlier version.".into()))?;
-        let (next, element) = self.project.edit_element(
+        let (next, element) = self.project.edit_element_in(
+            document,
             self.project.revision,
-            page_id,
             target,
             &crate::ElementEdit::Replace {
                 html,

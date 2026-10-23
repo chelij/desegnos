@@ -175,8 +175,9 @@ impl GenerationCandidate {
                 .regions
                 .iter()
                 .filter(|region| {
-                    !(snapshot.format_version().is_ok_and(|v| v >= 18)
-                        && region.is_whole_page(page))
+                    region.frame_target.is_none()
+                        && !(snapshot.format_version().is_ok_and(|v| v >= 18)
+                            && region.is_whole_page(page))
                         && self.regions.iter().any(|outcome| {
                             outcome.region_id == region.id
                                 && outcome.status == crate::RegionStatus::Conflict
@@ -288,6 +289,9 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         project: &Project,
     ) -> Result<()> {
+        if snapshot.format_version()? >= 22 {
+            self.validate_framed_documents(snapshot, project)?;
+        }
         if snapshot.is_flexible() {
             for page in &self.pages {
                 let doc = crate::editing::parse(&page.content.html)?;
@@ -341,6 +345,65 @@ impl GenerationCandidate {
         candidate.validate_scope_exact(snapshot, &project)
     }
 
+    /// Framed site documents are complete HTML files; check them with the same parse and repair
+    /// rules as pages. Fully scoped comparison inside a framed document is not part of this
+    /// contract, so only structure, IDs and source rules are enforced here.
+    pub(crate) fn validate_framed_documents(
+        &self,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+    ) -> Result<()> {
+        let format = snapshot.format_version()?;
+        if format < 22 {
+            ensure(
+                self.documents.is_empty(),
+                "This requirements format cannot change framed documents.",
+            )?;
+            return Ok(());
+        }
+        let mut framed = BTreeSet::new();
+        for (page_id, region_id) in snapshot.target_ids()? {
+            let page = project.page(page_id)?;
+            let region = page
+                .regions
+                .iter()
+                .find(|region| region.id == region_id)
+                .ok_or_else(|| crate::Error("A requested area no longer exists.".into()))?;
+            let implemented = self.regions.iter().any(|outcome| {
+                outcome.region_id == region_id && outcome.status == crate::RegionStatus::Implemented
+            });
+            if implemented && let Some(frame) = &region.frame_target {
+                framed.insert(frame.document.clone());
+            }
+        }
+        let mut seen = BTreeSet::new();
+        for document in &self.documents {
+            ensure(
+                framed.contains(&document.document) && seen.insert(document.document.clone()),
+                "The generation result contains a duplicate or unrequested framed document.",
+            )?;
+            crate::validate_imported_document_source(&document.content.html)
+                .map_err(|error| crate::Error(error.to_string()))?;
+            let doc = project.parse_document_target(&document.document, &document.content.html)?;
+            crate::stable_targets::validate_ids(&doc)?;
+        }
+        let host_pages: BTreeSet<_> = snapshot
+            .target_ids()?
+            .into_iter()
+            .map(|(page, _)| page)
+            .collect();
+        for page in &self.pages {
+            if host_pages.contains(&page.page_id) {
+                continue;
+            }
+            crate::validate_page_source(&page.content)
+                .map_err(|error| crate::Error(error.to_string()))?;
+            let doc = project.parse_page_html(&page.content.html)?;
+            crate::stable_targets::validate_ids(&doc)?;
+        }
+        Ok(())
+    }
+
     fn validate_scope_exact(
         &self,
         snapshot: &RequirementsSnapshot,
@@ -351,7 +414,12 @@ impl GenerationCandidate {
         }
         let targets = snapshot.target_ids()?;
         let stable = snapshot.format_version()? >= 10;
+        let host_pages: BTreeSet<_> = targets.iter().map(|(page, _)| *page).collect();
         for page in &self.pages {
+            if !host_pages.contains(&page.page_id) {
+                // A framed page document; validate_framed_documents covers its source rules.
+                continue;
+            }
             let original = project.page(page.page_id)?;
             if stable {
                 let known = original
@@ -1318,6 +1386,8 @@ mod wrapper_tests {
             component_requests: vec![],
             decision_proposals: vec![],
             criticism: vec![],
+
+            documents: vec![],
         };
         (project, snapshot, candidate)
     }

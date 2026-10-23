@@ -399,6 +399,19 @@ pub(crate) fn validate_html_before_repair(html: &str) -> crate::Result<()> {
 pub fn validate_page_source(content: &SiteContent) -> SourceEditResult<()> {
     validate_page_source_for_website(content, false)
 }
+
+/// Validate an imported site HTML document with the same parse, script and CSS rules used for
+/// pages, allowing the remote scripts an imported site already contains.
+pub(crate) fn validate_imported_document_source(html: &str) -> SourceEditResult<()> {
+    validate_page_source_for_website(
+        &SiteContent {
+            html: html.into(),
+            css: String::new(),
+            javascript: String::new(),
+        },
+        true,
+    )
+}
 fn validate_page_source_for_website(content: &SiteContent, imported: bool) -> SourceEditResult<()> {
     content.validate()?;
     content.found_sources()?;

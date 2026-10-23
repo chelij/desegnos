@@ -39,6 +39,8 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+
+        documents: vec![],
     };
     (project, snapshot, candidate)
 }
@@ -46,7 +48,7 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
 #[test]
 fn new_capabilities_and_contract_are_explicit_and_legacy_serialization_is_identical() {
     let (project, snapshot, _) = fixture();
-    assert_eq!(snapshot.format_version().unwrap(), 21);
+    assert_eq!(snapshot.format_version().unwrap(), 22);
     assert!(snapshot.markdown.contains("data-desegnos-generate"));
     assert!(
         snapshot
@@ -360,6 +362,8 @@ fn old_capability_packet_keeps_unavailable_components_blocked() {
         }],
         decision_proposals: vec![],
         criticism: vec![],
+
+        documents: vec![],
     };
     candidate.validate(&snapshot, &project).unwrap();
     assert!(!candidate.can_apply(&snapshot));

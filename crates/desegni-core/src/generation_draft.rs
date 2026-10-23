@@ -625,6 +625,8 @@ impl Project {
             component_requests: vec![],
             decision_proposals: vec![],
             criticism: vec![],
+
+            documents: vec![],
         };
         let mut dossier =
             GenerationDossier::from_candidate(snapshot, &candidate, next.revision, 1)?;

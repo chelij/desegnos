@@ -82,6 +82,8 @@ fn candidate(p: &Project, s: &RequirementsSnapshot) -> GenerationCandidate {
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+
+        documents: vec![],
     }
 }
 #[test]
@@ -174,7 +176,7 @@ fn explicit_toggle_forces_scope_and_remembers_auto_detection_opt_out() {
 fn page_job_accepts_structure_css_and_javascript_and_recovery_keeps_them() {
     let p = fixture();
     let s = p.prepare_requirements().unwrap();
-    assert_eq!(s.format_version().unwrap(), 21);
+    assert_eq!(s.format_version().unwrap(), 22);
     assert!(s.markdown.contains("\"scope\": \"page\""));
     assert!(s.markdown.contains(
         "change the whole page to satisfy this request; keep content and IDs unless asked"

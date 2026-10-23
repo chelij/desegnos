@@ -285,6 +285,7 @@ impl LegacyProject {
                             z_index: region.z_index,
                             prompt: region.prompt,
                             element: None,
+                            frame_target: None,
                             elements: vec![],
                             allow_target_removal: false,
                             mobile_only: false,
@@ -471,7 +472,7 @@ fn decode_source(
                 source_project_markdown,
             })
         }
-        6 | 7 | SCHEMA_VERSION => {
+        6 | 7 | 8 | SCHEMA_VERSION => {
             let mut project: Project =
                 serde_json::from_slice(bytes).map_err(|error| Error(error.to_string()))?;
             let source = project.clone();

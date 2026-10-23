@@ -82,6 +82,14 @@ pub struct GeneratedPage {
     pub content: SiteContent,
 }
 
+/// New source for an editable site HTML file shown inside an iframe (`documents` in a reply).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GeneratedDocument {
+    pub document: crate::DocumentTarget,
+    pub content: SiteContent,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ComponentResolution {
@@ -124,6 +132,9 @@ pub struct GenerationCandidate {
     pub summary: String,
     pub regions: Vec<RegionOutcome>,
     pub pages: Vec<GeneratedPage>,
+    /// Framed site HTML documents; page documents are returned in `pages`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub documents: Vec<GeneratedDocument>,
     pub component_requests: Vec<ComponentRequest>,
     pub decision_proposals: Vec<DecisionProposal>,
     pub criticism: Vec<DesignCriticism>,
@@ -250,14 +261,65 @@ impl GenerationCandidate {
             regions == target_regions,
             "The generation result omitted a requested area.",
         )?;
+        let format = snapshot.format_version()?;
+        if format < 22 {
+            ensure(
+                self.documents.is_empty(),
+                "This requirements format cannot change framed documents.",
+            )?;
+        }
+        // Framed requests edit their target document; only Flexible may also change the host page.
+        let mut required_pages = BTreeSet::new();
+        let mut allowed_pages: BTreeSet<Uuid> = target_pages.clone();
+        let mut required_documents: BTreeSet<crate::DocumentTarget> = BTreeSet::new();
+        if format >= 22 {
+            allowed_pages.clear();
+            for (page_id, region_id) in &targets {
+                let page = project.page(*page_id)?;
+                let region = page
+                    .regions
+                    .iter()
+                    .find(|region| region.id == *region_id)
+                    .ok_or_else(|| Error("A requested area no longer exists.".into()))?;
+                let implemented = self.regions.iter().any(|outcome| {
+                    outcome.region_id == *region_id && outcome.status == RegionStatus::Implemented
+                });
+                if !implemented {
+                    continue;
+                }
+                match &region.frame_target {
+                    None => {
+                        required_pages.insert(*page_id);
+                        allowed_pages.insert(*page_id);
+                    }
+                    Some(frame) => match &frame.document {
+                        crate::DocumentTarget::Page { page_id } => {
+                            required_pages.insert(*page_id);
+                            allowed_pages.insert(*page_id);
+                        }
+                        crate::DocumentTarget::SiteFile { .. } => {
+                            required_documents.insert(frame.document.clone());
+                        }
+                    },
+                }
+                if region.frame_target.is_some() && snapshot.is_flexible() {
+                    allowed_pages.insert(*page_id);
+                }
+            }
+        }
         let mut pages = BTreeSet::new();
         for page in &self.pages {
+            let allowed = if format >= 22 {
+                allowed_pages.contains(&page.page_id)
+            } else {
+                target_pages.contains(&page.page_id)
+            };
             ensure(
-                target_pages.contains(&page.page_id) && pages.insert(page.page_id),
+                allowed && pages.insert(page.page_id),
                 "The generation result contains a duplicate or unrequested page.",
             )?;
             ensure(
-                snapshot.format_version()? >= 17
+                format >= 17
                     || targets.iter().filter(|(id, _)| *id == page.page_id).all(
                         |(_, region_id)| {
                             self.regions.iter().any(|region| {
@@ -269,7 +331,24 @@ impl GenerationCandidate {
                 "A conflicted page cannot be represented as complete generated source.",
             )?;
         }
-        if snapshot.format_version()? >= 17 {
+        if format >= 22 {
+            ensure(
+                required_pages.iter().all(|id| pages.contains(id)),
+                "Return source for exactly the documents with implemented regions.",
+            )?;
+            let mut documents = BTreeSet::new();
+            for document in &self.documents {
+                ensure(
+                    required_documents.contains(&document.document)
+                        && documents.insert(document.document.clone()),
+                    "The generation result contains a duplicate or unrequested framed document.",
+                )?;
+            }
+            ensure(
+                documents == required_documents,
+                "Return source for exactly the framed documents with implemented regions.",
+            )?;
+        } else if format >= 17 {
             let ready_pages: BTreeSet<_> = targets
                 .iter()
                 .filter(|(_, id)| {
@@ -283,6 +362,8 @@ impl GenerationCandidate {
                 pages == ready_pages,
                 "Return source for exactly the pages with implemented regions.",
             )?;
+        }
+        if format >= 17 {
             if !snapshot.is_flexible() {
                 self.validate_conflicting_regions(snapshot, project)?;
             }
@@ -400,7 +481,12 @@ impl GenerationCandidate {
 
     /// Legacy requests retain their all-or-nothing application contract.
     pub fn can_apply(&self, snapshot: &RequirementsSnapshot) -> bool {
-        if snapshot.format_version().is_ok_and(|format| format >= 17) {
+        if snapshot.format_version().is_ok_and(|format| format >= 22) {
+            self.regions
+                .iter()
+                .any(|region| region.status == RegionStatus::Implemented)
+                && (!self.pages.is_empty() || !self.documents.is_empty())
+        } else if snapshot.format_version().is_ok_and(|format| format >= 17) {
             self.regions
                 .iter()
                 .any(|region| region.status == RegionStatus::Implemented)
@@ -589,6 +675,21 @@ impl Project {
                 }
             }
         }
+        for document in &candidate.documents {
+            let crate::DocumentTarget::SiteFile { path } = &document.document else {
+                return Err(Error(
+                    "Page source belongs in pages, not in documents.".into(),
+                ));
+            };
+            ensure(
+                next.is_editable_site_file(path),
+                "A framed document is no longer an editable site HTML file.",
+            )?;
+            let html = crate::source::assign_editor_ids(&document.content.html)?;
+            crate::source::validate_imported_document_source(&html)
+                .map_err(|error| Error(error.to_string()))?;
+            next.set_site_document_html(path, &html)?;
+        }
         next.pictures.extend(placed);
         for index in &selected {
             let proposal = &candidate.decision_proposals[*index];
@@ -646,6 +747,15 @@ fn same_topic(first: &str, second: &str) -> bool {
 }
 
 pub fn candidate_schema() -> serde_json::Value {
+    candidate_schema_value(true)
+}
+
+/// The schema emitted before framed documents existed; frozen requirements rebuild it exactly.
+pub(crate) fn candidate_schema_legacy() -> serde_json::Value {
+    candidate_schema_value(false)
+}
+
+fn candidate_schema_value(include_documents: bool) -> serde_json::Value {
     use serde_json::json;
     fn object(properties: serde_json::Value) -> serde_json::Value {
         let required: Vec<_> = properties
@@ -670,7 +780,7 @@ pub fn candidate_schema() -> serde_json::Value {
         object(json!({"kind":{"type":"string","enum":["page"]},"id":uuid})),
         object(json!({"kind":{"type":"string","enum":["region"]},"id":uuid}))
     ]});
-    object(json!({
+    let mut schema = object(json!({
         "jobId":uuid,
         "requirementsSha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
         "summary":text(16_384),
@@ -680,6 +790,13 @@ pub fn candidate_schema() -> serde_json::Value {
             "explanation":text(MAX_EXPLANATION_CHARS)
         })),MAX_GENERATION_REGIONS),
         "pages":array(object(json!({"pageId":uuid,"content":content})),MAX_PAGES),
+        "documents":{"type":"array","maxItems":MAX_GENERATION_REGIONS,"description":"New source for framed site HTML documents only. Page documents belong in pages.","items":object(json!({
+            "document":{"anyOf":[
+                object(json!({"kind":{"type":"string","enum":["siteFile"]},"path":{"type":"string"}})),
+                object(json!({"kind":{"type":"string","enum":["page"]},"pageId":uuid}))
+            ]},
+            "content":content
+        }))},
         "componentRequests":array(object(json!({
             "regionId":uuid,
             "capability":text(1024),
@@ -697,5 +814,17 @@ pub fn candidate_schema() -> serde_json::Value {
             "message":text(MAX_EXPLANATION_CHARS),
             "suggestion":text(MAX_EXPLANATION_CHARS)
         })),MAX_DESIGN_CRITICISMS)
-    }))
+    }));
+    if !include_documents {
+        // Frozen requirements from before framed documents rebuild their exact schema.
+        schema["properties"]
+            .as_object_mut()
+            .expect("properties is an object")
+            .remove("documents");
+        schema["required"]
+            .as_array_mut()
+            .expect("required is a list")
+            .retain(|name| name != "documents");
+    }
+    schema
 }

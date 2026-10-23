@@ -151,6 +151,8 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
             message: "The control and explanation need clear separation.".into(),
             suggestion: "Keep a consistent gap between them.".into(),
         }],
+
+        documents: vec![],
     };
     (project, snapshot, candidate)
 }
@@ -397,7 +399,7 @@ fn current_conflicts_keep_other_pages_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 21"));
+    assert!(snapshot.markdown.contains("Requirements format: 22"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -691,6 +693,7 @@ fn source_candidate_and_requirements_limits_fail_without_truncation() {
             whole_page: false,
             whole_page_disabled: false,
             attachments: vec![],
+            frame_target: None,
             completed: false,
             id: Uuid::new_v4(),
             rect: excessive.pages[0].regions[0].rect,
@@ -1460,6 +1463,8 @@ fn precise_selected_element_generation_preserves_surrounding_content() {
             component_requests: vec![],
             decision_proposals: vec![],
             criticism: vec![],
+
+            documents: vec![],
         };
         valid.validate(&snapshot, &project).unwrap();
         let mut changed = valid.clone();

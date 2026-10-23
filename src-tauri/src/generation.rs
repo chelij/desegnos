@@ -115,6 +115,11 @@ struct GenerationArea {
     rect: desegni_core::Rect,
     #[serde(default, skip_serializing_if = "desegni_core::RegionShape::is_rect")]
     shape: desegni_core::RegionShape,
+    /// Set when this request edits a document shown inside one of the page's iframes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    document: Option<desegni_core::DocumentTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    frame_rect: Option<desegni_core::Rect>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1121,6 +1126,11 @@ impl GenerationService {
                             region_id: region.id,
                             rect: region.rect,
                             shape: region.shape.clone(),
+                            document: region
+                                .frame_target
+                                .as_ref()
+                                .map(|frame| frame.document.clone()),
+                            frame_rect: region.frame_target.as_ref().map(|frame| frame.rect),
                         })
                 })
                 .collect();
@@ -1431,6 +1441,11 @@ impl GenerationService {
                                 region_id: region.id,
                                 rect: region.rect,
                                 shape: region.shape.clone(),
+                                document: region
+                                    .frame_target
+                                    .as_ref()
+                                    .map(|frame| frame.document.clone()),
+                                frame_rect: region.frame_target.as_ref().map(|frame| frame.rect),
                             })
                     })
                     .collect(),
@@ -3197,6 +3212,8 @@ pub fn create_preview(
                 component_requests: vec![],
                 decision_proposals: vec![],
                 criticism: vec![],
+
+                documents: vec![],
             })
         } else {
             view.candidate

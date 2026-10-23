@@ -451,6 +451,8 @@ mod tests {
                 component_requests: vec![],
                 decision_proposals: vec![],
                 criticism: vec![],
+
+                documents: vec![],
             };
             candidate.validate(&snapshot, &project).unwrap();
             let response = ProviderResponse {
@@ -649,7 +651,7 @@ mod capacity_benchmark {
         for snapshot in [legacy, nine, current] {
             let before = count.load(Ordering::Relaxed);
             let id = project.pages[0].regions[0].id;
-            let candidate=GenerationCandidate {job_id:snapshot.job_id,requirements_sha256:snapshot.sha256.clone(),summary:"Eight requested images.".into(),regions:vec![RegionOutcome{region_id:id,status:RegionStatus::Implemented,explanation:"Placed the requested images.".into()}],pages:vec![GeneratedPage{page_id:project.home_page_id,content:SiteContent{html:format!("<main data-desegnos-region='{id}'>{}</main>",(0..8).map(|index|format!("<img data-desegnos-download src='{origin}/images/photo-{index}.png' alt='Reference image {index}'>")).collect::<String>()),css:String::new(),javascript:String::new()}}],component_requests:vec![],decision_proposals:vec![],criticism:vec![]};
+            let candidate=GenerationCandidate {job_id:snapshot.job_id,requirements_sha256:snapshot.sha256.clone(),summary:"Eight requested images.".into(),regions:vec![RegionOutcome{region_id:id,status:RegionStatus::Implemented,explanation:"Placed the requested images.".into()}],pages:vec![GeneratedPage{page_id:project.home_page_id,content:SiteContent{html:format!("<main data-desegnos-region='{id}'>{}</main>",(0..8).map(|index|format!("<img data-desegnos-download src='{origin}/images/photo-{index}.png' alt='Reference image {index}'>")).collect::<String>()),css:String::new(),javascript:String::new()}}],component_requests:vec![],decision_proposals:vec![],criticism:vec![],documents: vec![],};
             candidate.validate(&snapshot, &project).unwrap();
             let response = ProviderResponse {
                 text: serde_json::to_string(&candidate).unwrap(),

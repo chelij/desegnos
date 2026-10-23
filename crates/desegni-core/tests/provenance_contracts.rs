@@ -39,6 +39,8 @@ fn found_metadata_survives_generation_and_serialization_but_export_keeps_only_pu
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+
+        documents: vec![],
     };
     candidate.validate(&snapshot, &project).unwrap();
     let applied = project
@@ -113,7 +115,7 @@ fn capabilities_are_frozen_without_granting_search_to_an_adapter_that_lacks_it()
             image_generation: None,
         })
         .unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 21);
+    assert_eq!(snapshot.format_version().unwrap(), 22);
     assert!(snapshot.markdown.contains("\"webSearch\": false"));
     assert!(
         !snapshot

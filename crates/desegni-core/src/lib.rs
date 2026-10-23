@@ -1,6 +1,7 @@
 mod area_geometry;
 mod attachments;
 mod code_format;
+mod document;
 mod dossier;
 mod editing;
 mod element_fix;
@@ -32,6 +33,7 @@ pub use website_merge::{WebsiteImportPage, WebsiteImportReview};
 
 pub use attachments::*;
 pub use code_format::{compact_site_content, format_site_content};
+pub use document::*;
 pub use dossier::*;
 pub use editing::*;
 pub use element_fix::{ELEMENT_FIX_FORMAT, element_fix_schema, result_schema};

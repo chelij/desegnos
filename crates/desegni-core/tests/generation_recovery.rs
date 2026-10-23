@@ -65,6 +65,8 @@ fn fixture(existing: bool) -> (Project, RequirementsSnapshot, GenerationCandidat
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+
+        documents: vec![],
     };
     (project, snapshot, candidate)
 }

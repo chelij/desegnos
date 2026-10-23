@@ -301,17 +301,23 @@ impl Project {
         page_id: Uuid,
         selected: &ElementTarget,
     ) -> Result<ElementDetails> {
+        self.inspect_element_in(&crate::DocumentTarget::Page { page_id }, selected)
+    }
+
+    /// Inspect an element in a page or in an editable site HTML file shown by an iframe.
+    pub fn inspect_element_in(
+        &self,
+        document: &crate::DocumentTarget,
+        selected: &ElementTarget,
+    ) -> Result<ElementDetails> {
         self.validate()?;
-        let content = self
-            .page(page_id)?
-            .content
-            .as_ref()
-            .ok_or_else(|| Error("Generate a page before selecting its elements.".into()))?;
+        let content = self.document_content(document)?;
+        let hash = self.document_hash(document)?;
         ensure(
-            !selected.id.is_empty() || content.sha256()? == selected.source_sha256,
-            "The page changed. Select this element again.",
+            !selected.id.is_empty() || hash == selected.source_sha256,
+            "The document changed. Select this element again.",
         )?;
-        let doc = self.parse_page_html(&content.html)?;
+        let doc = self.parse_document_target(document, &content.html)?;
         let node = locate(&doc, selected)?;
         let text = text_nodes(node);
         let editable = text
@@ -320,7 +326,7 @@ impl Project {
             .filter(|(_, node)| !node.text().trim().is_empty())
             .collect::<Vec<_>>();
         Ok(ElementDetails {
-            target: target(node, body(&doc)?, &content.sha256()?)
+            target: target(node, body(&doc)?, &hash)
                 .ok_or_else(|| Error("This item cannot be selected.".into()))?,
             texts: editable
                 .iter()
@@ -359,25 +365,41 @@ impl Project {
         selected: &ElementTarget,
         edit: &ElementEdit,
     ) -> Result<(Self, Option<ElementTarget>)> {
+        self.edit_element_in(
+            &crate::DocumentTarget::Page { page_id },
+            revision,
+            selected,
+            edit,
+        )
+    }
+
+    /// Edit an element in a page or in an editable site HTML file shown by an iframe.
+    pub fn edit_element_in(
+        &self,
+        document: &crate::DocumentTarget,
+        revision: u64,
+        selected: &ElementTarget,
+        edit: &ElementEdit,
+    ) -> Result<(Self, Option<ElementTarget>)> {
         self.validate()?;
         ensure(
             revision == self.revision,
             "The project changed. Try the edit again.",
         )?;
-        let page = self.page(page_id)?;
-        let original = page
-            .content
-            .as_ref()
-            .ok_or_else(|| Error("This page has no site to edit.".into()))?;
+        let content = self.document_content(document)?;
+        let hash = self.document_hash(document)?;
         ensure(
-            !selected.id.is_empty() || original.sha256()? == selected.source_sha256,
-            "The page changed. Select this element again.",
+            !selected.id.is_empty() || hash == selected.source_sha256,
+            "The document changed. Select this element again.",
         )?;
-        let doc = self.parse_page_html(&original.html)?;
+        let doc = self.parse_document_target(document, &content.html)?;
         let node = locate(&doc, selected)?;
         let before = serialized(&doc)?;
         let before_ids = ids(&doc);
-        let tracked = tracked(&doc, page, &selected.source_sha256)?;
+        let tracked = match document {
+            crate::DocumentTarget::Page { page_id } => tracked(&doc, self.page(*page_id)?, &hash)?,
+            crate::DocumentTarget::SiteFile { .. } => vec![],
+        };
         let mut retained = Some(node);
         match edit {
             ElementEdit::Update {
@@ -550,13 +572,15 @@ impl Project {
                 "This replacement introduces a duplicate element ID. Use unique IDs.",
             )?;
         }
-        self.finish_element_edit(revision, page_id, &doc, retained, tracked, None)
+        self.finish_document_edit(document, revision, &doc, retained, tracked, None)
     }
 
-    pub(crate) fn finish_element_edit(
+    /// Store an edited DOM back into its document. Pages keep their tracked requests and shared
+    /// CSS/JavaScript; site files keep their exact path and change only their own bytes.
+    pub(crate) fn finish_document_edit(
         &self,
+        document: &crate::DocumentTarget,
         revision: u64,
-        page_id: Uuid,
         doc: &Document,
         retained: Option<NodeRef<'_>>,
         tracked: Vec<(Uuid, NodeRef<'_>)>,
@@ -566,75 +590,97 @@ impl Project {
         crate::stable_targets::assign_document_ids(doc)?;
         let html = serialized(doc)?;
         ensure(
-            serialized(&self.parse_page_html(&html)?)? == html,
+            serialized(&parse_document(
+                &html,
+                self.document_parse_full(document, &html),
+            )?)? == html,
             "This edit would be repaired differently by the browser. Choose valid markup for this layout.",
         )?;
-        let original = self.page(page_id)?.content.as_ref();
-        let content = SiteContent {
-            html,
-            css: css.unwrap_or_else(|| {
-                original
-                    .map(|content| content.css.clone())
-                    .unwrap_or_default()
-            }),
-            javascript: original
-                .map(|content| content.javascript.clone())
-                .unwrap_or_default(),
-        };
-        content.validate()?;
-        let hash = content.sha256()?;
         let body = body(doc)?;
         let mut next = self.clone();
         next.revision = revision
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
-        let page = next
-            .pages
-            .iter_mut()
-            .find(|page| page.id == page_id)
-            .unwrap();
-        page.content = Some(content);
-        let mut refreshed = BTreeMap::<Uuid, Vec<ElementTarget>>::new();
-        for (id, node) in tracked {
-            if let Some(target) = target(node, body, &hash) {
-                refreshed.entry(id).or_default().push(target);
-            }
-        }
-        for region in page
-            .regions
-            .iter_mut()
-            .filter(|r| !r.completed && r.has_targets())
-        {
-            let previous: Vec<_> = region.targets().into_iter().cloned().collect();
-            let actual = refreshed.remove(&region.id).unwrap_or_default();
-            let lost = actual.is_empty();
-            region.elements = previous
-                .into_iter()
-                .enumerate()
-                .map(|(index, old)| {
-                    if old.id.is_empty() {
-                        actual.get(index).cloned().unwrap_or(old)
-                    } else {
-                        actual
-                            .iter()
-                            .find(|new| old.id == new.id)
-                            .cloned()
-                            .unwrap_or(old)
+        let selected = match document {
+            crate::DocumentTarget::Page { page_id } => {
+                let original = self.page(*page_id)?.content.as_ref();
+                let content = SiteContent {
+                    html,
+                    css: css.unwrap_or_else(|| {
+                        original
+                            .map(|content| content.css.clone())
+                            .unwrap_or_default()
+                    }),
+                    javascript: original
+                        .map(|content| content.javascript.clone())
+                        .unwrap_or_default(),
+                };
+                content.validate()?;
+                let hash = content.sha256()?;
+                let page = next
+                    .pages
+                    .iter_mut()
+                    .find(|page| page.id == *page_id)
+                    .ok_or_else(|| Error("This page no longer exists.".into()))?;
+                page.content = Some(content);
+                let mut refreshed = BTreeMap::<Uuid, Vec<ElementTarget>>::new();
+                for (id, node) in tracked {
+                    if let Some(target) = target(node, body, &hash) {
+                        refreshed.entry(id).or_default().push(target);
                     }
-                })
-                .collect();
-            if region.prompt.trim().is_empty()
-                && (lost
-                    || region
-                        .elements
-                        .iter()
-                        .all(|target| locate(doc, target).is_err()))
-            {
-                region.completed = true;
+                }
+                for region in page
+                    .regions
+                    .iter_mut()
+                    .filter(|r| !r.completed && r.has_targets())
+                {
+                    let previous: Vec<_> = region.targets().into_iter().cloned().collect();
+                    let actual = refreshed.remove(&region.id).unwrap_or_default();
+                    let lost = actual.is_empty();
+                    region.elements = previous
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, old)| {
+                            if old.id.is_empty() {
+                                actual.get(index).cloned().unwrap_or(old)
+                            } else {
+                                actual
+                                    .iter()
+                                    .find(|new| old.id == new.id)
+                                    .cloned()
+                                    .unwrap_or(old)
+                            }
+                        })
+                        .collect();
+                    if region.prompt.trim().is_empty()
+                        && (lost
+                            || region
+                                .elements
+                                .iter()
+                                .all(|target| locate(doc, target).is_err()))
+                    {
+                        region.completed = true;
+                    }
+                    region.element = None;
+                }
+                retained.and_then(|node| target(node, body, &hash))
             }
-            region.element = None;
-        }
-        let selected = retained.and_then(|node| target(node, body, &hash));
+            crate::DocumentTarget::SiteFile { path } => {
+                ensure(
+                    css.is_none(),
+                    "A framed site document has no separate stylesheet.".to_string(),
+                )?;
+                ensure(
+                    !html.trim().is_empty(),
+                    "The framed document's HTML is required.".to_string(),
+                )?;
+                crate::source::validate_imported_document_source(&html)
+                    .map_err(|error| Error(error.to_string()))?;
+                next.set_site_document_html(path, &html)?;
+                let hash = next.document_hash(document)?;
+                retained.and_then(|node| target(node, body, &hash))
+            }
+        };
         next.store_inline_images()?;
         next.validate()?;
         Ok((next, selected))

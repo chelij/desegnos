@@ -77,49 +77,73 @@ impl Project {
         page_id: Uuid,
         targets: &[ElementTarget],
     ) -> Result<Self> {
+        self.delete_elements_in(revision, &crate::DocumentTarget::Page { page_id }, targets)
+    }
+    /// Delete elements from a page or from an editable site HTML file shown by an iframe.
+    pub fn delete_elements_in(
+        &self,
+        revision: u64,
+        document: &crate::DocumentTarget,
+        targets: &[ElementTarget],
+    ) -> Result<Self> {
         ensure(
             revision == self.revision,
             "The project changed. Try the edit again.",
         )?;
-        let canonical = self.canonical_targets(page_id, targets)?;
-        let page = self.page(page_id)?;
-        let content = page
-            .content
-            .as_ref()
-            .ok_or_else(|| Error("This page has no site yet.".into()))?;
-        let doc = crate::editing::parse(&content.html)?;
-        let tracked = crate::editing::tracked(&doc, page, &content.sha256()?)?;
+        let canonical = self.canonical_targets_in(document, targets)?;
+        let content = self.document_content(document)?;
+        let doc = self.document_edit_document(document, &content.html)?;
+        let tracked = match document {
+            crate::DocumentTarget::Page { page_id } => {
+                crate::editing::tracked(&doc, self.page(*page_id)?, &self.document_hash(document)?)?
+            }
+            crate::DocumentTarget::SiteFile { .. } => vec![],
+        };
         let body = crate::editing::body(&doc)?;
         for target in canonical {
             let node = crate::editing::locate(&doc, &target)?;
             ensure(node.id != body.id, "Select items inside the page.")?;
             node.remove_from_parent();
         }
-        self.finish_element_edit(revision, page_id, &doc, None, tracked, None)
+        self.finish_document_edit(document, revision, &doc, None, tracked, None)
             .map(|(project, _)| project)
+    }
+    /// The browser form an element edit uses for this document, unchanged for pages.
+    pub(crate) fn document_edit_document(
+        &self,
+        document: &crate::DocumentTarget,
+        html: &str,
+    ) -> Result<dom_query::Document> {
+        match document {
+            crate::DocumentTarget::Page { .. } => crate::editing::parse(html),
+            crate::DocumentTarget::SiteFile { .. } => self.parse_document_target(document, html),
+        }
     }
     pub fn canonical_targets(
         &self,
         page_id: Uuid,
         targets: &[ElementTarget],
     ) -> Result<Vec<ElementTarget>> {
+        self.canonical_targets_in(&crate::DocumentTarget::Page { page_id }, targets)
+    }
+    pub fn canonical_targets_in(
+        &self,
+        document: &crate::DocumentTarget,
+        targets: &[ElementTarget],
+    ) -> Result<Vec<ElementTarget>> {
         ensure(
             !targets.is_empty() && targets.len() <= 8,
             "Select between one and eight elements.",
         )?;
-        let content = self
-            .page(page_id)?
-            .content
-            .as_ref()
-            .ok_or_else(|| Error("This page has no site yet.".into()))?;
-        let hash = content.sha256()?;
-        let doc = crate::editing::parse(&content.html)?;
+        let content = self.document_content(document)?;
+        let hash = self.document_hash(document)?;
+        let doc = self.document_edit_document(document, &content.html)?;
         let body = crate::editing::body(&doc)?;
         let mut nodes = Vec::new();
         for selected in targets {
             ensure(
                 !selected.id.is_empty() || selected.source_sha256 == hash,
-                "The page changed. Select this element again.",
+                "The document changed. Select this element again.",
             )?;
             let node = crate::editing::locate(&doc, selected)?;
             if !nodes
@@ -152,20 +176,25 @@ impl Project {
         targets: &[ElementTarget],
         bounds: &[TargetBounds],
     ) -> Result<Rect> {
+        self.target_bounds_union_in(&crate::DocumentTarget::Page { page_id }, targets, bounds)
+    }
+    pub fn target_bounds_union_in(
+        &self,
+        document: &crate::DocumentTarget,
+        targets: &[ElementTarget],
+        bounds: &[TargetBounds],
+    ) -> Result<Rect> {
         ensure(
             !bounds.is_empty() && bounds.len() <= 8,
             "Supply the selected element positions.",
         )?;
-        let page = self.page(page_id)?;
-        let content = page
-            .content
-            .as_ref()
-            .ok_or_else(|| Error("This page has no site yet.".into()))?;
-        let doc = crate::editing::parse(&content.html)?;
+        let viewport = self.document_viewport(document)?;
+        let content = self.document_content(document)?;
+        let doc = self.document_edit_document(document, &content.html)?;
         let mut seen = BTreeSet::new();
         let mut rectangles = Vec::new();
         for bound in bounds {
-            bound.rect.validate(page.viewport)?;
+            bound.rect.validate(viewport)?;
             let node = crate::editing::locate(&doc, &bound.target)?;
             ensure(
                 seen.insert(node.id),
@@ -204,7 +233,7 @@ impl Project {
             width: right - left,
             height: bottom - top,
         };
-        result.validate(page.viewport)?;
+        result.validate(viewport)?;
         Ok(result)
     }
     /// Upgrade only in memory. Storage writes the migrated copy only after Save.
