@@ -274,6 +274,11 @@
 .live-bar .live-note { color: var(--muted); white-space: nowrap; }
 .live-toggle[aria-pressed="true"] { border-color: #2b8a3e; color: #2b8a3e; }
 .live-bar .segmented button { white-space: nowrap; }
+.live-bar .live-history { display: flex; gap: 2px; }
+.live-bar .live-history button { width: 26px; min-height: 28px; padding: 0; font-size: 13px; line-height: 1; }
+.live-bar .live-path { max-width: 240px; overflow: hidden; padding: 2px 6px; border: 0; background: none; color: var(--muted); font: 12px/1.4 ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.live-bar button.live-path { color: var(--text); cursor: pointer; text-decoration: underline dotted; }
+.live-bar button.live-path:hover { color: var(--accent); }
 
 /* The same non-modal surface serves settings, conversation, and element tools. */
 .surface-host:empty { display: none; }

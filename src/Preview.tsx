@@ -6,6 +6,7 @@ import { siteLayerTree, siteLayerStyles, siteCopyStyles, type SiteLayer } from '
 import { translatedStyle } from './elementEditing';
 import { measurableDocument, needsReferenceMeasure, pendingFrameHeight, promotionHeight } from './previewMeasurement';
 import { hardenStaticFrames, staticBase, staticDocument, staticPolicy } from './previewDocument';
+import { liveCommand, liveLocation, type LiveHistoryAction } from './liveBar';
 import { collectFrame, frameKey, resolveFrameSource, type CollectedFrame } from './previewFrames';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
 import type { ElementSelection, ElementTarget, ElementStyleEdit, LayerDirection, ElementVisual, Page, PreviewDescriptor, Rect, SiteContent } from './types';
@@ -28,13 +29,14 @@ export type ElementMover = { preview: (x: number, y: number) => ElementSelection
 export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null; style: (rect: Rect) => string; cancel: () => void };
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
 export type FrameView = { pageUrl: string | null; frames: CollectedFrame[] };
-export type CanvasPreviewHandle = { frameOverlays: () => FrameView; hideStaticFrames: (keys: readonly string[]) => void; measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type CanvasPreviewHandle = { liveHistory: (action: LiveHistoryAction) => void; frameOverlays: () => FrameView; hideStaticFrames: (keys: readonly string[]) => void; measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   pageId: string; draftId?: string | null; jobId?: string | null; runScripts?: boolean; title: string; staticView?: boolean; revision?: number | string;
   onRuntimeProblems?: (errors: string[]) => void; fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
   content?: SiteContent; onReady?: (settled: boolean, revision: number | string) => void; referenceHeight?: number; onHeight?: (height: number) => void;
-}>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady, onRuntimeProblems, fixRuntimeErrors, aiDisabled, observationsVersion }, ref) {
+  onLiveLocation?: (path: string) => void;
+}>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady, onRuntimeProblems, fixRuntimeErrors, aiDisabled, observationsVersion, onLiveLocation }, ref) {
   const frame = useRef<HTMLIFrameElement>(null);
   const stagingFrame = useRef<HTMLIFrameElement>(null);
   const [extent, setExtent] = useState(referenceHeight);
@@ -182,6 +184,13 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     return { node, original: original ?? '', origin, restore, set, offset };
   }
   useImperativeHandle(ref, () => ({
+    // The Live bar's history controls reach the bridge in this session's document; a
+    // command for another session is ignored there.
+    liveHistory(action) {
+      const target = frame.current?.contentWindow;
+      if (!runScripts || !descriptor || !target) return;
+      target.postMessage(liveCommand(descriptor.sessionId, action), '*');
+    },
     // The frames the canvas can show live, read from the promoted document. A frame the
     // canvas hides under its overlay keeps reporting itself so the overlay stays put.
     frameOverlays(): FrameView {
@@ -396,6 +405,8 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       if (now - rate.current.started > 1000) rate.current = { started: now, count: 0 };
       if (++rate.current.count > 10) return;
       const value = event.data as Record<string, unknown>;
+      const path = liveLocation(value, source.sessionId);
+      if (path) { onLiveLocation?.(path); return; }
       if (value.type === 'desegni-preview-link' && value.sessionId === source.sessionId && value.pageId === pageId &&
         typeof value.url === 'string' && /^https?:\/\//.test(value.url) && value.url.length <= 2048 && Object.keys(value).length === 4) { if (!staging) setOutsideLink(value.url); return; }
       if (value.type !== 'desegni-preview-error' || value.sessionId !== source.sessionId || value.pageId !== pageId ||
@@ -408,7 +419,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     }
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
-  }, [descriptor, pending, pageId, staticView]);
+  }, [descriptor, pending, pageId, staticView, onLiveLocation]);
   useLayoutEffect(() => {
     if (!staticView || !mounted.current || invalidated.current) return;
     Document.prototype.getAnimations?.call(mounted.current.document).forEach(animation => animation.pause());
@@ -425,7 +436,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       // viewport-relative page inside it keeps the layout the canvas is showing.
       const frameHeight = staging ? pendingFrameHeight(visibleExtent, candidate.pageId, referenceHeight) : extent;
       return <iframe key={candidate.descriptor.sessionId} ref={node => { if (staging) stagingFrame.current = node; else frame.current = node; }} inert={staging || staticView || !!draftId || undefined}
-        src={sourceDocument ? undefined : candidate.descriptor.url} srcDoc={sourceDocument} sandbox={sourceDocument ? 'allow-same-origin' : candidate.runScripts ? 'allow-scripts' : ''} referrerPolicy="no-referrer" title={title}
+        src={sourceDocument ? undefined : candidate.descriptor.url} srcDoc={sourceDocument} sandbox={sourceDocument ? 'allow-same-origin' : candidate.runScripts ? 'allow-scripts allow-forms' : ''} referrerPolicy="no-referrer" title={title}
         style={{ ...(sourceDocument ? { height: frameHeight } : {}), ...(staging ? { position: 'absolute', inset: 0, visibility: 'hidden', pointerEvents: 'none' } as CSSProperties : {}) }}
         tabIndex={staging || staticView || draftId ? -1 : undefined} aria-hidden={staging || staticView || undefined} onLoad={async event => {
           const node = event.currentTarget;

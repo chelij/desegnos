@@ -335,10 +335,16 @@ impl PreviewRegistry {
         if run_scripts {
             for (id, file) in &project.website.as_ref().expect("website").page_files {
                 if package.files.contains_key(file) {
+                    let path = project
+                        .pages
+                        .iter()
+                        .find(|page| page.id == *id)
+                        .map_or("/", |page| page.path.as_str());
                     bridges.insert(
                         file.clone(),
                         format!(
-                            "<script src=\"/{bridge_name}\" crossorigin=\"anonymous\" data-file-mode=\"true\" data-session=\"{session_id}\" data-page=\"{id}\" data-path=\"/\" data-routes=\"{{}}\"></script>"
+                            "<script src=\"/{bridge_name}\" crossorigin=\"anonymous\" data-file-mode=\"true\" data-session=\"{session_id}\" data-page=\"{id}\" data-path=\"{}\" data-routes=\"{{}}\"></script>",
+                            attribute(path)
                         ),
                     );
                 }
@@ -439,32 +445,74 @@ impl PreviewRegistry {
                 return denied();
             };
             let path = decoded.trim_start_matches('/');
-            let directory = path.trim_end_matches('/');
-            let mut candidates = vec![
-                path.to_owned(),
-                format!("{directory}/index.html"),
-                format!("{directory}/index.htm"),
-                format!("{directory}.html"),
-                format!("{directory}.htm"),
-            ];
-            if path.is_empty() {
-                candidates.extend(["index.html".to_owned(), "index.htm".to_owned()]);
+            // A file is served at its own path exactly as stored.
+            if !path.is_empty()
+                && let Some(resource) = session.file(path)
+            {
+                return site_response(
+                    id,
+                    session,
+                    resource,
+                    session.bridges.get(path).map(String::as_str),
+                    request,
+                    StatusCode::OK,
+                );
             }
-            let Some((path, resource)) = candidates
+            let directory = path.trim_end_matches('/');
+            let mut candidates = Vec::new();
+            if directory.is_empty() {
+                candidates.extend(["index.html".to_owned(), "index.htm".to_owned()]);
+            } else {
+                candidates.extend([
+                    format!("{directory}/index.html"),
+                    format!("{directory}/index.htm"),
+                    format!("{directory}.html"),
+                    format!("{directory}.htm"),
+                ]);
+            }
+            let resolved = candidates
                 .into_iter()
-                .find_map(|candidate| session.file(&candidate).map(|file| (candidate, file)))
-            else {
+                .find_map(|candidate| session.file(&candidate).map(|file| (candidate, file)));
+            if let Some((name, resource)) = resolved {
+                // A directory route loads its index at the address that keeps the page's
+                // relative links correct, the same as an ordinary web server.
+                if !path.is_empty() && !path.ends_with('/') && is_index_name(&name) {
+                    return redirect(request);
+                }
+                return site_response(
+                    id,
+                    session,
+                    resource,
+                    session.bridges.get(&name).map(String::as_str),
+                    request,
+                    StatusCode::OK,
+                );
+            }
+            // A site's own 404 page answers missing paths, with the same bridge and policy
+            // as any other page the session serves.
+            let fallback = session
+                .file("404.html")
+                .map(|resource| ("404.html".to_owned(), resource))
+                .or_else(|| {
+                    session.site.as_ref().and_then(|package| {
+                        package
+                            .files
+                            .iter()
+                            .find(|(name, _)| name.eq_ignore_ascii_case("404.html"))
+                            .map(|(name, resource)| (name.clone(), resource))
+                    })
+                });
+            let Some((name, resource)) = fallback else {
                 return denied();
             };
             return site_response(
+                id,
                 session,
                 resource,
-                session.bridges.get(&path).map(String::as_str),
+                session.bridges.get(&name).map(String::as_str),
                 request,
+                StatusCode::NOT_FOUND,
             );
-        }
-        if request.uri().query().is_some() {
-            return denied();
         }
         let path: Vec<_> = request.uri().path().split('/').collect();
         if path.len() != 4 || !path[0].is_empty() {
@@ -474,6 +522,10 @@ impl PreviewRegistry {
             return denied();
         };
         if session.to_string() != path[1] || page.to_string() != path[2] {
+            return denied();
+        }
+        // A GET form lands on the page document with a query; assets stay path-only.
+        if request.uri().query().is_some() && path[3] != "index.html" {
             return denied();
         }
         let Some(package) = self.sessions.get(&session) else {
@@ -558,18 +610,23 @@ impl PreviewSession {
 
 /// Serve one site resource, decoding only the requested byte range.
 fn site_response(
+    session_id: Uuid,
     session: &PreviewSession,
     resource: &Resource,
     bridge: Option<&str>,
     request: &Request<Vec<u8>>,
+    status: StatusCode,
 ) -> Response<Vec<u8>> {
     let script = if session.scripts_enabled {
         "'unsafe-inline' desegni-preview: http: https:"
     } else {
         "'none'"
     };
+    // GET forms navigate within this session, whose pages can render the result. There
+    // is no server for a POST, and scripts cannot send a form anywhere else.
+    let forms = format!("desegni-preview: http://{session_id}.desegni-preview.localhost");
     let policy = format!(
-        "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegni-preview: http: https: data:; img-src desegni-preview: http: https: data:; font-src desegni-preview: http: https: data:; connect-src {EMBED_SOURCES}; frame-src {EMBED_SOURCES}; child-src {EMBED_SOURCES}; object-src 'none'; base-uri desegni-preview: http: https:; form-action 'none'; media-src desegni-preview: http: https: data:; worker-src 'none'"
+        "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegni-preview: http: https: data:; img-src desegni-preview: http: https: data:; font-src desegni-preview: http: https: data:; connect-src {EMBED_SOURCES}; frame-src {EMBED_SOURCES}; child-src {EMBED_SOURCES}; object-src 'none'; base-uri desegni-preview: http: https:; form-action {forms}; media-src desegni-preview: http: https: data:; worker-src 'none'"
     );
     let decorate = |mut result: Response<Vec<u8>>| {
         result.headers_mut().insert(
@@ -635,7 +692,7 @@ fn site_response(
             if let Some(bridge) = bridge.filter(|_| !head) {
                 body = with_bridge(body, bridge);
             }
-            let mut result = response(StatusCode::OK, resource.content_type, body);
+            let mut result = response(status, resource.content_type, body);
             if head {
                 result.headers_mut().insert(
                     "content-length",
@@ -647,6 +704,36 @@ fn site_response(
             decorate(result)
         }
     }
+}
+
+/// A directory route keeps its trailing slash so relative links resolve inside it.
+fn redirect(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
+    let mut location = format!("{}/", request.uri().path());
+    if let Some(query) = request.uri().query() {
+        location.push('?');
+        location.push_str(query);
+    }
+    let Ok(location) = HeaderValue::from_str(&location) else {
+        return response(
+            StatusCode::NOT_FOUND,
+            "text/plain; charset=utf-8",
+            b"Preview resource is unavailable.".to_vec(),
+        );
+    };
+    Response::builder()
+        .status(StatusCode::PERMANENT_REDIRECT)
+        .header("location", location)
+        .header("cache-control", "no-store")
+        .header("referrer-policy", "no-referrer")
+        .body(vec![])
+        .expect("Preview redirect headers are fixed and valid")
+}
+
+fn is_index_name(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    ["index.html", "index.htm"].iter().any(|index| {
+        name == *index || name.ends_with(&format!("/{index}"))
+    })
 }
 
 /// Session-bound bridge markup is added only to the served page, never to shared bytes.
@@ -737,10 +824,13 @@ fn source_response(
     let origins = format!(
         "desegni-preview://localhost/{session_id}/ http://desegni-preview.localhost/{session_id}/ https://desegni-preview.localhost/{session_id}/"
     );
-    let policy = preview_policy().replace(
-        "style-src 'unsafe-inline'",
-        &format!("style-src 'unsafe-inline' {origins}"),
-    );
+    let policy = preview_policy()
+        .replace(
+            "style-src 'unsafe-inline'",
+            &format!("style-src 'unsafe-inline' {origins}"),
+        )
+        // A GET form is a navigation to this session's page document.
+        .replace("form-action 'none'", &format!("form-action {origins}"));
     let policy = if run_scripts {
         policy.replace("script-src 'none'", &format!("script-src {origins}"))
     } else {
@@ -979,6 +1069,94 @@ mod tests {
         assert!(csp.contains(&format!("frame-src {EMBED_SOURCES}")));
     }
 
+    /// Every page a session serves answers its own address with the bridge and the
+    /// scripting policy, including directory routes, their slash form, and the site's
+    /// own 404 page for paths that do not exist.
+    #[test]
+    fn site_routes_redirect_to_directories_and_serve_bridge_and_404_pages_directly() {
+        let files = BTreeMap::from([
+            (
+                "index.html".into(),
+                b"<!doctype html><html><body><a href=\"/projects/papan\">Papan</a></body></html>".to_vec(),
+            ),
+            (
+                "projects/papan/index.html".into(),
+                b"<!doctype html><html><body><h1>Papan</h1></body></html>".to_vec(),
+            ),
+            (
+                "404.html".into(),
+                b"<!doctype html><html><body><h1>Page not found</h1></body></html>".to_vec(),
+            ),
+            ("css/site.css".into(), b"h1{color:red}".to_vec()),
+        ]);
+        let project = desegni_core::import_website_files("Routes", &files).unwrap();
+        let mut registry = PreviewRegistry::default();
+        let live = registry
+            .register(&project, None, project.home_page_id, true)
+            .unwrap();
+        let origin = live.url.trim_end_matches("/index.html").to_owned();
+        let bridge = format!("desegnos-{}.js", live.session_id);
+        let get = |path: &str| {
+            registry.serve(
+                &Request::get(format!("{origin}/{path}"))
+                    .body(vec![])
+                    .unwrap(),
+            )
+        };
+        // A directory route keeps its trailing slash so relative links stay inside it.
+        let moved = get("projects/papan");
+        assert_eq!(moved.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(moved.headers()["location"], "/projects/papan/");
+        let moved = get("projects/papan?ref=home");
+        assert_eq!(moved.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(moved.headers()["location"], "/projects/papan/?ref=home");
+        for path in [
+            "projects/papan/",
+            "projects/papan/index.html",
+            "projects/papan/?ref=home",
+        ] {
+            let page = get(path);
+            assert_eq!(page.status(), StatusCode::OK, "{path}");
+            assert_eq!(page.headers()["content-type"], "text/html; charset=utf-8");
+            let html = String::from_utf8(page.body().clone()).unwrap();
+            assert!(html.contains(">Papan</h1>"), "{path}: {html}");
+            assert!(html.contains(&format!("src=\"/{bridge}\"")), "{path}");
+            let csp = page.headers()["content-security-policy"]
+                .to_str()
+                .unwrap();
+            assert!(csp.contains("script-src 'unsafe-inline'"), "{path}");
+            assert!(
+                csp.contains(&format!(
+                    "form-action desegni-preview: http://{}.desegni-preview.localhost",
+                    live.session_id
+                )),
+                "{path}: {csp}"
+            );
+        }
+        // The site's own 404 page answers a missing path, with the same bridge and policy.
+        let missing = get("projects/unknown/");
+        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+        assert_eq!(missing.headers()["content-type"], "text/html; charset=utf-8");
+        let html = String::from_utf8(missing.body().clone()).unwrap();
+        assert!(html.contains("Page not found"));
+        assert!(html.contains(&format!("src=\"/{bridge}\"")));
+        assert!(
+            missing.headers()["content-security-policy"]
+                .to_str()
+                .unwrap()
+                .contains("script-src 'unsafe-inline'")
+        );
+        // The 404 page itself is still an ordinary file of the session.
+        let direct = get("404.html");
+        assert_eq!(direct.status(), StatusCode::OK);
+        assert!(String::from_utf8_lossy(direct.body()).contains("Page not found"));
+        assert!(String::from_utf8_lossy(direct.body()).contains(&format!("src=\"/{bridge}\"")));
+        // A rejected traversal never reaches the site's 404 page.
+        let traversal = get("%2e%2e/Cargo.toml");
+        assert_eq!(traversal.status(), StatusCode::NOT_FOUND);
+        assert_eq!(traversal.body(), b"Preview resource is unavailable.");
+    }
+
     fn project() -> Project {
         let mut project = Project::new(
             "Preview checks".into(),
@@ -1063,7 +1241,11 @@ mod tests {
         let csp = document.headers()["content-security-policy"]
             .to_str()
             .unwrap();
-        assert!(csp.contains("form-action 'none'"));
+        assert!(!csp.contains("form-action 'none'"));
+        assert!(csp.contains(&format!(
+            "form-action desegni-preview://localhost/{}/",
+            descriptor.session_id
+        )));
         assert!(!csp.contains("unsafe-eval"));
         // A live or paused page may still frame its own files and an https embed; the
         // policy fails closed for everything else.
@@ -1071,6 +1253,17 @@ mod tests {
         assert!(csp.contains(&format!("child-src {EMBED_SOURCES}")));
         assert!(csp.contains(&format!("connect-src {EMBED_SOURCES}")));
         assert!(!csp.contains("frame-src 'none'") && !csp.contains("connect-src 'none'"));
+        // A GET form may land back on this page document with its query.
+        assert_eq!(
+            registry
+                .serve(
+                    &Request::get(format!("{}?name=Ada", descriptor.url))
+                        .body(vec![])
+                        .unwrap()
+                )
+                .status(),
+            StatusCode::OK
+        );
         for suffix in ["site.js", "../../Cargo.toml", "%2e%2e", "site.css?token=x"] {
             let url = descriptor.url.replace("index.html", suffix);
             assert_eq!(

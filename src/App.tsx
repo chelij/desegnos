@@ -23,6 +23,7 @@ import './shell.css';
 import { editorShortcut, SHORTCUT_HELP } from './shortcuts';
 import { closePageTab, loadPageTabs, savePageTabs, showPageTab, visiblePageTabs } from './pageTabs';
 import { steppedZoom } from './canvasGeometry';
+import { pathPage } from './liveBar';
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
 import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from './CodePane';
@@ -138,6 +139,8 @@ function Editor() {
   // Live mode: the canvas page runs its scripts and takes clicks; requests can still be added.
   const [live, setLive] = useState(false);
   const [liveDevice, setLiveDevice] = useState<'desktop' | 'tablet' | 'phone'>('desktop');
+  // The path the live page is on, reported by its bridge; the editor selection stays put.
+  const [livePath, setLivePath] = useState('/');
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
   const askDelete = useAskBeforeDelete();
   const [skipNextAsk, setSkipNextAsk] = useState(false);
@@ -605,6 +608,8 @@ function Editor() {
     name: importedImages.find(image => image.dataUri === dataUri)?.name ?? `Picture ${index + 1}` }));
   const projectImages = [...storedImages, ...importedImages.filter(image => !storedImages.some(stored => stored.dataUri === image.dataUri))];
   const page = project?.pages.find(page => page.id === pageId) ?? project?.pages.find(page => page.id === project.homePageId) ?? null;
+  // Only a path that names a project page can leave Live for the editor.
+  const livePage = project && livePath ? pathPage(livePath, project.pages) : null;
   const region = page?.regions.find(region => region.id === selected) ?? null;
   const pageIdsKey = project?.pages.map(item => item.id).join(',') ?? '';
   const openPageIds = project ? visiblePageTabs(openPages[project.id], project.pages.map(item => item.id)) : [];
@@ -674,6 +679,7 @@ function Editor() {
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
   useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
+  useEffect(() => { setLivePath(page?.path ?? '/'); }, [live, page?.id]);
   async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
   function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
     const host = event.currentTarget.parentElement; if (!host) return;
@@ -1085,7 +1091,7 @@ function Editor() {
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
       <SurfaceHost place="canvas" />
-      {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => { void addRegion(rect, shape).catch(() => {}); }} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {resultReview && !showGenerationStatus ? <Notice className="generation-notice status-applied" variant={retryResult ? 'warning' : 'success'} priority="result" title={retryResult ? 'Try again?' : 'Page updated'}
         message={retryResult ? 'This uses your AI account again.' : summarizeOutsideChanges(generation.job?.validationEvents ?? [])}
         action={retryResult ? { label: 'Try again', disabled: pending > 0, onClick: () => { setRetryResult(false); run(() => rejectResult(true)); } } : { label: 'Undo', disabled: pending > 0, onClick: () => run(() => rejectResult()) }}
@@ -1094,6 +1100,14 @@ function Editor() {
       <FirstRunTips />
       {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
         <strong>Live</strong>
+        <div className="live-history" role="group" aria-label="Live history">
+          <button type="button" aria-label="Back" title="Back" onClick={() => canvas.current?.liveHistory('back')}>←</button>
+          <button type="button" aria-label="Forward" title="Forward" onClick={() => canvas.current?.liveHistory('forward')}>→</button>
+          <button type="button" aria-label="Reload" title="Reload" onClick={() => canvas.current?.liveHistory('reload')}>⟳</button>
+        </div>
+        {livePage
+          ? <button type="button" className="live-path" title="Edit this page" aria-label={`Edit this page: ${livePath}`} onClick={() => run(async () => { await selectPage(livePage.id); setLive(false); })}>{livePath}</button>
+          : <span className="live-path" title={livePath}>{livePath}</span>}
         <div className="segmented" role="group" aria-label="Live device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
         {liveDevice !== 'desktop' && (liveDevice === 'tablet' ? 768 : 390) !== page.viewport.width && <span className="live-note">Add requests at page width</span>}
         {liveDevice === 'phone' && <button type="button" title="Fix on phones" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}

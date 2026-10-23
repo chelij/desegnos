@@ -18,6 +18,7 @@ import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, type MenuItem } from './Menus';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type FrameView, type InlineText } from './Preview';
 import { FrameOverlay, useLiveFrameSession } from './FrameOverlays';
+import type { LiveHistoryAction } from './liveBar';
 import { overlayPlacement, placeOverlays } from './previewFrames';
 import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
@@ -58,7 +59,7 @@ type CanvasProps = {
   archiveReports?: Record<string, import('./types').ArchiveReport[]>; projectId?: string;
   pendingImagesChanged: (count: number) => void; canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
   fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
-  projectImages?: import('./types').ProjectImage[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void;
+  projectImages?: import('./types').ProjectImage[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void; onLiveLocation?: (path: string) => void;
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   requestShape?: RequestShapeKind; grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: { rect: Rect; shape?: RegionShape }[]; highlighted?: { rect: Rect; shape?: RegionShape }[];
   refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
@@ -66,8 +67,8 @@ type CanvasProps = {
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => void; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
-export type CanvasHandle = { focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], inspectElement, editElement, undoElement, refreshElementBounds, openSource, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
   const [problemErrors, setProblemErrors] = useState<Record<string, string>>({});
   const [problemBusy, setProblemBusy] = useState(false);
@@ -89,6 +90,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const [context, setContext] = useState<CanvasContext | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const site = useRef<CanvasPreviewHandle>(null);
+  // The live page's own frame: its bridge owns navigation and history inside Live.
+  const liveSite = useRef<CanvasPreviewHandle>(null);
   const [siteLayers, setSiteLayers] = useState<SiteLayer[]>([]);
   const [layersReady, setLayersReady] = useState(false);
   const [layerBusy, setLayerBusy] = useState(false);
@@ -783,7 +786,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     if (found) { chooseElement(found); reveal(found.rect, false); }
     return found;
   }
-  useImperativeHandle(ref, () => ({ focusElement, addRequest: addRequestInView, focusRequest: focusRegion, askAI, undoElement: stepBackElement, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
+  useImperativeHandle(ref, () => ({ liveHistory: action => liveSite.current?.liveHistory(action), focusElement, addRequest: addRequestInView, focusRequest: focusRegion, askAI, undoElement: stepBackElement, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
     await flushImages();
     if (inlineSaving.current) await inlineSaving.current;
     const text = inlineTextRef.current;
@@ -1216,7 +1219,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           </div>}
           {liveView && page.content && <div className={`live-canvas-page${tool === 'request' || panReady || panning ? ' passive' : ''}`} data-testid="live-canvas-page" style={positioned({ x: 0, y: 0, width: liveView.width, height: liveHeight })}>
             <div className="live-canvas-content" style={{ width: liveView.width, height: liveHeight, transform: `scale(${zoom})` }}>
-              <PreviewFrame onRuntimeProblems={setRuntimeProblems} fixRuntimeErrors={fixRuntimeErrors} aiDisabled={aiDisabled} observationsVersion={observationsVersion} pageId={page.id} revision={`live:${acceptedVersion}`} runScripts title={`${page.name} live`} />
+              <PreviewFrame ref={liveSite} onLiveLocation={onLiveLocation} onRuntimeProblems={setRuntimeProblems} fixRuntimeErrors={fixRuntimeErrors} aiDisabled={aiDisabled} observationsVersion={observationsVersion} pageId={page.id} revision={`live:${acceptedVersion}`} runScripts title={`${page.name} live`} />
             </div>
           </div>}
           {!liveView && frameSession && liveOverlays.map(frame => <FrameOverlay key={frame.key} frame={frame} live={frameSession} pageId={page.id} staticPageUrl={frameView.pageUrl} zoom={zoom}
