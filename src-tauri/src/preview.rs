@@ -1,10 +1,10 @@
-use desegni_core::{GenerationCandidate, Project};
+use desegni_core::{GenerationCandidate, PreviewFile, Project};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, VecDeque},
-    sync::Arc,
+    sync::{Arc, Weak},
 };
-use tauri::http::{Request, Response, StatusCode};
+use tauri::http::{HeaderValue, Request, Response, StatusCode};
 use uuid::Uuid;
 
 #[cfg(target_os = "linux")]
@@ -38,7 +38,7 @@ pub fn configure_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
     })
 }
 
-const MAX_PREVIEW_BYTES: usize = 64 * 1024 * 1024;
+const MAX_PREVIEW_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PREVIEW_SESSIONS: usize = 8;
 const PREVIEW_CSP: &str = "default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline'; img-src data:; font-src 'none'; connect-src 'none'; frame-src 'none'; child-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; media-src 'none'; worker-src 'none'";
 
@@ -55,13 +55,19 @@ pub struct PreviewDescriptor {
 
 struct Resource {
     content_type: &'static str,
-    bytes: Arc<[u8]>,
+    body: PreviewFile,
+}
+
+/// One rendered site, shared by every session previewing the same project revision.
+struct SitePackage {
+    files: BTreeMap<String, Resource>,
 }
 
 struct PreviewSession {
     resources: BTreeMap<(Uuid, &'static str), Resource>,
-    site: BTreeMap<String, Resource>,
-    byte_len: usize,
+    site: Option<Arc<SitePackage>>,
+    extras: BTreeMap<String, Resource>,
+    bridges: BTreeMap<String, String>,
     scripts_enabled: bool,
 }
 
@@ -69,6 +75,7 @@ struct PreviewSession {
 pub struct PreviewRegistry {
     sessions: BTreeMap<Uuid, PreviewSession>,
     order: VecDeque<Uuid>,
+    packages: BTreeMap<(Uuid, u64, bool), Weak<SitePackage>>,
 }
 
 fn attribute(value: &str) -> String {
@@ -204,27 +211,22 @@ impl PreviewRegistry {
                 byte_len = byte_len
                     .checked_add(bytes.len())
                     .ok_or("The preview package is too large.")?;
-                if byte_len > MAX_PREVIEW_BYTES {
-                    return Err("The complete preview exceeds the 64 MiB local limit. Reduce the site's source before previewing.".into());
+                if byte_len > MAX_PREVIEW_TEXT_BYTES {
+                    return Err(format!(
+                        "This page's code is too large to preview ({} MB).",
+                        byte_len.div_ceil(1024 * 1024)
+                    ));
                 }
                 resources.insert(
                     (page.id, name),
                     Resource {
                         content_type,
-                        bytes: bytes.into(),
+                        body: PreviewFile::Inline(bytes.into()),
                     },
                 );
             }
         }
-        while self.sessions.len() >= MAX_PREVIEW_SESSIONS
-            || self
-                .sessions
-                .values()
-                .map(|session| session.byte_len)
-                .sum::<usize>()
-                + byte_len
-                > MAX_PREVIEW_BYTES
-        {
+        while self.sessions.len() >= MAX_PREVIEW_SESSIONS {
             let Some(expired) = self.order.pop_front() else {
                 break;
             };
@@ -234,8 +236,9 @@ impl PreviewRegistry {
             session_id,
             PreviewSession {
                 resources,
-                site: BTreeMap::new(),
-                byte_len,
+                site: None,
+                extras: BTreeMap::new(),
+                bridges: BTreeMap::new(),
                 scripts_enabled: run_scripts,
             },
         );
@@ -274,71 +277,75 @@ impl PreviewRegistry {
     ) -> Result<PreviewDescriptor, String> {
         let session_id = Uuid::new_v4();
         let page = project.page(page_id).map_err(|e| e.to_string())?;
-        let imported = project.website.as_ref().expect("website");
-        let path = imported
+        let path = project
+            .website
+            .as_ref()
+            .expect("website")
             .page_files
             .get(&page_id)
-            .ok_or("This page has no imported file.")?;
-        let mut files = if run_scripts {
-            project.website_live_files()
-        } else {
-            project.website_files()
-        }
-        .map_err(|e| e.to_string())?
-        .expect("website");
+            .ok_or("This page has no imported file.")?
+            .clone();
+        // Static and live frames of the same revision share one rendered package.
+        let key = (project.id, project.revision, run_scripts);
+        let package = match self.packages.get(&key).and_then(Weak::upgrade) {
+            Some(package) => package,
+            None => {
+                let files = project
+                    .website_preview_files(run_scripts, MAX_PREVIEW_TEXT_BYTES)
+                    .map_err(|e| e.to_string())?
+                    .expect("website");
+                let package = Arc::new(SitePackage {
+                    files: files
+                        .into_iter()
+                        .map(|(path, body)| {
+                            let content_type = site_mime(&path);
+                            (path, Resource { content_type, body })
+                        })
+                        .collect(),
+                });
+                // Sessions hold the strong references; unused packages disappear here.
+                self.packages
+                    .retain(|_, package| package.strong_count() > 0);
+                self.packages.insert(key, Arc::downgrade(&package));
+                package
+            }
+        };
         let bridge_name = format!("desegnos-{session_id}.js");
-        files.insert(
+        let mut extras = BTreeMap::new();
+        extras.insert(
             bridge_name.clone(),
-            include_bytes!("preview_bridge.js").to_vec(),
+            Resource {
+                content_type: "text/javascript; charset=utf-8",
+                body: PreviewFile::Inline(include_bytes!("preview_bridge.js").to_vec().into()),
+            },
         );
-        for (id, file) in &imported.page_files {
-            if let Some(bytes) = files.get_mut(file) {
-                let mut html = String::from_utf8(bytes.clone()).map_err(|e| e.to_string())?;
-                if run_scripts {
-                    let bridge = format!(
-                        "<script src=\"/{bridge_name}\" crossorigin=\"anonymous\" data-file-mode=\"true\" data-session=\"{session_id}\" data-page=\"{id}\" data-path=\"/\" data-routes=\"{{}}\"></script>"
+        // The bridge binds a page to this session, so it is injected when serving, not stored.
+        let mut bridges = BTreeMap::new();
+        if run_scripts {
+            for (id, file) in &project.website.as_ref().expect("website").page_files {
+                if package.files.contains_key(file) {
+                    bridges.insert(
+                        file.clone(),
+                        format!(
+                            "<script src=\"/{bridge_name}\" crossorigin=\"anonymous\" data-file-mode=\"true\" data-session=\"{session_id}\" data-page=\"{id}\" data-path=\"/\" data-routes=\"{{}}\"></script>"
+                        ),
                     );
-                    if let Some(position) = html.to_ascii_lowercase().rfind("</body>") {
-                        html.insert_str(position, &bridge);
-                    } else {
-                        html.push_str(&bridge);
-                    }
                 }
-                *bytes = html.into_bytes();
             }
         }
-        let byte_len = files.values().map(Vec::len).sum::<usize>();
-        if byte_len > MAX_PREVIEW_BYTES {
-            return Err("The complete preview exceeds the 64 MiB local limit.".into());
-        }
-        while self.sessions.len() >= MAX_PREVIEW_SESSIONS
-            || self.sessions.values().map(|s| s.byte_len).sum::<usize>() + byte_len
-                > MAX_PREVIEW_BYTES
-        {
+        while self.sessions.len() >= MAX_PREVIEW_SESSIONS {
             let Some(expired) = self.order.pop_front() else {
                 break;
             };
             self.sessions.remove(&expired);
         }
-        let site = files
-            .into_iter()
-            .map(|(path, bytes)| {
-                let mime = site_mime(&path);
-                (
-                    path,
-                    Resource {
-                        content_type: mime,
-                        bytes: bytes.into(),
-                    },
-                )
-            })
-            .collect();
         self.sessions.insert(
             session_id,
             PreviewSession {
                 resources: BTreeMap::new(),
-                site,
-                byte_len,
+                site: Some(package),
+                extras,
+                bridges,
                 scripts_enabled: run_scripts,
             },
         );
@@ -371,6 +378,7 @@ impl PreviewRegistry {
     pub fn clear(&mut self) {
         self.sessions.clear();
         self.order.clear();
+        self.packages.clear();
     }
 
     pub fn release(&mut self, session_id: Uuid) {
@@ -401,7 +409,7 @@ impl PreviewRegistry {
             .and_then(|h| h.strip_suffix(".desegni-preview").or(Some(h)))
             .and_then(|h| Uuid::parse_str(h).ok())
         {
-            let Some(package) = self.sessions.get(&id) else {
+            let Some(session) = self.sessions.get(&id) else {
                 return denied();
             };
             let Some(decoded) = decode_site_path(request.uri().path()) else {
@@ -409,48 +417,28 @@ impl PreviewRegistry {
             };
             let path = decoded.trim_start_matches('/');
             let directory = path.trim_end_matches('/');
-            let Some(resource) = package
-                .site
-                .get(path)
-                .or_else(|| package.site.get(&format!("{directory}/index.html")))
-                .or_else(|| package.site.get(&format!("{directory}/index.htm")))
-                .or_else(|| package.site.get(&format!("{directory}.html")))
-                .or_else(|| package.site.get(&format!("{directory}.htm")))
-                .or_else(|| {
-                    (path.is_empty())
-                        .then(|| {
-                            package
-                                .site
-                                .get("index.html")
-                                .or_else(|| package.site.get("index.htm"))
-                        })
-                        .flatten()
-                })
+            let mut candidates = vec![
+                path.to_owned(),
+                format!("{directory}/index.html"),
+                format!("{directory}/index.htm"),
+                format!("{directory}.html"),
+                format!("{directory}.htm"),
+            ];
+            if path.is_empty() {
+                candidates.extend(["index.html".to_owned(), "index.htm".to_owned()]);
+            }
+            let Some((path, resource)) = candidates
+                .into_iter()
+                .find_map(|candidate| session.file(&candidate).map(|file| (candidate, file)))
             else {
                 return denied();
             };
-            let mut result = response(
-                StatusCode::OK,
-                resource.content_type,
-                if request.method() == "HEAD" {
-                    vec![]
-                } else {
-                    resource.bytes.to_vec()
-                },
+            return site_response(
+                session,
+                resource,
+                session.bridges.get(&path).map(String::as_str),
+                request,
             );
-            let script = if package.scripts_enabled {
-                "'unsafe-inline' desegni-preview: http: https:"
-            } else {
-                "'none'"
-            };
-            let policy = format!(
-                "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegni-preview: http: https: data:; img-src desegni-preview: http: https: data:; font-src desegni-preview: http: https: data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri desegni-preview: http: https:; form-action 'none'; media-src desegni-preview: http: https: data:; worker-src 'none'"
-            );
-            result.headers_mut().insert(
-                "content-security-policy",
-                policy.parse().expect("fixed website policy"),
-            );
-            return result;
         }
         if request.uri().query().is_some() {
             return denied();
@@ -471,26 +459,12 @@ impl PreviewRegistry {
         let Some(resource) = package.resources.get(&(page, path[3])) else {
             return denied();
         };
-        if let Some(range) = request.headers().get("range") {
-            let range = range
-                .to_str()
-                .ok()
-                .and_then(|range| range.strip_prefix("bytes="))
-                .and_then(|range| range.split_once('-'))
-                .filter(|(start, end)| !start.is_empty() && !end.contains(','));
-            let bounds = range.and_then(|(start, end)| {
-                Some((
-                    start.parse::<usize>().ok()?,
-                    if end.is_empty() {
-                        resource.bytes.len().checked_sub(1)?
-                    } else {
-                        end.parse::<usize>().ok()?
-                    },
-                ))
-            });
-            let Some((start, end)) =
-                bounds.filter(|(start, end)| start <= end && *end < resource.bytes.len())
-            else {
+        let Some(len) = resource.body.decoded_len() else {
+            return denied();
+        };
+        let head = request.method() == "HEAD";
+        match requested_range(request.headers().get("range"), len) {
+            RequestedRange::Unsatisfiable => {
                 let mut result = source_response(
                     session,
                     package.scripts_enabled,
@@ -500,42 +474,219 @@ impl PreviewRegistry {
                 );
                 result.headers_mut().insert(
                     "content-range",
-                    format!("bytes */{}", resource.bytes.len())
+                    format!("bytes */{len}")
                         .parse()
                         .expect("A bounded resource length is a valid header"),
                 );
-                return result;
-            };
-            let mut result = source_response(
+                result
+            }
+            RequestedRange::Satisfiable(start, end) => {
+                let mut result = source_response(
+                    session,
+                    package.scripts_enabled,
+                    StatusCode::PARTIAL_CONTENT,
+                    resource.content_type,
+                    if head {
+                        vec![]
+                    } else {
+                        resource.body.read_range(start, end).unwrap_or_default()
+                    },
+                );
+                result.headers_mut().insert(
+                    "content-range",
+                    format!("bytes {start}-{end}/{len}")
+                        .parse()
+                        .expect("Bounded resource offsets are valid headers"),
+                );
+                result.headers_mut().insert(
+                    "content-length",
+                    (end - start + 1)
+                        .to_string()
+                        .parse()
+                        .expect("A bounded resource length is a valid header"),
+                );
+                result
+            }
+            RequestedRange::None => source_response(
                 session,
                 package.scripts_enabled,
-                StatusCode::PARTIAL_CONTENT,
+                StatusCode::OK,
                 resource.content_type,
-                if request.method() == "HEAD" {
+                if head || len == 0 {
                     vec![]
                 } else {
-                    resource.bytes[start..=end].to_vec()
+                    resource.body.read_range(0, len - 1).unwrap_or_default()
+                },
+            ),
+        }
+    }
+}
+
+impl PreviewSession {
+    /// Resolve a site path against the shared package and this session's own bridge.
+    fn file(&self, path: &str) -> Option<&Resource> {
+        self.extras.get(path).or_else(|| {
+            self.site
+                .as_ref()
+                .and_then(|package| package.files.get(path))
+        })
+    }
+}
+
+/// Serve one site resource, decoding only the requested byte range.
+fn site_response(
+    session: &PreviewSession,
+    resource: &Resource,
+    bridge: Option<&str>,
+    request: &Request<Vec<u8>>,
+) -> Response<Vec<u8>> {
+    let script = if session.scripts_enabled {
+        "'unsafe-inline' desegni-preview: http: https:"
+    } else {
+        "'none'"
+    };
+    let policy = format!(
+        "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegni-preview: http: https: data:; img-src desegni-preview: http: https: data:; font-src desegni-preview: http: https: data:; connect-src 'none'; frame-src 'none'; object-src 'none'; base-uri desegni-preview: http: https:; form-action 'none'; media-src desegni-preview: http: https: data:; worker-src 'none'"
+    );
+    let decorate = |mut result: Response<Vec<u8>>| {
+        result.headers_mut().insert(
+            "content-security-policy",
+            policy.parse().expect("fixed website policy"),
+        );
+        result
+    };
+    let Some(len) = resource.body.decoded_len() else {
+        return decorate(response(
+            StatusCode::NOT_FOUND,
+            "text/plain; charset=utf-8",
+            b"Preview resource is unavailable.".to_vec(),
+        ));
+    };
+    let head = request.method() == "HEAD";
+    match requested_range(request.headers().get("range"), len) {
+        RequestedRange::Unsatisfiable => {
+            let mut result = response(
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                resource.content_type,
+                vec![],
+            );
+            result.headers_mut().insert(
+                "content-range",
+                format!("bytes */{len}")
+                    .parse()
+                    .expect("A bounded resource length is a valid header"),
+            );
+            decorate(result)
+        }
+        RequestedRange::Satisfiable(start, end) => {
+            let mut result = response(
+                StatusCode::PARTIAL_CONTENT,
+                resource.content_type,
+                if head {
+                    vec![]
+                } else {
+                    resource.body.read_range(start, end).unwrap_or_default()
                 },
             );
             result.headers_mut().insert(
                 "content-range",
-                format!("bytes {start}-{end}/{}", resource.bytes.len())
+                format!("bytes {start}-{end}/{len}")
                     .parse()
                     .expect("Bounded resource offsets are valid headers"),
             );
-            return result;
+            result.headers_mut().insert(
+                "content-length",
+                (end - start + 1)
+                    .to_string()
+                    .parse()
+                    .expect("A bounded resource length is a valid header"),
+            );
+            decorate(result)
         }
-        source_response(
-            session,
-            package.scripts_enabled,
-            StatusCode::OK,
-            resource.content_type,
-            if request.method() == "HEAD" {
+        RequestedRange::None => {
+            let mut body = if head || len == 0 {
                 vec![]
             } else {
-                resource.bytes.to_vec()
-            },
-        )
+                resource.body.read_range(0, len - 1).unwrap_or_default()
+            };
+            if let Some(bridge) = bridge.filter(|_| !head) {
+                body = with_bridge(body, bridge);
+            }
+            let mut result = response(StatusCode::OK, resource.content_type, body);
+            if head {
+                result.headers_mut().insert(
+                    "content-length",
+                    len.to_string()
+                        .parse()
+                        .expect("A bounded resource length is a valid header"),
+                );
+            }
+            decorate(result)
+        }
+    }
+}
+
+/// Session-bound bridge markup is added only to the served page, never to shared bytes.
+fn with_bridge(bytes: Vec<u8>, bridge: &str) -> Vec<u8> {
+    match String::from_utf8(bytes) {
+        Ok(mut html) => {
+            if let Some(position) = html.to_ascii_lowercase().rfind("</body>") {
+                html.insert_str(position, bridge);
+            } else {
+                html.push_str(bridge);
+            }
+            html.into_bytes()
+        }
+        Err(error) => error.into_bytes(),
+    }
+}
+
+enum RequestedRange {
+    None,
+    Satisfiable(usize, usize),
+    Unsatisfiable,
+}
+
+fn requested_range(value: Option<&HeaderValue>, len: usize) -> RequestedRange {
+    let Some(spec) = value
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("bytes="))
+    else {
+        return RequestedRange::None;
+    };
+    if spec.contains(',') {
+        return RequestedRange::None;
+    }
+    let Some((start, end)) = spec.split_once('-') else {
+        return RequestedRange::Unsatisfiable;
+    };
+    if len == 0 {
+        return RequestedRange::Unsatisfiable;
+    }
+    if start.is_empty() {
+        let Ok(suffix) = end.parse::<usize>() else {
+            return RequestedRange::Unsatisfiable;
+        };
+        if suffix == 0 {
+            return RequestedRange::Unsatisfiable;
+        }
+        return RequestedRange::Satisfiable(len - suffix.min(len), len - 1);
+    }
+    let Ok(start) = start.parse::<usize>() else {
+        return RequestedRange::Unsatisfiable;
+    };
+    let end = if end.is_empty() {
+        len - 1
+    } else {
+        let Ok(end) = end.parse::<usize>() else {
+            return RequestedRange::Unsatisfiable;
+        };
+        end
+    };
+    if start > end || end >= len {
+        RequestedRange::Unsatisfiable
+    } else {
+        RequestedRange::Satisfiable(start, end)
     }
 }
 
@@ -546,6 +697,7 @@ fn response(status: StatusCode, content_type: &'static str, bytes: Vec<u8>) -> R
         .header("content-security-policy", PREVIEW_CSP)
         .header("x-content-type-options", "nosniff")
         .header("cache-control", "no-store")
+        .header("accept-ranges", "bytes")
         .header("access-control-allow-origin", "*")
         .header("referrer-policy", "no-referrer")
         .body(bytes)
@@ -620,6 +772,20 @@ fn site_mime(path: &str) -> &'static str {
         "ttf" => "font/ttf",
         "otf" => "font/otf",
         "json" => "application/json",
+        "xml" => "application/xml",
+        "webmanifest" => "application/manifest+json",
+        "wasm" => "application/wasm",
+        "txt" => "text/plain; charset=utf-8",
+        "mp4" | "m4v" => "video/mp4",
+        "webm" => "video/webm",
+        "ogv" => "video/ogg",
+        "mov" => "video/quicktime",
+        "mp3" => "audio/mpeg",
+        "m4a" => "audio/mp4",
+        "wav" => "audio/wav",
+        "ogg" | "oga" => "audio/ogg",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
         _ => "application/octet-stream",
     }
 }
@@ -846,5 +1012,149 @@ mod tests {
         );
         registry.clear();
         assert!(!registry.scripts_enabled());
+    }
+
+    #[test]
+    fn large_media_previews_by_reference_and_supports_range_requests() {
+        let clip = 65 * 1024 * 1024;
+        let media: Vec<u8> = (0..clip).map(|index| (index % 251) as u8).collect();
+        let files = BTreeMap::from([
+            (
+                "index.html".into(),
+                b"<!doctype html><html><body><video src=\"portfolio/clip.mp4\" controls></video></body></html>".to_vec(),
+            ),
+            ("portfolio/clip.mp4".into(), media),
+        ]);
+        let project = desegni_core::import_website_files("Portfolio", &files).unwrap();
+        let mut registry = PreviewRegistry::default();
+        let live = registry
+            .register(&project, None, project.home_page_id, true)
+            .unwrap();
+        let document = registry.serve(&Request::get(&live.url).body(vec![]).unwrap());
+        assert_eq!(document.status(), StatusCode::OK);
+        assert!(String::from_utf8_lossy(document.body()).contains("portfolio/clip.mp4"));
+        let origin = live.url.trim_end_matches("/index.html");
+        let url = format!("{origin}/portfolio/clip.mp4");
+        let head = registry.serve(
+            &Request::builder()
+                .method("HEAD")
+                .uri(&url)
+                .body(vec![])
+                .unwrap(),
+        );
+        assert_eq!(head.status(), StatusCode::OK);
+        assert_eq!(head.headers()["content-type"], "video/mp4");
+        assert_eq!(head.headers()["accept-ranges"], "bytes");
+        assert_eq!(head.headers()["content-length"], clip.to_string().as_str());
+        let expected = |start: usize, end: usize| -> Vec<u8> {
+            (start..=end).map(|index| (index % 251) as u8).collect()
+        };
+        for (range, start, end) in [
+            ("bytes=1000-1999", 1000, 1999),
+            ("bytes=999-2001", 999, 2001),
+            ("bytes=0-0", 0, 0),
+        ] {
+            let partial = registry.serve(
+                &Request::get(&url)
+                    .header("range", range)
+                    .body(vec![])
+                    .unwrap(),
+            );
+            assert_eq!(partial.status(), StatusCode::PARTIAL_CONTENT);
+            assert_eq!(
+                partial.headers()["content-range"],
+                format!("bytes {start}-{end}/{clip}").as_str()
+            );
+            assert_eq!(
+                partial.headers()["content-length"],
+                (end - start + 1).to_string().as_str()
+            );
+            assert_eq!(partial.body(), &expected(start, end));
+        }
+        let suffix = registry.serve(
+            &Request::get(&url)
+                .header("range", "bytes=-8")
+                .body(vec![])
+                .unwrap(),
+        );
+        assert_eq!(suffix.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(suffix.body(), &expected(clip - 8, clip - 1));
+        let open = registry.serve(
+            &Request::get(&url)
+                .header("range", "bytes=100-")
+                .body(vec![])
+                .unwrap(),
+        );
+        assert_eq!(open.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(open.body().len(), clip - 100);
+        let beyond = registry.serve(
+            &Request::get(&url)
+                .header("range", "bytes=0-999999999999")
+                .body(vec![])
+                .unwrap(),
+        );
+        assert_eq!(beyond.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+        assert_eq!(
+            beyond.headers()["content-range"],
+            format!("bytes */{clip}").as_str()
+        );
+    }
+
+    #[test]
+    fn text_over_the_limit_names_the_offending_file() {
+        let oversized = vec![b'a'; MAX_PREVIEW_TEXT_BYTES + 1];
+        let files = BTreeMap::from([
+            (
+                "index.html".into(),
+                b"<!doctype html><html><body>Portfolio</body></html>".to_vec(),
+            ),
+            ("portfolio/styles.css".into(), oversized),
+        ]);
+        let project = desegni_core::import_website_files("Portfolio", &files).unwrap();
+        let mut registry = PreviewRegistry::default();
+        let Err(error) = registry.register(&project, None, project.home_page_id, false) else {
+            panic!("an oversized text payload must not register a preview");
+        };
+        assert_eq!(
+            error,
+            "portfolio/styles.css is too large to preview (17 MB)."
+        );
+    }
+
+    #[test]
+    fn sessions_share_site_bytes_instead_of_duplicating_them() {
+        let files = BTreeMap::from([
+            (
+                "index.html".into(),
+                b"<!doctype html><html><body><video src=\"media/clip.mp4\"></video></body></html>"
+                    .to_vec(),
+            ),
+            ("media/clip.mp4".into(), vec![7_u8; 2 * 1024 * 1024]),
+        ]);
+        let project = desegni_core::import_website_files("Portfolio", &files).unwrap();
+        let mut registry = PreviewRegistry::default();
+        let first = registry
+            .register(&project, None, project.home_page_id, false)
+            .unwrap();
+        let second = registry
+            .register(&project, None, project.home_page_id, false)
+            .unwrap();
+        let live = registry
+            .register(&project, None, project.home_page_id, true)
+            .unwrap();
+        let package = |id: Uuid| registry.sessions[&id].site.clone().unwrap();
+        let (a, b, c) = (
+            package(first.session_id),
+            package(second.session_id),
+            package(live.session_id),
+        );
+        assert!(Arc::ptr_eq(&a, &b));
+        assert!(Arc::strong_count(&a) >= 2);
+        assert!(!Arc::ptr_eq(&a, &c));
+        let media = |package: &SitePackage| match &package.files["media/clip.mp4"].body {
+            PreviewFile::Encoded(bytes) => bytes.clone(),
+            _ => panic!("large media must stay referenced, not copied into a session"),
+        };
+        assert!(Arc::ptr_eq(&media(&a), &media(&c)));
     }
 }

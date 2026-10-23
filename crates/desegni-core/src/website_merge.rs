@@ -285,7 +285,7 @@ impl Project {
             .collect();
         for (path, bytes) in resources {
             if !html_paths.contains(&path) && !path.ends_with(".html") && !path.ends_with(".htm") {
-                website.files.insert(path, STANDARD.encode(bytes));
+                website.files.insert(path, STANDARD.encode(bytes).into());
             }
         }
         next.website = Some(website);

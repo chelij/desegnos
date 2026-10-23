@@ -9,7 +9,7 @@ pub fn project_asset_reference(id: Uuid) -> String {
     format!("{PROJECT_ASSET_SCHEME}{id}")
 }
 
-fn inline_images(source: &str) -> impl Iterator<Item = &str> {
+pub(crate) fn inline_images(source: &str) -> impl Iterator<Item = &str> {
     source
         .match_indices("data:image/")
         .filter_map(move |(start, _)| {

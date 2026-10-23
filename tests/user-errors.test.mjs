@@ -46,6 +46,10 @@ try {
     assert.equal(userError('No space left on device: /private/file'), 'Your storage is full. Free some space and try again.');
     assert.equal(userError('The system clipboard could not be read: native error'), "Desegnos couldn't read the clipboard. Copy the item again.");
     assert.equal(userError('The result is preserved, but its project dossier could not be saved: /private'), "Your result is saved, but the project brief couldn't be updated.");
+    assert.equal(userError('portfolio/index.html is too large to preview (90 MB).'), 'portfolio/index.html is too large to preview (90 MB).');
+    assert.equal(userError("This page's code is too large to preview (17 MB)."), "This page's code is too large to preview (17 MB).");
+    assert.equal(userError('The complete preview exceeds the 64 MiB local limit.'), 'This page is too large to preview. Try a smaller page.');
+    assert.equal(userError('../private/index.html is too large to preview (90 MB).'), 'This page is too large to preview. Try a smaller page.');
     for (const raw of ['Error: bad\n at script.js:12', 'Unknown /private/file', 'Could not match #secret', 'Could not match .secret', 'Could not read private.json', 'Unknown 561acc85-1234-1234-1234-123456789012']) {
       const plain = userError(raw);
       assert.doesNotMatch(plain, /private|secret|script\.js|561acc85|Error:|\n/);

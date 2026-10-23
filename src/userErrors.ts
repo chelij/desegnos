@@ -32,13 +32,15 @@ function isPlain(value: string): boolean {
 export function userError(error: unknown): string {
   const value = diagnostic(error).replace(/^Error:\s*/, '').trim();
   if (!value) return '';
+  // A site-relative file name is the useful part of an oversized-preview message.
+  if (/^[\w][\w .@+-]*(?:\/[\w .@+-]+)* is too large to preview \(\d+ MB\)\.$/.test(value) && !/\/\.\.?(?:\/| )/.test(value)) return value;
   // Preserve short plain instructions; translate technical diagnostics below.
   const messages: [RegExp, string][] = [
     [/SyntaxError|unexpected (?:token|identifier|end)|unclosed|unterminated|missing closing/i, 'This code has a writing mistake. Check the highlighted line.'],
     [/stacking|painting rules|move part of its layout/i, 'This item cannot be arranged on its own. Select its containing group.'],
     [/finite.*(?:position|offset|number)/i, 'Enter a valid number.'],
     [/(?:ZIP|file).*32 MiB/i, 'This file is too large. Choose a file smaller than 32 MB.'],
-    [/complete preview.*limit/i, 'This page is too large to preview. Try a smaller page.'],
+    [/too large to preview|complete preview.*limit/i, 'This page is too large to preview. Try a smaller page.'],
     [/identity analysis|analyzing identity/i, "Desegnos couldn't read your brand. Try again."],
     [/cancell?ed.*(?:record|receipt)|cancellation.*(?:save|storage|attention)/i, "The request stopped, but Desegnos couldn't save its status. Check that you can save files."],
     [/applied.*(?:history|job-history)|(?:history|job-history).*applied/i, "Your changes were added, but their history couldn't be saved."],

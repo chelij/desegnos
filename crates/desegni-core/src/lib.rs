@@ -58,7 +58,9 @@ pub use session::*;
 pub use source::*;
 pub use stable_targets::*;
 pub use website::*;
-pub use website_import::{ImportedWebsite, import_website_files};
+pub use website_import::{
+    ImportedWebsite, PREVIEW_INLINE_BYTES, PreviewFile, import_website_files,
+};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

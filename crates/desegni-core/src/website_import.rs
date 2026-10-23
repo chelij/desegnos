@@ -3,6 +3,7 @@ use crate::{Appearance, Error, Page, Project, Result, SiteContent, Viewport, ens
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cssparser::{Parser, ParserInput, Token};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use url::Url;
 use uuid::Uuid;
 
@@ -513,7 +514,7 @@ pub(crate) fn import_website_pages(
                     .get(p)
                     .map(|(id, _)| crate::project_asset_reference(*id))
                     .unwrap_or_else(|| STANDARD.encode(bytes));
-                (p.clone(), value)
+                (p.clone(), value.into())
             })
             .collect(),
         framework: None,
@@ -529,12 +530,115 @@ pub(crate) fn import_website_pages(
     Ok(project)
 }
 
+/// Byte threshold above which a binary preview file stays a reference, not a copy.
+pub const PREVIEW_INLINE_BYTES: usize = 1024 * 1024;
+/// Preview-only route for pictures that have no file of their own in the imported site.
+const PREVIEW_ASSET_DIRECTORY: &str = "__desegnos_assets__";
+
+/// One preview resource. Inline bytes are copied into a session; encoded and picture values
+/// point at bytes the project already shares, so sessions never multiply a site's memory.
+#[derive(Clone)]
+pub enum PreviewFile {
+    Inline(Arc<[u8]>),
+    Encoded(Arc<str>),
+    Picture(Arc<str>),
+}
+
+impl PreviewFile {
+    /// Byte length of an inline file; referenced files have no session copy.
+    pub fn inline_len(&self) -> Option<usize> {
+        match self {
+            Self::Inline(bytes) => Some(bytes.len()),
+            Self::Encoded(_) | Self::Picture(_) => None,
+        }
+    }
+
+    /// Decoded length of the full resource, without decoding its bytes.
+    pub fn decoded_len(&self) -> Option<usize> {
+        match self {
+            Self::Inline(bytes) => Some(bytes.len()),
+            Self::Encoded(encoded) => base64_decoded_len(encoded),
+            Self::Picture(uri) => base64_decoded_len(base64_body(uri)),
+        }
+    }
+
+    /// Bytes for an inclusive range, decoding only the base64 groups that cover it.
+    pub fn read_range(&self, start: usize, end: usize) -> Result<Vec<u8>> {
+        let body = match self {
+            Self::Inline(bytes) => {
+                return bytes
+                    .get(start..=end)
+                    .map(<[u8]>::to_vec)
+                    .ok_or_else(|| Error("The preview resource is unavailable.".into()));
+            }
+            Self::Encoded(encoded) => encoded,
+            Self::Picture(uri) => base64_body(uri),
+        };
+        decode_base64_range(body, start, end)
+    }
+}
+
+fn base64_body(value: &str) -> &str {
+    value.split_once(";base64,").map_or(value, |(_, body)| body)
+}
+
+fn base64_decoded_len(value: &str) -> Option<usize> {
+    let body = value.trim_end();
+    if !body.len().is_multiple_of(4) {
+        return None;
+    }
+    let padding = body
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count()
+        .min(2);
+    (body.len() / 4 * 3).checked_sub(padding)
+}
+
+fn decode_base64_range(body: &str, start: usize, end: usize) -> Result<Vec<u8>> {
+    let invalid = || Error("The preview resource is unavailable.".into());
+    let decoded_len = base64_decoded_len(body).ok_or_else(invalid)?;
+    if start > end || end >= decoded_len {
+        return Err(invalid());
+    }
+    // Base64 stores three bytes per four characters, so one group covers a whole range.
+    let first = start / 3;
+    let last = end / 3;
+    let chars = &body.as_bytes()[first * 4..((last + 1) * 4).min(body.len())];
+    let decoded = STANDARD.decode(chars).map_err(|_| invalid())?;
+    let offset = start - first * 3;
+    decoded
+        .get(offset..offset + end - start + 1)
+        .map(<[u8]>::to_vec)
+        .ok_or_else(invalid)
+}
+
+fn preview_text_path(path: &str) -> bool {
+    matches!(
+        path.rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .as_str(),
+        "html" | "htm" | "css" | "js" | "mjs"
+    )
+}
+
+fn preview_too_large(path: &str, bytes: usize) -> String {
+    format!(
+        "{path} is too large to preview ({} MB).",
+        bytes.div_ceil(1024 * 1024)
+    )
+}
+
 /// Original file layout and bounded local resources, retained across saves and recovery.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedWebsite {
     pub page_files: BTreeMap<Uuid, String>,
-    pub files: BTreeMap<String, String>,
+    pub files: BTreeMap<String, Arc<str>>,
     pub framework: Option<String>,
     pub skipped: Vec<String>,
 }
@@ -547,7 +651,7 @@ impl Project {
         for (path, encoded) in &site.files {
             let value = self
                 .resolve_site_content(&SiteContent {
-                    html: encoded.clone(),
+                    html: encoded.to_string(),
                     css: String::new(),
                     javascript: String::new(),
                 })?
@@ -628,6 +732,200 @@ impl Project {
         }
         files.extend(rendered);
         Ok(Some(files))
+    }
+    /// Preview resources keep text and small files as inline bytes, while larger binary files
+    /// stay references to bytes the project already holds. No whole-site copy is made.
+    pub fn website_preview_files(
+        &self,
+        run_scripts: bool,
+        text_limit: usize,
+    ) -> Result<Option<BTreeMap<String, PreviewFile>>> {
+        let Some(site) = &self.website else {
+            return Ok(None);
+        };
+        let pictures = self.preview_pictures();
+        let mut paths_by_picture = BTreeMap::new();
+        let mut files = BTreeMap::new();
+        for (path, encoded) in &site.files {
+            let reference = encoded
+                .strip_prefix(crate::PROJECT_ASSET_SCHEME)
+                .and_then(|value| Uuid::parse_str(value).ok());
+            if let Some(id) = reference {
+                let uri = pictures
+                    .get(&id)
+                    .cloned()
+                    .ok_or_else(|| Error("An imported website picture is missing.".into()))?;
+                paths_by_picture.insert(id, path.clone());
+                files.insert(path.clone(), PreviewFile::Picture(uri));
+            } else if !preview_text_path(path) && encoded.len() > PREVIEW_INLINE_BYTES {
+                files.insert(path.clone(), PreviewFile::Encoded(encoded.clone()));
+            } else {
+                let bytes = STANDARD
+                    .decode(encoded.as_bytes())
+                    .map_err(|_| Error("Invalid imported website resource.".into()))?;
+                files.insert(path.clone(), PreviewFile::Inline(bytes.into()));
+            }
+        }
+        for page in self.pages.iter().filter(|page| page.included) {
+            let Some(content) = &page.content else {
+                continue;
+            };
+            let path = site
+                .page_files
+                .get(&page.id)
+                .cloned()
+                .unwrap_or_else(|| crate::export::output_path(&page.path));
+            let html =
+                self.preview_source(&content.html, &pictures, &paths_by_picture, &mut files)?;
+            let css =
+                self.preview_source(&content.css, &pictures, &paths_by_picture, &mut files)?;
+            let javascript = self.preview_source(
+                &content.javascript,
+                &pictures,
+                &paths_by_picture,
+                &mut files,
+            )?;
+            let mut document = html;
+            if !css.is_empty() {
+                let style = format!("<style>{}</style>", css.replace("</style", "<\\/style"));
+                if let Some(at) = document.to_ascii_lowercase().rfind("</head>") {
+                    document.insert_str(at, &style);
+                } else {
+                    document.insert_str(0, &style);
+                }
+            }
+            if !javascript.is_empty() {
+                document.push_str(&format!(
+                    "<script>{}</script>",
+                    javascript.replace("</script", "<\\/script")
+                ));
+            }
+            let runtime = crate::region_script_runtime(&document)?;
+            if !runtime.is_empty() {
+                let name = format!("desegnos-regions-{}.js", crate::digest(runtime.as_bytes()));
+                let resource = path
+                    .rsplit_once('/')
+                    .map_or(name.clone(), |(directory, _)| format!("{directory}/{name}"));
+                files.insert(resource, PreviewFile::Inline(runtime.into_bytes().into()));
+                document.push_str(&format!("<script defer src=\"{name}\"></script>"));
+            }
+            ensure(
+                document.len() <= text_limit,
+                preview_too_large(&path, document.len()),
+            )?;
+            files.insert(path, PreviewFile::Inline(document.into_bytes().into()));
+        }
+        if run_scripts {
+            // Render scripts against inline sources only; larger files stay referenceable URLs.
+            let render: BTreeMap<String, Vec<u8>> = files
+                .iter()
+                .filter_map(|(path, file)| match file {
+                    PreviewFile::Inline(bytes) => Some((path.clone(), bytes.to_vec())),
+                    _ => None,
+                })
+                .collect();
+            let importer = Importer {
+                keep_scripts: true,
+                files: &render,
+                routes: BTreeMap::new(),
+                pictures: BTreeMap::new(),
+            };
+            let mut rendered = BTreeMap::new();
+            for source in site
+                .page_files
+                .values()
+                .filter(|source| render.contains_key(*source))
+            {
+                let (_, content) = importer.page(source)?;
+                rendered.insert(source.clone(), content.html.into_bytes());
+            }
+            for (path, bytes) in rendered {
+                ensure(
+                    bytes.len() <= text_limit,
+                    preview_too_large(&path, bytes.len()),
+                )?;
+                files.insert(path, PreviewFile::Inline(bytes.into()));
+            }
+        }
+        let mut text_bytes = 0usize;
+        let mut largest: Option<(String, usize)> = None;
+        for (path, file) in &files {
+            let Some(len) = file.inline_len().filter(|_| preview_text_path(path)) else {
+                continue;
+            };
+            text_bytes = text_bytes.saturating_add(len);
+            if largest.as_ref().is_none_or(|(_, size)| *size < len) {
+                largest = Some((path.clone(), len));
+            }
+        }
+        if text_bytes > text_limit {
+            let (path, len) = largest.expect("text bytes are attributed to a file");
+            return Err(Error(preview_too_large(&path, len)));
+        }
+        Ok(Some(files))
+    }
+    /// Point image references at preview URLs, keeping the session text free of picture bytes.
+    fn preview_source(
+        &self,
+        source: &str,
+        pictures: &BTreeMap<Uuid, Arc<str>>,
+        paths_by_picture: &BTreeMap<Uuid, String>,
+        files: &mut BTreeMap<String, PreviewFile>,
+    ) -> Result<String> {
+        let mut output = String::with_capacity(source.len());
+        let mut rest = source;
+        while let Some(index) = rest.find(crate::PROJECT_ASSET_SCHEME) {
+            output.push_str(&rest[..index]);
+            rest = &rest[index + crate::PROJECT_ASSET_SCHEME.len()..];
+            let id = rest
+                .get(..36)
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .ok_or_else(|| Error("An image reference is invalid.".into()))?;
+            let uri = pictures.get(&id).ok_or_else(|| {
+                Error("An image reference is not in this project. Your page is unchanged.".into())
+            })?;
+            let url = if let Some(path) = paths_by_picture.get(&id) {
+                format!("/{path}")
+            } else {
+                let path = format!("{PREVIEW_ASSET_DIRECTORY}/{id}");
+                files
+                    .entry(path.clone())
+                    .or_insert_with(|| PreviewFile::Picture(uri.clone()));
+                format!("/{path}")
+            };
+            output.push_str(&url);
+            rest = &rest[36..];
+        }
+        output.push_str(rest);
+        Ok(output)
+    }
+    fn preview_pictures(&self) -> BTreeMap<Uuid, Arc<str>> {
+        let mut pictures = self.pictures.clone();
+        if let Some(identity) = &self.imported_identity {
+            for asset in &identity.assets {
+                pictures
+                    .entry(asset.id)
+                    .or_insert_with(|| Arc::from(asset.data_uri.as_str()));
+            }
+            for photo in &identity.photos {
+                pictures
+                    .entry(photo.id)
+                    .or_insert_with(|| photo.data_uri.clone());
+            }
+        }
+        for page in &self.pages {
+            let Some(content) = &page.content else {
+                continue;
+            };
+            for source in [&content.html, &content.css, &content.javascript] {
+                for uri in crate::project_assets::inline_images(source) {
+                    pictures
+                        .entry(crate::project_assets::inline_image_id(uri))
+                        .or_insert_with(|| Arc::from(uri));
+                }
+            }
+        }
+        pictures
     }
     /// Rendering changes are disposable; the editor source and saved resources remain intact.
     pub fn website_canvas_content(&self, page: &Page) -> Result<Option<SiteContent>> {
