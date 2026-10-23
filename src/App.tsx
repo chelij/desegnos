@@ -21,6 +21,7 @@ import { Notes, type DossierSection } from './Notes';
 import { MenuButton, type MenuItem } from './Menus';
 import './shell.css';
 import { editorShortcut, SHORTCUT_HELP } from './shortcuts';
+import { closePageTab, loadPageTabs, savePageTabs, showPageTab, visiblePageTabs } from './pageTabs';
 import { steppedZoom } from './canvasGeometry';
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
@@ -77,6 +78,9 @@ function Editor() {
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [pageId, setPageId] = useState<string | null>(null);
+  // Open page tabs per project, persisted separately from the website output.
+  const [openPages, setOpenPages] = useState<Record<string, string[]>>({});
+  const [closeChoice, setCloseChoice] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [focusPrompt, setFocusPrompt] = useState(false);
   const [zoom, setZoom] = useState(0.75);
@@ -239,8 +243,13 @@ function Editor() {
     const project = view?.project;
     if (!project) { setPageId(null); setSelected(null); return; }
     const page = project.pages.find(page => page.id === pageId);
-    if (!page) { setPageId(project.homePageId); setSelected(null); }
-    else if (!page.regions.some(region => region.id === selected)) setSelected(null);
+    if (!page) {
+      // Prefer a page whose tab is open, so restored tab state survives a restart.
+      const pageIds = project.pages.map(item => item.id);
+      const open = loadPageTabs(project.id, pageIds);
+      setPageId(open.includes(project.homePageId) ? project.homePageId : open[0] ?? project.homePageId);
+      setSelected(null);
+    } else if (!page.regions.some(region => region.id === selected)) setSelected(null);
   }, [view, pageId, selected]);
 
   const settle = useCallback(async () => {
@@ -328,6 +337,25 @@ function Editor() {
       });
     });
   }
+  /** Close one project tab. `discard` keeps the recovery journal and only stops offering it. */
+  async function closeProjectTab(projectId: string, discard: boolean) {
+    await synchronize(); await settle();
+    const wasActive = current.current?.project?.id === projectId;
+    await queue(async () => {
+      accept(await native<WorkspaceView>('close_project', { projectId, discard }));
+      setSelected(null); setCloseChoice(null); setNotice('Project closed.');
+      if (wasActive) setPageId(null);
+    });
+  }
+  async function saveAndCloseProjectTab(projectId: string) {
+    if (current.current?.project?.id !== projectId) {
+      await switchProject(projectId);
+      if (current.current?.project?.id !== projectId) return;
+    }
+    const saved = await save();
+    if (!saved || saved.dirty) return;
+    await closeProjectTab(projectId, false);
+  }
   async function importContext(analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) {
     await synchronize(); await settle();
     await queue(async workspace => {
@@ -347,7 +375,7 @@ function Editor() {
     await queue(async () => {
       const next = await native<WorkspaceView>('switch_project', { projectId });
       accept(next); setSelected(null);
-      if (pageId) setPageId(pageId);
+      if (pageId) activatePage(pageId);
       if (next.project) setZoom(initialZoom(next.project.viewport.width, next.project.viewport.height));
     });
   }
@@ -519,12 +547,17 @@ function Editor() {
       const shortcut = editorShortcut(event, editingText);
       if (!shortcut) return;
       // Side panels keep focus while editing, so app-wide commands still work there.
-      if (event.target instanceof Element && event.target.closest('.workspace-surface') && !['save', 'saveAs', 'open', 'new', 'undo', 'redo', 'zoomIn', 'zoomOut', 'fit', 'actualSize', 'doubleSize', 'nextPage', 'previousPage'].includes(shortcut)) return;
-      if (event.repeat && ['new', 'open', 'saveAs', 'help', 'remove'].includes(shortcut)) { event.preventDefault(); return; }
+      if (event.target instanceof Element && event.target.closest('.workspace-surface') && !['save', 'saveAs', 'open', 'new', 'undo', 'redo', 'zoomIn', 'zoomOut', 'fit', 'actualSize', 'doubleSize', 'nextPage', 'previousPage', 'closePageTab'].includes(shortcut)) return;
+      if (event.repeat && ['new', 'open', 'saveAs', 'help', 'remove', 'closePageTab'].includes(shortcut)) { event.preventDefault(); return; }
       const project = current.current?.project;
       let action: (() => Promise<unknown>) | undefined;
       if (shortcut === 'help') { event.preventDefault(); setShowShortcuts(true); return; }
       if (shortcut === 'new') { event.preventDefault(); setShowNew(true); return; }
+      if (shortcut === 'closePageTab') {
+        event.preventDefault();
+        if (project && page) closePageTabInStrip(page.id);
+        return;
+      }
       if (shortcut === 'open') action = open;
       else if (!project) return;
       else if (shortcut === 'save' || shortcut === 'saveAs') action = () => save(shortcut === 'saveAs');
@@ -564,6 +597,22 @@ function Editor() {
   const projectImages = [...storedImages, ...importedImages.filter(image => !storedImages.some(stored => stored.dataUri === image.dataUri))];
   const page = project?.pages.find(page => page.id === pageId) ?? project?.pages.find(page => page.id === project.homePageId) ?? null;
   const region = page?.regions.find(region => region.id === selected) ?? null;
+  const pageIdsKey = project?.pages.map(item => item.id).join(',') ?? '';
+  const openPageIds = project ? visiblePageTabs(openPages[project.id], project.pages.map(item => item.id)) : [];
+  // Restore a project's open page tabs the first time it becomes active, then drop tabs for
+  // pages that no longer exist. A project with no saved tabs shows all of its pages.
+  useEffect(() => {
+    const projectId = project?.id;
+    if (!projectId) return;
+    const pageIds = pageIdsKey ? pageIdsKey.split(',') : [];
+    setOpenPages(previous => {
+      const known = previous[projectId];
+      const next = known ? visiblePageTabs(known, pageIds) : loadPageTabs(projectId, pageIds);
+      if (known && next.length === known.length && next.every((id, index) => id === known[index])) return previous;
+      savePageTabs(projectId, next);
+      return { ...previous, [projectId]: next };
+    });
+  }, [project?.id, pageIdsKey]);
   const requestedAreas = project?.pages.reduce((count, page) => count + page.regions.filter(region => !region.completed && region.prompt.trim()).length, 0) ?? 0;
   const checks = useMemo(() => project ? checkProject(project) : [], [project]);
   const placeholderCount = checks.filter(item => item.kind === 'placeholder').length;
@@ -691,7 +740,32 @@ function Editor() {
     setSelected(id); setFocusPrompt(false);
     if (cleanEmpty) void dismissEmpty(id).catch(() => {});
   }
-  async function selectPage(id: string, keep: string | null = null) { await synchronize(); await settle(); await dismissEmpty(keep); setPageId(id); setSelected(null); }
+  // Page tabs: closing hides a page from the strip; it never deletes the page.
+  function projectPageIds() { return current.current?.project?.pages.map(item => item.id) ?? []; }
+  function openPageTab(id: string) {
+    const projectId = current.current?.project?.id;
+    if (!projectId) return;
+    const pageIds = projectPageIds();
+    setOpenPages(previous => {
+      const open = visiblePageTabs(previous[projectId], pageIds);
+      const next = showPageTab(open, id, pageIds);
+      if (next === open) return previous;
+      savePageTabs(projectId, next);
+      return { ...previous, [projectId]: next };
+    });
+  }
+  function activatePage(id: string) { openPageTab(id); setPageId(id); }
+  function closePageTabInStrip(id: string) {
+    const projectId = current.current?.project?.id;
+    if (!projectId) return;
+    const open = visiblePageTabs(openPages[projectId], projectPageIds());
+    const result = closePageTab(open, id, pageId);
+    if (result.open === open) return;
+    savePageTabs(projectId, result.open);
+    setOpenPages(previous => ({ ...previous, [projectId]: result.open }));
+    if (result.active !== pageId && result.active) { setPageId(result.active); setSelected(null); }
+  }
+  async function selectPage(id: string, keep: string | null = null) { await synchronize(); await settle(); await dismissEmpty(keep); activatePage(id); setSelected(null); }
   async function addRegion(rect: Rect, shape?: RegionShape) {
     if (!page) return;
     const id = page.id;
@@ -826,7 +900,7 @@ function Editor() {
     await synchronize();
     const page_id = page.id;
     setConfirmation({ title: 'Remove page?', message: `Remove “${page.name}” and its ${page.regions.length} requests? Remove any linked choices or exceptions from the project brief first.`,
-      action: async () => { await mutate({ type: 'delete_page', page_id }); setPageId(project!.homePageId); setSelected(null); } });
+      action: async () => { await mutate({ type: 'delete_page', page_id }); activatePage(project!.homePageId); setSelected(null); } });
   }
 
   const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
@@ -959,17 +1033,26 @@ function Editor() {
     </main> : <>
       <div className="page-strip"><div className="page-tabs" role="tablist" aria-label="Project pages">
         {(view.openProjects?.length ? view.openProjects : [{ id: project.id, name: project.name, dirty: !!view.dirty, active: true, pages: [] }]).map((open, groupIndex, groups) => <div key={open.id} data-project-id={open.id} className={`project-tab-group${open.active ? ' active' : ''}${groups.length > 1 ? ' labelled' : ''}`} style={{ '--project-colour': PROJECT_COLOURS[groupIndex % PROJECT_COLOURS.length] } as CSSProperties} role="group" aria-label={`Project ${open.name}`}>
-          {groups.length > 1 && <span className="project-tab-label" title={open.name}>{open.name}{open.dirty ? ' •' : ''}</span>}
-          <div className="project-tab-row">{open.active ? <>
-        {project.pages.map((item, index) => <button key={item.id} id={`page-tab-${item.id}`} role="tab" aria-selected={page?.id === item.id} aria-controls="page-panel" tabIndex={page?.id === item.id ? 0 : -1}
-          title={`${item.path}${item.included ? '' : ' · Hidden page'}`} onClick={() => run(() => selectPage(item.id))}
-          onKeyDown={event => {
-            if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-            event.preventDefault();
-            const next = event.key === 'Home' ? 0 : event.key === 'End' ? project.pages.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + project.pages.length) % project.pages.length;
-            document.getElementById(`page-tab-${project.pages[next].id}`)?.focus(); run(() => selectPage(project.pages[next].id));
-          }}><span>{item.name}</span>{!item.included && <span className="page-draft">Hidden</span>}</button>)}
-          <button className="add-page-tab" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}>+</button></> : open.pages.map(item => <button key={item.id} type="button" className="parked-tab" title={`Switch to ${open.name}`} onClick={() => run(() => switchProject(open.id, item.id))}><span>{item.name}</span></button>)}</div>
+          {groups.length > 1 && <div className="project-tab-head"><span className="project-tab-label" title={open.name}>{open.name}{open.dirty ? ' •' : ''}</span>
+            <button type="button" className="project-tab-close" aria-label={`Close ${open.name}`} title={`Close ${open.name}`} onClick={() => { if (open.dirty) setCloseChoice(open.id); else run(() => closeProjectTab(open.id, false)); }}>×</button></div>}
+          <div className="project-tab-row">{closeChoice === open.id ? <div className="project-close-choice" role="group" aria-label={`Close ${open.name}`}>
+            <button type="button" className="primary" disabled={pending > 0} onClick={() => run(() => saveAndCloseProjectTab(open.id))}>Save</button>
+            <button type="button" className="danger" disabled={pending > 0} onClick={() => run(() => closeProjectTab(open.id, true))}>Don’t save</button>
+            <button type="button" onClick={() => setCloseChoice(null)}>Cancel</button>
+          </div> : open.active ? <>
+        {openPageIds.map((id, index) => { const item = project.pages.find(entry => entry.id === id); if (!item) return null; return <div key={item.id} className={`page-tab-shell${page?.id === item.id ? ' active' : ''}`}>
+          <button className="page-tab" id={`page-tab-${item.id}`} role="tab" aria-selected={page?.id === item.id} aria-controls="page-panel" tabIndex={page?.id === item.id ? 0 : -1}
+            title={`${item.path}${item.included ? '' : ' · Hidden page'}`} onClick={() => run(() => selectPage(item.id))}
+            onKeyDown={event => {
+              if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+              event.preventDefault();
+              const next = event.key === 'Home' ? 0 : event.key === 'End' ? openPageIds.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + openPageIds.length) % openPageIds.length;
+              document.getElementById(`page-tab-${openPageIds[next]}`)?.focus(); run(() => selectPage(openPageIds[next]));
+            }}><span>{item.name}</span>{!item.included && <span className="page-draft">Hidden</span>}</button>
+          <button type="button" className="page-tab-close" aria-label={`Close ${item.name} tab`} title="Close tab" disabled={openPageIds.length <= 1} onClick={() => closePageTabInStrip(item.id)}>×</button>
+        </div>; })}
+          <button className="add-page-tab" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}>+</button>
+          <MenuButton label="Pages" ariaLabel="All pages" title="All pages" className="page-list-menu" items={project.pages.map(item => ({ id: `page-list-${item.id}`, label: item.name, checked: openPageIds.includes(item.id), action: () => run(() => selectPage(item.id)) }))} /></> : open.pages.map(item => <button key={item.id} type="button" className="parked-tab" title={`Switch to ${open.name}`} onClick={() => run(() => switchProject(open.id, item.id))}><span>{item.name}</span></button>)}</div>
         </div>)}
       </div></div>
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
@@ -1027,7 +1110,7 @@ function Editor() {
           await dismissEmpty(null);
           await synchronize();
           const next = await mutate({ type: 'add_page', name: values.name, path: values.path });
-          setPageId(next.project!.pages.at(-1)!.id); setSelected(null);
+          activatePage(next.project!.pages.at(-1)!.id); setSelected(null);
         } else await mutate({ type: 'update_page', page_id: pageDialog.id, ...values });
         setPageDialog(null);
       }} />

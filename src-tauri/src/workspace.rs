@@ -551,10 +551,7 @@ impl Workspace {
             recovery_error: self.recovery_error.clone(),
             migration_notice: self.migration_notice.clone(),
             open_projects: self.open_projects(),
-            any_dirty: self.parked.iter().any(OpenProject::dirty)
-                || self.session.as_ref().is_some_and(|s| {
-                    Some(s.project().revision) != self.saved_revision || self.needs_migration_save
-                }),
+            any_dirty: self.parked.iter().any(OpenProject::dirty) || self.active_dirty(),
             outside_edits: self
                 .file
                 .as_ref()
@@ -581,6 +578,12 @@ impl Workspace {
         Ok(())
     }
 
+    fn active_dirty(&self) -> bool {
+        self.session.as_ref().is_some_and(|session| {
+            Some(session.project().revision) != self.saved_revision || self.needs_migration_save
+        })
+    }
+
     /// Back to the start screen. The project lock is released; its recovery journal stays,
     /// exactly as when another project replaces it.
     /// "Discard and continue": the unsaved work is no longer offered for recovery and no longer
@@ -604,7 +607,13 @@ impl Workspace {
         Ok(())
     }
 
+    /// Close the active project and activate the next open one in tab order, or the start
+    /// screen when no project remains.
     fn close(&mut self) {
+        let position = self.session.as_ref().and_then(|session| {
+            let id = session.project().id;
+            self.order.iter().position(|other| *other == id)
+        });
         if let Some(session) = &self.session {
             let id = session.project().id;
             self.order.retain(|other| *other != id);
@@ -618,10 +627,67 @@ impl Workspace {
         self.migration_notice = None;
         self.needs_migration_save = false;
         self.pending_save = None;
-        if let Some(project) = self.parked.pop() {
+        // The tab that followed the closed one, or the one before it when it was last.
+        let next = position
+            .and_then(|index| {
+                self.order
+                    .get(index)
+                    .or_else(|| index.checked_sub(1).and_then(|last| self.order.get(last)))
+            })
+            .copied();
+        if let Some(index) = next.and_then(|id| {
+            self.parked
+                .iter()
+                .position(|open| open.session.project().id == id)
+        }) {
+            let project = self.parked.remove(index);
             self.unpark(project);
         }
         self.refresh_recoveries();
+    }
+
+    /// Close one open project tab. Unsaved changes need an explicit discard; discarding keeps
+    /// the recovery journal on disk and only stops offering it, as closing the active project does.
+    fn close_tab(&mut self, project_id: Option<Uuid>, discard: bool) -> NativeResult<()> {
+        let Some(target) = project_id.or_else(|| self.session.as_ref().map(|s| s.project().id))
+        else {
+            return Ok(());
+        };
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.project().id == target)
+        {
+            if self.active_dirty() {
+                self.check_replace(discard)?;
+                self.set_aside_recovery()?;
+            }
+            self.close();
+            return Ok(());
+        }
+        let index = self
+            .parked
+            .iter()
+            .position(|open| open.session.project().id == target)
+            .ok_or("That project is no longer open.")?;
+        let project = self.parked.remove(index);
+        if project.dirty() {
+            if !discard {
+                self.parked.insert(index, project);
+                return Err(
+                    "Save this project or explicitly discard its unsaved changes first.".into(),
+                );
+            }
+            if let Err(error) = self.discard_recovery_pointer(target) {
+                self.parked.insert(index, project);
+                return Err(error);
+            }
+        }
+        // Dropping the entry releases its lock; its recovery journal stays on disk.
+        drop(project);
+        self.order.retain(|other| *other != target);
+        self.refresh_recoveries();
+        Ok(())
     }
 
     fn open_projects(&self) -> Vec<OpenProjectSummary> {
@@ -643,8 +709,7 @@ impl Workspace {
             .iter()
             .filter_map(|id| {
                 if let Some(session) = self.session.as_ref().filter(|s| s.project().id == *id) {
-                    let dirty = Some(session.project().revision) != self.saved_revision
-                        || self.needs_migration_save;
+                    let dirty = self.active_dirty();
                     return Some(summary(session.project(), dirty, true));
                 }
                 self.parked
@@ -1392,6 +1457,7 @@ pub fn switch_project(
 pub fn close_project(
     state: WorkspaceState<'_>,
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
+    project_id: Option<Uuid>,
     discard: bool,
 ) -> NativeResult<WorkspaceView> {
     generation
@@ -1399,11 +1465,7 @@ pub fn close_project(
         .map_err(message)?
         .ensure_switch_allowed()?;
     let mut state = state.lock().map_err(message)?;
-    state.check_replace(discard)?;
-    if discard && state.view().dirty {
-        state.set_aside_recovery()?;
-    }
-    state.close();
+    state.close_tab(project_id, discard)?;
     Ok(state.view())
 }
 
@@ -2610,6 +2672,156 @@ mod tests {
                 .flatten()
                 .any(|entry| entry.file_name().to_string_lossy().ends_with(".journal"))
         );
+    }
+
+    #[test]
+    fn closing_a_clean_parked_project_releases_its_lock_and_keeps_the_rest_open() {
+        let temp = Temp::new();
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        let first = project("Active project");
+        let second = project("Clean parked project");
+        workspace
+            .start(first.clone(), None, Some(first.revision))
+            .unwrap();
+        workspace
+            .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
+            .unwrap();
+        workspace.close_tab(Some(first.id), false).unwrap();
+        assert_eq!(
+            workspace.session.as_ref().unwrap().project().id,
+            second.id
+        );
+        assert_eq!(
+            workspace.view().open_projects.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            [second.id]
+        );
+        // The closed tab released its lock, so another window could open the project.
+        assert!(workspace.acquire_ownership(first.id).unwrap().is_some());
+    }
+
+    #[test]
+    fn closing_the_active_project_activates_the_next_open_one_then_the_start_screen() {
+        let temp = Temp::new();
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        let first = project("First project");
+        let second = project("Second project");
+        let third = project("Third project");
+        workspace
+            .start(first.clone(), None, Some(first.revision))
+            .unwrap();
+        workspace
+            .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
+            .unwrap();
+        workspace
+            .open_tab(|state| state.start(third.clone(), None, Some(third.revision)))
+            .unwrap();
+        assert_eq!(
+            workspace.session.as_ref().unwrap().project().id,
+            third.id
+        );
+        // The third tab was last, so closing it falls back to the tab before it.
+        workspace.close_tab(None, false).unwrap();
+        assert_eq!(
+            workspace.session.as_ref().unwrap().project().id,
+            second.id
+        );
+        // With the second project parked behind the first, closing the first activates the
+        // next tab in order rather than the most recently parked one.
+        workspace.switch_to(first.id).unwrap();
+        assert_eq!(
+            workspace.session.as_ref().unwrap().project().id,
+            first.id
+        );
+        workspace.close_tab(None, false).unwrap();
+        assert_eq!(
+            workspace.session.as_ref().unwrap().project().id,
+            second.id
+        );
+        workspace.close_tab(None, false).unwrap();
+        assert!(workspace.view().project.is_none());
+        assert!(workspace.view().open_projects.is_empty());
+    }
+
+    #[test]
+    fn closing_a_dirty_parked_project_needs_a_choice_and_discarding_keeps_its_journal() {
+        let temp = Temp::new();
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        let first = project("Stays open");
+        let second = project("Dirty parked project");
+        workspace
+            .start(first.clone(), None, Some(first.revision))
+            .unwrap();
+        workspace
+            .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
+            .unwrap();
+        change_grid(&mut workspace);
+        assert!(workspace.view().dirty);
+        workspace.switch_to(first.id).unwrap();
+        assert!(!workspace.view().dirty);
+        let pointer: RecoveryPointer = serde_json::from_slice(
+            &fs::read(workspace.pointer_path(second.id)).unwrap(),
+        )
+        .unwrap();
+        let journal = temp.0.join(pointer.journal_file);
+        assert!(journal.exists());
+        assert!(workspace.close_tab(Some(second.id), false).is_err());
+        assert!(
+            workspace.view().open_projects.iter().any(|tab| tab.id == second.id),
+            "a project with unsaved changes must stay open until the choice is explicit"
+        );
+        workspace.close_tab(Some(second.id), true).unwrap();
+        assert_eq!(
+            workspace.view().open_projects.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            [first.id]
+        );
+        assert!(
+            workspace
+                .recoveries
+                .iter()
+                .all(|item| item.info.project_id != second.id),
+            "discarded work is no longer offered for recovery"
+        );
+        assert!(journal.exists(), "the discarded journal stays on disk");
+        assert!(
+            temp.0
+                .join(format!("{}.recovery.discarded.json", second.id))
+                .exists()
+        );
+        drop(workspace);
+        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
+        assert!(
+            restarted
+                .view()
+                .recoveries
+                .iter()
+                .all(|item| item.project_id != second.id),
+            "discarded work is no longer offered, but its journal stays on disk"
+        );
+    }
+
+    #[test]
+    fn saving_a_dirty_parked_project_first_lets_it_close_cleanly() {
+        let temp = Temp::new();
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        let first = project("Stays open too");
+        let second = project("Saved before closing");
+        let path = temp.0.join("saved-before-closing.desegni");
+        workspace
+            .start(first.clone(), None, Some(first.revision))
+            .unwrap();
+        workspace
+            .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
+            .unwrap();
+        change_grid(&mut workspace);
+        let saved = workspace.session.as_ref().unwrap().project().clone();
+        workspace.save_snapshot(&saved, Some(path.clone())).unwrap();
+        workspace.switch_to(first.id).unwrap();
+        workspace.close_tab(Some(second.id), false).unwrap();
+        assert_eq!(
+            workspace.view().open_projects.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            [first.id]
+        );
+        assert!(desegni_storage::load_project(&path).unwrap().show_grid);
     }
 
     #[test]

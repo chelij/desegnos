@@ -1,4 +1,4 @@
-export type EditorShortcut = 'new' | 'open' | 'save' | 'saveAs' | 'undo' | 'redo' | 'zoomIn' | 'zoomOut' | 'fit' | 'actualSize' | 'doubleSize' | 'nextPage' | 'previousPage' | 'remove' | 'help' | 'selectTool' | 'requestTool' | 'rectangleTool' | 'circleTool' | 'freehandTool' | 'panTool' | 'askAI' | 'undoElement' | 'cutLayer' | 'copyLayer' | 'pasteLayer' | 'layerForward' | 'layerBackward' | 'layerFront' | 'layerBack';
+export type EditorShortcut = 'new' | 'open' | 'save' | 'saveAs' | 'undo' | 'redo' | 'zoomIn' | 'zoomOut' | 'fit' | 'actualSize' | 'doubleSize' | 'nextPage' | 'previousPage' | 'closePageTab' | 'remove' | 'help' | 'selectTool' | 'requestTool' | 'rectangleTool' | 'circleTool' | 'freehandTool' | 'panTool' | 'askAI' | 'undoElement' | 'cutLayer' | 'copyLayer' | 'pasteLayer' | 'layerForward' | 'layerBackward' | 'layerFront' | 'layerBack';
 export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented?: boolean; isComposing?: boolean };
 
 export const SHORTCUT_HELP = [
@@ -6,7 +6,7 @@ export const SHORTCUT_HELP = [
   ['Copy / cut / paste selected layer', 'Ctrl/Cmd+C / X / V outside text'], ['Bring forward / send backward', 'Ctrl/Cmd+] / ['], ['Bring to front / send to back', 'Ctrl/Cmd+Shift+] / ['],
   ['Undo', 'Ctrl/Cmd+Z'], ['Undo changes to the selected element only', 'Alt+Z'], ['Redo', 'Ctrl/Cmd+Shift+Z · Ctrl+Y'],
   ['Zoom in / out', 'Ctrl/Cmd++ / − · Ctrl+wheel'], ['Fit screen guide', 'Ctrl/Cmd+0'], ['Actual size', 'Ctrl/Cmd+1'], ['200% view', 'Ctrl/Cmd+2'],
-  ['Next / previous page', 'Ctrl+Tab / Ctrl+Shift+Tab · Ctrl+Page Down / Page Up'],
+  ['Next / previous page', 'Ctrl+Tab / Ctrl+Shift+Tab · Ctrl+Page Down / Page Up'], ['Close page tab', 'Ctrl/Cmd+W'],
   ['Select an element', 'Single-click'], ['Edit selected element', 'F2'], ['Move selected element', 'Arrow keys · Shift for 10 px'], ['Delete selected element', 'Delete / Backspace'],
   ['Move / resize element', 'Drag selection / its corners'], ['Element actions', 'Right-click'],
   ['Edit text in place', 'Double-click website text · Enter to save · Escape to cancel'],
@@ -33,6 +33,7 @@ export function editorShortcut(event: ShortcutInput, editingText: boolean): Edit
     if (!editingText && (key === ']' || key === '}' || event.code === 'BracketRight')) return event.shiftKey ? 'layerFront' : 'layerForward';
     if (!editingText && !event.shiftKey && key === 'k') return 'askAI';
     if (key === 's') return event.shiftKey ? 'saveAs' : 'save';
+    if (!event.shiftKey && key === 'w') return 'closePageTab';
     if (!event.shiftKey && key === 'n') return 'new';
     if (!event.shiftKey && key === 'o') return 'open';
     if (key === '+' || key === '=') return 'zoomIn';
