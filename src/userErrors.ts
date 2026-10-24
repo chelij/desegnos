@@ -62,6 +62,14 @@ export function outcomeReason(reason: string, request = 'this request', affected
   return /[.!?…]$/.test(sentence) ? sentence : `${sentence}.`;
 }
 
+/// Open-in-browser failures carry the already-running local address separately, so the
+/// editor can offer to copy it instead of turning the message into a generic notice.
+export function browserOpenUrl(error: unknown): string | null {
+  if (!error || typeof error !== 'object' || !('url' in error)) return null;
+  const url = (error as { url?: unknown }).url;
+  return typeof url === 'string' && /^https?:\/\/[^\s]+$/.test(url) ? url : null;
+}
+
 export function userError(error: unknown): string {
   const value = diagnostic(error).replace(/^Error:\s*/, '').trim();
   if (!value) return '';

@@ -10,7 +10,7 @@ try {
   const compiler = new URL('bin/tsc', import.meta.resolve('typescript/package.json'));
   const result = spawnSync(process.execPath, [compiler.pathname, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--outDir', temporary, 'src/userErrors.ts'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  const { userError, runtimeError, generationError, outcomeReason, technicalReason } = await import(pathToFileURL(join(temporary, 'userErrors.js')));
+  const { browserOpenUrl, userError, runtimeError, generationError, outcomeReason, technicalReason } = await import(pathToFileURL(join(temporary, 'userErrors.js')));
   await test('browser error shapes have plain descriptions without echoing code', () => {
     const cases = [
       ["TypeError: null is not an object (evaluating pause.addEventListener)", "A script on this page looks for something that isn't there."],
@@ -63,6 +63,16 @@ try {
       assert.doesNotMatch(plain, /private|secret|script\.js|561acc85|Error:|\n/);
       assert.ok(plain.length <= 160);
     }
+  });
+  await test('open-in-browser failures keep their local address for a copy action', async () => {
+    const url = 'http://127.0.0.1:49152/8d4f0c2e/';
+    assert.equal(browserOpenUrl({ message: `The site is running at ${url}`, url }), url);
+    assert.equal(browserOpenUrl({ message: 'Only the Desegnos editor can open a website.' }), null);
+    assert.equal(browserOpenUrl(new Error(url)), null);
+    assert.equal(browserOpenUrl({ url: 'not a web address' }), null);
+    const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
+    assert.match(app, /const url = browserOpenUrl\(error\);/);
+    assert.match(app, /label: 'Copy link'/);
   });
   await test('runtime repair still sends the original observations', async () => {
     const source = await readFile(new URL('../src/Preview.tsx', import.meta.url), 'utf8');

@@ -210,16 +210,56 @@ impl LocalSite {
     }
 }
 
+/// Prefix used only between the opener and the command boundary. The editor turns it
+/// into a structured error so the local address survives as its own field.
+const OPEN_FAILED: &str = "open-in-browser-failed:";
+
+/// The site is already running, but no browser opened it. `url` lets the editor offer
+/// "Copy link" instead of translating the message into a generic browser error.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenInBrowserError {
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+}
+
+impl OpenInBrowserError {
+    fn plain(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            url: None,
+        }
+    }
+
+    fn from_message(message: String) -> Self {
+        match message.strip_prefix(OPEN_FAILED) {
+            Some(url) => Self {
+                message: format!("The site is running at {url}, but no browser could open it."),
+                url: Some(url.to_string()),
+            },
+            None => Self::plain(message),
+        }
+    }
+}
+
 /// Serve the active project in the user's default browser.
 #[tauri::command]
-pub async fn open_in_browser(app: AppHandle, window: WebviewWindow) -> Result<String, String> {
+pub async fn open_in_browser(
+    app: AppHandle,
+    window: WebviewWindow,
+) -> Result<String, OpenInBrowserError> {
     if window.label() != "editor" {
-        return Err("Only the Desegnos editor can open a website.".into());
+        return Err(OpenInBrowserError::plain(
+            "Only the Desegnos editor can open a website.",
+        ));
     }
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || open(&app))
-        .await
-        .map_err(|error| error.to_string())?
+    match tauri::async_runtime::spawn_blocking(move || open(&app)).await {
+        Ok(Ok(url)) => Ok(url),
+        Ok(Err(message)) => Err(OpenInBrowserError::from_message(message)),
+        Err(error) => Err(OpenInBrowserError::plain(error.to_string())),
+    }
 }
 
 fn open(app: &AppHandle) -> Result<String, String> {
@@ -241,9 +281,7 @@ fn open(app: &AppHandle) -> Result<String, String> {
             package,
             Some(source_signature(&project)),
         )?;
-    crate::system_open::open(&url).map_err(|_| {
-        format!("The site is running at {url}, but no browser could open it. Open that address manually.")
-    })?;
+    crate::system_open::open(&url).map_err(|_| format!("{OPEN_FAILED}{url}"))?;
     Ok(url)
 }
 
@@ -818,6 +856,25 @@ mod tests {
         io::{Read, Write},
         net::TcpStream,
     };
+
+    #[test]
+    fn browser_failure_keeps_the_local_address_as_a_field() {
+        let error =
+            OpenInBrowserError::from_message(format!("{OPEN_FAILED}http://127.0.0.1:9/token/"));
+        let value = serde_json::to_value(&error).unwrap();
+        assert_eq!(value["url"], "http://127.0.0.1:9/token/");
+        assert!(value["message"].as_str().unwrap().contains("no browser"));
+
+        let plain = serde_json::to_value(OpenInBrowserError::from_message(
+            "Only the Desegnos editor can open a website.".into(),
+        ))
+        .unwrap();
+        assert!(plain.get("url").is_none());
+        assert_eq!(
+            plain["message"],
+            "Only the Desegnos editor can open a website."
+        );
+    }
 
     fn generated() -> Project {
         let mut project = Project::new(

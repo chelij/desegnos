@@ -88,6 +88,14 @@ impl Default for ToolSearch {
     }
 }
 impl ToolSearch {
+    /// Search exactly these directories. Callers that already know where to look
+    /// (such as tests with controlled launchers) avoid the inherited PATH.
+    pub fn from_directories(directories: impl IntoIterator<Item = PathBuf>) -> Self {
+        Self {
+            directories: directories.into_iter().collect(),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn empty() -> Self {
         Self {

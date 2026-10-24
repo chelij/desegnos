@@ -1,4 +1,4 @@
-use tauri::AppHandle;
+use tauri::{AppHandle, WebviewWindow};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 // The core validates the typed layer packet separately. This adapter bounds
@@ -10,6 +10,16 @@ fn check_size(text: &str) -> Result<(), String> {
         return Err("This item is too large to copy. Copy a smaller group.".into());
     }
     Ok(())
+}
+
+/// Copy a short piece of app-owned text, such as a local site address, at the
+/// user's request. The editor is the only window allowed to call this.
+#[tauri::command]
+pub fn copy_text(app: AppHandle, window: WebviewWindow, text: String) -> Result<(), String> {
+    if window.label() != "editor" {
+        return Err("Only the Desegnos editor can copy text.".into());
+    }
+    write(&app, text)
 }
 
 /// Invoke from a blocking worker, outside any workspace lock.

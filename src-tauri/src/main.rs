@@ -152,6 +152,7 @@ fn main() {
             open_found_source,
             copy_layer,
             copy_elements,
+            clipboard::copy_text,
             cut_layer,
             paste_layer,
             undo_project,

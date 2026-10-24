@@ -1,7 +1,7 @@
 import { OutsideEditsNotice } from './OutsideEditsNotice';
 import { needsAiSettings, ProblemBanner, Notice, NoticeProvider, NoticeHost } from './ProblemBanner.js';
 import { summarizeOutsideChanges } from './noticeSummary.js';
-import { userError } from './userErrors.js';
+import { browserOpenUrl, userError } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -47,7 +47,7 @@ type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
 type Confirmation = { title: string; message: string; action: () => Promise<void>; skippable?: boolean };
 
 const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
-function errorMessage(error: unknown) { return error instanceof Error ? error.message : String(error); }
+function errorMessage(error: unknown) { if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message); return String(error ?? ''); }
 // Open each page fitted to the window: web pages by width, mobile pages by height.
 function initialZoom(width: number, height = 900) { const fit = width > 600 ? (window.innerWidth - 96) / width : (window.innerHeight - 240) / height; return Math.max(0.1, Math.min(1, fit)); }
 function readRequestShape(): RequestShapeKind { try { const value = localStorage.getItem('desegnos.request-shape'); return value === 'ellipse' || value === 'freehand' ? value : 'rect'; } catch { return 'rect'; } }
@@ -73,6 +73,7 @@ function Editor() {
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [openFailure, setOpenFailure] = useState('');
   const [notices, setNotices] = useState<{ id: number; message: string }[]>([]);
   const noticeId = useRef(0);
   const setNotice = useCallback((message: string) => { const id = ++noticeId.current; setNotices(items => [...items, { id, message }]); }, []);
@@ -478,9 +479,13 @@ function Editor() {
   }
   async function openInBrowser() {
     await synchronize(); await settle();
-    setError('');
+    setError(''); setOpenFailure('');
     try { await native<string>('open_in_browser'); setNotice('Opened in your browser.'); }
-    catch (error) { setError(errorMessage(error)); }
+    catch (error) {
+      const url = browserOpenUrl(error);
+      if (url) setOpenFailure(url);
+      else setError(errorMessage(error));
+    }
   }
   async function exportWebsite() {
     await synchronize(); await settle();
@@ -1156,6 +1161,7 @@ function Editor() {
     <SurfaceHost place="banner" />
     <NoticeHost />
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />}
+    {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={`The site is running at ${openFailure}`} action={{ label: 'Copy link', onClick: () => { void native('copy_text', { text: openFailure }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure('')} />}
     {notices.map(item => <Notice key={item.id} variant="info" message={item.message} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
     {exported && <Notice className="export-notice" priority="result" variant={exported.warnings.length ? 'warning' : 'success'} title="Website exported" message={`${exported.pageCount} ${exported.pageCount === 1 ? 'page' : 'pages'}${exported.warnings.length ? ` · ${[...new Set(exported.warnings)].join(' ')}` : ''}`} action={{ label: 'Open folder', onClick: () => run(() => native('open_export_folder', { path: exported.path })) }} dismiss={() => setExported(null)} />}
     {offerRestyle && project && <Notice variant="info" message={offerRestyle} action={{ label: 'Regenerate pages', disabled: pending > 0 || working, onClick: () => run(regenerateWithContext) }} dismiss={() => setOfferRestyle(false)} />}
