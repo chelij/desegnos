@@ -1921,6 +1921,74 @@ pub fn edit_elements(
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcrossPagesView {
+    workspace: WorkspaceView,
+    changes: Vec<desegni_core::AcrossPagesChange>,
+}
+
+/// The other pages and framed site files that contain this element.
+#[tauri::command]
+pub fn element_matches(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    target: desegni_core::ElementTarget,
+    document: Option<desegni_core::DocumentTarget>,
+) -> NativeResult<Vec<desegni_core::AcrossPagesMatch>> {
+    let state = state.lock().map_err(message)?;
+    let session = state
+        .session
+        .as_ref()
+        .ok_or("Open a project first.")?;
+    if session.project().id != project_id {
+        return Err("Return to the project that owns these elements.".into());
+    }
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    session
+        .project()
+        .element_matches(&document, &target)
+        .map_err(message)
+}
+
+/// Apply one element change to the same element on the chosen pages as one history step.
+#[tauri::command]
+pub fn edit_element_across_pages(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    target: desegni_core::ElementTarget,
+    change: desegni_core::ElementEdit,
+    documents: Vec<desegni_core::DocumentTarget>,
+    document: Option<desegni_core::DocumentTarget>,
+) -> NativeResult<AcrossPagesView> {
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let session = session.as_mut().ok_or("Open a project first.")?;
+    if session.project().id != project_id {
+        return Err("Return to the project that owns these elements.".into());
+    }
+    let journal = journal.as_ref().ok_or("Open a project first.")?;
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let request = desegni_core::AcrossPagesEdit {
+        document,
+        target,
+        edit: change,
+        documents,
+    };
+    let changes = session
+        .edit_element_across_documents(revision, &request, |next| journal.append(next))
+        .map_err(message)?;
+    Ok(AcrossPagesView {
+        workspace: state.view(),
+        changes,
+    })
+}
+
 /// Steps the selected element back to its previous version; other changes stay.
 #[tauri::command]
 pub fn undo_element(

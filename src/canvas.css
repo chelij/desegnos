@@ -214,3 +214,8 @@
 .area-problem { position: absolute; display: flex; flex-direction: column; justify-content: space-between; pointer-events: auto; }
 .area-problem > span { overflow-wrap: anywhere; }
 .area-problem > div { display: flex; gap: 6px; align-items: center; }
+
+/* Change an element on the other pages that have it: an inline list, no dialog. */
+.across-pages { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px 12px; padding-top: 4px; margin-top: 2px; border-top: 1px solid var(--border-soft); font-size: 12px; max-height: 168px; overflow-y: auto; }
+.across-pages label.check-label { flex-direction: row; align-items: center; gap: 6px; font-weight: 400; white-space: nowrap; }
+.across-pages input { margin: 0; }

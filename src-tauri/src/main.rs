@@ -144,6 +144,8 @@ fn main() {
             refresh_element_target_bounds,
             edit_element,
             edit_elements,
+            element_matches,
+            edit_element_across_pages,
             undo_element,
             edit_page_source,
             get_page_source_map,

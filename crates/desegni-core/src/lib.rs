@@ -1,3 +1,4 @@
+mod across_pages;
 mod area_geometry;
 mod attachments;
 mod code_format;
@@ -32,6 +33,7 @@ mod website_import;
 mod website_merge;
 pub use website_merge::{WebsiteImportPage, WebsiteImportReview};
 
+pub use across_pages::*;
 pub use attachments::*;
 pub use code_format::{compact_site_content, format_site_content};
 pub use document::*;

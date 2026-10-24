@@ -9,6 +9,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { flushSync } from 'react-dom';
 import { canonicalSelections, documentKey, regionTargets, sameDocument, sameTarget, targetKey, unionRect } from './elementTargets';
 import { MAX_SELECTION, marqueeSelections } from './elementSelection';
+import { acrossPagesFor, acrossPagesLabel, chosenAcrossPages, setAcrossPages, toggleAcrossPage, type AcrossPagesState, ACROSS_PAGES_OFF } from './acrossPages';
 import { adoptRequestFrame, frameTargetShown, pageRectToInnerDocument, remapFramedRequest, requestFrame } from './frameDocuments';
 import { useDraftText } from './DraftText';
 import { escapeHtml, imageFile } from './elementEditing';
@@ -24,7 +25,7 @@ import type { LiveHistoryAction } from './liveBar';
 import { overlayPlacement, placeOverlays, type CollectedFrame } from './previewFrames';
 import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
-import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
+import type { AcrossPagesChange, AcrossPagesMatch, DocumentTarget, ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
 import type { RequestShapeKind } from './CanvasTools';
 import './canvas.css';
@@ -96,10 +97,11 @@ type CanvasProps = {
   resolveGenerationFix?: (fix: OutcomeFix, regionId: string) => void;
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
   editElements: (edits: { target: ElementTarget; change: ElementEdit }[]) => Promise<(ElementTarget | null)[]>; copyElements: (targets: ElementTarget[], styles: ElementStyleEdit[][]) => Promise<void>;
+  findAcrossPages: (target: ElementTarget) => Promise<AcrossPagesMatch[]>; editAcrossPages: (target: ElementTarget, change: ElementEdit, documents: DocumentTarget[]) => Promise<AcrossPagesChange[]>;
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => Promise<Region | null>; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; selectSimilar: () => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, findAcrossPages, editAcrossPages, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
   const [problemErrors, setProblemErrors] = useState<Record<string, string>>({});
   const [problemBusy, setProblemBusy] = useState(false);
@@ -545,6 +547,56 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       if (items.length) applySelection(items);
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
   }
+  // The toggle belongs to one element: a new selection starts with it off.
+  const [acrossMatches, setAcrossMatches] = useState<AcrossPagesMatch[]>([]);
+  const [across, setAcross] = useState<AcrossPagesState>(ACROSS_PAGES_OFF);
+  const acrossLookup = useRef(0);
+  const acrossSelection = element && !extras.length && !liveView && element.element.selector !== 'body' ? element.element : null;
+  const acrossKey = acrossSelection ? `${documentKey(acrossSelection.document)}|${acrossSelection.id || acrossSelection.selector}` : '';
+  useEffect(() => { setAcross(current => acrossPagesFor(element && !extras.length && !liveView ? element.element : null, current)); }, [acrossKey, extras.length, liveView]);
+  useEffect(() => {
+    const target = acrossSelection;
+    const ticket = ++acrossLookup.current;
+    if (!target) { setAcrossMatches([]); return; }
+    void findAcrossPages(target).then(matches => { if (acrossLookup.current === ticket) setAcrossMatches(matches); }, () => { if (acrossLookup.current === ticket) setAcrossMatches([]); });
+  }, [acrossKey, extras.length, page.id]);
+  // One native change carries the edit to the chosen pages; the toggle only reaches a single element.
+  function acrossDocuments(selected: ElementSelection | null | undefined): DocumentTarget[] | null {
+    if (!across.enabled || extrasRef.current.length || !selected || !elementRef.current || !sameTarget(selected.element, elementRef.current.element)) return null;
+    const documents = chosenAcrossPages(across, acrossMatches);
+    return documents.length ? documents : null;
+  }
+  async function applyAcross(selected: ElementSelection, change: ElementEdit, documents: DocumentTarget[]): Promise<AcrossPagesChange[]> {
+    const ticket = selectionSerial.current; const pageId = page.id;
+    setEditingElement(true); setElementError('');
+    try {
+      const changes = await editAcrossPages(selected.element, change, documents);
+      if (pageRef.current.id === pageId && selectionSerial.current === ticket) {
+        if (change.kind === 'remove') deselectElement();
+        else {
+          // Keep the selection on this page's element, including any identity the edit gave it.
+          const reference = selected.element.document ?? { kind: 'page' as const, pageId };
+          const changed = changes.find(item => documentKey(item.document) === documentKey(reference));
+          const next = changed ? (selected.element.document ? { ...changed.target, document: selected.element.document } : changed.target) : null;
+          if (next) {
+            const latest = elementRef.current;
+            const shown = latest && sameTarget(latest.element, selected.element) ? latest : selected;
+            if (expectedSelection.current && sameTarget(expectedSelection.current.element, selected.element)) expectedSelection.current = { element: next, rect: expectedSelection.current.rect };
+            pendingSelection.current = next;
+            storeElement({ ...shown, element: next });
+          } else {
+            pendingSelection.current = selected.element;
+            const found = site.current?.find(selected.element);
+            if (found) storeElement({ ...selected, rect: found.rect });
+          }
+        }
+      }
+      return changes;
+    } catch (error) {
+      if (pageRef.current.id === pageId && selectionSerial.current === ticket) setElementError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally { setEditingElement(false); }
+  }
   // One native batch edit for the whole selection: one revision, one undo step.
   async function applyBatch(changes: BatchChange[]) {
     if (!changes.length) return [];
@@ -637,6 +689,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   }
   async function applyElement(change: ElementEdit, selected = elementRef.current) {
     if (!selected) throw new Error('Select an element first.');
+    const documents = change.kind === 'layerStyles' ? null : acrossDocuments(selected);
+    if (documents) { await applyAcross(selected, change, documents); return; }
     const ticket = selectionSerial.current; const pageId = page.id;
     const ownsSelection = !!elementRef.current && sameTarget(elementRef.current.element, selected.element);
     setEditingElement(true); setElementError('');
@@ -940,6 +994,15 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   // Copy the selection, then paste it once beside the anchor: one undo step for the copies.
   async function duplicateSelection() {
     if (layerBusy || editingElement || nudging) return;
+    const current = elementRef.current;
+    const documents = current ? acrossDocuments(current) : null;
+    if (current && documents) {
+      setLayerBusy(true);
+      try { await applyAcross(current, { kind: 'duplicate' }, documents); }
+      catch { /* applyAcross reports the error */ }
+      finally { setLayerBusy(false); }
+      return;
+    }
     setLayerBusy(true); setElementError('');
     try {
       await finishLayerDraft();
@@ -1512,7 +1575,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   ] : [];
   return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers && !liveView ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''} ${repicking ? 'repicking' : ''} ${liveView ? 'live' : ''}`}
     onKeyDownCapture={event => { if (!(event.target instanceof Element && event.target.closest('.workspace-surface')) && event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
-    <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 500 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Alt-drag on empty space selects everything the rectangle touches; add Shift to keep the current selection. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Ctrl or Command Shift A selects every item similar to the selected one. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
+    <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 500 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Alt-drag on empty space selects everything the rectangle touches; add Shift to keep the current selection. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Ctrl or Command Shift A selects every item similar to the selected one. Also on pages in the element toolbar changes the element on the other pages that have it, and its inline list chooses which pages. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
     {(() => {
       const key = `page:${generation?.job?.jobId ?? 'start'}:${page.id}`;
       const outcome = jobOutcome(generation?.job ?? null, id => page.regions.find(region => region.id === id)?.prompt);
@@ -1645,6 +1708,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         <button className="wide" title="Select every item with the same tag and classes · Ctrl/⌘+Shift+A" disabled={editBusy} onClick={selectSimilar}>Select similar</button>
         <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
         {element.element.selector !== 'body' && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}
+      </>}
+      {element && element.element.selector !== 'body' && acrossMatches.length > 0 && <>
+        <button className="wide" aria-pressed={across.enabled} title="Apply the next changes to this element on the pages that have it" disabled={editBusy} onClick={() => setAcross(current => setAcrossPages(current, !current.enabled))}>{acrossPagesLabel(acrossMatches.length)}</button>
+        {across.enabled && <div className="across-pages" role="group" aria-label="Pages that change">
+          {acrossMatches.map(match => { const key = documentKey(match.document); return <label key={key} className="check-label"><input type="checkbox" checked={!across.excluded.includes(key)} onChange={event => setAcross(current => toggleAcrossPage(current, match.document, event.target.checked))} />{match.label || key}</label>; })}
+        </div>}
       </>}
       {element && foundUrl && openSource && !element.element.document && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
       {element && undoElement && element.element.selector !== 'body' && <button aria-label="Undo changes to this element" title="Step this element back to its previous version · Alt+Z" disabled={editBusy} onClick={() => { void stepBackElement(); }}><QuickIcon name="undo" /></button>}

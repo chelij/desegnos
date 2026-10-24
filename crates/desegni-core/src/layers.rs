@@ -244,6 +244,34 @@ fn render_style(declarations: &[Declaration]) -> String {
     result
 }
 
+/// Carry the declarations that changed between two inline styles onto another inline style.
+/// A style edit keeps the untouched declarations of every element it reaches.
+pub(crate) fn merge_style_changes(current: &str, previous: &str, next: &str) -> Result<String> {
+    let before = declarations(previous)?;
+    let after = declarations(next)?;
+    let mut merged = declarations(current)?;
+    for old in &before {
+        if !after.iter().any(|new| new.name == old.name) {
+            merged.retain(|existing| existing.name != old.name);
+        }
+    }
+    for declaration in after {
+        let unchanged = before.iter().any(|old| {
+            old.name == declaration.name
+                && old.value == declaration.value
+                && old.important == declaration.important
+        });
+        if unchanged {
+            continue;
+        }
+        merged.retain(|existing| existing.name != declaration.name);
+        merged.push(declaration);
+    }
+    let style = render_style(&merged);
+    check_value(&style, MAX_LAYER_STYLE_BYTES)?;
+    Ok(style)
+}
+
 fn visual_style(original: &str, snapshot: &str) -> Result<String> {
     let (mut computed, mut important): (Vec<_>, Vec<_>) = declarations(snapshot)?
         .into_iter()
@@ -1138,7 +1166,7 @@ fn decoded_fragment(value: &str) -> Option<String> {
     String::from_utf8(result).ok()
 }
 
-fn rewrite_ids(
+pub(crate) fn rewrite_ids(
     root: NodeRef<'_>,
     destination: &BTreeMap<String, usize>,
     styles: &[LayerVisualStyle],

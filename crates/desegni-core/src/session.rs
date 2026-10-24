@@ -232,6 +232,25 @@ impl Session {
         Ok(targets)
     }
 
+    /// Apply one element change to the same element on other pages as one history step. The
+    /// durable write and the history entry cover every document the change reached.
+    pub fn edit_element_across_documents(
+        &mut self,
+        revision: u64,
+        request: &crate::AcrossPagesEdit,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<Vec<crate::AcrossPagesChange>> {
+        self.assert_revision(revision)?;
+        let (next, changes) = self
+            .project
+            .edit_element_across(self.project.revision, request)?;
+        if next.revision != self.project.revision {
+            durable(&next)?;
+            self.commit(next);
+        }
+        Ok(changes)
+    }
+
     pub fn paste_layer(
         &mut self,
         revision: u64,

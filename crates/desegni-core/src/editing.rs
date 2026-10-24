@@ -65,6 +65,8 @@ pub enum ElementEdit {
         styles: Vec<ElementStyleEdit>,
     },
     Remove,
+    /// Copy the element beside itself. Used when one change also lands on other pages.
+    Duplicate,
 }
 /// One target and the change applied to it in a batch edit. Every change lands in
 /// one document pass, one revision and one history step.
@@ -204,7 +206,7 @@ fn clear_found_ancestry(node: NodeRef<'_>) {
         current = node.parent();
     }
 }
-fn text_nodes(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
+pub(crate) fn text_nodes(node: NodeRef<'_>) -> Vec<NodeRef<'_>> {
     let mut pending = vec![node];
     let mut result = vec![];
     while let Some(node) = pending.pop() {
@@ -302,7 +304,7 @@ pub(crate) fn tracked<'a>(
         .collect()
 }
 
-fn apply_element_edit<'a>(
+pub(crate) fn apply_element_edit<'a>(
     doc: &'a Document,
     node: NodeRef<'a>,
     selected: &ElementTarget,
@@ -467,6 +469,66 @@ fn apply_element_edit<'a>(
             )?;
             node.remove_from_parent();
             retained = None;
+        }
+        ElementEdit::Duplicate => {
+            ensure(
+                selected.selector != "body",
+                "The page itself cannot be duplicated. Select an item inside it.",
+            )?;
+            let html = node.html().to_string();
+            check_value(&html, crate::MAX_SITE_SOURCE_BYTES)?;
+            let parent = node
+                .parent()
+                .ok_or_else(|| Error("This element has no parent.".into()))?;
+            let context = parent
+                .query(|value| value.as_element().map(|element| element.name.clone()))
+                .flatten()
+                .ok_or_else(|| Error("The copy context is invalid.".into()))?;
+            let fragment = html5ever::parse_fragment(
+                Document::fragment_sink(),
+                ParseOpts {
+                    tree_builder: TreeBuilderOpts {
+                        scripting_enabled: false,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                context,
+                vec![],
+                false,
+            )
+            .one(html.as_str());
+            bounded(&fragment)?;
+            let root = fragment
+                .root()
+                .first_child()
+                .ok_or_else(|| Error("This element cannot be duplicated in its layout.".into()))?;
+            let children = root
+                .children()
+                .into_iter()
+                .filter(|child| {
+                    child.is_element() || child.is_text() && !child.text().trim().is_empty()
+                })
+                .collect::<Vec<_>>();
+            ensure(
+                children.len() == 1 && children[0].is_element(),
+                "This element cannot be duplicated in its layout.",
+            )?;
+            let copy = children[0];
+            let copied: Vec<_> = std::iter::once(copy)
+                .chain(copy.descendants_it())
+                .collect();
+            for node in copied {
+                node.remove_attr(crate::ELEMENT_ID_ATTRIBUTE);
+            }
+            // A copy keeps its own anchor targets apart from the original's IDs.
+            crate::layers::rewrite_ids(copy, &ids(doc), &[])?;
+            Selection::from(parent).append_selection(&Selection::from(copy));
+            let inserted = parent
+                .last_child()
+                .ok_or_else(|| Error("The copy could not be inserted.".into()))?;
+            inserted.remove_from_parent();
+            node.insert_after(&inserted);
         }
     }
     Ok(retained)
@@ -705,6 +767,27 @@ impl Project {
         tracked: Vec<(Uuid, NodeRef<'_>)>,
         css: Option<String>,
     ) -> Result<(Self, Option<ElementTarget>)> {
+        let mut next = self.clone();
+        next.revision = revision
+            .checked_add(1)
+            .ok_or_else(|| Error("Project revision limit reached.".into()))?;
+        let selected = self.store_document_edit(document, doc, retained, tracked, css, &mut next)?;
+        next.store_inline_images()?;
+        next.validate()?;
+        Ok((next, selected))
+    }
+
+    /// Store an edited DOM in `next`, whose revision is already final. Several documents can be
+    /// stored this way and still land in one revision and one history step.
+    pub(crate) fn store_document_edit(
+        &self,
+        document: &crate::DocumentTarget,
+        doc: &Document,
+        retained: Option<NodeRef<'_>>,
+        tracked: Vec<(Uuid, NodeRef<'_>)>,
+        css: Option<String>,
+        next: &mut Project,
+    ) -> Result<Option<ElementTarget>> {
         bounded(doc)?;
         crate::stable_targets::assign_document_ids(doc)?;
         let html = serialized(doc)?;
@@ -716,10 +799,6 @@ impl Project {
             "This edit would be repaired differently by the browser. Choose valid markup for this layout.",
         )?;
         let body = body(doc)?;
-        let mut next = self.clone();
-        next.revision = revision
-            .checked_add(1)
-            .ok_or_else(|| Error("Project revision limit reached.".into()))?;
         let selected = match document {
             crate::DocumentTarget::Page { page_id } => {
                 let original = self.page(*page_id)?.content.as_ref();
@@ -800,9 +879,7 @@ impl Project {
                 retained.and_then(|node| target(node, body, &hash))
             }
         };
-        next.store_inline_images()?;
-        next.validate()?;
-        Ok((next, selected))
+        Ok(selected)
     }
 }
 
