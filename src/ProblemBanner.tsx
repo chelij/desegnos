@@ -71,12 +71,12 @@ export function showsDismissButton(notice: NoticeKind): boolean {
   return !isToast(notice);
 }
 export function NoticeRow({ variant = 'info', title, message, action, secondaryAction, dismiss, className = '' }: NoticeProps) {
-  return <div className={`notice notice-${variant} ${className}`.trim()} role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'} onPointerDown={event => event.stopPropagation()}>
+  return <div className={`notice floating-bar notice-${variant} ${className}`.trim()} role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'} onPointerDown={event => event.stopPropagation()}>
     <div className="notice-copy" title={[title, message].filter(Boolean).join(' · ')}>{title && <strong>{title}</strong>}{message && <span>{message}</span>}</div>
     <div className="notice-actions">
       {action && <button type="button" className="primary" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>}
       {secondaryAction && <button type="button" disabled={secondaryAction.disabled} onClick={secondaryAction.onClick}>{secondaryAction.label}</button>}
-      {showsDismissButton({ variant, action, secondaryAction }) && <button type="button" className="notice-dismiss icon-button sm" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}><Icon name="close" /></button>}
+      {showsDismissButton({ variant, action, secondaryAction }) && <button type="button" className="close-button notice-dismiss icon-button sm" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}><Icon name="close" /></button>}
     </div>
   </div>;
 }

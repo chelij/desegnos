@@ -75,7 +75,7 @@ export function WorkspaceSurface({ title, close, children, place = 'panel', head
   }, [context.enter, target, place]);
   if (!target) return null;
   return createPortal(<section ref={ref} tabIndex={-1} className={`workspace-surface ${place === 'panel' ? 'generation-log' : `workspace-${place}`}`} aria-label={title} onKeyDown={event => { if (!event.ctrlKey && !event.metaKey) event.stopPropagation(); }} onPointerDown={event => event.stopPropagation()}>
-    {showHeader && (place === 'start' ? startHeading && <h2 className="start-section-heading">{title}</h2> : <header><strong className="surface-title">{title}</strong>{headerActions}{showClose && <button className="surface-close icon-button sm" type="button" aria-label={`Close ${title}`} title="Close" onClick={close}><Icon name="close" /></button>}</header>)}
+    {showHeader && (place === 'start' ? startHeading && <h2 className="start-section-heading">{title}</h2> : <header><strong className="surface-title">{title}</strong>{headerActions}{showClose && <button className="close-button icon-button sm" type="button" aria-label={`Close ${title}`} title="Close" onClick={close}><Icon name="close" /></button>}</header>)}
     <div className="surface-content">{children}</div>
   </section>, target);
 }

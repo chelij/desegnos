@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { native } from './api';
 import { MenuButton, type MenuItem } from './Menus';
 import { Icon } from './icons';
+import { Disclosure } from './Disclosure';
+import { StatusChip } from './StatusChip';
 import './dialogs.css';
 import type { AiSettingsView, ProviderSettings } from './types';
 
@@ -142,7 +144,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         <div className="ai-account-card">
           <span className="ai-avatar" aria-hidden="true">{identity.charAt(0).toUpperCase()}</span>
           <div className="ai-account-copy"><span className="ai-account-identity">{identity}</span>
-            <span className="chatgpt-account-status connection-status" role="status"><span className={`ai-status-dot${connected ? ' connected' : ''}`} aria-hidden="true" />{connected ? 'Connected' : 'Not connected'}</span>
+            <StatusChip tone={connected ? 'success' : 'neutral'} dot role="status" className="connection-status">{connected ? 'Connected' : 'Not connected'}</StatusChip>
           </div>
           {usesChatgpt && view.chatgpt.accounts.length > 1 && <select aria-label="ChatGPT account" className="ai-account-switcher" value={view.chatgpt.activeAccountId ?? ''} disabled={busy || pending} onChange={event => { if (event.target.value) void action('select_chatgpt_account', { accountId: event.target.value }); }}>
             {!account && <option value="" disabled>Choose account</option>}{view.chatgpt.accounts.map((item, index) => <option key={item.id} value={item.id}>{item.email ?? item.label}{view.chatgpt.accounts.filter(other => (other.email ?? other.label) === (item.email ?? item.label)).length > 1 ? ` (${index + 1})` : ''}{!item.connected ? ' · Not connected' : !item.planEnabled ? ' · Plan permission needed' : ''}</option>)}
@@ -190,7 +192,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         {!model && <ProblemBanner message="No available AI model is selected." />}
         {(!usesChatgpt || view.imageKey.configured) && <label className="ai-inline-field ai-budget">Budget per generation (USD)<input disabled={busy || pending} type="number" required min={0.01} step={0.01} aria-label="API budget per generation (USD)" aria-describedby="ai-budget-help" value={budget ?? String(settings.spendingLimitUsd)} onChange={event => { setBudget(event.target.value); if (event.target.value.trim() && Number.isFinite(event.target.valueAsNumber)) setSettings({ ...settings, spendingLimitUsd: event.target.valueAsNumber }); }} onBlur={() => setBudget(null)} /><span id="ai-budget-help" className="field-help">Blocks estimates over budget; not a guaranteed billing cap.</span></label>}
         <section className="ai-features" aria-label="Features">
-          <div className="ai-feature-row image-generation-access"><div className="ai-feature-copy"><label htmlFor="ai-image-generation">Image generation</label><div className="ai-feature-meta"><span className="ai-feature-pill" id="ai-image-status" role="status">{imageStatus}</span><button type="button" className="ai-refresh icon-button sm" aria-label="Check again" title="Check again" disabled={busy || !canTest || view.imageAccessChecking} onClick={() => { void testAccess(); }}><Icon name="refresh" /></button></div></div>
+          <div className="ai-feature-row image-generation-access"><div className="ai-feature-copy"><label htmlFor="ai-image-generation">Image generation</label><div className="ai-feature-meta"><StatusChip tone={imageStatus === 'Available' ? 'neutral' : imageStatus === 'Checking…' ? 'info' : 'warning'} id="ai-image-status" role="status">{imageStatus}</StatusChip><button type="button" className="ai-refresh icon-button sm" aria-label="Check again" title="Check again" disabled={busy || !canTest || view.imageAccessChecking} onClick={() => { void testAccess(); }}><Icon name="refresh" /></button></div></div>
             <input id="ai-image-generation" className="ai-switch" type="checkbox" role="switch" aria-describedby="ai-image-status" disabled={busy || pending || checkingImages || view.imageAccessChecking || view.imageAccess?.available !== 'yes' || !connected || (usesChatgpt && !account?.planEnabled) || !provider?.capabilities.imageGeneration} checked={settings.imageGeneration} onChange={event => setSettings({ ...settings, imageGeneration: event.target.checked })} />
           </div>
           {view.provider === 'openai' && <div className="ai-feature-meta">
@@ -205,13 +207,13 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           </div>}
           {view.provider === 'openai' && view.imageKey.vaultError && <ProblemBanner message={userError(view.imageKey.vaultError)} />}
           {view.provider === 'openai' && view.imageAccess?.available !== 'yes' && [view.imageKeyAccess, view.mainImageAccess].find(access => access?.reason.includes('API Organization Verification')) && <ProblemBanner message="Verify your OpenAI account to create pictures." />}
-          <div className="ai-feature-row"><span>Web search</span><span className="ai-feature-pill">{provider?.capabilities.webSearch ? 'Available' : 'Not available'}</span></div>
+          <div className="ai-feature-row"><span>Web search</span><StatusChip tone={provider?.capabilities.webSearch ? 'neutral' : 'warning'}>{provider?.capabilities.webSearch ? 'Available' : 'Not available'}</StatusChip></div>
         </section>
-        <details className="ai-advanced" open={advanced} onToggle={event => setAdvanced(event.currentTarget.open)}><summary>Advanced</summary><fieldset className="advanced-settings"><legend>Model details</legend>{usesChatgpt && account && <p className="small muted">Registration: <span className="source-url">{account.id}</span></p>}{model && <div className="model-details">{!usesChatgpt && <p className="small">Standard input: USD {model.inputUsdPerMillion} / million tokens · Standard output: USD {model.outputUsdPerMillion} / million tokens</p>}
+        <Disclosure className="ai-advanced" summary="Advanced" open={advanced} onToggle={setAdvanced}><fieldset className="advanced-settings"><legend>Model details</legend>{usesChatgpt && account && <p className="small muted">Registration: <span className="source-url">{account.id}</span></p>}{model && <div className="model-details">{!usesChatgpt && <p className="small">Standard input: USD {model.inputUsdPerMillion} / million tokens · Standard output: USD {model.outputUsdPerMillion} / million tokens</p>}
           <p className="small muted">Catalogue verified {model.verifiedAt}.{!usesChatgpt && <> Pricing source: <span className="source-url">{model.sourceUrl}</span></>}</p></div>}
         <div className={usesChatgpt ? undefined : 'field-pair'}>{!usesChatgpt && <label>Maximum output tokens<input disabled={busy} type="number" required min={1} max={32768} step={1} value={settings.maxOutputTokens} onChange={event => setSettings({ ...settings, maxOutputTokens: Number(event.target.value) })} /></label>}
           <label>Reasoning effort<select disabled={busy || pending || !model} value={settings.reasoningEffort} onChange={event => setSettings({ ...settings, reasoningEffort: event.target.value })}>{model?.reasoningEfforts.map(level => <option key={level} value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>)}</select></label></div>
-        </fieldset></details>
+        </fieldset></Disclosure>
         <div className="form-actions ai-save-actions">{status && <Notice variant="success" message={status} />}{dirty && <button type="button" disabled={busy || pending} onClick={() => setSettings(view.settings)}>Reset changes</button>}{dirty && <button className="primary" disabled={busy || pending || (!model && !view.configurationError)}>Save AI settings</button>}</div>
       </form>
     </>}

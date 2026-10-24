@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
 import { scopeLabel } from './Notes';
 import { SourceView } from './Preview';
+import { Disclosure } from './Disclosure';
 import type { AiSettingsView, GenerationJobView, Project, ResponseCorrelation, ResponseRejection } from './types';
 import type { GenerationController } from './useGeneration';
 
@@ -183,7 +184,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
         {usageLimit && <Notice variant="warning" title="ChatGPT usage limit reached" message="Review your limit in ChatGPT settings." />}
         {job.status === 'applied' && !alreadyApplied && <Notice variant="warning" message="These changes are no longer on the page. They may have been undone." />}
         <div className="generation-review-toolbar"><p>{job.requirements.regionCount} {job.requirements.regionCount === 1 ? 'request' : 'requests'} · {affectedPages.join(', ')} · {readable(job.generationMode)}</p><MenuButton label="More" ariaLabel="Generation options" items={more} /></div>
-        <details className="generation-section" open={tab === 'details' || undefined}><summary>Request details</summary><dl className="generation-facts"><dt>Cost</dt><dd>{usesChatgpt ? `Counts toward ${frozenAccount?.label ?? 'your ChatGPT'} plan or credits` : `About ${money(job.estimateUsd)}; final charges may vary`}</dd><dt>Provider</dt><dd>{service}</dd><dt>Authentication</dt><dd>{usesChatgpt ? 'ChatGPT plan' : 'API key'}</dd><dt>Model</dt><dd>{job.settings.model}</dd><dt>Generation mode</dt><dd>{readable(job.generationMode)}</dd>
+        <Disclosure className="generation-section" open={tab === 'details'} summary="Request details"><dl className="generation-facts"><dt>Cost</dt><dd>{usesChatgpt ? `Counts toward ${frozenAccount?.label ?? 'your ChatGPT'} plan or credits` : `About ${money(job.estimateUsd)}; final charges may vary`}</dd><dt>Provider</dt><dd>{service}</dd><dt>Authentication</dt><dd>{usesChatgpt ? 'ChatGPT plan' : 'API key'}</dd><dt>Model</dt><dd>{job.settings.model}</dd><dt>Generation mode</dt><dd>{readable(job.generationMode)}</dd>
           {usesChatgpt ? <><dt>Account</dt><dd>{frozenAccount?.label ?? job.chatgptAccountId ?? 'No account recorded'}{frozenAccount && <span className="small muted"> · {job.chatgptAccountId}</span>}</dd><dt>Reasoning effort</dt><dd>{job.settings.reasoningEffort}</dd></> : <>
             <dt>Estimated job cost</dt><dd>{money(job.estimateUsd)}</dd><dt>Estimate allowance</dt><dd>{money(job.settings.spendingLimitUsd)}</dd>
             <dt>Output cap</dt><dd>{job.settings.maxOutputTokens.toLocaleString()} tokens · {job.settings.reasoningEffort} reasoning</dd></>}</dl>
@@ -203,7 +204,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
           {providerError.param && <><dt>Request parameter</dt><dd>{providerError.param}</dd></>}
           {providerError.requestId && <><dt>Request ID</dt><dd>{providerError.requestId}</dd></>}
         </dl></section>}
-        {job.usage && <p className="token-usage">Reported usage: {job.usage.inputTokens.toLocaleString()} input · {job.usage.outputTokens.toLocaleString()} output · {job.usage.totalTokens.toLocaleString()} total tokens</p>}</details>
+        {job.usage && <p className="token-usage">Reported usage: {job.usage.inputTokens.toLocaleString()} input · {job.usage.outputTokens.toLocaleString()} output · {job.usage.totalTokens.toLocaleString()} total tokens</p>}</Disclosure>
         {tab === 'requirements' && <section className="generation-section"><h3>REQUIREMENTS.md</h3>
           <p className="digest">SHA-256: <code>{job.requirements.sha256}</code></p><pre className="markdown-source" tabIndex={0} aria-label="Generation REQUIREMENTS.md source">{job.requirements.markdown}</pre>
         </section>}
@@ -211,7 +212,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
           <strong>Attempt {attempt.ordinal} · {readable(attempt.status)}</strong><p className="small">Started {attempt.startedAt}{attempt.finishedAt ? ` · Finished ${attempt.finishedAt}` : ''}</p>
           {attempt.responseId && <p className="small response-id">Response: {attempt.responseId}</p>}{attempt.usage && <p className="small">{attempt.usage.inputTokens} input · {attempt.usage.outputTokens} output · {attempt.usage.totalTokens} total tokens</p>}
         </li>)}</ol>}</section>}
-        <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><p>Needs attention</p>{job.message && <details><summary>Technical details</summary><p className="small">{job.message}</p></details>}</>}</> : <>
+        <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><p>Needs attention</p>{job.message && <Disclosure summary="Technical details"><p className="small">{job.message}</p></Disclosure>}</>}</> : <>
           {job.status === 'applied' && conflicts.length > 0 && <p>Applied {candidate.regions.length - conflicts.length} of {candidate.regions.length} areas</p>}
           {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft">
             <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
@@ -223,7 +224,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
                   {gap.fix && <button type="button" onClick={() => openFix(gap.fix!)}>{fixLabel(gap.fix)}</button>}
                 </div>}</> : <span>Needs attention</span>}</li>;
             })}</ul>
-            <details><summary>Technical details</summary><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></details>
+            <Disclosure summary="Technical details"><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></Disclosure>
           </section> : <><h3>Your page</h3><p>{candidate.summary}</p></>}
           {changedDocuments.length > 1 && <p className="small muted">Changed: {changedDocuments.join(', ')}</p>}
           {generatedImages.length > 0 && <section aria-label="Generated images"><h3>Generated images</h3>{generatedImages.map((image, index) => <figure key={index}>
@@ -233,14 +234,14 @@ export function GenerationDetails({ controller, project, settings, openSettings,
           {source && <><div className="candidate-page-picker"><label>Result page<select value={source.pageId} onChange={event => setPageId(event.target.value)}>{candidate.pages.map(item => <option key={item.pageId} value={item.pageId}>{project.pages.find(page => page.id === item.pageId)?.name ?? item.pageId}</option>)}</select></label></div>
             {showSource && <section className="candidate-source"><h3>Source code</h3><SourceView key={source.pageId} content={source.content} label="Generated" /></section>}
           </>}
-          {candidate.decisionProposals.length > 0 && <details className="proposal-list"><summary>Suggested rules ({candidate.decisionProposals.length})</summary>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
+          {candidate.decisionProposals.length > 0 && <Disclosure className="proposal-list" summary={`Suggested rules (${candidate.decisionProposals.length})`}>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
             <input type="checkbox" checked={selected.includes(index)} disabled={job.status !== 'ready' || alreadyApplied || !!operation} onChange={event => setSelected(previous => event.target.checked ? [...previous, index] : previous.filter(value => value !== index))} />
             <span><strong>{proposal.topic}</strong><span className="preserve-text">{outcomeReason(proposal.value)}</span><span className="small muted">{scopeLabel(project, proposal.scope)} · {outcomeReason(proposal.rationale)}</span></span>
-          </label>)}</details>}
-          {candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.regionId ? requestLabel(project, criticism.regionId) : 'Whole site'}</strong><p>{outcomeReason(criticism.message)}</p><p className="muted">{outcomeReason(criticism.suggestion)}</p></li>)}</ul></details>}
-          <details className="generation-coverage"><summary>Request details</summary><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.regions.map(region => <tr key={region.regionId}><th>{requestLabel(project, region.regionId)}</th><td>{readable(region.status)}</td><td>{region.status === 'conflict' ? outcomeReason(region.explanation) : region.explanation}</td></tr>)}</tbody></table></div>
+          </label>)}</Disclosure>}
+          {candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.regionId ? requestLabel(project, criticism.regionId) : 'Whole site'}</strong><p>{outcomeReason(criticism.message)}</p><p className="muted">{outcomeReason(criticism.suggestion)}</p></li>)}</ul></Disclosure>}
+          <Disclosure className="generation-coverage" summary="Request details"><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.regions.map(region => <tr key={region.regionId}><th>{requestLabel(project, region.regionId)}</th><td>{readable(region.status)}</td><td>{region.status === 'conflict' ? outcomeReason(region.explanation) : region.explanation}</td></tr>)}</tbody></table></div>
             {candidate.componentRequests.length > 0 && <ul className="generation-list">{candidate.componentRequests.map((component, index) => <li key={index}><strong>{component.capability}</strong><p>{component.resolution === 'native' ? 'Built in' : 'Unavailable'}: {outcomeReason(component.reason)}</p></li>)}</ul>}
-          </details>
+          </Disclosure>
         </>}</section>
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}

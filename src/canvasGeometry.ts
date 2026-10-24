@@ -259,7 +259,7 @@ export function alignmentLines(rect: Rect | undefined, guide: Viewport, others: 
 
 export const MIN_ZOOM = 0.001;
 export const ZOOM_LEVELS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
-export const zoomLabel = (zoom: number) => `${Math.round(zoom * 1000) / 10}%`;
+export const zoomLabel = (zoom: number) => `${Math.round(zoom * 100)}%`;
 export function steppedZoom(zoom: number, direction: number): number {
   return direction > 0 ? ZOOM_LEVELS.find(value => value > zoom + 1e-6) ?? 4
     : [...ZOOM_LEVELS].reverse().find(value => value < zoom - 1e-6) ?? MIN_ZOOM;

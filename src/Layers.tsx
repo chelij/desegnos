@@ -70,7 +70,7 @@ export function LayersPopover({ open, page, siteLayers, selectedElement, selecte
       event.preventDefault(); event.stopPropagation(); buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]?.focus({ preventScroll: true });
     }
   }}>
-    <header><h2>Layers</h2><button type="button" className="layers-close icon-button sm" aria-label="Close Layers" title="Close" onClick={close}><Icon name="close" /></button></header>
+    <header><h2>Layers</h2><button type="button" className="close-button layers-close icon-button sm" aria-label="Close Layers" title="Close" onClick={close}><Icon name="close" /></button></header>
     <div className="layer-actions" role="toolbar" aria-label="Layer actions">
       <button type="button" title={withShortcut('Bring to front', 'front')} aria-label="Bring to front" disabled={busy || !canForward} onClick={() => arrange('front')}><LayerIcon direction="front" /></button>
       <button type="button" title={withShortcut('Bring forward', 'forward')} aria-label="Bring forward" disabled={busy || !canForward} onClick={() => arrange('forward')}><LayerIcon direction="forward" /></button>

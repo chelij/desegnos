@@ -29,6 +29,7 @@ import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { AcrossPagesChange, AcrossPagesMatch, DocumentTarget, ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, PageSelection, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
+import { FloatingBar } from './FloatingBar';
 import { Icon } from './icons';
 import { withShortcut } from './shortcuts';
 import { RequestPages } from './RequestPages';
@@ -1526,6 +1527,25 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   } : {};
   // Requests line up with the design only at the page's own width, so they show (and can be added) there.
   const liveRequests = liveShown.requests;
+  // Number badges stack upward when request boxes overlap, and move inside a box that sits
+  // too close to the top of the workspace for the badge to fit above it.
+  const requestBadgeTops = (() => {
+    const placed: Rect[] = [];
+    const tops = new Map<string, number>();
+    for (const region of page.regions) {
+      if (region.completed) continue;
+      const boxTop = (region.rect.y - bounds.top) * zoom;
+      const left = (region.rect.x + region.rect.width - bounds.left) * zoom - 18;
+      let inside = boxTop < 22;
+      let top = inside ? boxTop + 2 : boxTop - 20;
+      let badge = { x: left, y: top, width: 18, height: 16 };
+      const overlaps = () => placed.some(other => badge.x < other.x + other.width && badge.x + badge.width > other.x && badge.y < other.y + other.height && badge.y + badge.height > other.y);
+      for (let attempt = 0; attempt < 8 && overlaps(); attempt += 1) { top += inside ? 18 : -18; badge = { ...badge, y: top }; if (!inside && top < 2) { inside = true; top = boxTop + 2; badge = { ...badge, y: top }; } }
+      placed.push(badge);
+      tops.set(region.id, top - boxTop);
+    }
+    return tops;
+  })();
   // Keep callbacks stable so prompt edits cannot re-render the memoized live layer.
   const fixRuntimeErrorsRef = useRef(fixRuntimeErrors); fixRuntimeErrorsRef.current = fixRuntimeErrors;
   const stableFixRuntimeErrors = useCallback((errors: string[]) => fixRuntimeErrorsRef.current?.(errors), []);
@@ -1655,7 +1675,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           {liveRequests && page.regions.map((region, index) => {
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
-            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} wholePage={isWholePage(region, page)} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
+            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} wholePage={isWholePage(region, page)} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0} badgeTop={requestBadgeTops.get(region.id)}
               pages={pages} hostPageId={page.id} layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => changeRequest(region.id, patch)} />;
           })}
           {element && !liveView && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
@@ -1694,7 +1714,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         </div>
       </div>
     </div>
-    {toolbarRect && !inlineText && !(liveView && element) && <div ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
+    {toolbarRect && !inlineText && !(liveView && element) && <FloatingBar ref={toolbar} className="element-toolbar" role="toolbar" aria-label={element ? 'Selected element' : 'Selected request'} style={toolbarPosition}>
       {confirmMany ? <div className="delete-inline" role="group" aria-label="Delete items">
         <span>Delete {confirmMany.count} items?</span>
         <button type="button" className="danger" onClick={() => { if (confirmMany.skip) setAskBeforeDelete(false); setConfirmMany(null); void (confirmMany.pageId === page.id ? deleteSelected(true, confirmMany.targets) : Promise.resolve()).catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}>Delete</button>
@@ -1737,13 +1757,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={styleVisual} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </>}
       </>}
-    </div>}
+    </FloatingBar>}
     {context && <ContextMenu key={`${context.kind}:${context.point.x}:${context.point.y}`} label={context.kind === 'element' ? 'Element actions' : context.kind === 'request' ? 'Request actions' : 'Canvas actions'} point={context.point} close={closeContext} items={contextItems} />}
     <LayersPopover open={layersOpen} page={page} siteLayers={siteLayers} selectedElement={element ? targetKey(element.element) : null} selectedRequest={selected} busy={layerBusy || editingElement || nudging} ready={layersReady} anchor={toolbarPoint ? { x: toolbarPoint.x, y: toolbarPoint.y, height: toolbarSize.height } : null} contextElement={openElementContext} contextRequest={openRequestContext}
       chooseElement={item => { chooseElement(item); reveal(item.rect, false); }} chooseRequest={item => { deselectElement(); select(item.id); reveal(item.rect, false); }}
       arrange={direction => { void arrangeLayer(direction); }} copy={() => { void copyLayer(); }} paste={() => { void pasteLayer(); }} close={() => setLayersOpen(false)} />
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { const file = event.target.files?.[0]; const target = browseFor.current; event.target.value = ''; if (file && target) void stageImage(target, file); }} />
-    {repicking && <div className="repick-hint" role="status">Click the element this request is for. <button type="button" onClick={() => setRepicking(null)}>Cancel</button></div>}
+    {repicking && <div className="floating-bar repick-hint" role="status">Click the element this request is for. <button type="button" onClick={() => setRepicking(null)}>Cancel</button></div>}
 
     {elementError && <ProblemBanner className="element-edit-error" message={userError(elementError)} dismiss={() => setElementError('')} />}
     {elementDialog && element && <ElementDialog projectImages={projectImages} mode={elementDialog} target={element.element} visual={site.current?.visual(element.element) ?? null} inspect={inspectElement} apply={change => applyElement(change)} move={moveElement} close={() => { setElementDialog(null); if (elementRef.current && !site.current?.find(elementRef.current.element) && !pendingSelection.current) deselectElement(); }} />}
@@ -1765,10 +1785,10 @@ function Ruler({ axis, unit, start, length, reference, zoom, cursor, selection }
   </div>;
 }
 
-function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
+function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rect, bounds, zoom, maxHeight, selected, focus, focusToken, badgeTop, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
   reports: import('./types').ArchiveReport[]; wholePage: boolean; pages: Page[]; hostPageId: string;
   stale?: boolean; repickNow?: () => void; removeNow?: () => void; attach?: (files: File[], links: string[]) => void; detach?: (attachmentId: string) => void;
-  region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; controlsLayer: number; select: () => void;
+  region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; badgeTop?: number; layer: number; controlsLayer: number; select: () => void;
   begin: (event: PointerEvent, kind: Gesture['kind'], region?: Region) => void;
   keyboard: (event: KeyboardEvent, region?: Region, resize?: boolean) => void; change: (patch: RequestPatch) => Promise<Region>;
 }) {
@@ -1833,7 +1853,7 @@ function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rec
     <div className="request-frame" aria-hidden="true" />
     {dropping && <div className="request-drop-hint" aria-hidden="true">Drop to attach to this request</div>}
     {stale && <ProblemBanner className="request-stale" message="This element was removed." action={repickNow ? { label: 'Pick again', onClick: repickNow } : undefined} secondaryAction={removeNow ? { label: 'Remove request', onClick: removeNow } : undefined} />}
-    {!attached && <span className="request-number" aria-hidden="true">{number}</span>}
+    {!attached && <span className="request-number" aria-hidden="true" style={badgeTop === undefined ? undefined : { top: badgeTop }}>{number}</span>}
     {wholePage && <span className="request-phone-tag" title={region.wholePage ? "Whole page" : "Whole page (automatically detected). Turn off in request controls."}>Whole page</span>}
     {region.mobileOnly && <span className="request-phone-tag">Phone fix</span>}
     <textarea ref={text} aria-label={`Request ${number}`} aria-describedby="canvas-keyboard-help" maxLength={16384} value={draft} placeholder={targets.length === 1 && targets[0].tag === 'img' ? 'Describe the picture…' : target ? 'Describe the change…' : 'Describe what goes here…'}

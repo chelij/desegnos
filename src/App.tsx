@@ -23,6 +23,8 @@ import { MenuButton, type MenuItem } from './Menus';
 import './shell.css';
 import { editorShortcut, SHORTCUT_HELP, withShortcut } from './shortcuts';
 import { Icon } from './icons';
+import { FloatingBar } from './FloatingBar';
+import { StatusChip } from './StatusChip';
 import { closePageTab, loadPageTabs, savePageTabs, showPageTab, visiblePageTabs } from './pageTabs';
 import { steppedZoom } from './canvasGeometry';
 import { pathPage } from './liveBar';
@@ -1098,7 +1100,7 @@ function Editor() {
   // Canvas-level actions (copy, arrange, zoom) live on the canvas and its right-click menu.
   const menuItems: MenuItem[] = [
     { id: 'new', label: 'New project', shortcut: 'Ctrl/Cmd+N', action: () => setShowNew(true) },
-    { id: 'open', label: 'Open project', shortcut: 'Ctrl/Cmd+O', action: () => run(open) },
+    { id: 'open', label: 'Open project…', shortcut: 'Ctrl/Cmd+O', action: () => run(open) },
     { id: 'open-folder', label: 'Open project folder…', action: () => run(() => open(true)) },
     { id: 'save', label: 'Save', shortcut: 'Ctrl/Cmd+S', disabled: !project, action: () => run(() => save()) },
     { id: 'close-project', label: 'Close project', disabled: !project, action: () => run(closeProject) },
@@ -1151,15 +1153,15 @@ function Editor() {
         {project && showsOpener({ available: true, open: showImport }) && <button type="button" onClick={() => { setImportSource(null); setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import…</button>}
         {project && <>{view?.canUndo && <button aria-label="Undo last change" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}>Undo</button>}{view?.canRedo && <button aria-label="Redo last change" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}>Redo</button>}
           <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
-        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live view'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? <>Live<span className="live-dot" aria-hidden="true" /></> : 'Live'}</button>}
-        {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
+        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live view'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>Live</button>}
+        {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export…'}</button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {showsOpener({ available: !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" onClick={() => setShowLog(true)}>AI log</button>}
         {project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : generate}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
       </div>
     </header>
     <SurfaceHost place="banner" />
-    <NoticeHost />
+    {!project && <NoticeHost />}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />}
     {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={`The site is running at ${openFailure}`} action={{ label: 'Copy link', onClick: () => { void native('copy_text', { text: openFailure }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure('')} />}
     {notices.map(item => <Notice key={item.id} variant="info" message={item.message} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
@@ -1176,7 +1178,7 @@ function Editor() {
       <div className="page-strip"><div className="page-tabs" ref={tabStrip} role="tablist" aria-label="Project pages">
         {(view.openProjects?.length ? view.openProjects : [{ id: project.id, name: project.name, dirty: !!view.dirty, active: true, pages: [] }]).map((open, groupIndex, groups) => <div key={open.id} data-project-id={open.id} className={`project-tab-group${open.active ? ' active' : ''}${groups.length > 1 ? ' labelled' : ''}`} style={{ '--project-colour': PROJECT_COLOURS[groupIndex % PROJECT_COLOURS.length] } as CSSProperties} role="group" aria-label={`Project ${open.name}`}>
           {groups.length > 1 && <div className="project-tab-head"><span className="project-tab-label" title={open.name}><span>{open.name}{open.dirty && <span className="project-dirty-dot" aria-hidden="true" />}</span></span>
-            {showsOpener({ available: true, open: closeChoice === open.id }) && <button type="button" className="project-tab-close icon-button sm" aria-label={`Close ${open.name}`} title={`Close ${open.name}`} onClick={() => { if (open.dirty) setCloseChoice(open.id); else run(() => closeProjectTab(open.id, false)); }}><Icon name="close" /></button>}</div>}
+            {showsOpener({ available: true, open: closeChoice === open.id }) && <button type="button" className="project-tab-close close-button icon-button sm" aria-label={`Close ${open.name}`} title={`Close ${open.name}`} onClick={() => { if (open.dirty) setCloseChoice(open.id); else run(() => closeProjectTab(open.id, false)); }}><Icon name="close" /></button>}</div>}
           <div className="project-tab-row">{closeChoice === open.id ? <div className="project-close-choice" role="group" aria-label={`Close ${open.name}`}>
             <button type="button" className="primary" disabled={pending > 0} onClick={() => run(() => saveAndCloseProjectTab(open.id))}>Save</button>
             <button type="button" className="danger" disabled={pending > 0} onClick={() => run(() => closeProjectTab(open.id, true))}>Don’t save</button>
@@ -1191,7 +1193,7 @@ function Editor() {
               const next = event.key === 'Home' ? 0 : event.key === 'End' ? openPageIds.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + openPageIds.length) % openPageIds.length;
               document.getElementById(`page-tab-${openPageIds[next]}`)?.focus(); run(() => selectPage(openPageIds[next]));
             }}><span>{item.name}</span>{!item.included && <span className="page-draft">Hidden</span>}</button>
-          <button type="button" className="page-tab-close icon-button sm" aria-label={`Close ${item.name} tab`} title={withShortcut('Close tab', 'closePage')} disabled={openPageIds.length <= 1} onClick={() => closePageTabInStrip(item.id)}><Icon name="close" /></button>
+          <button type="button" className="page-tab-close close-button icon-button sm" aria-label={`Close ${item.name} tab`} title={withShortcut('Close tab', 'closePage')} disabled={openPageIds.length <= 1} onClick={() => closePageTabInStrip(item.id)}><Icon name="close" /></button>
         </div>; })}
           <button className="add-page-tab icon-button sm" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}><Icon name="plus" /></button>
           <MenuButton label="Pages" ariaLabel="All pages" title="All pages" className="page-list-menu" items={project.pages.map(item => ({ id: `page-list-${item.id}`, label: item.name, checked: openPageIds.includes(item.id), action: () => run(() => selectPage(item.id)) }))} /></> : open.pages.map(item => <button key={item.id} type="button" className="parked-tab" title={`Switch to ${open.name}`} onClick={() => run(() => switchProject(open.id, item.id))}><span>{item.name}</span></button>)}</div>
@@ -1200,6 +1202,7 @@ function Editor() {
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
       <SurfaceHost place="canvas" />
+      <NoticeHost />
       {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} pages={project.pages} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveDevice={live && page?.content ? liveDevice : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} editElements={editElementsNative} copyElements={copyElementsNative} findAcrossPages={findAcrossPages} editAcrossPages={editAcrossPages} resolveGenerationFix={resolveGenerationFix} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => addRegion(rect, shape)} ensureElementId={ensureElementIdNative} setFrameTarget={setFrameTargetNative} frameDocuments={frameDocuments} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={(selection, chosen) => pickElement(selection, chosen)} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {resultReview && !showGenerationStatus ? <Notice className="generation-notice status-applied" variant="success" priority="result" title="Page updated"
         message={summarizeOutsideChanges(generation.job?.validationEvents ?? [])}
@@ -1207,22 +1210,24 @@ function Editor() {
         secondaryAction={showsOpener({ available: true, open: showLog }) ? { label: 'Details', onClick: openGeneration } : undefined}
         dismiss={keepResult} /> : showGenerationStatus ? <GenerationFeedback controller={generation} project={project ?? undefined} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} requestEditorOpen={requestEditorIsOpen} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : draftCount > 0 && showsOpener({ available: true, open: showLog }) ? <Notice priority="result" message={`${draftCount} ${draftCount === 1 ? 'draft' : 'drafts'}`} action={{ label: 'Details', onClick: openGeneration }} /> : null}
       <FirstRunTips />
-      {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
-        <strong>Live</strong>
-        <div className="live-history" role="group" aria-label="Live history">
-          <button type="button" className="icon-button sm" aria-label="Back" title="Back" onClick={() => canvas.current?.liveHistory('back')}><Icon name="arrow-left" /></button>
-          <button type="button" className="icon-button sm" aria-label="Forward" title="Forward" onClick={() => canvas.current?.liveHistory('forward')}><Icon name="arrow-right" /></button>
-          <button type="button" className="icon-button sm" aria-label="Reload" title="Reload" onClick={() => canvas.current?.liveHistory('reload')}><Icon name="reload" /></button>
+      {live && page?.content && <FloatingBar className="live-bar" role="group" aria-label="Live view">
+        <span className="floating-bar-label">Live</span>
+        <div className="floating-bar-group" role="group" aria-label="Live history">
+          <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={() => canvas.current?.liveHistory('back')}><Icon name="arrow-left" /></button>
+          <button type="button" className="icon-button" aria-label="Forward" title="Forward" onClick={() => canvas.current?.liveHistory('forward')}><Icon name="arrow-right" /></button>
+          <button type="button" className="icon-button" aria-label="Reload" title="Reload" onClick={() => canvas.current?.liveHistory('reload')}><Icon name="reload" /></button>
         </div>
+        <span className="floating-bar-divider" aria-hidden="true" />
         {livePage
-          ? <button type="button" className="live-path" title="Edit this page" aria-label={`Edit this page: ${livePath}`} onClick={() => run(async () => { await selectPage(livePage.id); setLive(false); })}>{livePath}</button>
-          : <span className="live-path" title={livePath}>{livePath}</span>}
-        <div className="segmented" role="group" aria-label="Live device">{(['desktop', 'tablet', 'phone'] as const).map(device => <button key={device} type="button" aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}>{device === 'desktop' ? (page.viewport.width < 600 ? 'Page width' : 'Desktop') : device === 'tablet' ? 'Tablet' : 'Phone'}</button>)}</div>
-        {liveDevice !== 'desktop' && (liveDevice === 'tablet' ? 768 : 390) !== page.viewport.width && <span className="live-note">Add requests at page width</span>}
-        {liveDevice === 'phone' && <button type="button" title="Fix on phones" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
-        <button type="button" title="Serve this site locally and open it in your browser" onClick={() => run(openInBrowser)}>Open in browser</button>
-        <button type="button" onClick={() => setLive(false)}>Exit live</button>
-      </div>}
+          ? <button type="button" className="live-path-field" title="Edit this page" aria-label={`Edit this page: ${livePath}`} onClick={() => run(async () => { await selectPage(livePage.id); setLive(false); })}><Icon name="link" size={14} /><span>{livePath}</span></button>
+          : <span className="live-path-field" title={livePath}><Icon name="link" size={14} /><span>{livePath}</span></span>}
+        <div className="segmented live-device" role="group" aria-label="Live device">
+          {([['desktop', 'monitor', page.viewport.width < 600 ? 'Page width' : 'Desktop'], ['tablet', 'tablet', 'Tablet'], ['phone', 'phone', 'Phone']] as const).map(([device, icon, label]) => <button key={device} type="button" className="icon-button" aria-label={label} title={label} aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}><Icon name={icon} /></button>)}
+        </div>
+        {liveDevice === 'phone' && <button type="button" className="live-fix" title="Fix this page for phones" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
+        <button type="button" className="icon-button" aria-label="Open in browser" title="Serve this site locally and open it in your browser" onClick={() => run(openInBrowser)}><Icon name="external" /></button>
+        <button type="button" className="primary live-exit" onClick={() => setLive(false)}>Exit live</button>
+      </FloatingBar>}
       {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}
       <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} requestShape={requestShape} setRequestShape={setRequestShape} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
       </div>
@@ -1233,7 +1238,7 @@ function Editor() {
       {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} resultApplied={!!resultReview} requestEditorOpen={requestEditorIsOpen} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} manageUsage={manageChatgptUsage} editRequest={editGenerationRequest} close={() => setShowLog(false)} />}
       <SurfaceHost place="panel" />
       </main>
-      <footer className="status-bar"><span title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} elements selected` : region ? 'Request selected' : tool === 'request' ? requestShape === 'freehand' ? 'Draw around an area; release to close' : requestShape === 'ellipse' ? 'Drag an ellipse · Shift for a circle' : 'Click or drag to describe an area' : tool === 'pan' ? 'Drag to move around the canvas' : 'Double-click text to edit · Ask AI for changes'}</span><div className="canvas-status-actions">{showsOpener({ available: fixCount > 0, open: showCheck }) && <button className="check-chip" aria-label="Open page check" onClick={() => setShowCheck(true)}>{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</button>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<span role="status" aria-live="polite">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</span></div></footer>
+      <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} selected` : region && page ? `Box ${page.regions.indexOf(region) + 1}` : ''}</span><div className="canvas-status-actions">{showsOpener({ available: fixCount > 0, open: showCheck }) && <StatusChip tone="warning" className="check-chip" onClick={() => setShowCheck(true)} role="status" ariaLabel="Open page check">{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</StatusChip>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
     </>}
     {showShortcuts && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></WorkspaceSurface>}
     {showNew && <WorkspaceSurface place={project ? 'panel' : 'start'} title="New project" startHeading={false} close={() => setShowNew(false)}><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} recovery={recovery} /></WorkspaceSurface>}

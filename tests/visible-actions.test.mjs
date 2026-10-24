@@ -96,7 +96,7 @@ try {
     const banner = await read('ProblemBanner.tsx');
     assert.match(banner, /export function showsDismissButton\(notice: NoticeKind\): boolean \{/);
     assert.match(banner, /return !isToast\(notice\);/);
-    assert.match(banner, /\{showsDismissButton\(\{ variant, action, secondaryAction \}\) && <button type="button" className="notice-dismiss icon-button sm"/);
+    assert.match(banner, /\{showsDismissButton\(\{ variant, action, secondaryAction \}\) && <button type="button" className="close-button notice-dismiss icon-button sm"/);
   });
 
   await test('a save conflict keeps the close button as its only cancel', async () => {

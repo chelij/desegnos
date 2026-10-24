@@ -3,6 +3,7 @@ import { userError, generationError } from './userErrors.js';
 import { areaOutcome, fixLabel, jobOutcome, jsonBlocks } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
+import { Disclosure } from './Disclosure';
 import type { AiSettingsView } from './types';
 import type { GenerationController } from './useGeneration';
 import { native } from './api';
@@ -78,7 +79,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
           {working && !candidate && <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p>}
           {!past && !working && !resultApplied && (review.retryable.length > 0 || review.retryAll) && <button disabled={!!operation} onClick={() => { void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
-          {candidate && candidate.criticism.length > 0 && <details className="generation-feedback"><summary>Design feedback ({candidate.criticism.length})</summary><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></details>}
+          {candidate && candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></Disclosure>}
           {!past && review.blocked.length > 0 && <section className="log-needs-input" aria-label="Needs your input">
             <p className="log-who">Needs your input</p>
             {review.blocked.map(item => <div key={item.regionId}>
@@ -90,18 +91,18 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
               </div>}
             </div>)}
           </section>}
-          {candidate && candidate.decisionProposals.length > 0 && <details><summary>Suggested rules ({candidate.decisionProposals.length})</summary><ul>{candidate.decisionProposals.map((proposal, index) => <li key={index}><strong>{humanText(proposal.topic)}</strong><p className="log-text">{humanText(proposal.value)}</p><p className="log-meta">{scopeLabel(project, proposal.scope)}</p></li>)}</ul></details>}
+          {candidate && candidate.decisionProposals.length > 0 && <Disclosure summary={`Suggested rules (${candidate.decisionProposals.length})`}><ul>{candidate.decisionProposals.map((proposal, index) => <li key={index}><strong>{humanText(proposal.topic)}</strong><p className="log-text">{humanText(proposal.value)}</p><p className="log-meta">{scopeLabel(project, proposal.scope)}</p></li>)}</ul></Disclosure>}
 
-          <details className="conversation-request-details"><summary>Request details</summary><dl className="conversation-facts">
+          <Disclosure className="conversation-request-details" summary="Request details"><dl className="conversation-facts">
             <dt>AI style</dt><dd>{job.generationMode === 'strict' ? 'Precise' : 'Flexible'}</dd>
             <dt>Model</dt><dd>{settings?.catalogue.find(model => model.id === job.settings.model)?.name ?? job.settings.model}</dd>
             {job.repairRounds ? <><dt>Automatic corrections</dt><dd>{job.repairRounds}</dd></> : null}
             {context.length > 0 && <><dt>Additional context</dt><dd>{context.length} page elements</dd></>}
-          </dl></details>
+          </dl></Disclosure>
           {job.usage && <p className="log-meta token-footer">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
         </section>
       </>}
-      <details className="log-message" aria-label="Past generations"><summary>Past generations · {history?.jobs.length ?? 0}</summary>
+      <Disclosure className="past-generations" ariaLabel="Past generations" summary={`Past generations · ${history?.jobs.length ?? 0}`}>
         {history?.jobs.map(item => <p key={item.jobId}><button type="button" disabled={loadingPast} aria-pressed={past?.jobId === item.jobId} onClick={() => { void showPast(item.jobId); }}>
           <span className="log-meta">{item.createdAt ? new Date(item.createdAt).toLocaleString() : 'Earlier generation'} · {statusLabel(item.status)}</span><br />
           <span style={{ display: 'block', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{humanText(item.firstRequest || item.summary).split('\n')[0].slice(0, 160)}</span>{item.usage && <><br /><span className="log-meta">{item.usage.inputTokens.toLocaleString()} sent · {item.usage.outputTokens.toLocaleString()} received</span></>}
@@ -109,8 +110,8 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
         {history?.skipped ? <p className="field-help">{history.skipped} saved records could not be read.</p> : null}
         {history?.truncated && <p className="field-help">Showing the latest 100 saved generations.</p>}
         {historyError && <ProblemBanner message={userError(historyError)} dismiss={() => setHistoryError('')} />}
-      </details>
-      {(error || job?.message || job?.candidate) && <details><summary>Technical details</summary><pre>{JSON.stringify({ error, message: job?.message, providerError: job?.providerError, validationEvents: job?.validationEvents, outcomes: job?.candidate?.regions, drafts: job?.drafts?.map(({ reason }) => ({ reason })) }, null, 2)}</pre></details>}
+      </Disclosure>
+      {(error || job?.message || job?.candidate) && <Disclosure summary="Technical details"><pre>{JSON.stringify({ error, message: job?.message, providerError: job?.providerError, validationEvents: job?.validationEvents, outcomes: job?.candidate?.regions, drafts: job?.drafts?.map(({ reason }) => ({ reason })) }, null, 2)}</pre></Disclosure>}
     </div>
   </WorkspaceSurface>;
 }

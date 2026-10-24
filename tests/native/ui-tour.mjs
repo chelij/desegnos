@@ -102,7 +102,22 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
           if (style.borderTopWidth !== '0px' || style.boxShadow !== 'none') issues.push('Tab close shows a box');
         }
         const prompt = document.querySelector('.annotation textarea');
-        if (prompt && getComputedStyle(prompt).backgroundColor === 'rgba(0, 0, 0, 0)') issues.push('Request text background is transparent');
+        if (prompt) {
+          const box = prompt.closest('.annotation');
+          if (['rgba(0, 0, 0, 0)', 'transparent'].includes(getComputedStyle(box).backgroundColor)) issues.push('Request surface is fully transparent');
+          if (parseFloat(getComputedStyle(prompt).opacity) === 0) issues.push('Request text is invisible');
+        }
+        for (const bar of document.querySelectorAll('.floating-bar')) {
+          if (!bar.getClientRects().length) continue;
+          if (bar.scrollWidth > bar.clientWidth + 1) issues.push(`Floating bar overflows: ${bar.className}`);
+          const style = getComputedStyle(bar);
+          if (style.borderTopLeftRadius !== '6px') issues.push(`Floating bar radius differs: ${bar.className}`);
+        }
+        const tools = document.querySelector('.canvas-tools'), liveBar = document.querySelector('.live-bar');
+        if (tools && liveBar && liveBar.getBoundingClientRect().height <= 40 && Math.abs(rect(tools).height - rect(liveBar).height) > 1) issues.push('Live bar height differs from the canvas tools');
+        for (const close of document.querySelectorAll('.surface-close, .layers-close, .page-check-close, .notice-dismiss')) {
+          if (getComputedStyle(close).borderTopWidth !== '0px') issues.push('Close button shows a box');
+        }
         return { issues, width: innerWidth, documentWidth: document.documentElement.scrollWidth };
       });
       layoutChecks.push({ file, ...layout });
@@ -178,7 +193,7 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
   await driver.button('Generate');
   await waitFor(async () => ['applied', 'blocked', 'failed'].includes((await driver.invoke('get_generation', { projectId: p.id }))?.status), 'Initial generation did not finish', 30000);
   await writeFile(join(evidence, 'initial-job.json'), JSON.stringify(await driver.invoke('get_generation', { projectId: p.id }), null, 2));
-  await surface(28, 'generation-notice', 'A floating notice above the canvas tools', async () => {
+  await surface(28, 'generation-notice', 'A floating notice over the canvas, below the ruler', async () => {
     await driver.ready('.generation-notice');
   });
   await surface(29, 'ai-conversation-current', 'AI conversation for the applied generation', async () => {
@@ -266,8 +281,17 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
       await driver.ready(`.workspace-surface[aria-label="${title}"]`);
     });
   }
-  await surface(17, 'live-mode', 'Live mode with device controls', async () => { await driver.menu(['Live preview']); await driver.ready('.live-bar'); });
+  await surface(17, 'live-mode-desktop', 'Live mode on the page width with compact history, address, device and exit controls', async () => { await driver.menu(['Live view']); await driver.ready('.live-bar'); });
   if (await driver.execute(() => !!document.querySelector('.live-bar'))) await driver.button('Exit live');
+  for (const [number, name, device] of [[31, 'live-mode-tablet', 'Tablet'], [32, 'live-mode-phone', 'Phone']]) {
+    await surface(number, name, `Live mode at ${device.toLowerCase()} width with the same floating bar`, async () => {
+      await driver.menu(['Live view']);
+      await driver.ready('.live-bar');
+      await driver.button(device);
+      await driver.ready(`.live-bar button[aria-pressed="true"][aria-label="${device}"]`);
+    });
+    if (await driver.execute(() => !!document.querySelector('.live-bar'))) await driver.button('Exit live');
+  }
   await surface(26, 'element-toolbar-style', 'Selected element toolbar with its quick style row', async () => {
     await driver.button('Fit'); await selectElement('p'); await driver.ready('.element-toolbar');
     if (!await driver.execute(() => !!document.querySelector('.style-bar'))) await driver.button('Style');
@@ -332,6 +356,40 @@ finally:
     // Undo once so both history actions are on screen; every bar action keeps one size.
     if (await driver.execute(() => [...document.querySelectorAll('.shell-primary-actions button')].some(node => node.getAttribute('aria-label') === 'Undo last change' && !node.disabled))) await driver.button('Undo last change');
     await driver.ready('.shell-primary-actions button[aria-label="Redo last change"]');
+  });
+  async function pendingRequests() {
+    return (await project()).pages.find(item => item.id === pageId)?.regions.filter(item => !item.completed) ?? [];
+  }
+  await surface(33, 'request-box-empty', 'Empty request box: see-through surface, soft halo, quiet dashed outline and a visible placeholder', async () => {
+    await driver.button('Fit');
+    await mutate({ type: 'add_region', page_id: pageId, rect: { x: 80, y: 700, width: 420, height: 130 } });
+    await driver.button('Save');
+    await driver.button('Fit');
+    await driver.ready('.annotation textarea[placeholder="Describe what goes here…"]');
+  });
+  await surface(34, 'request-box-text', 'Request box with text: readable text over the see-through surface', async () => {
+    await driver.button('Fit');
+    let filled = (await pendingRequests()).find(item => item.prompt.trim());
+    if (!filled) {
+      const next = await mutate({ type: 'add_region', page_id: pageId, rect: { x: 120, y: 520, width: 340, height: 150 } });
+      filled = next.project.pages.find(item => item.id === pageId)?.regions.at(-1);
+      if (filled) await mutate({ type: 'update_region', page_id: pageId, region_id: filled.id, rect: filled.rect, prompt: 'Add a short introduction and a clear next step.' });
+      await driver.button('Save');
+    }
+    await selectElement('img');
+    await physical.keys('Escape');
+    await driver.button('Fit');
+    await driver.ready('.annotation textarea');
+    assert.ok(await driver.execute(() => [...document.querySelectorAll('.annotation textarea')].some(node => node.value.trim())), 'No request with text is visible');
+  });
+  await surface(35, 'request-box-selected', 'Selected request box: solid surface and a clear blue outline', async () => {
+    await driver.button('Fit');
+    const filled = (await pendingRequests()).find(item => item.prompt.trim()) ?? (await pendingRequests())[0];
+    assert.ok(filled, 'No request to select');
+    await driver.button('Layers');
+    await driver.click(`.layer-row[data-region-id="${filled.id}"] button.layer-select`);
+    await driver.button('Close Layers');
+    await driver.ready('.annotation.selected');
   });
   if (restart && (!selected || selected.has(24))) {
     await mutate({ type: 'rename_project', name: 'Northstar Studio — recovered work' });

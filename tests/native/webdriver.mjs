@@ -101,7 +101,15 @@ export class WebDriver {
     if (expanded !== 'true') await this.click(trigger, 'xpath');
     let menuId = await waitFor(() => this.execute(selector => document.evaluate(selector, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue?.getAttribute('aria-controls'), trigger), `${rootAriaLabel} did not open its menu`);
     for (let index = 0; index < path.length; index += 1) {
-      const selector = `//ul[@role="menu" and @id=${xpathString(menuId)}]/li/button[@aria-label=${xpathString(path[index])} and (@role="menuitem" or @role="menuitemcheckbox" or @role="menuitemradio")]`;
+      // Menu labels may add an ellipsis only where the command needs more input.
+      const wanted = path[index];
+      const variants = [wanted, wanted.endsWith('…') ? wanted.slice(0, -1) : `${wanted}…`];
+      let selector;
+      for (const label of variants) {
+        const candidate = `//ul[@role="menu" and @id=${xpathString(menuId)}]/li/button[@aria-label=${xpathString(label)} and (@role="menuitem" or @role="menuitemcheckbox" or @role="menuitemradio")]`;
+        if (await this.execute(value => !!document.evaluate(value, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue, candidate)) { selector = candidate; break; }
+      }
+      if (!selector) throw new Error(`${rootAriaLabel} has no menu item ${wanted}`);
       await this.click(selector, 'xpath');
       if (index + 1 < path.length) menuId = await waitFor(() => this.execute(value => document.evaluate(value, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue?.getAttribute('aria-controls'), selector), `${path[index]} did not open its submenu`);
     }
@@ -113,7 +121,8 @@ export class WebDriver {
 
   async button(text) {
     const visible = await this.execute(label => {
-      return [...document.querySelectorAll('button')].some(button => (button.getAttribute('aria-label') === label || button.textContent.trim() === label)
+      const plain = value => String(value).replace(/…$/, '');
+      return [...document.querySelectorAll('button')].some(button => (plain(button.getAttribute('aria-label')) === plain(label) || plain(button.textContent.trim()) === plain(label))
         && button.getClientRects().length && getComputedStyle(button).visibility === 'visible' && !button.matches(':disabled'));
     }, text);
     if (text === 'Generation status') return this.button('AI log');
@@ -130,8 +139,8 @@ export class WebDriver {
     if (!visible && routes[text]) return this.menu(routes[text]);
     // Keep the target tied to its accessible name while the UI changes around it.
     // A global button ordinal can point elsewhere when selection handles mount/unmount.
-    const label = xpathString(text);
-    return this.click(`//button[not(@disabled) and (@aria-label=${label} or normalize-space(.)=${label})]`, 'xpath');
+    const label = xpathString(text), withEllipsis = xpathString(text.endsWith('…') ? text : `${text}…`), withoutEllipsis = xpathString(text.replace(/…$/, ''));
+    return this.click(`//button[not(@disabled) and (@aria-label=${label} or normalize-space(.)=${label} or @aria-label=${withEllipsis} or normalize-space(.)=${withEllipsis} or @aria-label=${withoutEllipsis} or normalize-space(.)=${withoutEllipsis})]`, 'xpath');
   }
 
   field(label) {

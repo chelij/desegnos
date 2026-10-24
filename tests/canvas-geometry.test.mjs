@@ -13,7 +13,7 @@ try {
     '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts', 'src/layerOrder.ts', 'src/wholePageScope.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { pointInEllipse, pointInPolygon, pointInRegion, absolutePoints, relativePoints, simplifyFreehand, freehandArea, resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
-    workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, selectionLabelPosition, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
+    workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, selectionLabelPosition, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom, zoomLabel } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
   const { reorderedLayers } = await import(pathToFileURL(join(temporary, 'layerOrder.js')).href);
   const { isWholePage } = await import(pathToFileURL(join(temporary, 'wholePageScope.js')).href);
@@ -202,6 +202,12 @@ try {
     assert.equal(steppedZoom(0.87, 1), 1);
     assert.equal(steppedZoom(0.87, -1), 0.75);
     assert.equal(steppedZoom(4, 1), 4);
+  });
+  await test('the zoom readout uses whole percentages like other editors', () => {
+    assert.equal(zoomLabel(0.892), '89%');
+    assert.equal(zoomLabel(0.644), '64%');
+    assert.equal(zoomLabel(1), '100%');
+    assert.equal(zoomLabel(0.005), '1%');
   });
   await test('editor shortcuts preserve text undo, clipboard, composition and handled canvas keys', () => {
     const key = (name, patch = {}, editing = false) => editorShortcut({ key: name, ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, ...patch }, editing);

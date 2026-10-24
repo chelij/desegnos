@@ -16,9 +16,12 @@ try {
     .replace(/^import \{ MenuButton \} from '\.\/Menus';$/m, 'const MenuButton = () => null;')
     .replace(/^import \{ scopeLabel \} from '\.\/Notes';$/m, "const scopeLabel = () => 'Whole site';")
     .replace(/^import \{ documentKey \} from '\.\/elementTargets';$/m, "const documentKey = () => 'page';")
-    .replace(/^import \{ SourceView \} from '\.\/Preview';$/m, 'const SourceView = () => null;');
+    .replace(/^import \{ SourceView \} from '\.\/Preview';$/m, 'const SourceView = () => null;')
+    .replace(/^import .* from '\.\/Disclosure';$/m, "import { Disclosure } from './Disclosure.js';");
   const banner = join(temporary, 'ProblemBanner.js');
   await writeFile(banner, (await readFile(banner, 'utf8')).replaceAll("from './icons'", "from './icons.js'"));
+  const disclosure = join(temporary, 'Disclosure.js');
+  await writeFile(disclosure, (await readFile(disclosure, 'utf8')).replaceAll("from './icons'", "from './icons.js'"));
   await writeFile(join(temporary, 'Generation.mjs'), source);
   const { GenerationFeedback } = await import(pathToFileURL(join(temporary, 'Generation.mjs')));
   const id = '12345678-1234-1234-1234-123456789abc';

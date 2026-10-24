@@ -24,7 +24,7 @@ try {
         variant, title: 'Update', message,
         action: { label: 'Fix', onClick() {} }, secondaryAction: { label: 'Details', disabled: true, onClick() {} },
       }));
-      assert.match(html, new RegExp(`class="notice notice-${variant}" role="${['error', 'warning'].includes(variant) ? 'alert' : 'status'}"`));
+      assert.match(html, new RegExp(`class="notice floating-bar notice-${variant}" role="${['error', 'warning'].includes(variant) ? 'alert' : 'status'}"`));
       assert.ok(html.includes(`title="Update · ${message}"`));
       assert.match(html, /<strong>Update<\/strong><span>/);
       assert.match(html, /class="primary">Fix/);

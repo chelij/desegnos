@@ -93,9 +93,9 @@ try {
   await test('the strip wires the close button, the page list and the shortcut', async () => {
     const { readFile } = await import('node:fs/promises');
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    assert.match(app, /className="page-tab-close icon-button sm"/);
+    assert.match(app, /className="page-tab-close close-button icon-button sm"/);
     assert.match(app, /aria-label=\{`Close \$\{item\.name\} tab`\}/);
-    assert.match(app, /className="project-tab-close icon-button sm"/);
+    assert.match(app, /className="project-tab-close close-button icon-button sm"/);
     assert.match(app, /<MenuButton label="Pages"/);
     assert.match(app, /shortcut === 'closePageTab'/);
     assert.match(app, /closePageTabInStrip\(page\.id\)/);

@@ -1,3 +1,4 @@
+import { FloatingBar } from './FloatingBar';
 import { LayerIcon } from './Layers';
 import { MenuButton } from './Menus';
 import { steppedZoom, zoomLabel, ZOOM_LEVELS, MIN_ZOOM } from './canvasGeometry';
@@ -12,7 +13,7 @@ export function CanvasTools({ tool, setTool, requestShape, setRequestShape, zoom
   requestShape: RequestShapeKind; setRequestShape: (shape: RequestShapeKind) => void;
   tool: CanvasTool; setTool: (tool: CanvasTool) => void; zoom: number; setZoom: (value: number) => void; fit: () => void; layersOpen: boolean; toggleLayers: () => void;
 }) {
-  return <div className="canvas-tools" role="toolbar" aria-label="Canvas tools">
+  return <FloatingBar className="canvas-tools" role="toolbar" aria-label="Canvas tools">
     {([
       ['select', 'Select', 'M3.5 2 12.5 9 8 10 6.5 14.5Z'],
       ['request', 'Add request', 'M2 4h12v9H2Z M8 1.5v5 M5 4h6'],
@@ -29,5 +30,5 @@ export function CanvasTools({ tool, setTool, requestShape, setRequestShape, zoom
     <MenuButton label={zoomLabel(zoom)} ariaLabel="Canvas zoom" title="Canvas zoom" items={ZOOM_LEVELS.map(value => ({ id: `zoom-${value}`, label: zoomLabel(value), checked: zoom === value, action: () => setZoom(value) }))} />
     <button type="button" className="icon-button sm" aria-label="Zoom in" title={withShortcut('Zoom in', 'zoomIn')} disabled={zoom === ZOOM_LEVELS.at(-1)} onClick={() => setZoom(steppedZoom(zoom, 1))}><Icon name="plus" /></button>
     <button type="button" title={withShortcut('Fit screen guide', 'fit')} onClick={fit}>Fit</button>
-  </div>;
+  </FloatingBar>;
 }
