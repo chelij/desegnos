@@ -34,7 +34,6 @@ button.subtle { border-color: transparent; background: transparent; }
 button.subtle:hover:not(:disabled) { border-color: transparent; background: var(--surface-muted); }
 button.danger { color: var(--danger); }
 button.danger:hover:not(:disabled) { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, var(--surface-raised)); }
-button.compact { height: var(--control-sm); min-height: var(--control-sm); padding: 0 var(--space-4); font-size: var(--text-xs); }
 button.icon-button { width: var(--control-md); padding: 0; flex: none; }
 button.icon-button.sm { width: var(--control-sm); height: var(--control-sm); min-height: var(--control-sm); }
 button.icon-button.lg { width: var(--control-lg); height: var(--control-lg); min-height: var(--control-lg); }

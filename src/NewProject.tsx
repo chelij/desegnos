@@ -2,7 +2,7 @@ import { ProblemBanner } from './ProblemBanner.js';
 import { RecoveryChoice, type RecoveryChoices } from './RecoveryBanner.js';
 import { userError } from './userErrors.js';
 import { useState, type FormEvent } from 'react';
-import type { AiSettingsView, ProjectLocationView, Viewport } from './types';
+import type { ProjectLocationView, Viewport } from './types';
 import { native } from './api';
 import { ProjectLocationSettings } from './ProjectLocation';
 import { Icon } from './icons';
@@ -13,9 +13,9 @@ const sizes = {
   mobile: [[390, 844], [414, 896], [360, 800], [384, 832], [393, 873], [360, 780]],
 } as const;
 function message(error: unknown) { return error && typeof error === 'object' && 'message' in error ? String(error.message) : String(error); }
-type Props = { importBrand: () => void; busy: boolean; create: (name: string, viewport: Viewport, parentDirectory?: string) => Promise<void>; open: () => Promise<void>; openFolder: () => Promise<void>; location: ProjectLocationView | null; changeLocation: (reset: boolean) => Promise<void>; recentProjects?: { path: string; name: string }[]; openRecent?: (path: string) => Promise<void>; forgetRecent: (path: string) => Promise<void>; settings: AiSettingsView | null; openSettings: () => void; recovery?: RecoveryChoices | null };
+type Props = { importBrand: () => void; busy: boolean; create: (name: string, viewport: Viewport, parentDirectory?: string) => Promise<void>; open: () => Promise<void>; openFolder: () => Promise<void>; location: ProjectLocationView | null; changeLocation: (reset: boolean) => Promise<void>; recentProjects?: { path: string; name: string }[]; openRecent?: (path: string) => Promise<void>; forgetRecent: (path: string) => Promise<void>; recovery?: RecoveryChoices | null };
 
-export function NewProject({ importBrand, busy, create, open, openFolder, location, changeLocation, recentProjects = [], openRecent, forgetRecent, settings, openSettings, recovery = null }: Props) {
+export function NewProject({ importBrand, busy, create, open, openFolder, location, changeLocation, recentProjects = [], openRecent, forgetRecent, recovery = null }: Props) {
   const [mode, setMode] = useState<'blank' | null>(null);
   const [name, setName] = useState('');
   const [platform, setPlatform] = useState<'web' | 'mobile'>('web');
@@ -26,8 +26,6 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
   const [missingRecent, setMissingRecent] = useState<string | null>(null);
   const [parentDirectory, setParentDirectory] = useState<string>();
   const locked = busy || working;
-  const account = settings?.chatgpt.accounts.find(item => item.id === settings.chatgpt.activeAccountId);
-  const connected = !settings?.configurationError && (settings?.authentication === 'chatgpt' ? account?.connected && account.planEnabled && !account.storageRepairRequired : settings?.credential.configured);
   async function run(operation: () => Promise<void>, recentPath?: string) {
     setWorking(true); setError(''); setMissingRecent(null);
     try { await operation(); } catch (error) {
@@ -49,8 +47,7 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
         <button type="button" aria-label="Blank website" disabled={locked} onClick={() => setMode('blank')}><span className="start-icon" aria-hidden="true"><Icon name="plus" /></span><strong>Blank website</strong></button>
         <button type="button" disabled={locked} onClick={importBrand}><span className="start-icon" aria-hidden="true"><Icon name="fill-color" /></span><strong>Use my existing brand</strong></button>
       </div>
-      {!connected && <p className="start-ai-note"><button type="button" className="link-button" onClick={openSettings}>Connect now</button></p>}
-      <div className="start-open"><button type="button" className="link-button" onClick={() => { void run(open); }} disabled={locked}>Open project</button><span><button type="button" className="link-button" onClick={() => { void run(openFolder); }} disabled={locked}>Open folder…</button></span></div>
+      <div className="start-open"><button type="button" onClick={() => { void run(open); }} disabled={locked}>Open project</button><button type="button" onClick={() => { void run(openFolder); }} disabled={locked}>Open folder…</button></div>
       {((recentProjects.length > 0 && openRecent) || recovery) && <section className="recent-projects" aria-label="Recent projects"><h2>Recent projects</h2>
         {recovery && !recentProjects.some(project => project.path === recovery.path) && <RecoveryChoice {...recovery} />}
         <ul>{recentProjects.map(project => { const recovering = !!recovery && project.path === recovery.path; return <li key={project.path}>

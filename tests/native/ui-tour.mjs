@@ -91,6 +91,16 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
         if (brief && /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(brief.textContent)) issues.push('Internal ID in project brief');
         const tabs = [...document.querySelectorAll('.dossier-navigation [role="tab"]')];
         if (new Set(tabs.map(node => Math.round(rect(node).top))).size > 1) issues.push('Project brief tabs wrap');
+        const barActions = [...document.querySelectorAll('.shell-primary-actions > button, .shell-primary-actions > .menu-anchor > button')];
+        if (barActions.length) {
+          const heights = new Set(barActions.map(node => Math.round(rect(node).height)));
+          const sizes = new Set(barActions.map(node => getComputedStyle(node).fontSize));
+          if (heights.size > 1 || sizes.size > 1) issues.push('Top bar actions differ in height or font size');
+        }
+        for (const close of document.querySelectorAll('.page-tab-close, .project-tab-close')) {
+          const style = getComputedStyle(close);
+          if (style.borderTopWidth !== '0px' || style.boxShadow !== 'none') issues.push('Tab close shows a box');
+        }
         const prompt = document.querySelector('.annotation textarea');
         if (prompt && getComputedStyle(prompt).backgroundColor === 'rgba(0, 0, 0, 0)') issues.push('Request text background is transparent');
         return { issues, width: innerWidth, documentWidth: document.documentElement.scrollWidth };
@@ -317,6 +327,12 @@ finally:
   });
   await surface(22, 'project-location', 'Default project location settings', async () => { await driver.menu(['Default project location']); await driver.ready('[aria-label="Project location"]'); });
   await surface(23, 'new-project', 'New project choices over the editor', async () => { await driver.button('New project'); await driver.ready('[aria-label="New project"]'); });
+  await surface(30, 'editor-chrome', 'Editor top bar with Undo and Redo beside one-sized actions, and page tabs', async () => {
+    await driver.ready('.page-tabs');
+    // Undo once so both history actions are on screen; every bar action keeps one size.
+    if (await driver.execute(() => [...document.querySelectorAll('.shell-primary-actions button')].some(node => node.getAttribute('aria-label') === 'Undo last change' && !node.disabled))) await driver.button('Undo last change');
+    await driver.ready('.shell-primary-actions button[aria-label="Redo last change"]');
+  });
   if (restart && (!selected || selected.has(24))) {
     await mutate({ type: 'rename_project', name: 'Northstar Studio — recovered work' });
     ({ driver, physical } = await restart());

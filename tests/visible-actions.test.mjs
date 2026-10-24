@@ -52,8 +52,9 @@ try {
 
   await test('Undo and Redo appear only when they would change the page', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /\{view\?\.canUndo && <button className="compact" aria-label="Undo last change"/);
-    assert.match(app, /\{view\?\.canRedo && <button className="compact" aria-label="Redo last change"/);
+    assert.match(app, /\{view\?\.canUndo && <button aria-label="Undo last change"/);
+    assert.match(app, /\{view\?\.canRedo && <button aria-label="Redo last change"/);
+    assert.doesNotMatch(app, /className="compact"/, 'top-bar buttons share one control size');
     assert.doesNotMatch(app, /disabled=\{!view\?\.can/);
     // The keyboard shortcut still travels through the same history commands.
     assert.match(app, /shortcut === 'undo' \? current\.current\?\.canUndo : current\.current\?\.canRedo/);
