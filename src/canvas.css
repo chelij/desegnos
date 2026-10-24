@@ -208,12 +208,15 @@
 .free-workspace .request-attach:hover:not(:disabled) { background: var(--annotation-hover); }
 .free-workspace .request-drop-hint { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; border: 2px dashed var(--annotation-focus); background: color-mix(in srgb, var(--annotation-focus) 18%, var(--annotation-surface)); color: var(--annotation-text); font-size: var(--text-sm); font-weight: var(--weight-semibold); pointer-events: none; }
 
-/* Live view: the real, interactive page sits over the static copy at the same place and zoom. */
-.free-workspace .live-canvas-page { position: absolute; z-index: 1; background: var(--site-light); box-shadow: 0 0 0 1px var(--annotation-focus); }
+/* Live view: the real, interactive page replaces the editing page at the same place and zoom. */
+.free-workspace .live-canvas-page { position: absolute; z-index: 1; background: var(--site-light); box-shadow: 0 0 0 1px var(--border), var(--shadow-1); }
 .free-workspace .canvas.dark .live-canvas-page { background: var(--site-dark); }
 .free-workspace .live-canvas-content { position: absolute; top: 0; left: 0; transform-origin: top left; }
 .free-workspace .live-canvas-content .preview-frame, .free-workspace .live-canvas-content .preview-frame iframe { width: 100%; height: 100%; min-height: 0; border: 0; }
 .free-workspace .live-canvas-page.passive { pointer-events: none; }
+/* Live paints the page itself, so the static copy and its screen guide stay mounted but paint
+   nothing: no white filler beside a device frame and no second layout showing through. */
+.free-workspace .accepted-canvas-preview.behind-live, .free-workspace .screen-guide.behind-live { visibility: hidden; }
 .free-workspace.live .screen-guide-label { display: none; }
 
 .delete-inline { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3); font-size: var(--text-sm); }

@@ -23,6 +23,7 @@ import { requestEditorOpen } from './visibleActions';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type FrameView, type InlineText } from './Preview';
 import { FrameOverlay, useLiveFrameSession, type LiveFrameSession } from './FrameOverlays';
 import type { LiveHistoryAction } from './liveBar';
+import { liveFrame, liveVisibility, type LiveDevice } from './liveFrame';
 import { overlayPlacement, placeOverlays, type CollectedFrame } from './previewFrames';
 import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
@@ -92,7 +93,7 @@ type CanvasProps = {
   archiveReports?: Record<string, import('./types').ArchiveReport[]>; projectId?: string;
   pendingImagesChanged: (count: number) => void; canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
   fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
-  projectImages?: import('./types').ProjectImage[]; page: Page; pages: Page[]; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void; onLiveLocation?: (path: string) => void;
+  projectImages?: import('./types').ProjectImage[]; page: Page; pages: Page[]; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveDevice?: LiveDevice | null; detach?: (regionId: string, attachmentId: string) => void; onLiveLocation?: (path: string) => void;
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   requestShape?: RequestShapeKind; grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: { rect: Rect; shape?: RegionShape }[]; highlighted?: { rect: Rect; shape?: RegionShape }[];
   frameDocuments?: FrameDocumentView[]; ensureElementId: (target: ElementTarget) => Promise<ElementTarget | null>; setFrameTarget: (regionId: string, frameTarget: FrameTarget | null) => Promise<void>;
@@ -105,7 +106,7 @@ type CanvasProps = {
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => Promise<Region | null>; pickElement: (selection: ElementSelection[], pages?: PageSelection[]) => Promise<Region | null>; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; selectSimilar: () => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, pages, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, findAcrossPages, editAcrossPages, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, pages, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveDevice = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, findAcrossPages, editAcrossPages, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
   // Pages chosen for the next Ask AI on an element; the request box has its own picker.
   const [requestPages, setRequestPages] = useState<PageSelection[]>([]);
@@ -135,6 +136,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const [layersReady, setLayersReady] = useState(false);
   const [layerBusy, setLayerBusy] = useState(false);
   const [siteHeight, setSiteHeight] = useState(page.viewport.height);
+  // Live replaces the page frame: desktop keeps the page's width and whole scroll height, a
+  // device shows its own viewport and scrolls inside it.
+  const liveView = useMemo(() => liveDevice ? liveFrame(liveDevice, page.viewport, siteHeight) : null,
+    [liveDevice, page.viewport.width, page.viewport.height, siteHeight]);
+  const liveShown = useMemo(() => liveVisibility(liveView, page.viewport.width), [liveView?.width, liveView?.height, page.viewport.width]);
   // Frames read from the promoted static document, and the one the user is playing.
   const [frameView, setFrameView] = useState<FrameView>({ pageUrl: null, frames: [] });
   const [interactingFrame, setInteractingFrame] = useState<string | null>(null);
@@ -340,16 +346,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   function show(kind: CanvasViewAction['kind']) {
     const node = scroll.current;
     if (!node) return;
+    // Live frames the page itself, so fit and centre aim at what Live shows.
+    const framed = liveView ?? page.viewport;
     if (kind === 'fit') {
-      const target = Math.max(MIN_ZOOM, Math.min(4, Math.max(1, node.clientWidth - 96) / page.viewport.width, Math.max(1, node.clientHeight - 160) / page.viewport.height));
-      const origin = { x: page.viewport.width / 2 - node.clientWidth / target / 2, y: page.viewport.height / 2 - (node.clientHeight - 64) / target / 2 };
+      const target = Math.max(MIN_ZOOM, Math.min(4, Math.max(1, node.clientWidth - 96) / framed.width, Math.max(1, node.clientHeight - 160) / framed.height));
+      const origin = { x: framed.width / 2 - node.clientWidth / target / 2, y: framed.height / 2 - (node.clientHeight - 64) / target / 2 };
       if (Math.abs(target - zoom) < 1e-8) seek(origin);
       else { zoomIntent.current = { pageId: page.id, zoom: target, origin }; changeZoom(target); }
       return;
     }
     const region = kind === 'selection' ? page.regions.find(region => region.id === selected) : null;
     seek(region ? { x: region.rect.x + region.rect.width / 2 - node.clientWidth / zoom / 2, y: region.rect.y + region.rect.height / 2 - node.clientHeight / zoom / 2 }
-      : { x: page.viewport.width / 2 - node.clientWidth / zoom / 2, y: -64 / zoom });
+      : { x: framed.width / 2 - node.clientWidth / zoom / 2, y: -64 / zoom });
   }
   function point(client: Point): Point {
     return clientToCanvas(client, stage.current!.getBoundingClientRect(), zoom, { x: boundsRef.current.left, y: boundsRef.current.top });
@@ -1517,12 +1525,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     color: mixedStyle('color'), backgroundColor: mixedStyle('backgroundColor'), fontSize: mixedStyle('fontSize'), padding: mixedStyle('padding'), textAlign: mixedStyle('textAlign'),
   } : {};
   // Requests line up with the design only at the page's own width, so they show (and can be added) there.
-  const liveRequests = !liveView || liveView.width === page.viewport.width;
+  const liveRequests = liveShown.requests;
   // Keep callbacks stable so prompt edits cannot re-render the memoized live layer.
   const fixRuntimeErrorsRef = useRef(fixRuntimeErrors); fixRuntimeErrorsRef.current = fixRuntimeErrors;
   const stableFixRuntimeErrors = useCallback((errors: string[]) => fixRuntimeErrorsRef.current?.(errors), []);
   const stopInteracting = useCallback(() => setInteractingFrame(null), []);
-  const liveHeight = liveView ? Math.max(liveView.height, liveView.width === page.viewport.width ? previewHeight : liveView.height) : 0;
   nativeDrag.current = value => {
     if (value.phase === 'leave') { setDropTarget(null); return; }
     if (value.phase === 'drop') {
@@ -1628,17 +1635,17 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           onPointerLeave={() => { if (!gesture.current) setCursor(null); }} onPointerCancel={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
           onLostPointerCapture={event => { if (gesture.current?.pointerId === event.pointerId || pan.current?.pointerId === event.pointerId || elementDrag.current?.pointerId === event.pointerId) cancel(); }}
           onKeyDown={event => { if (event.target === event.currentTarget || event.key === 'Escape') keyboard(event); }}>
-          {page.content && <div className="accepted-canvas-preview" data-testid="accepted-canvas-preview" style={positioned({ x: 0, y: 0, width: page.viewport.width, height: previewHeight })} aria-hidden="true">
+          {page.content && <div className={`accepted-canvas-preview${liveShown.staticPage ? '' : ' behind-live'}`} data-testid="accepted-canvas-preview" style={positioned({ x: 0, y: 0, width: page.viewport.width, height: previewHeight })} aria-hidden="true">
             <div className="accepted-canvas-content" style={{ width: page.viewport.width, height: previewHeight, transform: `scale(${zoom})` }}>
               <PreviewFrame ref={site} content={page.content} frameDocuments={frameDocuments} referenceHeight={page.viewport.height} onHeight={setSiteHeight} onReady={(settled, revision) => refreshElement(settled, revision)} pageId={page.id} revision={acceptedVersion} title={`${page.name} accepted static preview`} staticView />
             </div>
           </div>}
-          {liveView && page.content && <LiveCanvasLayer pageId={page.id} pageName={page.name} revision={`live:${acceptedVersion}`} width={liveView.width} height={liveHeight}
+          {liveView && page.content && <LiveCanvasLayer pageId={page.id} pageName={page.name} revision={`live:${acceptedVersion}`} width={liveView.width} height={liveView.height}
             bounds={bounds} zoom={zoom} passive={tool === 'request' || panReady || panning} aiDisabled={!!aiDisabled} observationsVersion={observationsVersion} frameRef={liveSite}
             onLiveLocation={onLiveLocation} onRuntimeProblems={setRuntimeProblems} fixRuntimeErrors={stableFixRuntimeErrors} />}
           {!liveView && frameSession && <FrameLayer frames={liveOverlays} session={frameSession} pageId={page.id} pageName={page.name} staticPageUrl={frameView.pageUrl}
             bounds={bounds} zoom={zoom} interactingFrame={interactingFrame} interactiveSelector={tool === 'select' && element ? element.element.selector : null} stop={stopInteracting} />}
-          <div className={`screen-guide ${page.content ? 'has-preview' : ''}`} data-testid="screen-guide" style={positioned({ x: 0, y: 0, ...page.viewport })} aria-hidden="true">
+          <div className={`screen-guide ${page.content ? 'has-preview' : ''}${liveShown.screenGuide ? '' : ' behind-live'}`} data-testid="screen-guide" style={positioned({ x: 0, y: 0, ...page.viewport })} aria-hidden="true">
             <span className="screen-guide-label">Screen · {page.viewport.width} × {page.viewport.height}</span>
           </div>
           {grid && !liveView && <div className="canvas-grid" aria-hidden="true" style={{ ...positioned({ x: 0, y: 0, width: page.viewport.width, height: Math.max(page.viewport.height, page.content ? previewHeight : 0) }), backgroundSize: `${displayStep.x * zoom}px ${displayStep.y * zoom}px`, backgroundPosition: '0 0' }} />}
