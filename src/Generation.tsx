@@ -60,7 +60,12 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   const minutes = elapsedSeconds ?? 0;
   const review = jobOutcome(job, id => project?.pages.flatMap(page => page.regions).find(region => region.id === id)?.prompt);
   const needsInput = review.blocked.length > 0 && review.retryable.length === 0 && !review.retryAll;
-  const retry = review.retryable.length > 0 || review.retryAll || (controller.stopped && !review.blocked.length);
+  const retry = review.retryable.length > 0 || review.retryAll || review.retryBatches || (controller.stopped && !review.blocked.length);
+  // A batched job resends only the failed parts; anything else prepares the unfinished areas.
+  const retryRequests = () => {
+    if (review.retryBatches) void controller.retry().catch(() => {});
+    else void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {});
+  };
   const blocked = review.blocked[0];
   const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your page…' : 'Building your page…',
     ready: 'Updating your page…', blocked: needsInput ? 'Needs your input' : 'Needs attention', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
@@ -77,8 +82,8 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   // Keep the resolving surface visible beside the request change when both exist.
   const secondaryAction = needsInput && change && fixAction ? fixAction : details ? { label: 'Details', onClick: details } : undefined;
   return <Notice className={`generation-notice status-${job?.status ?? 'preparing'}`} variant={error || job && ['failed', 'blocked', 'unknown'].includes(job.status) ? 'error' : job?.status === 'applied' ? 'success' : 'info'} priority="result" title={heading} dismissKey={`${job?.jobId}:${job?.status}:${operation}:${error}`}
-    message={error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : blocked?.reason ?? ''}
-    action={action ?? (needsAiSettings(error || job?.message || '') && openSettings ? { label: 'AI settings', onClick: openSettings } : controller.canStop ? { label: 'Stop', onClick: () => { void controller.cancel(); } } : changeAction ?? (retry ? { label: 'Try again', onClick: () => { void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); } } : undefined))}
+    message={error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${job?.batches?.length ? `${job.message} · ` : ''}${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : blocked?.reason ?? ''}
+    action={action ?? (needsAiSettings(error || job?.message || '') && openSettings ? { label: 'AI settings', onClick: openSettings } : controller.canStop ? { label: 'Stop', onClick: () => { void controller.cancel(); } } : changeAction ?? (retry ? { label: 'Try again', onClick: retryRequests } : undefined))}
     secondaryAction={secondaryAction} />;
 }
 
@@ -119,7 +124,11 @@ export function GenerationDetails({ controller, project, settings, openSettings,
   });
   const source = candidate?.pages.find(page => page.pageId === pageId) ?? candidate?.pages[0];
   const review = jobOutcome(job, id => project.pages.flatMap(page => page.regions).find(region => region.id === id)?.prompt);
-  const canRetry = review.retryable.length > 0 || review.retryAll;
+  const canRetry = review.retryable.length > 0 || review.retryAll || review.retryBatches;
+  const retryRequests = () => {
+    if (review.retryBatches) void controller.retry().catch(() => {});
+    else void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {});
+  };
   const changeRequest = (regionId: string) => { editRequest(regionId); setConfirmRetry(false); };
   const openFix = (fix: Parameters<typeof fixLabel>[0]) => { if (fix === 'aiSettings') openSettings(); else if (fix === 'import') openImport?.(); else openBrief?.(); };
   const canDiscard = !!job && ['prepared', 'ready', 'blocked', 'failed', 'unknown', 'cancelled'].includes(job.status);
@@ -236,13 +245,13 @@ export function GenerationDetails({ controller, project, settings, openSettings,
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
           {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready changes' : 'Apply changes'}</button>}
-          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={() => { void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
+          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={retryRequests}>Try again</button>}
         </div>
       </>}
     </div>
     {confirmRetry && job && <section ref={retryConfirmation} aria-label="Confirm retry" className="dialog-body"><strong>Try these requests with the current page?</strong><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
       <p>{usesChatgpt ? 'The retry counts toward that account’s ChatGPT plan or credits balance. Earlier attempts may also have used your plan or credits.' : `Estimated job cost: ${money(job.estimateUsd)}. Earlier attempts may also have been charged.`}</p>
       {usageError && <ProblemBanner message={userError(usageError)} dismiss={() => setUsageError('')} />}
-      <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { dismissRetry(); void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={dismissRetry}>Keep current job</button></div></section>}
+      <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { dismissRetry(); retryRequests(); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={dismissRetry}>Keep current job</button></div></section>}
   </>;
 }

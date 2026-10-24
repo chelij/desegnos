@@ -558,6 +558,7 @@ fn freeze(
         region_count: 0,
         page_count: 0,
         documents: vec![],
+        batch: None,
         dependencies: BTreeMap::new(),
         dossier_context: None,
         request_history: String::new(),

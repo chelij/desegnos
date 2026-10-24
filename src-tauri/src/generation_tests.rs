@@ -1754,7 +1754,7 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, before.revision);
     fresh.requirements.validate_current(&before).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 24);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 25);
     assert_eq!(
         fresh.source_fingerprints.get(&before.pages[0].id),
         Some(&desegni_core::source_fingerprints(
@@ -1819,7 +1819,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_while_begin_submits_current_
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, project.revision);
     fresh.requirements.validate_current(&project).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 24);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 25);
     assert_eq!(
         fresh.source_fingerprints.get(&project.pages[0].id),
         Some(&desegni_core::source_fingerprints(
@@ -2578,5 +2578,260 @@ fn whole_reply_validator_rejection_is_not_a_provider_failure() {
             .history_entries(&view)
             .iter()
             .all(|e| e.outcome == "failed" && e.validation_rejection.is_none())
+    );
+}
+
+/// A request whose page picker covers three large pages, so it needs two sequential parts.
+fn batched_project() -> Project {
+    let mut project = project();
+    for name in ["Atlas", "Borealis", "About"] {
+        project = project
+            .apply(
+                project.revision,
+                Command::AddPage {
+                    name: name.into(),
+                    path: format!("/{}", name.to_lowercase()),
+                },
+            )
+            .unwrap();
+    }
+    let filler = "Tall case study text. ".repeat(7_600);
+    for page in project.pages.iter_mut().skip(1) {
+        page.content = Some(SiteContent {
+            html: format!(
+                "<!doctype html>\n<html><body><main><h1>{}</h1><p>{filler}</p></main></body></html>",
+                page.name
+            ),
+            css: "main { color: navy; }".into(),
+            javascript: String::new(),
+        });
+    }
+    let home = project.home_page_id;
+    let region_id = project.pages[0].regions[0].id;
+    project
+        .apply(
+            project.revision,
+            Command::SetRegionPages {
+                page_id: home,
+                region_id,
+                pages: vec![desegni_core::PageSelection::All],
+            },
+        )
+        .unwrap()
+}
+
+/// A candidate that changes only the documents owned by one part. Later parts see the request's
+/// framed document as read-only reference, so they never return it.
+fn part_candidate(
+    project: &Project,
+    snapshot: &RequirementsSnapshot,
+    label: &str,
+) -> GenerationCandidate {
+    let home = project.home_page_id;
+    let pages = snapshot
+        .documents
+        .iter()
+        .filter_map(|included| {
+            let page_id = match included.document {
+                desegni_core::DocumentTarget::Page { page_id } => page_id,
+                desegni_core::DocumentTarget::SiteFile { .. } => return None,
+            };
+            let source = project.page(page_id).ok()?.content.clone()?;
+            let html = if page_id == home {
+                let roots = project
+                    .pages
+                    .iter()
+                    .flat_map(|page| page.regions.iter())
+                    .filter(|region| !region.prompt.trim().is_empty())
+                    .map(|region| {
+                        format!(
+                            "<section data-desegnos-region=\"{}\"><button>{label}</button></section>",
+                            region.id
+                        )
+                    })
+                    .collect::<String>();
+                format!("{}{roots}", source.html)
+            } else {
+                source
+                    .html
+                    .replace("</main>", &format!("<p>{label}</p></main>"))
+            };
+            Some(GeneratedPage {
+                page_id,
+                content: SiteContent { html, ..source },
+            })
+        })
+        .collect();
+    GenerationCandidate {
+        job_id: snapshot.job_id,
+        requirements_sha256: snapshot.sha256.clone(),
+        summary: format!("Changed the pages for {label}."),
+        regions: project
+            .pages
+            .iter()
+            .flat_map(|page| page.regions.iter())
+            .filter(|region| !region.prompt.trim().is_empty())
+            .map(|region| RegionOutcome {
+                region_id: region.id,
+                status: RegionStatus::Implemented,
+                explanation: "Implemented using native HTML.".into(),
+            })
+            .collect(),
+        pages,
+        documents: vec![],
+        component_requests: vec![],
+        decision_proposals: vec![],
+        criticism: vec![],
+    }
+}
+
+#[test]
+fn a_batched_request_reserves_every_part_against_the_spending_limit() {
+    assert!(spending_within_limit(
+        AuthenticationMethod::ApiKey,
+        0.4,
+        0.4
+    ));
+    assert!(!spending_within_limit(
+        AuthenticationMethod::ApiKey,
+        0.41,
+        0.4
+    ));
+    assert!(!spending_within_limit(
+        AuthenticationMethod::ApiKey,
+        f64::NAN,
+        0.4
+    ));
+    assert!(!spending_within_limit(
+        AuthenticationMethod::ApiKey,
+        1.0,
+        f64::INFINITY
+    ));
+    // ChatGPT plan usage is not priced in dollars.
+    assert!(spending_within_limit(
+        AuthenticationMethod::Chatgpt,
+        100.0,
+        0.4
+    ));
+}
+
+#[test]
+fn a_failed_part_keeps_finished_parts_and_retries_only_that_part() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    service.settings.spending_limit_usd = 10_000.0;
+    let project = batched_project();
+    let prepared = service.prepare(&project).unwrap();
+    assert_eq!(prepared.batches.len(), 2, "{}", prepared.message);
+    assert!(prepared.merged_requirements.is_some());
+    assert!(prepared.estimate_usd >= 0.0);
+
+    // Part 1 succeeds.
+    let (first, _) = service.begin(&project, prepared.job_id, false).unwrap();
+    assert!(first.status == JobStatus::Generating, "{}", first.message);
+    let candidate = part_candidate(&project, &first.requirements, "part one");
+    candidate
+        .validate(&first.requirements, &project)
+        .expect("the part's own reply validates");
+    service
+        .finish(
+            &project,
+            Some(&project),
+            prepared.job_id,
+            1,
+            Ok(response(&candidate, 1)),
+        )
+        .unwrap();
+    let view = service.jobs.get(&prepared.job_id).unwrap().view.clone();
+    assert!(
+        view.batches[0].status == JobStatus::Ready,
+        "{}",
+        view.batches[0].message
+    );
+    assert!(view.batches[0].candidate.is_some());
+
+    // Part 2 is next, and carries part 1's summary into its frozen packet.
+    let (second, _) = service
+        .advance_batch(&project, prepared.job_id)
+        .unwrap()
+        .expect("the next part starts");
+    assert!(second.status == JobStatus::Generating);
+    assert_eq!(second.requirements.batch.as_ref().unwrap().part, Some(2));
+    assert!(second.requirements.markdown.contains("part 2 of 2"));
+    assert!(second.requirements.markdown.contains("part one"));
+
+    // Part 2 fails: part 1's work is kept and the job asks for attention.
+    let ordinal = second.attempts.len();
+    let error = ProviderError::new(ErrorKind::Malformed, SubmissionOutcome::Received);
+    service
+        .finish(
+            &project,
+            Some(&project),
+            prepared.job_id,
+            ordinal,
+            Err(error),
+        )
+        .unwrap();
+    let view = service.latest(&project).unwrap().unwrap();
+    assert!(view.batches[0].status == JobStatus::Ready);
+    assert!(view.batches[1].status == JobStatus::Failed);
+    assert!(view.status == JobStatus::Blocked, "{}", view.message);
+    let merged = view.candidate.as_ref().expect("part 1 is kept");
+    assert!(!merged.pages.is_empty());
+    assert_eq!(
+        merged
+            .regions
+            .iter()
+            .filter(|region| region.status == RegionStatus::Implemented)
+            .count(),
+        2
+    );
+    let finished_part = view.batches[0].requirements.sha256.clone();
+    let failed_documents = view.batches[1].documents.clone();
+    assert!(!failed_documents.is_empty());
+
+    // Try again resends only the failed part, not the finished one.
+    let (retried, _) = service.begin(&project, prepared.job_id, true).unwrap();
+    assert!(retried.batches[0].status == JobStatus::Ready);
+    assert_eq!(retried.batches[0].requirements.sha256, finished_part);
+    assert!(
+        retried.batches[1].status == JobStatus::Generating,
+        "{}",
+        retried.message
+    );
+    assert_eq!(retried.requirements.batch.as_ref().unwrap().part, Some(2));
+    assert_eq!(retried.batches[1].documents, failed_documents);
+    assert_eq!(retried.attempts.len(), 3);
+}
+
+#[test]
+fn prepare_rejects_a_batched_request_whose_parts_exceed_the_spending_limit() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    service.settings.spending_limit_usd = 10_000.0;
+    let project = batched_project();
+    let prepared = service.prepare(&project).unwrap();
+    let estimates: Vec<f64> = prepared
+        .batches
+        .iter()
+        .map(|batch| batch.estimate_usd)
+        .collect();
+    let highest = estimates.iter().copied().fold(0.0_f64, f64::max);
+    let total: f64 = estimates.iter().sum();
+    assert!(
+        total > highest,
+        "each part fits, the combined request does not: {estimates:?}"
+    );
+    // A limit that every single part fits but the whole batched request does not.
+    let second_temp = Temp::new();
+    let mut second = second_temp.service();
+    second.settings.spending_limit_usd = highest + (total - highest) / 2.0;
+    let error = match second.prepare(&project) {
+        Ok(view) => panic!("the combined estimate must be refused: {}", view.message),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("batches") && error.contains("combined estimate"),
+        "{error}"
     );
 }

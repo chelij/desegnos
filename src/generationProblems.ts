@@ -4,7 +4,7 @@ import { generationError, outcomeReason, technicalReason } from './userErrors.js
 /// A specific place that can resolve an outcome the AI itself declared.
 export type OutcomeFix = 'aiSettings' | 'import' | 'brief';
 export type Outcome = { retryable: boolean; reason: string; fix?: OutcomeFix };
-export type JobOutcome = { retryable: string[]; blocked: { regionId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean };
+export type JobOutcome = { retryable: string[]; blocked: { regionId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean; retryBatches: boolean };
 export type AreaProblem = { key: string; regionId: string; draftId?: string; message: string; stale: boolean; retryable: boolean; fix?: OutcomeFix; rect: Rect };
 
 export const fixLabel = (fix: OutcomeFix) => fix === 'aiSettings' ? 'AI settings' : fix === 'import' ? 'Import…' : 'Project brief';
@@ -66,7 +66,7 @@ export function areaOutcome(job: GenerationJobView | null, regionId: string, pro
 
 /// Classify a whole job, keeping the retryable areas separate from the declared gaps.
 export function jobOutcome(job: GenerationJobView | null, promptOf: (regionId: string) => string | undefined = () => undefined): JobOutcome {
-  if (!job || !terminal.includes(job.status)) return { retryable: [], blocked: [], retryAll: false };
+  if (!job || !terminal.includes(job.status)) return { retryable: [], blocked: [], retryAll: false, retryBatches: false };
   const ids = new Set<string>();
   for (const area of job.areas) ids.add(area.regionId);
   for (const draft of job.drafts ?? []) for (const id of draft.regionIds) ids.add(id);
@@ -80,7 +80,9 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (regionId: s
     const implemented = job.candidate?.regions?.some(region => region.regionId === regionId && region.status === 'implemented');
     if (!implemented && !latest?.applied) retryable.push(regionId);
   }
-  return { retryable, blocked, retryAll: ids.size === 0 && !blocked.length && ['failed', 'unknown', 'cancelled'].includes(job.status) };
+  // A batched job keeps its finished parts; a failed part is retried on its own.
+  const retryBatches = (job.batches ?? []).some(batch => ['failed', 'unknown', 'cancelled', 'blocked'].includes(batch.status));
+  return { retryable, blocked, retryAll: ids.size === 0 && !blocked.length && ['failed', 'unknown', 'cancelled'].includes(job.status), retryBatches };
 }
 
 export function areaProblems(job: GenerationJobView | null, page: Page): AreaProblem[] {

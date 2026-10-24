@@ -189,8 +189,12 @@ pub fn recover_generation_reply(
             })
             .map(|(page, _)| *page)
             .collect();
+        let reference = snapshot.reference_documents();
         if let Some(pages) = value["pages"].as_array_mut() {
             for id in ready {
+                if reference.contains(&crate::DocumentTarget::page(id)) {
+                    continue;
+                }
                 if !pages.iter().any(|p| p["pageId"] == id.to_string())
                     && let Some(content) = &project.page(id)?.content
                 {
@@ -244,8 +248,10 @@ pub fn recover_generation_reply(
                     .as_str()
                     .and_then(|id| Uuid::parse_str(id).ok())
                     .ok_or_else(|| Error("A generated page needs a valid pageId.".into()))?;
+                let editable = snapshot.editable_pages();
                 ensure(
-                    targets.iter().any(|(page, _)| *page == id) && seen.insert(id),
+                    (targets.iter().any(|(page, _)| *page == id) || editable.contains(&id))
+                        && seen.insert(id),
                     "The reply contains duplicate or unrequested pages.",
                 )?;
                 let checked = serde_json::from_value::<GeneratedPage>(page.clone())

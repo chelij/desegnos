@@ -1,5 +1,5 @@
 /// Requirements contract used for newly prepared requests.
-pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 24;
+pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 25;
 
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
@@ -7,7 +7,7 @@ use crate::{
     ensure,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,6 +73,10 @@ pub struct RequirementsSnapshot {
     /// Format 23: every document this request may change, in priority order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub documents: Vec<crate::IncludedDocument>,
+    /// Format 25: this snapshot is one sequential part of a larger request, or the merged
+    /// document set used only for validation and application.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<DocumentBatchContext>,
     pub dependencies: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dossier_context: Option<GenerationDossierContext>,
@@ -84,6 +88,27 @@ pub struct RequirementsSnapshot {
     /// Format 13: small previews of attached pictures, sent beside the requirements file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<RequestImage>,
+}
+
+/// How one request's documents were split into sequential parts (format 25).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DocumentBatchContext {
+    /// 1-based part number; `None` marks the merged validation snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<usize>,
+    pub parts: usize,
+    /// Summaries and shared CSS carried forward from earlier parts.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub earlier: String,
+    /// Whether each document's complete source is embedded. The merged validation snapshot
+    /// lists every document with its hash but without its body.
+    #[serde(default = "default_true")]
+    pub sources: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// A downscaled preview of one attached picture, labelled with its attachment ID.
@@ -252,6 +277,7 @@ impl Project {
             CURRENT_REQUIREMENTS_FORMAT,
             dossier_context,
             Some(capabilities),
+            None,
         )
     }
 
@@ -263,6 +289,7 @@ impl Project {
         format: u8,
         dossier_context: Option<GenerationDossierContext>,
         capabilities: Option<GenerationCapabilities>,
+        batch: Option<&DocumentBatchContext>,
     ) -> Result<RequirementsSnapshot> {
         ensure(
             format >= 15 || targets.iter().all(|(_, region)| region.shape.is_rect()),
@@ -296,11 +323,18 @@ impl Project {
                     && (format < 18 || !targets.iter().any(|(p, r)| r.is_whole_page(p)))));
         // Format 23: a Flexible framed request may also change the pages it clearly concerns.
         // Format 24: every request may change the pages chosen on its page picker.
+        // Format 25: a selection beyond the source budget is split into sequential parts.
+        let batch = batch.filter(|_| format >= 25);
         let document_context = if format >= 23 {
-            self.document_context(targets, flexible)?
+            if let Some(batch) = batch {
+                self.batched_document_context(targets, flexible, batch)?
+            } else {
+                self.document_context(targets, flexible)?
+            }
         } else {
             crate::DocumentContext::default()
         };
+        let embed_sources = batch.is_none_or(|batch| batch.sources);
         // From format 14 page sources are sent without the layout whitespace added after a
         // generation; hashes and dependencies still describe the stored source.
         let compacted = (format >= 14).then(|| self.compact_pages());
@@ -669,15 +703,21 @@ impl Project {
                             })
                         })
                         .collect();
-                    md.push_str(&fenced_json(&serde_json::json!({
+                    let mut entry = serde_json::json!({
                         "document": frame.document,
                         "hostPageId": frame.page_id,
                         "iframeId": frame.iframe_id,
                         "sha256": self.document_hash(&frame.document)?,
                         "viewport": self.document_viewport(&frame.document)?,
-                        "content": source,
                         "requests": requests,
-                    }))?);
+                    });
+                    if embed_sources {
+                        entry["content"] = serde_json::to_value(&source)
+                            .map_err(|error| Error(error.to_string()))?;
+                    } else {
+                        entry["sourceOmitted"] = serde_json::json!(true);
+                    }
+                    md.push_str(&fenced_json(&entry)?);
                     md.push('\n');
                 }
             }
@@ -705,22 +745,31 @@ impl Project {
             } else {
                 "Precise: these documents are editable for this request: {}. Changes to any other page are rejected. Each document's complete current source is supplied below with its path. Do not report a document's source as unavailable. Return a project page's new source as a pages entry with its pageId, and an imported site file's new HTML as a documents entry with its document target. Return every changed document in this one reply; Desegnos applies them as one change and the user reviews it with Keep/Undo. Only the documents listed here and above may change."
             };
-            md.push_str(&format!("\n## Editable documents for this request\n\n{}\n\n", rules.replace("{}", &paths.join(", "))));
+            md.push_str(&format!(
+                "\n## Editable documents for this request\n\n{}\n\n",
+                rules.replace("{}", &paths.join(", "))
+            ));
             for included in extra_documents {
                 let content = self.document_content(&included.document)?;
                 let source = match &included.document {
                     crate::DocumentTarget::Page { .. } => self.all_asset_references(&content),
                     crate::DocumentTarget::SiteFile { .. } => content,
                 };
-                md.push_str(&fenced_json(&serde_json::json!({
+                let mut entry = serde_json::json!({
                     "document": included.document,
                     "path": included.path,
                     "title": included.title,
                     "reason": included.reason,
                     "sha256": self.document_hash(&included.document)?,
                     "viewport": self.document_viewport(&included.document)?,
-                    "content": source,
-                }))?);
+                });
+                if embed_sources {
+                    entry["content"] =
+                        serde_json::to_value(&source).map_err(|error| Error(error.to_string()))?;
+                } else {
+                    entry["sourceOmitted"] = serde_json::json!(true);
+                }
+                md.push_str(&fenced_json(&entry)?);
                 md.push('\n');
             }
             if !document_context.stylesheets.is_empty() {
@@ -819,6 +868,9 @@ impl Project {
             md.push_str("## Whole-page requests and precedence\n\nFor each request with scope=page, change the whole page to satisfy this request; keep content and IDs unless asked. Its complete page source is listed above. The rectangle describes page intent, not a region root or fixed output size. You may restructure that page's HTML and change its shared CSS and JavaScript. Preserve existing data-desegnos-id elements and their IDs; leave new elements without IDs. Removal needs allowTargetRemoval for selected roots (and their descendants), or an explicit removal request naming the editor ID. Protected content and accepted project decisions remain authoritative; other pages cannot change. No remote code.\n\nThese page-scope rules override the area-only restrictions above only for page-scoped requests. When page and area requests share a page, the page-scoped request owns shared CSS/JavaScript and the surrounding layout. Compose requests from bottom to top by layerOrder (ascending zIndex, with original request order breaking ties). Apply areas layered above the base inside its result, in that order; where boxes overlap, the higher layer wins for its own box only. Full-width page-layout requests (including below-fold one-screen requests) are page-scoped too and refine the page layout in this same order. Element-fix rules and partial-page/conflict rules constrain only their own local regions; they must never freeze the page-scoped request's shared CSS/JavaScript or surrounding structure. Area requests do not independently authorize global changes. Page-scoped requests need no data-desegnos-region wrapper. Conflicted page requests grant no page-wide authority; preserve conflicted local targets/roots even when a page request is implemented.\n\n");
         }
         md.push_str("## Acceptance and review\n\nAccount for every target. Preserve scope, accepted identity, protected content, deliberate exceptions, and the selected generation setting. Coordinate the requested content and placement intent into a complete responsive layout. Implement actual browser behavior; disclose missing configuration. Preview and exported behavior must agree. Describe component choices, proposed identity/decision changes, and concrete design criticism. Never silently apply a new project-wide rule or replace an intentional style solely to follow a convention.\n");
+        if let Some(batch) = batch {
+            md.push_str(&batch_instructions(batch));
+        }
         let mut dependencies = BTreeMap::new();
         for (page, region) in targets {
             dependencies.insert(
@@ -917,6 +969,7 @@ impl Project {
                 .collect::<std::collections::BTreeSet<_>>()
                 .len(),
             documents: document_context.documents,
+            batch: batch.cloned(),
             dependencies,
             dossier_context,
             request_history: String::new(),
@@ -1163,6 +1216,7 @@ impl RequirementsSnapshot {
             format,
             self.dossier_context.clone(),
             self.capabilities.clone(),
+            self.batch.as_ref(),
         )?;
         expected.set_request_history(self.request_history.clone())?;
         ensure(
@@ -1170,6 +1224,146 @@ impl RequirementsSnapshot {
             "The requirements document or its target metadata disagrees with the project snapshot.",
         )
     }
+
+    /// Documents repeated in a later sequential part as read-only reference.
+    pub fn reference_documents(&self) -> BTreeSet<crate::DocumentTarget> {
+        if !self
+            .batch
+            .as_ref()
+            .is_some_and(|batch| batch.part.is_some_and(|part| part > 1))
+        {
+            return BTreeSet::new();
+        }
+        self.documents
+            .iter()
+            .filter(|included| included.reason == crate::DocumentReason::Framed)
+            .map(|included| included.document.clone())
+            .collect()
+    }
+
+    /// Documents this snapshot may return changed source for.
+    pub fn editable_documents(&self) -> BTreeSet<crate::DocumentTarget> {
+        let reference = self.reference_documents();
+        self.documents
+            .iter()
+            .filter(|included| !reference.contains(&included.document))
+            .map(|included| included.document.clone())
+            .collect()
+    }
+
+    /// Pages this snapshot may return changed source for.
+    pub fn editable_pages(&self) -> BTreeSet<Uuid> {
+        self.editable_documents()
+            .into_iter()
+            .filter_map(|document| match document {
+                crate::DocumentTarget::Page { page_id } => Some(page_id),
+                crate::DocumentTarget::SiteFile { .. } => None,
+            })
+            .collect()
+    }
+
+    /// How many sequential parts this request's editable documents need. One means the request
+    /// is sent and applied as a single provider call.
+    pub fn document_part_count(&self, project: &Project) -> Result<usize> {
+        if self.format_version()? < 25 || project.id != self.project_id {
+            return Ok(1);
+        }
+        let targets = ordered_targets(project, &self.target_ids()?)?;
+        Ok(project
+            .document_plan(&targets, self.is_flexible())?
+            .parts
+            .len())
+    }
+
+    /// The frozen requirements packet for one part of this same batched request. Later parts
+    /// receive the earlier parts' summaries and shared CSS so they stay consistent.
+    pub fn batched_part(&self, project: &Project, part: usize, earlier: &str) -> Result<Self> {
+        self.with_batch(
+            project,
+            DocumentBatchContext {
+                part: Some(part),
+                parts: self.document_part_count(project)?,
+                earlier: earlier.into(),
+                sources: true,
+            },
+        )
+    }
+
+    /// Every editable document with its hash but without its source. Desegnos uses this copy only
+    /// to validate and apply the merged result of all parts; it is never sent to the provider.
+    pub fn merged_documents(&self, project: &Project) -> Result<Self> {
+        self.with_batch(
+            project,
+            DocumentBatchContext {
+                part: None,
+                parts: self.document_part_count(project)?,
+                earlier: String::new(),
+                sources: false,
+            },
+        )
+    }
+
+    fn with_batch(&self, project: &Project, batch: DocumentBatchContext) -> Result<Self> {
+        ensure(
+            self.format_version()? >= 25,
+            "Batched requests need new generation requirements.",
+        )?;
+        ensure(batch.parts > 0, "The batched request has no parts.")?;
+        let targets = ordered_targets(project, &self.target_ids()?)?;
+        let mut next = project.requirements_for(
+            self.job_id,
+            self.base_revision,
+            &targets,
+            self.format_version()?,
+            self.dossier_context.clone(),
+            self.capabilities.clone(),
+            Some(&batch),
+        )?;
+        next.set_request_history(self.request_history.clone())?;
+        Ok(next)
+    }
+}
+
+fn ordered_targets<'a>(
+    project: &'a Project,
+    ids: &[(Uuid, Uuid)],
+) -> Result<Vec<(&'a Page, &'a Region)>> {
+    let targets: Vec<_> = project
+        .pages
+        .iter()
+        .flat_map(|page| {
+            page.regions
+                .iter()
+                .filter(|region| ids.contains(&(page.id, region.id)))
+                .map(move |region| (page, region))
+        })
+        .collect();
+    ensure(
+        targets.len() == ids.len(),
+        "A requested area was removed. Generate new requirements.",
+    )?;
+    Ok(targets)
+}
+
+fn batch_instructions(batch: &DocumentBatchContext) -> String {
+    let mut text = String::from("\n## Sequential request parts\n\n");
+    match batch.part {
+        Some(part) => {
+            text.push_str(&format!("This is part {part} of {} of one request. Desegnos merges every part's result and applies them as one change, so the user reviews and undoes them together. Change only the documents listed as editable for this part. Documents supplied as read-only reference and other parts' documents stay exactly as they are; do not return their source. Account for every requested area once: an area already implemented in an earlier part stays implemented and is not repeated. Keep this part consistent with the summaries and shared CSS from earlier parts below.\n\n", batch.parts));
+            if part > 1 {
+                text.push_str("The framed or host documents above are read-only reference in this part; only the documents listed for this part may change.\n\n");
+            }
+        }
+        None => {
+            text.push_str(&format!("This job was sent as {} sequential parts. This copy lists every editable document with its hash but without its source; Desegnos uses it only to validate and apply the merged result, never as a provider request.\n\n", batch.parts));
+        }
+    }
+    if !batch.earlier.trim().is_empty() {
+        text.push_str("### Earlier parts\n\n");
+        text.push_str(batch.earlier.trim());
+        text.push_str("\n\n");
+    }
+    text
 }
 
 fn region_digest(page: &Page, region: &Region, format: u8) -> Result<String> {
@@ -1244,6 +1438,7 @@ mod transparency_tests {
                 format,
                 None,
                 Some(GenerationCapabilities::default()),
+                None,
             )
             .unwrap()
     }
@@ -1411,6 +1606,7 @@ mod whole_page_legacy_tests {
                     format,
                     None,
                     (format >= 9).then(GenerationCapabilities::default),
+                    None,
                 )
                 .unwrap()
             };
@@ -1467,6 +1663,7 @@ mod request_history_legacy_tests {
                     format,
                     (format >= 4).then(|| context.clone()),
                     (format >= 9).then(GenerationCapabilities::default),
+                    None,
                 )
                 .unwrap();
             assert_eq!(
@@ -1492,6 +1689,7 @@ mod request_history_legacy_tests {
                 19,
                 Some(context),
                 Some(GenerationCapabilities::default()),
+                None,
             )
             .unwrap();
         assert!(!newest.markdown.contains("Previous generation notes"));

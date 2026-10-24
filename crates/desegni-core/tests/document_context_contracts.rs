@@ -179,7 +179,7 @@ fn a_request_drawn_before_framed_editing_gains_its_document_before_prepare() {
     assert_eq!(adopted.adopt_frame_targets().unwrap(), adopted);
 
     let snapshot = adopted.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 24);
+    assert_eq!(snapshot.format_version().unwrap(), 25);
     assert!(snapshot.markdown.contains("## Framed document requests"));
     assert!(snapshot.markdown.contains("All projects"));
     assert!(
@@ -579,7 +579,7 @@ fn chosen_pages_are_editable_and_changed_in_flexible_and_precise() {
         let region = &project.pages[0].regions[0];
         assert_eq!(region.pages, vec![PageSelection::page(atlas)]);
         let snapshot = project.prepare_requirements().unwrap();
-        assert_eq!(snapshot.format_version().unwrap(), 24);
+        assert_eq!(snapshot.format_version().unwrap(), 25);
         assert_eq!(
             included(&snapshot),
             vec![DocumentTarget::page(index), DocumentTarget::page(atlas)]
@@ -696,18 +696,14 @@ fn a_page_group_and_all_pages_expand_on_the_request() {
     }
     assert!(!documents.contains(&DocumentTarget::page(about)));
 
-    let all = select_pages(
-        project.clone(),
-        region_id,
-        vec![PageSelection::All],
-    );
+    let all = select_pages(project.clone(), region_id, vec![PageSelection::All]);
     let all = all.adopt_frame_targets().unwrap();
     let snapshot = all.prepare_requirements().unwrap();
     assert!(included(&snapshot).contains(&DocumentTarget::page(about)));
 }
 
 #[test]
-fn a_selection_larger_than_the_source_budget_reports_how_many_pages_fit() {
+fn a_selection_larger_than_the_source_budget_splits_into_sequential_parts() {
     let (project, _index, atlas, borealis) = page_project(GenerationMode::Fuzzy);
     let mut project = project;
     let filler = "Tall case study text. ".repeat(7_600);
@@ -725,7 +721,7 @@ fn a_selection_larger_than_the_source_budget_reports_how_many_pages_fit() {
     let project = select_pages(project, region_id, vec![PageSelection::All]);
     let project = project.adopt_frame_targets().unwrap();
 
-    // The three large pages split into two sequential batches, framed document aside.
+    // The three large pages split into two sequential parts, framed document aside.
     let documents = vec![
         DocumentTarget::page(atlas),
         DocumentTarget::page(borealis),
@@ -736,14 +732,57 @@ fn a_selection_larger_than_the_source_budget_reports_how_many_pages_fit() {
         .unwrap();
     assert_eq!(batches.len(), 2, "{batches:?}");
     assert_eq!(batches[0].documents.len(), 2);
-    assert!(batches.iter().all(|batch| batch.bytes <= MAX_DOCUMENT_CONTEXT_BYTES));
-
-    let error = project.prepare_requirements().unwrap_err().to_string();
     assert!(
-        error.contains("These 4 pages are too large for one request. 3 fit")
-            && error.contains("choose fewer pages"),
-        "{error}"
+        batches
+            .iter()
+            .all(|batch| batch.bytes <= MAX_DOCUMENT_CONTEXT_BYTES)
     );
+
+    let about = project.pages[4].id;
+    let snapshot = project.prepare_requirements().unwrap();
+    assert_eq!(snapshot.document_part_count(&project).unwrap(), 2);
+    let first = snapshot.batched_part(&project, 1, "").unwrap();
+    let second = snapshot
+        .batched_part(&project, 2, "Part 1 tidied the framed document.")
+        .unwrap();
+    assert_eq!(first.batch.as_ref().unwrap().part, Some(1));
+    assert_eq!(second.batch.as_ref().unwrap().part, Some(2));
+    assert!(first.markdown.contains("part 1 of 2"));
+    assert!(second.markdown.contains("part 2 of 2"));
+    assert!(
+        second
+            .markdown
+            .contains("Part 1 tidied the framed document.")
+    );
+    assert!(
+        first
+            .documents
+            .iter()
+            .any(|included| included.document == DocumentTarget::page(atlas))
+    );
+    assert!(
+        second
+            .documents
+            .iter()
+            .any(|included| included.document == DocumentTarget::page(about))
+    );
+    assert!(
+        !first
+            .documents
+            .iter()
+            .any(|included| included.document == DocumentTarget::page(about))
+    );
+    first.validate_current(&project).unwrap();
+    second.validate_current(&project).unwrap();
+    let merged = snapshot.merged_documents(&project).unwrap();
+    merged.validate_current(&project).unwrap();
+    for page_id in [atlas, borealis, about] {
+        assert!(
+            merged
+                .dependencies
+                .contains_key(&format!("document:page:{page_id}"))
+        );
+    }
 }
 
 #[test]
@@ -776,7 +815,12 @@ fn precise_requests_include_chosen_site_documents_and_their_stylesheets() {
     let project = project.adopt_frame_targets().unwrap();
     let snapshot = project.prepare_requirements().unwrap();
     let documents = included(&snapshot);
-    assert_eq!(documents[0], DocumentTarget::SiteFile { path: index.clone() });
+    assert_eq!(
+        documents[0],
+        DocumentTarget::SiteFile {
+            path: index.clone()
+        }
+    );
     for path in [&atlas, &borealis] {
         assert!(
             documents.contains(&DocumentTarget::SiteFile { path: path.clone() }),
@@ -809,4 +853,250 @@ fn precise_requests_include_chosen_site_documents_and_their_stylesheets() {
         ],
     );
     changed.validate(&snapshot, &project).unwrap();
+}
+
+fn tall_pages(project: &mut Project, page_ids: &[Uuid], bytes: usize) {
+    let filler = "Tall case study text. ".repeat(bytes / 20);
+    for page_id in page_ids {
+        let page = project
+            .pages
+            .iter_mut()
+            .find(|page| page.id == *page_id)
+            .unwrap();
+        page.content = Some(content(&format!(
+            "<!doctype html>\n<html><body><main><h1>Case study</h1><p>{filler}</p></main></body></html>"
+        )));
+    }
+}
+
+#[test]
+fn a_batched_selection_partitions_each_part_within_the_source_budget() {
+    let (project, _index, atlas, borealis) = page_project(GenerationMode::Fuzzy);
+    let mut project = project;
+    let about = project.pages[4].id;
+    tall_pages(&mut project, &[atlas, borealis, about], 152_000);
+    let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+    let project = select_pages(project, region_id, vec![PageSelection::All]);
+    let project = project.adopt_frame_targets().unwrap();
+
+    let plan = project
+        .document_plan(
+            &project.pages[0]
+                .regions
+                .iter()
+                .map(|region| (&project.pages[0], region))
+                .collect::<Vec<_>>(),
+            true,
+        )
+        .unwrap();
+    assert_eq!(plan.parts.len(), 2, "{plan:?}");
+    for part in &plan.parts {
+        assert!(
+            part.bytes <= MAX_DOCUMENT_CONTEXT_BYTES,
+            "{} bytes",
+            part.bytes
+        );
+        // The framed document is repeated in every part.
+        assert_eq!(part.documents[0].reason, DocumentReason::Framed);
+    }
+    let mut assigned: Vec<DocumentTarget> = plan
+        .parts
+        .iter()
+        .flat_map(|part| {
+            part.documents
+                .iter()
+                .filter(|included| included.reason != DocumentReason::Framed)
+                .map(|included| included.document.clone())
+        })
+        .collect();
+    assigned.sort_by_key(|document| format!("{document:?}"));
+    assigned.dedup();
+    assert_eq!(assigned.len(), 4, "each editable document appears once");
+    assert!(plan.merged.documents.len() > plan.parts[0].documents.len());
+}
+
+#[test]
+fn a_selected_page_larger_than_the_whole_budget_gets_its_own_part() {
+    let (project, _index, atlas, _borealis) = page_project(GenerationMode::Fuzzy);
+    let mut project = project;
+    let about = project.pages[4].id;
+    tall_pages(
+        &mut project,
+        &[atlas],
+        MAX_DOCUMENT_CONTEXT_BYTES + 64 * 1024,
+    );
+    let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+    let project = select_pages(project, region_id, vec![PageSelection::All]);
+
+    let plan = project
+        .document_plan(
+            &project.pages[0]
+                .regions
+                .iter()
+                .map(|region| (&project.pages[0], region))
+                .collect::<Vec<_>>(),
+            true,
+        )
+        .unwrap();
+    assert!(plan.parts.len() > 1);
+    let oversized: Vec<_> = plan
+        .parts
+        .iter()
+        .filter(|part| {
+            part.documents
+                .iter()
+                .any(|included| included.document == DocumentTarget::page(atlas))
+        })
+        .collect();
+    assert_eq!(oversized.len(), 1);
+    assert_eq!(
+        oversized[0]
+            .documents
+            .iter()
+            .filter(|included| included.reason != DocumentReason::Framed)
+            .count(),
+        1,
+        "the oversize page gets its own part"
+    );
+    assert!(
+        !oversized[0]
+            .documents
+            .iter()
+            .any(|included| included.document == DocumentTarget::page(about))
+    );
+    let batches = project
+        .document_batches(
+            &[DocumentTarget::page(about), DocumentTarget::page(atlas)],
+            MAX_DOCUMENT_CONTEXT_BYTES,
+        )
+        .unwrap();
+    assert_eq!(batches.len(), 2);
+    assert!(batches.iter().all(|batch| batch.documents.len() == 1));
+}
+
+#[test]
+fn later_parts_carry_earlier_summaries_and_a_read_only_framed_document() {
+    let (project, index, atlas, borealis) = page_project(GenerationMode::Fuzzy);
+    let mut project = project;
+    let about = project.pages[4].id;
+    tall_pages(&mut project, &[atlas, borealis, about], 152_000);
+    let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+    let project = select_pages(project, region_id, vec![PageSelection::All]);
+    let project = project.adopt_frame_targets().unwrap();
+    let snapshot = project.prepare_requirements().unwrap();
+    assert_eq!(snapshot.document_part_count(&project).unwrap(), 2);
+
+    let earlier =
+        "Part 1 of 2 finished: removed the top gap.\n\n```css\nmain { padding-top: 0; }\n```";
+    let second = snapshot.batched_part(&project, 2, earlier).unwrap();
+    assert!(second.markdown.contains("This is part 2 of 2"));
+    assert!(
+        second
+            .markdown
+            .contains("Part 1 of 2 finished: removed the top gap.")
+    );
+    assert!(second.markdown.contains("main { padding-top: 0; }"));
+    assert!(second.markdown.contains("read-only reference in this part"));
+    assert!(
+        second
+            .documents
+            .iter()
+            .any(|included| included.document == DocumentTarget::page(index))
+    );
+    assert_eq!(second.batch.as_ref().unwrap().part, Some(2));
+    assert_eq!(second.batch.as_ref().unwrap().parts, 2);
+    assert!(second.batch.as_ref().unwrap().sources);
+    second.validate_current(&project).unwrap();
+
+    let first = snapshot.batched_part(&project, 1, "").unwrap();
+    assert!(first.markdown.contains("This is part 1 of 2"));
+    assert!(!first.markdown.contains("Part 1 of 2 finished"));
+    first.validate_current(&project).unwrap();
+}
+
+#[test]
+fn merged_parts_apply_as_one_revision_and_undo_once() {
+    let (project, index, atlas, borealis) = page_project(GenerationMode::Fuzzy);
+    let mut project = project;
+    let about = project.pages[4].id;
+    tall_pages(&mut project, &[atlas, borealis, about], 152_000);
+    let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+    let project = select_pages(project, region_id, vec![PageSelection::All]);
+    let project = project.adopt_frame_targets().unwrap();
+    let snapshot = project.prepare_requirements().unwrap();
+    let parts = snapshot.document_part_count(&project).unwrap();
+    assert_eq!(parts, 2);
+    let merged_requirements = snapshot.merged_documents(&project).unwrap();
+    assert!(
+        merged_requirements.markdown.contains("without its source"),
+        "the merged copy never embeds document sources"
+    );
+
+    let mut candidates = Vec::new();
+    for part in 1..=parts {
+        let packet = snapshot.batched_part(&project, part, "").unwrap();
+        let pages: Vec<GeneratedPage> = packet
+            .documents
+            .iter()
+            .filter_map(|included| {
+                // Later parts receive the framed document as read-only reference only.
+                if packet
+                    .batch
+                    .as_ref()
+                    .is_some_and(|batch| batch.part.is_some_and(|part| part > 1))
+                    && included.reason == DocumentReason::Framed
+                {
+                    return None;
+                }
+                let DocumentTarget::Page { page_id } = included.document else {
+                    return None;
+                };
+                let source = project.page(page_id).ok()?.content.clone()?;
+                let marker = format!("merged part {part}");
+                Some(GeneratedPage {
+                    page_id,
+                    content: SiteContent {
+                        html: source
+                            .html
+                            .replace("</main>", &format!("<p>{marker}</p></main>")),
+                        ..source
+                    },
+                })
+            })
+            .collect();
+        let candidate = candidate(&project, &packet, pages, vec![]);
+        candidate.validate(&packet, &project).unwrap();
+        candidates.push(candidate);
+    }
+    let merged = merge_document_batches(
+        merged_requirements.job_id,
+        &merged_requirements.sha256,
+        &candidates,
+        &[],
+    )
+    .unwrap();
+    merged.validate(&merged_requirements, &project).unwrap();
+
+    let mut session = Session::new(project.clone()).unwrap();
+    let before = session.project().pages.clone();
+    session
+        .apply_generation(&merged_requirements, &merged, &[], |_| Ok(()))
+        .unwrap();
+    assert_eq!(session.project().revision, project.revision + 1);
+    for page_id in [index, atlas, borealis, about] {
+        assert!(
+            session
+                .project()
+                .page(page_id)
+                .unwrap()
+                .content
+                .as_ref()
+                .unwrap()
+                .html
+                .contains("merged part"),
+            "page {page_id} was changed"
+        );
+    }
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages, before);
 }

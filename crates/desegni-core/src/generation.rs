@@ -308,8 +308,26 @@ impl GenerationCandidate {
                 }
             }
         }
+        // Format 25: a sequential part may change only its own documents. The framed documents
+        // are repeated in every later part as read-only reference.
+        let reference_documents = snapshot.reference_documents();
+        let owned_documents = snapshot.editable_documents();
+        let owned_pages = snapshot.editable_pages();
+        if snapshot
+            .batch
+            .as_ref()
+            .is_some_and(|batch| batch.part.is_some())
+        {
+            allowed_pages.retain(|page_id| owned_pages.contains(page_id));
+            allowed_documents.retain(|document| owned_documents.contains(document));
+            required_pages.retain(|page_id| owned_pages.contains(page_id));
+            required_documents.retain(|document| owned_documents.contains(document));
+        }
         // Format 23: a Flexible request may also update the documents it was given.
         for included in &snapshot.documents {
+            if reference_documents.contains(&included.document) {
+                continue;
+            }
             match &included.document {
                 crate::DocumentTarget::Page { page_id } => {
                     allowed_pages.insert(*page_id);
@@ -528,6 +546,126 @@ impl GenerationCandidate {
             "Resolve unavailable component requirements before applying this generation.",
         )
     }
+}
+
+/// Merge the independently validated results of a batched request into one candidate. A region
+/// implemented by any part wins over a conflict; page and document updates are disjoint by
+/// construction because every part may change only its own documents.
+pub fn merge_document_batches(
+    job_id: Uuid,
+    requirements_sha256: &str,
+    batches: &[GenerationCandidate],
+    unresolved: &[(Uuid, String)],
+) -> Result<GenerationCandidate> {
+    ensure(
+        !batches.is_empty(),
+        "A batched result needs at least one part.",
+    )?;
+    let mut merged = GenerationCandidate {
+        job_id,
+        requirements_sha256: requirements_sha256.into(),
+        summary: String::new(),
+        regions: Vec::new(),
+        pages: Vec::new(),
+        documents: Vec::new(),
+        component_requests: Vec::new(),
+        decision_proposals: Vec::new(),
+        criticism: Vec::new(),
+    };
+    let mut summaries: Vec<String> = Vec::new();
+    for candidate in batches {
+        if !candidate.summary.trim().is_empty() {
+            summaries.push(candidate.summary.trim().to_string());
+        }
+        for outcome in &candidate.regions {
+            match merged
+                .regions
+                .iter_mut()
+                .find(|existing| existing.region_id == outcome.region_id)
+            {
+                Some(existing) if existing.status == RegionStatus::Implemented => {}
+                Some(existing) if outcome.status == RegionStatus::Implemented => {
+                    *existing = outcome.clone();
+                }
+                Some(_) => {}
+                None => merged.regions.push(outcome.clone()),
+            }
+        }
+        for page in &candidate.pages {
+            if !merged
+                .pages
+                .iter()
+                .any(|existing| existing.page_id == page.page_id)
+            {
+                merged.pages.push(page.clone());
+            }
+        }
+        for document in &candidate.documents {
+            if !merged
+                .documents
+                .iter()
+                .any(|existing| existing.document == document.document)
+            {
+                merged.documents.push(document.clone());
+            }
+        }
+        for request in &candidate.component_requests {
+            if !merged.component_requests.iter().any(|existing| {
+                existing.region_id == request.region_id
+                    && existing
+                        .capability
+                        .eq_ignore_ascii_case(&request.capability)
+            }) {
+                merged.component_requests.push(request.clone());
+            }
+        }
+        for proposal in &candidate.decision_proposals {
+            if !merged.decision_proposals.iter().any(|existing| {
+                existing.scope == proposal.scope
+                    && existing
+                        .topic
+                        .trim()
+                        .eq_ignore_ascii_case(&proposal.topic.trim())
+            }) {
+                merged.decision_proposals.push(proposal.clone());
+            }
+        }
+        for criticism in &candidate.criticism {
+            if !merged.criticism.iter().any(|existing| {
+                existing.region_id == criticism.region_id && existing.message == criticism.message
+            }) {
+                merged.criticism.push(criticism.clone());
+            }
+        }
+    }
+    // Every requested area must be accounted for even when its part failed.
+    for (region_id, explanation) in unresolved {
+        if merged
+            .regions
+            .iter()
+            .any(|existing| existing.region_id == *region_id)
+        {
+            continue;
+        }
+        merged.regions.push(RegionOutcome {
+            region_id: *region_id,
+            status: RegionStatus::Conflict,
+            explanation: explanation.chars().take(MAX_EXPLANATION_CHARS).collect(),
+        });
+    }
+    merged.summary = summaries
+        .join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(16_384)
+        .collect();
+    if merged.summary.is_empty() {
+        merged.summary = "The parts of this request were applied separately.".into();
+    }
+    merged.validate_bounds()?;
+    Ok(merged)
 }
 
 impl Project {

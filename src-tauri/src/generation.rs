@@ -81,6 +81,12 @@ pub enum JobStatus {
     Applied,
 }
 
+impl Default for JobStatus {
+    fn default() -> Self {
+        Self::Prepared
+    }
+}
+
 impl JobStatus {
     fn active(self) -> bool {
         matches!(
@@ -122,6 +128,28 @@ struct GenerationArea {
     frame_rect: Option<desegni_core::Rect>,
 }
 
+/// One sequential part of a request whose editable documents exceed the source budget.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GenerationBatch {
+    part: usize,
+    requirements: RequirementsSnapshot,
+    #[serde(default)]
+    estimate_usd: f64,
+    #[serde(default)]
+    candidate: Option<GenerationCandidate>,
+    #[serde(default)]
+    status: JobStatus,
+    #[serde(default)]
+    message: String,
+    #[serde(default)]
+    validation_events: Vec<desegni_core::ValidationEvent>,
+    #[serde(default)]
+    documents: Vec<desegni_core::DocumentTarget>,
+    #[serde(default)]
+    repair_rounds: usize,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerationJobView {
@@ -129,6 +157,13 @@ pub struct GenerationJobView {
     project_id: Uuid,
     base_revision: u64,
     requirements: RequirementsSnapshot,
+    /// Format 25: one frozen packet per sequential part.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    batches: Vec<GenerationBatch>,
+    /// Format 25: every editable document without sources, used to validate and apply the
+    /// merged result of all parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    merged_requirements: Option<RequirementsSnapshot>,
     #[serde(default)]
     source_fingerprints: BTreeMap<Uuid, BTreeMap<String, String>>,
     #[serde(default)]
@@ -181,6 +216,65 @@ pub struct GenerationJobView {
     recommended_decision_indices: Vec<usize>,
     #[serde(default)]
     dossier_error: Option<String>,
+}
+
+impl GenerationJobView {
+    /// The snapshot that validates and applies the complete result. A batched job uses the
+    /// merged document set; a single request uses its only snapshot.
+    fn request_requirements(&self) -> &RequirementsSnapshot {
+        self.merged_requirements
+            .as_ref()
+            .unwrap_or(&self.requirements)
+    }
+
+    /// What earlier parts already changed, so the next part stays consistent. Each finished
+    /// part contributes its summary and the shared CSS it produced; a failed part is named so
+    /// later parts do not silently repeat it.
+    fn batch_earlier(&self, index: usize) -> String {
+        let total = self.batches.len();
+        let mut text = String::new();
+        for batch in self.batches.iter().take(index) {
+            match &batch.candidate {
+                Some(candidate) => {
+                    text.push_str(&format!(
+                        "Part {} of {total} finished: {}\n",
+                        batch.part,
+                        candidate.summary.trim()
+                    ));
+                    let mut styles = Vec::new();
+                    for page in &candidate.pages {
+                        if !page.content.css.trim().is_empty() {
+                            styles.push(page.content.css.as_str());
+                        }
+                    }
+                    for document in &candidate.documents {
+                        if !document.content.css.trim().is_empty() {
+                            styles.push(document.content.css.as_str());
+                        }
+                    }
+                    if !styles.is_empty() {
+                        text.push_str(
+                            "\nShared CSS after earlier parts. Keep later parts consistent with it:\n\n```css\n",
+                        );
+                        for css in styles {
+                            text.push_str(&css.chars().take(8_000).collect::<String>());
+                            text.push('\n');
+                        }
+                        text.push_str("```\n\n");
+                    }
+                }
+                None => text.push_str(&format!(
+                    "Part {} of {total} did not finish; do not repeat its work.\n",
+                    batch.part
+                )),
+            }
+            if text.chars().count() > 32_000 {
+                text = text.chars().take(32_000).collect();
+                break;
+            }
+        }
+        text
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -641,6 +735,13 @@ impl GenerationService {
     fn persist(&mut self, record: JobRecord) -> NativeResult<GenerationJobView> {
         let directory = self.job_directory(record.view.project_id, record.view.job_id);
         private_directory(&directory)?;
+        // The on-disk REQUIREMENTS.md is the job's first packet; later parts are frozen in the
+        // job record with the summaries they carried forward.
+        let primary = record
+            .view
+            .batches
+            .first()
+            .map_or(&record.view.requirements, |batch| &batch.requirements);
         let markdown = directory.join("REQUIREMENTS.md");
         if markdown.exists() {
             regular_file(&markdown)?;
@@ -656,11 +757,11 @@ impl GenerationService {
             file.take(desegni_core::MAX_REQUIREMENTS_BYTES as u64 + 1)
                 .read_to_end(&mut existing)
                 .map_err(message)?;
-            if existing != record.view.requirements.markdown.as_bytes() {
+            if existing != primary.markdown.as_bytes() {
                 return Err("The frozen requirements file changed on disk. The existing record was preserved.".into());
             }
         } else {
-            write_markdown(&markdown, &record.view.requirements.markdown).map_err(message)?;
+            write_markdown(&markdown, &primary.markdown).map_err(message)?;
         }
         if let Some(context) = &record.view.context {
             if context.markdown.len() > desegni_core::MAX_REQUIREMENTS_BYTES
@@ -771,7 +872,7 @@ impl GenerationService {
             _ => "drafted",
         };
         let mut entries = desegni_core::earlier_requests(
-            &view.requirements,
+            view.request_requirements(),
             created,
             outcome,
             view.candidate
@@ -1226,10 +1327,16 @@ impl GenerationService {
                 attempt.status = JobStatus::Unknown;
                 attempt.finished_at = Some(now());
             }
+            for batch in &mut record.view.batches {
+                if batch.status == JobStatus::Generating {
+                    batch.status = JobStatus::Unknown;
+                    batch.message = record.view.message.clone();
+                }
+            }
             return self.persist(record).map(Some);
         }
         if record.view.status == JobStatus::Ready
-            && let Err(error) = record.view.requirements.validate_current(project)
+            && let Err(error) = record.view.request_requirements().validate_current(project)
         {
             record.view.status = JobStatus::Blocked;
             record.view.message = format!(
@@ -1237,16 +1344,29 @@ impl GenerationService {
             );
             return self.persist(record).map(Some);
         }
+        // A partially failed batched job keeps its finished parts for Try again; it must not
+        // become applyable before the failed parts are retried.
+        let batches_complete = record.view.batches.is_empty()
+            || record
+                .view
+                .batches
+                .iter()
+                .all(|batch| batch.status == JobStatus::Ready);
         if record.view.status == JobStatus::Blocked
+            && batches_complete
             && record
                 .view
                 .candidate
                 .as_ref()
-                .is_some_and(|candidate| candidate.can_apply(&record.view.requirements))
-            && record.view.requirements.validate_current(project).is_ok()
+                .is_some_and(|candidate| candidate.can_apply(record.view.request_requirements()))
+            && record
+                .view
+                .request_requirements()
+                .validate_current(project)
+                .is_ok()
             && record.view.candidate.as_ref().is_some_and(|candidate| {
                 candidate
-                    .validate(&record.view.requirements, project)
+                    .validate(record.view.request_requirements(), project)
                     .is_ok()
             })
         {
@@ -1341,14 +1461,14 @@ impl GenerationService {
         );
         let history = self.request_history(project)?;
         let retry_targets: Vec<_> = previous
-            .map(|view| view.requirements.target_ids())
+            .map(|view| view.request_requirements().target_ids())
             .transpose()
             .map_err(message)?
             .unwrap_or_default()
             .into_iter()
             .map(|(_, id)| id)
             .collect();
-        let requirements = if let Some(ids) = region_ids {
+        let mut requirements = if let Some(ids) = region_ids {
             project.prepare_targeted_requirements(capabilities, ids)
         } else if previous.is_some() {
             project.prepare_targeted_requirements(capabilities, &retry_targets)
@@ -1405,16 +1525,77 @@ impl GenerationService {
         let repair = requirements
             .validation_repair(&draft_feedback)
             .map_err(message)?;
-        let estimate = self
-            .adapter(provider)?
-            .estimate(
-                authentication,
-                repair.as_ref().unwrap_or(&requirements),
-                project.generation_mode,
-                &desegni_core::result_schema(&requirements),
-                &settings,
+        // Format 25: a selection beyond the source budget becomes sequential parts inside this
+        // one job. Every part keeps the same provider settings, cancellation and review.
+        let part_count = requirements.document_part_count(project).map_err(message)?;
+        let mut batches = Vec::new();
+        let mut merged_requirements = None;
+        let estimate = if part_count > 1 {
+            let merged = requirements.merged_documents(project).map_err(message)?;
+            let mut total = 0.0;
+            for part in 1..=part_count {
+                let packet = requirements
+                    .batched_part(project, part, "")
+                    .map_err(message)?;
+                let batch_estimate = self
+                    .adapter(provider)?
+                    .estimate(
+                        authentication,
+                        &packet,
+                        project.generation_mode,
+                        &desegni_core::result_schema(&packet),
+                        &settings,
+                    )
+                    .map_err(message)?;
+                total += batch_estimate.estimate_usd;
+                batches.push(GenerationBatch {
+                    part,
+                    documents: packet
+                        .documents
+                        .iter()
+                        .map(|item| item.document.clone())
+                        .collect(),
+                    requirements: packet,
+                    estimate_usd: batch_estimate.estimate_usd,
+                    candidate: None,
+                    status: JobStatus::Prepared,
+                    message: format!("Batch {part} of {part_count} is ready."),
+                    validation_events: vec![],
+                    repair_rounds: 0,
+                });
+            }
+            if !spending_within_limit(authentication, total, settings.spending_limit_usd) {
+                return Err(format!(
+                    "This request needs {part_count} batches. Their combined estimate ${total:.2} exceeds the spending limit ${:.2}. Raise the limit or choose fewer pages.",
+                    settings.spending_limit_usd
+                ));
+            }
+            requirements = batches[0].requirements.clone();
+            merged_requirements = Some(merged);
+            Some(total)
+        } else {
+            Some(
+                self.adapter(provider)?
+                    .estimate(
+                        authentication,
+                        repair.as_ref().unwrap_or(&requirements),
+                        project.generation_mode,
+                        &desegni_core::result_schema(&requirements),
+                        &settings,
+                    )
+                    .map_err(message)?
+                    .estimate_usd,
             )
-            .map_err(message)?;
+        };
+        let estimate_usd = estimate.unwrap_or(0.0);
+        let fingerprints = merged_requirements.as_ref().unwrap_or(&requirements);
+        let message = if part_count > 1 {
+            format!("Ready to send in {part_count} batches.")
+        } else if authentication == AuthenticationMethod::Chatgpt {
+            "Sending uses this ChatGPT account's plan allowance or credits.".into()
+        } else {
+            "Ready to send.".into()
+        };
         let record = JobRecord {
             version: 1,
             error: None,
@@ -1426,7 +1607,7 @@ impl GenerationService {
                     .pages
                     .iter()
                     .filter(|page| {
-                        requirements
+                        fingerprints
                             .dependencies
                             .contains_key(&format!("source:{}", page.id))
                     })
@@ -1439,6 +1620,8 @@ impl GenerationService {
                     .collect(),
                 applied_source_fingerprints: BTreeMap::new(),
                 requirements,
+                batches,
+                merged_requirements,
                 context: None,
                 draft_feedback,
                 earlier_contexts: vec![],
@@ -1478,13 +1661,9 @@ impl GenerationService {
                 failure_kind: None,
                 provider_error: None,
                 status: JobStatus::Prepared,
-                estimate_usd: estimate.estimate_usd,
+                estimate_usd,
                 received_bytes: 0,
-                message: if authentication == AuthenticationMethod::Chatgpt {
-                    "Sending uses this ChatGPT account's plan allowance or credits.".into()
-                } else {
-                    "Ready to send.".into()
-                },
+                message,
                 candidate: None,
                 usage: None,
                 attempts: vec![],
@@ -1542,6 +1721,42 @@ impl GenerationService {
             .requirements
             .validate_current(project)
             .map_err(message)?;
+        if !record.view.batches.is_empty() {
+            if self.active.contains_key(&job_id) {
+                return Err("A batch of this request is still running.".into());
+            }
+            if record.view.attempts.len() >= MAX_ATTEMPTS {
+                return Err("This frozen job has reached its twenty-attempt limit. Start a separately reviewed job; earlier paid records remain preserved.".into());
+            }
+            if self.active.len() >= 4 {
+                return Err("Four provider requests are already running. Wait for or cancel one before sending another.".into());
+            }
+            let index = if retry {
+                record
+                    .view
+                    .batches
+                    .iter()
+                    .position(|batch| {
+                        matches!(
+                            batch.status,
+                            JobStatus::Failed
+                                | JobStatus::Unknown
+                                | JobStatus::Cancelled
+                                | JobStatus::Blocked
+                                | JobStatus::Generating
+                        )
+                    })
+                    .ok_or("Every batch of this request is already complete. Review or discard its result.")?
+            } else {
+                record
+                    .view
+                    .batches
+                    .iter()
+                    .position(|batch| batch.status == JobStatus::Prepared)
+                    .ok_or("This batched request has no part left to send.")?
+            };
+            return self.start_batch(record, project, index);
+        }
         let repair = record
             .view
             .requirements
@@ -1641,6 +1856,262 @@ impl GenerationService {
         Ok((view, cancellation))
     }
 
+    /// Start one part of a batched request: rebuild its frozen packet with the earlier parts'
+    /// summaries and shared CSS, enforce the spending limit, and register the attempt.
+    fn start_batch(
+        &mut self,
+        mut record: JobRecord,
+        project: &Project,
+        index: usize,
+    ) -> NativeResult<(GenerationJobView, CancellationToken)> {
+        let total = record.view.batches.len();
+        let job_id = record.view.job_id;
+        // Reserve every part up to this one before submitting the next paid request.
+        let spent: f64 = record.view.batches[..=index]
+            .iter()
+            .map(|batch| batch.estimate_usd)
+            .sum();
+        if !spending_within_limit(
+            record.view.authentication,
+            spent,
+            record.view.settings.spending_limit_usd,
+        ) {
+            for batch in &mut record.view.batches[index..] {
+                batch.status = JobStatus::Failed;
+                batch.message =
+                    "Skipped because the batches would exceed the spending limit.".into();
+                batch.validation_events.push(desegni_core::ValidationEvent {
+                    kind: "spendingLimit".into(),
+                    disposition: "conflicted".into(),
+                    region_id: None,
+                    message: format!(
+                        "Batch {} of {total} was not sent: the first {} batches are estimated at ${spent:.2} and the spending limit is ${:.2}.",
+                        index + 1,
+                        index + 1,
+                        record.view.settings.spending_limit_usd
+                    ),
+                });
+            }
+            self.settle_batches(&mut record, project)?;
+            let message = format!(
+                "Batch {} of {total} was not sent: the batches would exceed the ${:.2} spending limit. Raise the limit or choose fewer pages.",
+                index + 1,
+                record.view.settings.spending_limit_usd
+            );
+            record.view.message = message.clone();
+            self.persist_retaining(record)?;
+            return Err(message.into());
+        }
+        let earlier = record.view.batch_earlier(index);
+        let packet = record.view.batches[index]
+            .requirements
+            .batched_part(project, index + 1, &earlier)
+            .map_err(message)?;
+        {
+            let batch = &mut record.view.batches[index];
+            batch.requirements = packet.clone();
+            batch.status = JobStatus::Generating;
+            batch.message = format!("Batch {} of {total}", index + 1);
+            batch.validation_events.clear();
+            batch.repair_rounds = 0;
+        }
+        record.view.requirements = packet;
+        record.view.status = JobStatus::Generating;
+        record.view.message = format!("Batch {} of {total}", index + 1);
+        record.view.candidate = None;
+        record.view.context = None;
+        record.view.earlier_contexts.clear();
+        record.view.first_exchange = None;
+        record.view.validation_events.clear();
+        record.view.validation_counts_recorded = false;
+        record.view.repair_rounds = 0;
+        record.view.repair_area_count = 0;
+        record.view.raw_reply = None;
+        record.view.failure_kind = None;
+        record.view.provider_error = None;
+        record.view.received_bytes = 0;
+        record.error = None;
+        let ordinal = record.view.attempts.len() + 1;
+        record.view.attempts.push(GenerationAttempt {
+            ordinal,
+            status: JobStatus::Generating,
+            started_at: now(),
+            finished_at: None,
+            response_id: None,
+            usage: None,
+        });
+        let view = self.persist(record)?;
+        let cancellation = CancellationToken::new();
+        self.active.insert(job_id, (ordinal, cancellation.clone()));
+        Ok((view, cancellation))
+    }
+
+    /// Start the next unattempted part after a finished part, if any.
+    fn advance_batch(
+        &mut self,
+        project: &Project,
+        job_id: Uuid,
+    ) -> NativeResult<Option<(GenerationJobView, CancellationToken)>> {
+        let Some(record) = self.jobs.get(&job_id).cloned() else {
+            return Ok(None);
+        };
+        if record.view.batches.is_empty() || record.view.status != JobStatus::Generating {
+            return Ok(None);
+        }
+        let Some(index) = record
+            .view
+            .batches
+            .iter()
+            .position(|batch| batch.status == JobStatus::Prepared)
+        else {
+            return Ok(None);
+        };
+        match self.start_batch(record, project, index) {
+            Ok(started) => Ok(Some(started)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    /// Fold one part's result into the job and, once every part is terminal, merge the results
+    /// into the single candidate the user reviews and applies.
+    fn settle_batches(&self, record: &mut JobRecord, project: &Project) -> NativeResult<()> {
+        let total = record.view.batches.len();
+        if let Some(index) = record
+            .view
+            .batches
+            .iter()
+            .position(|batch| batch.status == JobStatus::Prepared)
+        {
+            record.view.status = JobStatus::Generating;
+            record.view.candidate = None;
+            record.view.message = format!("Batch {} of {total}", index + 1);
+            return Ok(());
+        }
+        if record
+            .view
+            .batches
+            .iter()
+            .any(|batch| batch.status == JobStatus::Generating)
+        {
+            record.view.status = JobStatus::Generating;
+            record.view.candidate = None;
+            return Ok(());
+        }
+        let mut usage = None;
+        for attempt in &record.view.attempts {
+            usage = total_usage(usage, attempt.usage);
+        }
+        record.view.usage = usage;
+        let successful: Vec<GenerationCandidate> = record
+            .view
+            .batches
+            .iter()
+            .filter_map(|batch| batch.candidate.clone())
+            .collect();
+        if successful.is_empty() {
+            record.view.candidate = None;
+            let status = if record
+                .view
+                .batches
+                .iter()
+                .any(|batch| batch.status == JobStatus::Cancelled)
+            {
+                JobStatus::Cancelled
+            } else if record
+                .view
+                .batches
+                .iter()
+                .any(|batch| batch.status == JobStatus::Unknown)
+            {
+                JobStatus::Unknown
+            } else if record
+                .view
+                .batches
+                .iter()
+                .any(|batch| batch.status == JobStatus::Failed)
+            {
+                JobStatus::Failed
+            } else {
+                JobStatus::Blocked
+            };
+            record.view.status = status;
+            record.view.message = record
+                .view
+                .batches
+                .iter()
+                .rev()
+                .find(|batch| !batch.message.trim().is_empty())
+                .map(|batch| batch.message.clone())
+                .unwrap_or_else(|| "The request did not finish.".into());
+            return Ok(());
+        }
+        let merged_requirements = record
+            .view
+            .merged_requirements
+            .clone()
+            .ok_or("The batched request has no merged requirements.")?;
+        let covered: BTreeSet<Uuid> = successful
+            .iter()
+            .flat_map(|candidate| candidate.regions.iter().map(|region| region.region_id))
+            .collect();
+        let mut unresolved = Vec::new();
+        for (_, region_id) in merged_requirements.target_ids().map_err(message)? {
+            if covered.contains(&region_id) {
+                continue;
+            }
+            let explanation = record
+                .view
+                .batches
+                .iter()
+                .flat_map(|batch| batch.validation_events.iter())
+                .find(|event| {
+                    event.disposition == "conflicted" && event.region_id == Some(region_id)
+                })
+                .map(|event| event.message.clone())
+                .unwrap_or_else(|| {
+                    "This part of the request did not finish. Try again to complete it.".into()
+                });
+            unresolved.push((region_id, explanation));
+        }
+        let candidate = desegni_core::merge_document_batches(
+            merged_requirements.job_id,
+            &merged_requirements.sha256,
+            &successful,
+            &unresolved,
+        )
+        .map_err(message)?;
+        candidate
+            .validate(&merged_requirements, project)
+            .map_err(message)?;
+        let ready = candidate.is_ready();
+        let completed = record
+            .view
+            .batches
+            .iter()
+            .all(|batch| matches!(batch.status, JobStatus::Ready | JobStatus::Blocked));
+        record.view.candidate = Some(candidate);
+        record.view.status = if ready && completed {
+            JobStatus::Ready
+        } else {
+            JobStatus::Blocked
+        };
+        record.view.message = if ready && completed {
+            "Result ready to apply.".into()
+        } else {
+            let waiting = record
+                .view
+                .batches
+                .iter()
+                .filter(|batch| !matches!(batch.status, JobStatus::Ready | JobStatus::Blocked))
+                .count();
+            format!(
+                "{} of {total} batches finished; {waiting} need attention.",
+                successful.len()
+            )
+        };
+        Ok(())
+    }
+
     fn progress(&mut self, job_id: Uuid, ordinal: usize, progress: desegni_ai::ProviderProgress) {
         if self
             .active
@@ -1731,6 +2202,12 @@ impl GenerationService {
                     record.view.usage = usage;
                 }
                 self.record_validation_counts(&mut record);
+                for batch in &mut record.view.batches {
+                    if batch.status == JobStatus::Generating {
+                        batch.status = record.view.status;
+                        batch.message = record.view.message.clone();
+                    }
+                }
                 self.persist_retaining(record)?;
             }
             self.active.remove(&job_id);
@@ -1772,7 +2249,14 @@ impl GenerationService {
                             .and_then(|project| {
                                 record.view.requirements.validate_current(project).err()
                             });
-                        record.view.status = if candidate.can_apply(&record.view.requirements) && stale.is_none() {
+                        // A sequential part is complete when its own reply validated; the merged
+                        // result decides whether anything can be applied.
+                        let ready = if record.view.batches.is_empty() {
+                            candidate.can_apply(&record.view.requirements)
+                        } else {
+                            candidate.is_ready()
+                        };
+                        record.view.status = if ready && stale.is_none() {
                             JobStatus::Ready
                         } else {
                             JobStatus::Blocked
@@ -1781,7 +2265,7 @@ impl GenerationService {
                             format!(
                                 "The generated result is stale: {error} Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements."
                             )
-                        } else if candidate.can_apply(&record.view.requirements) {
+                        } else if ready {
                             "Result ready to apply.".into()
                         } else {
                             "Some requests need a choice.".into()
@@ -1829,6 +2313,66 @@ impl GenerationService {
                 }
                 record.error = Some(error);
             }
+        }
+        if !record.view.batches.is_empty() {
+            let index = record
+                .view
+                .batches
+                .iter()
+                .position(|batch| batch.status == JobStatus::Generating)
+                .unwrap_or_else(|| record.view.batches.len().saturating_sub(1));
+            let events = std::mem::take(&mut record.view.validation_events);
+            {
+                let batch = &mut record.view.batches[index];
+                batch.candidate = record.view.candidate.take();
+                batch.status = record.view.status;
+                batch.message = record.view.message.clone();
+                batch.validation_events = events.clone();
+                batch.repair_rounds = record.view.repair_rounds;
+                if batch.candidate.is_none()
+                    && matches!(
+                        batch.status,
+                        JobStatus::Failed | JobStatus::Unknown | JobStatus::Cancelled
+                    )
+                    && batch.validation_events.is_empty()
+                {
+                    batch.validation_events.push(desegni_core::ValidationEvent {
+                        kind: "batchFailure".into(),
+                        disposition: "conflicted".into(),
+                        region_id: None,
+                        message: batch.message.clone(),
+                    });
+                }
+            }
+            record.view.validation_events = record.view.batches[index].validation_events.clone();
+            if let Some(attempt) = record.view.attempts.last_mut() {
+                attempt.status = record.view.batches[index].status;
+                attempt.finished_at = Some(now());
+            }
+            if let Err(error) = self.settle_batches(&mut record, original) {
+                record
+                    .view
+                    .validation_events
+                    .push(desegni_core::ValidationEvent {
+                        kind: "batchMerge".into(),
+                        disposition: "conflicted".into(),
+                        region_id: None,
+                        message: error.to_string(),
+                    });
+                record.view.candidate = None;
+                record.view.status = JobStatus::Blocked;
+                record.view.message =
+                    format!("The parts could not be merged into one change: {error}");
+            }
+            if record.view.candidate.is_some() {
+                record.view.failure_kind = None;
+                record.view.provider_error = None;
+                record.error = None;
+            }
+            self.record_validation_counts(&mut record);
+            let _ = self.persist_retaining(record);
+            self.active.remove(&job_id);
+            return Ok(());
         }
         self.record_validation_counts(&mut record);
         if let Some(attempt) = record.view.attempts.last_mut() {
@@ -1942,6 +2486,12 @@ impl GenerationService {
             attempt.status = JobStatus::Cancelled;
             attempt.finished_at = Some(now());
         }
+        for batch in &mut record.view.batches {
+            if batch.status == JobStatus::Generating {
+                batch.status = JobStatus::Cancelled;
+                batch.message = record.view.message.clone();
+            }
+        }
         self.jobs.insert(job_id, record.clone());
         match self.persist(record.clone()) {
             Ok(view) => Ok(view),
@@ -1990,6 +2540,12 @@ impl GenerationService {
             if let Some(attempt) = record.view.attempts.last_mut() {
                 attempt.status = JobStatus::Cancelled;
                 attempt.finished_at = Some(now());
+            }
+            for batch in &mut record.view.batches {
+                if batch.status == JobStatus::Generating {
+                    batch.status = JobStatus::Cancelled;
+                    batch.message = record.view.message.clone();
+                }
             }
             self.jobs.insert(job_id, record.clone());
             if let Err(error) = self.persist(record.clone()) {
@@ -2576,7 +3132,7 @@ fn maintain_dossier(
         return Ok(view);
     };
     if view
-        .requirements
+        .request_requirements()
         .validate_current(workspace.project()?)
         .is_err()
     {
@@ -2584,10 +3140,10 @@ fn maintain_dossier(
     }
     let recommended = workspace
         .project()?
-        .compatible_decision_proposals(&view.requirements, candidate)
+        .compatible_decision_proposals(view.request_requirements(), candidate)
         .map_err(message)?;
     let error = workspace
-        .record_generated(&view.requirements, candidate, view.attempts.len())
+        .record_generated(view.request_requirements(), candidate, view.attempts.len())
         .err();
     if recommended != view.recommended_decision_indices || error != view.dossier_error {
         view.recommended_decision_indices = recommended;
@@ -2637,6 +3193,13 @@ fn total_usage(first: Option<TokenUsage>, second: Option<TokenUsage>) -> Option<
         }),
         (a, b) => b.or(a),
     }
+}
+
+/// A batched request reserves all of its parts against one spending limit. ChatGPT plan usage
+/// is not priced in dollars, so only paid API keys are checked.
+fn spending_within_limit(authentication: AuthenticationMethod, estimated: f64, limit: f64) -> bool {
+    authentication == AuthenticationMethod::Chatgpt
+        || (estimated.is_finite() && limit.is_finite() && estimated <= limit + 0.000_001)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2691,18 +3254,19 @@ async fn submit(
         let (view, cancellation) = service.begin(&project, job_id, retry)?;
         Ok((project, client, view, cancellation))
     };
-    let (original, client, view, cancellation) =
+    let (original, client, view, mut cancellation) =
         if let (Some(account_id), Some(epoch)) = (account_id, epoch) {
             chatgpt.with_epoch(account_id, epoch, begin)?
         } else {
             begin()?
         };
     let job_id = view.job_id;
-    let request = view.clone();
+    let mut request = view.clone();
     tauri::async_runtime::spawn(async move {
-        let ordinal = request.attempts.len();
-        let mut image_notice = None;
-        let result = async {
+        loop {
+            let ordinal = request.attempts.len();
+            let mut image_notice = None;
+            let result = async {
             // Keep preparation local. All credential refresh/model discovery belongs to
             // the registered, cancellable attempt, before any paid generation submission.
             let credentials = async {
@@ -2991,35 +3555,48 @@ async fn submit(
                 Err(error) => Err(error),
             }
         }.await;
-        let workspace_state = app.state::<Mutex<Workspace>>();
-        let service_state = app.state::<Mutex<GenerationService>>();
-        if let Ok(mut workspace) = workspace_state.lock()
-            && let Ok(mut service) = service_state.lock()
-        {
-            let current = workspace.project().ok().cloned();
-            if let Err(error) = service.finish(&original, current.as_ref(), job_id, ordinal, result)
+            let workspace_state = app.state::<Mutex<Workspace>>();
+            let service_state = app.state::<Mutex<GenerationService>>();
+            let mut next = None;
+            if let Ok(mut workspace) = workspace_state.lock()
+                && let Ok(mut service) = service_state.lock()
             {
-                service.handle_finish_error(job_id, ordinal, &error);
-            } else if current
-                .as_ref()
-                .is_some_and(|project| project.id == original.id)
-                && let Some(record) = service.jobs.get(&job_id)
-            {
-                let view = record.view.clone();
-                if let Err(error) = maintain_dossier(&mut workspace, &mut service, view)
-                    && let Some(record) = service.jobs.get_mut(&job_id)
+                let current = workspace.project().ok().cloned();
+                if let Err(error) =
+                    service.finish(&original, current.as_ref(), job_id, ordinal, result)
                 {
-                    record.view.dossier_error = Some(format!(
-                        "The result is preserved, but its project dossier could not be saved: {error}"
-                    ));
+                    service.handle_finish_error(job_id, ordinal, &error);
+                } else if current
+                    .as_ref()
+                    .is_some_and(|project| project.id == original.id)
+                    && let Some(record) = service.jobs.get(&job_id)
+                {
+                    let view = record.view.clone();
+                    if let Err(error) = maintain_dossier(&mut workspace, &mut service, view)
+                        && let Some(record) = service.jobs.get_mut(&job_id)
+                    {
+                        record.view.dossier_error = Some(format!(
+                            "The result is preserved, but its project dossier could not be saved: {error}"
+                        ));
+                    }
                 }
+                if let Some(notice) = image_notice
+                    && let Some(mut record) = service.jobs.get(&job_id).cloned()
+                {
+                    record.view.message.push(' ');
+                    record.view.message.push_str(&notice);
+                    let _ = service.persist_retaining(record);
+                }
+                // Continue with the next sequential part inside this same job, using the same
+                // provider settings and cancellation contract.
+                next = service.advance_batch(&original, job_id).ok().flatten();
             }
-            if let Some(notice) = image_notice
-                && let Some(mut record) = service.jobs.get(&job_id).cloned()
-            {
-                record.view.message.push(' ');
-                record.view.message.push_str(&notice);
-                let _ = service.persist_retaining(record);
+            match next {
+                Some((view, token)) => {
+                    request = view;
+                    cancellation = token;
+                }
+                None => break,
             }
         }
     });
@@ -3113,7 +3690,7 @@ pub fn apply_generation(
     workspace
         .project()?
         .apply_generation(
-            &record.view.requirements,
+            record.view.request_requirements(),
             candidate,
             &accepted_decision_indices,
         )
@@ -3140,7 +3717,7 @@ pub fn apply_generation(
     record.view.accepted_decision_indices = accepted_decision_indices.clone();
     service.persist(record.clone())?;
     if let Err(error) = workspace.apply_generated(
-        &record.view.requirements,
+        record.view.request_requirements(),
         record
             .view
             .candidate
