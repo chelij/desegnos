@@ -20,6 +20,8 @@ pub const MAX_DOCUMENT_CONTEXT_DOCUMENTS: usize = 24;
 pub enum DocumentReason {
     /// The request is drawn over an iframe that shows this document.
     Framed,
+    /// The user chose this page or page group on the request.
+    Selected,
     /// A framed document lives in the same directory as this one and the request covers the set.
     SharedDirectory,
     /// The request names this document's title or path.
@@ -50,6 +52,13 @@ pub struct SharedStylesheet {
 pub struct DocumentContext {
     pub documents: Vec<IncludedDocument>,
     pub stylesheets: Vec<SharedStylesheet>,
+}
+
+/// The documents of one sequential request when a selection exceeds the source budget.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DocumentBatch {
+    pub documents: Vec<DocumentTarget>,
+    pub bytes: usize,
 }
 
 /// Directory prefixes shared by page routes and site paths.
@@ -186,95 +195,201 @@ impl Project {
         Ok(())
     }
 
-    /// Every document this request may change. Precise requests keep only their framed
-    /// document; Flexible requests add the documents the request clearly concerns, bounded by
-    /// [`MAX_DOCUMENT_CONTEXT_BYTES`]. Framed documents come first and are never dropped.
+    /// Every document this request may change. Precise requests keep their framed document and
+    /// the user's page selection; Flexible requests add the documents the request clearly
+    /// concerns, bounded by [`MAX_DOCUMENT_CONTEXT_BYTES`]. Framed and selected documents come
+    /// first and are never dropped: a selection that does not fit one request is an error that
+    /// says how many pages fit.
     pub fn document_context(
         &self,
         targets: &[(&Page, &Region)],
         flexible: bool,
-    ) -> DocumentContext {
+    ) -> Result<DocumentContext> {
         let mut context = DocumentContext::default();
         let mut seen = BTreeSet::new();
+        let mut framed = BTreeSet::new();
         let mut used = 0usize;
         for (_, region) in targets {
             let Some(frame) = &region.frame_target else {
                 continue;
             };
-            let _ = self.include_document(
+            self.include_document(
                 &mut context,
                 &mut seen,
                 &mut used,
                 frame.document.clone(),
                 DocumentReason::Framed,
                 true,
-            );
+            )?;
+            framed.insert(frame.document.clone());
         }
-        if !flexible {
-            return context;
-        }
-        // Without a framed document this is an ordinary page request; stage-1 rules apply.
-        if context.documents.is_empty() {
-            return context;
-        }
-        let prompts: Vec<String> = targets
-            .iter()
-            .map(|(_, region)| region.prompt.to_lowercase())
-            .collect();
-        let host_pages: BTreeSet<Uuid> = targets.iter().map(|(page, _)| page.id).collect();
-        let candidates: Vec<DocumentTarget> = self
-            .pages
-            .iter()
-            .filter(|page| !host_pages.contains(&page.id) && page.content.is_some())
-            .map(|page| DocumentTarget::page(page.id))
-            .chain(
-                self.site_document_paths()
-                    .into_iter()
-                    .map(|path| DocumentTarget::SiteFile { path }),
-            )
+        // The page picker applies in both modes. Its documents are mandatory, so an oversized
+        // selection is reported instead of silently dropped.
+        let chosen: Vec<_> = self
+            .selected_documents(targets)
+            .into_iter()
             .filter(|document| !seen.contains(document))
             .collect();
-        // 1. Documents sharing the framed document's directory, when the request covers a set.
-        if prompts.iter().any(|prompt| mentions_shared_scope(prompt)) {
-            let patterns = self.framed_patterns(&seen);
+        if !chosen.is_empty() {
+            let remaining = MAX_DOCUMENT_CONTEXT_BYTES.saturating_sub(used);
+            let batches = self.document_batches(&chosen, remaining)?;
+            if batches.len() > 1 {
+                return Err(crate::Error(format!(
+                    "These {} pages are too large for one request. {} fit; choose fewer pages.",
+                    chosen.len(),
+                    batches[0].documents.len()
+                )));
+            }
+            for document in chosen {
+                self.include_document(
+                    &mut context,
+                    &mut seen,
+                    &mut used,
+                    document,
+                    DocumentReason::Selected,
+                    true,
+                )?;
+            }
+        }
+        // Without a framed document this is an ordinary page request; the automatic
+        // neighbour rules need a framed document to start from.
+        if flexible && !framed.is_empty() {
+            let prompts: Vec<String> = targets
+                .iter()
+                .map(|(_, region)| region.prompt.to_lowercase())
+                .collect();
+            let host_pages: BTreeSet<Uuid> = targets.iter().map(|(page, _)| page.id).collect();
+            let candidates: Vec<DocumentTarget> = self
+                .pages
+                .iter()
+                .filter(|page| !host_pages.contains(&page.id) && page.content.is_some())
+                .map(|page| DocumentTarget::page(page.id))
+                .chain(
+                    self.site_document_paths()
+                        .into_iter()
+                        .map(|path| DocumentTarget::SiteFile { path }),
+                )
+                .filter(|document| !seen.contains(document))
+                .collect();
+            // 1. Documents sharing the framed document's directory, when the request covers a set.
+            if prompts.iter().any(|prompt| mentions_shared_scope(prompt)) {
+                let patterns = self.framed_patterns(&framed);
+                for document in &candidates {
+                    if patterns.contains(document, &self.document_path(document)) {
+                        let _ = self.include_document(
+                            &mut context,
+                            &mut seen,
+                            &mut used,
+                            document.clone(),
+                            DocumentReason::SharedDirectory,
+                            false,
+                        );
+                    }
+                }
+            }
+            // 2. Documents the prompt names by title, path or route.
             for document in &candidates {
-                if patterns.contains(document, &self.document_path(document)) {
+                if seen.contains(document) {
+                    continue;
+                }
+                let path = self.document_path(document).to_lowercase();
+                let title = self.document_title(document).to_lowercase();
+                if prompts
+                    .iter()
+                    .any(|prompt| names_document(prompt, &path, &title))
+                {
                     let _ = self.include_document(
                         &mut context,
                         &mut seen,
                         &mut used,
                         document.clone(),
-                        DocumentReason::SharedDirectory,
+                        DocumentReason::NamedInPrompt,
                         false,
                     );
                 }
             }
         }
-        // 2. Documents the prompt names by title, path or route.
-        for document in &candidates {
-            if seen.contains(document) {
-                continue;
-            }
-            let path = self.document_path(document).to_lowercase();
-            let title = self.document_title(document).to_lowercase();
-            if prompts
-                .iter()
-                .any(|prompt| names_document(prompt, &path, &title))
-            {
-                let _ = self.include_document(
-                    &mut context,
-                    &mut seen,
-                    &mut used,
-                    document.clone(),
-                    DocumentReason::NamedInPrompt,
-                    false,
-                );
-            }
-        }
-        if used < MAX_DOCUMENT_CONTEXT_BYTES {
+        if (flexible || !context.documents.is_empty()) && used < MAX_DOCUMENT_CONTEXT_BYTES {
             context.stylesheets = self.shared_stylesheets(&context.documents, used);
         }
-        context
+        Ok(context)
+    }
+
+    /// The documents a request's page picker covers, in project order. Pages without code are
+    /// skipped: there is nothing to change yet.
+    pub fn selected_documents(&self, targets: &[(&Page, &Region)]) -> Vec<DocumentTarget> {
+        let selections: Vec<&crate::PageSelection> = targets
+            .iter()
+            .flat_map(|(_, region)| region.pages.iter())
+            .collect();
+        if selections.is_empty() {
+            return vec![];
+        }
+        let mut seen = BTreeSet::new();
+        let mut documents = Vec::new();
+        for page in &self.pages {
+            if page.content.is_none() {
+                continue;
+            }
+            if selections
+                .iter()
+                .any(|selection| selection.covers(&page.path, Some(page.id)))
+            {
+                let document = DocumentTarget::page(page.id);
+                if seen.insert(document.clone()) {
+                    documents.push(document);
+                }
+            }
+        }
+        for path in self.site_document_paths() {
+            if selections
+                .iter()
+                .any(|selection| selection.covers(&path, None))
+            {
+                let document = DocumentTarget::SiteFile { path };
+                if seen.insert(document.clone()) {
+                    documents.push(document);
+                }
+            }
+        }
+        documents
+    }
+
+    /// Split selected documents into sequential batches that each fit the source budget. A single
+    /// document larger than the budget is an error: no batch can contain it.
+    pub fn document_batches(
+        &self,
+        documents: &[DocumentTarget],
+        budget: usize,
+    ) -> Result<Vec<DocumentBatch>> {
+        crate::ensure(
+            budget > 0,
+            "This request has no room for another page. Choose fewer pages.",
+        )?;
+        let mut batches: Vec<DocumentBatch> = Vec::new();
+        for document in documents {
+            let size = self.document_content(document)?.byte_len();
+            crate::ensure(
+                size <= budget,
+                format!(
+                    "{} is {} KB, too large for one request ({} KB per request).",
+                    self.document_title(document),
+                    size / 1024,
+                    budget / 1024
+                ),
+            )?;
+            let full = batches.last().is_some_and(|batch| {
+                batch.bytes + size > budget
+                    || batch.documents.len() >= MAX_DOCUMENT_CONTEXT_DOCUMENTS
+            });
+            if batches.is_empty() || full {
+                batches.push(DocumentBatch::default());
+            }
+            let batch = batches.last_mut().expect("a document batch");
+            batch.bytes += size;
+            batch.documents.push(document.clone());
+        }
+        Ok(batches)
     }
 
     /// Directory patterns of the framed documents, as page routes and site paths.

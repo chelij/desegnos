@@ -38,7 +38,7 @@ import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './delet
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
 import { useHistory } from './useHistory';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AcrossPagesChange, AcrossPagesMatch, AcrossPagesView, AiSettingsView, Appearance, Brief, Command, DocumentTarget, ElementBatchEdit, ElementBatchEditView, ElementStyleEdit, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, Page, Project, Rect, RecoveryInfo, Region, RegionShape, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent, RequestAttachment } from './types';
+import type { AcrossPagesChange, AcrossPagesMatch, AcrossPagesView, AiSettingsView, Appearance, Brief, Command, DocumentTarget, ElementBatchEdit, ElementBatchEditView, ElementStyleEdit, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, Page, Project, Rect, RecoveryInfo, PageSelection, Region, RegionShape, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent, RequestAttachment } from './types';
 
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
@@ -704,6 +704,8 @@ function Editor() {
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
   }), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
+  // Pages this result changed stay marked in the strip until the user keeps or undoes it.
+  const changedPageIds = new Set(resultReview ? (generation.job?.candidate?.pages ?? []).map(item => item.pageId) : []);
   generationRef.current = generation.job;
   useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
   useEffect(() => { setLivePath(page?.path ?? '/'); }, [live, page?.id]);
@@ -838,8 +840,8 @@ function Editor() {
     setSelected(region.id); setFocusPrompt(true);
     return region;
   }
-  async function pickElement(selections: ElementSelection[]) {
-    if (!page || !selections.length) return;
+  async function pickElement(selections: ElementSelection[], pages?: PageSelection[]) {
+    if (!page || !selections.length) return null;
     const pageId = page.id, elements = selections.map(selection => selection.element);
     await synchronize(true); await settle();
     // Resolve against the queued current state, so repeated clicks cannot create duplicate requests.
@@ -850,7 +852,8 @@ function Editor() {
       return { type: 'add_element_regions', page_id: pageId, elements, bounds: selections.map(selection => ({ target: selection.element, rect: selection.rect })) };
     });
     const request = next.project!.pages.find(item => item.id === pageId)?.regions.find(region => !region.completed && sameTargets(regionTargets(region), elements));
-    if (request) { await dismissEmpty(request.id); setSelected(request.id); setFocusPrompt(true); }
+    if (request) { await dismissEmpty(request.id); if (pages?.length) await changeRegion(pageId, request.id, { pages }); setSelected(request.id); setFocusPrompt(true); }
+    return request ?? null;
   }
   // Fix on phones: one phone-only request (a section, or the whole page), generated right away.
   // The native scope check only lets small-screen CSS change, so the desktop design stays identical.
@@ -1010,6 +1013,7 @@ function Editor() {
       const area = project.pages.find(page => page.id === targetPageId)?.regions.find(region => region.id === regionId);
       if (!area) throw new Error('This area is no longer in the project.');
       if (patch.wholePage !== undefined) return { type: 'set_region_whole_page', page_id: targetPageId, region_id: regionId, whole_page: patch.wholePage };
+      if (patch.pages !== undefined) return { type: 'set_region_pages', page_id: targetPageId, region_id: regionId, pages: patch.pages };
       const rect = typeof patch.rect === 'function' ? patch.rect(area.rect) : { ...area.rect, ...patch.rect };
       const prompt = (typeof patch.prompt === 'function' ? patch.prompt() : patch.prompt) ?? area.prompt;
       if (rect.x === area.rect.x && rect.y === area.rect.y && rect.width === area.rect.width && rect.height === area.rect.height && prompt === area.prompt) return null;
@@ -1176,8 +1180,8 @@ function Editor() {
             <button type="button" onClick={() => setCloseChoice(null)}>Cancel</button>
           </div> : open.active ? <>
         {openPageIds.map((id, index) => { const item = project.pages.find(entry => entry.id === id); if (!item) return null; return <div key={item.id} className={`page-tab-shell${page?.id === item.id ? ' active' : ''}`}>
-          <button className="page-tab" id={`page-tab-${item.id}`} role="tab" aria-selected={page?.id === item.id} aria-controls="page-panel" tabIndex={page?.id === item.id ? 0 : -1}
-            title={`${item.path}${item.included ? '' : ' · Hidden page'}`} onClick={() => run(() => selectPage(item.id))}
+          <button className={`page-tab${changedPageIds.has(item.id) ? ' changed' : ''}`} id={`page-tab-${item.id}`} role="tab" aria-selected={page?.id === item.id} aria-controls="page-panel" tabIndex={page?.id === item.id ? 0 : -1}
+            title={`${item.path}${item.included ? '' : ' · Hidden page'}${changedPageIds.has(item.id) ? ' · Changed' : ''}`} onClick={() => run(() => selectPage(item.id))}
             onKeyDown={event => {
               if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
               event.preventDefault();
@@ -1193,7 +1197,7 @@ function Editor() {
       <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
       <div className="design-pane">
       <SurfaceHost place="canvas" />
-      {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} editElements={editElementsNative} copyElements={copyElementsNative} findAcrossPages={findAcrossPages} editAcrossPages={editAcrossPages} resolveGenerationFix={resolveGenerationFix} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => addRegion(rect, shape)} ensureElementId={ensureElementIdNative} setFrameTarget={setFrameTargetNative} frameDocuments={frameDocuments} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={selection => { void pickElement(selection).catch(() => {}); }} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
+      {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} pages={project.pages} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveView={live && page?.content ? (liveDevice === 'desktop' ? page.viewport : liveDevice === 'tablet' ? { width: 768, height: 1024 } : { width: 390, height: 844 }) : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} editElements={editElementsNative} copyElements={copyElementsNative} findAcrossPages={findAcrossPages} editAcrossPages={editAcrossPages} resolveGenerationFix={resolveGenerationFix} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => addRegion(rect, shape)} ensureElementId={ensureElementIdNative} setFrameTarget={setFrameTargetNative} frameDocuments={frameDocuments} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={(selection, chosen) => pickElement(selection, chosen)} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} />}
       {resultReview && !showGenerationStatus ? <Notice className="generation-notice status-applied" variant={retryResult ? 'warning' : 'success'} priority="result" title={retryResult ? 'Try again?' : 'Page updated'}
         message={retryResult ? 'This uses your AI account again.' : summarizeOutsideChanges(generation.job?.validationEvents ?? [])}
         action={retryResult ? { label: 'Try again', disabled: pending > 0, onClick: () => { setRetryResult(false); run(() => rejectResult(true)); } } : { label: 'Undo', disabled: pending > 0, onClick: () => run(() => rejectResult()) }}

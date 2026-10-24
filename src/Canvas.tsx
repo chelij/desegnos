@@ -25,13 +25,14 @@ import type { LiveHistoryAction } from './liveBar';
 import { overlayPlacement, placeOverlays, type CollectedFrame } from './previewFrames';
 import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
-import type { AcrossPagesChange, AcrossPagesMatch, DocumentTarget, ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
+import type { AcrossPagesChange, AcrossPagesMatch, DocumentTarget, ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, PageSelection, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
+import { RequestPages } from './RequestPages';
 import type { RequestShapeKind } from './CanvasTools';
 import './canvas.css';
 
 // A prompt function is read when the save runs, so queued keystrokes save the newest text once.
-export type RequestPatch = { wholePage?: boolean; prompt?: string | (() => string); rect?: RectChange | Partial<Rect> };
+export type RequestPatch = { wholePage?: boolean; pages?: PageSelection[]; prompt?: string | (() => string); rect?: RectChange | Partial<Rect> };
 export type CanvasViewAction = { serial: number; kind: 'guide' | 'selection' | 'fit' };
 type Gesture = GeometryGesture & { pointerId: number; region?: Region; active: boolean; shapeKind: RequestShapeKind; points: Point[]; freehand?: RegionShape };
 type BatchChange = { selection: ElementSelection; change: ElementEdit };
@@ -88,7 +89,7 @@ type CanvasProps = {
   archiveReports?: Record<string, import('./types').ArchiveReport[]>; projectId?: string;
   pendingImagesChanged: (count: number) => void; canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void; toggleGrid: () => void; configureGrid: () => void;
   fixRuntimeErrors?: (errors: string[]) => void; aiDisabled?: boolean; observationsVersion?: number;
-  projectImages?: import('./types').ProjectImage[]; page: Page; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void; onLiveLocation?: (path: string) => void;
+  projectImages?: import('./types').ProjectImage[]; page: Page; pages: Page[]; layersOpen: boolean; setLayersOpen: (open: boolean) => void; selectionChanged: (target: ElementTarget | null) => void; multiChanged?: (count: number) => void; repick?: (regionId: string, selection: ElementSelection) => Promise<void>; fixOnPhones?: (selection: ElementSelection) => void; attach?: (regionId: string, files: File[], links: string[]) => void; liveView?: { width: number; height: number } | null; detach?: (regionId: string, attachmentId: string) => void; onLiveLocation?: (path: string) => void;
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   requestShape?: RequestShapeKind; grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: { rect: Rect; shape?: RegionShape }[]; highlighted?: { rect: Rect; shape?: RegionShape }[];
   frameDocuments?: FrameDocumentView[]; ensureElementId: (target: ElementTarget) => Promise<ElementTarget | null>; setFrameTarget: (regionId: string, frameTarget: FrameTarget | null) => Promise<void>;
@@ -98,11 +99,13 @@ type CanvasProps = {
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
   editElements: (edits: { target: ElementTarget; change: ElementEdit }[]) => Promise<(ElementTarget | null)[]>; copyElements: (targets: ElementTarget[], styles: ElementStyleEdit[][]) => Promise<void>;
   findAcrossPages: (target: ElementTarget) => Promise<AcrossPagesMatch[]>; editAcrossPages: (target: ElementTarget, change: ElementEdit, documents: DocumentTarget[]) => Promise<AcrossPagesChange[]>;
-  changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => Promise<Region | null>; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
+  changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => Promise<Region | null>; pickElement: (selection: ElementSelection[], pages?: PageSelection[]) => Promise<Region | null>; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; selectSimilar: () => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, findAcrossPages, editAcrossPages, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, pages, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, findAcrossPages, editAcrossPages, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
+  // Pages chosen for the next Ask AI on an element; the request box has its own picker.
+  const [requestPages, setRequestPages] = useState<PageSelection[]>([]);
   const [problemErrors, setProblemErrors] = useState<Record<string, string>>({});
   const [problemBusy, setProblemBusy] = useState(false);
   const [runtimeProblems, setRuntimeProblems] = useState<string[]>([]);
@@ -1076,7 +1079,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
     finally { setLayerBusy(false); }
   }
-  async function askFrameRequest(selections: ElementSelection[]) {
+  async function askFrameRequest(selections: ElementSelection[], chosen: PageSelection[] = []) {
     const document = selections[0].element.document;
     if (!document) return;
     const sameDoc = selections.filter(item => sameDocument(item.element.document, document));
@@ -1091,6 +1094,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     const region = await add(hostRect);
     if (!region) return;
     await setFrameTarget(region.id, { pageId: pageRef.current.id, iframeId: iframe.id, document: frame.document, rect: innerRect });
+    if (chosen.length) await changeRequest(region.id, { pages: chosen });
   }
   function askAI() {
     const current = elementRef.current;
@@ -1098,8 +1102,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     setContext(null);
     const selections = canonicalSelections([current, ...extrasRef.current]);
     // A framed element has no targets on the host page: the request names the document instead.
-    if (selections.some(item => item.element.document)) { void askFrameRequest(selections).catch(error => setElementError(error instanceof Error ? error.message : String(error))); return; }
-    pickElement(selections);
+    if (selections.some(item => item.element.document)) { void askFrameRequest(selections, requestPages).catch(error => setElementError(error instanceof Error ? error.message : String(error))); setRequestPages([]); return; }
+    void pickElement(selections, requestPages);
+    setRequestPages([]);
   }
   // Select a website element by its structural selector (used by Page check), if the page has rendered.
   function focusElement(selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) {
@@ -1641,7 +1646,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
             return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} wholePage={isWholePage(region, page)} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0}
-              layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => changeRequest(region.id, patch)} />;
+              pages={pages} hostPageId={page.id} layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => changeRequest(region.id, patch)} />;
           })}
           {element && !liveView && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
             <span className="element-type-tag">{elementName(element.element.tag)}{foundUrl && <span className="found-tag" title={foundUrl}> · Found online · {foundHost}</span>}</span>
@@ -1717,6 +1722,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       </>}
       {element && foundUrl && openSource && !element.element.document && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
       {element && undoElement && element.element.selector !== 'body' && <button aria-label="Undo changes to this element" title="Step this element back to its previous version · Alt+Z" disabled={editBusy} onClick={() => { void stepBackElement(); }}><QuickIcon name="undo" /></button>}
+      {element && <RequestPages pages={pages} hostPageId={page.id} selection={requestPages} change={setRequestPages} />}
       <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
       {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={styleVisual} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </>}
@@ -1749,8 +1755,8 @@ function Ruler({ axis, unit, start, length, reference, zoom, cursor, selection }
   </div>;
 }
 
-function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
-  reports: import('./types').ArchiveReport[]; wholePage: boolean;
+function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rect, bounds, zoom, maxHeight, selected, focus, focusToken, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
+  reports: import('./types').ArchiveReport[]; wholePage: boolean; pages: Page[]; hostPageId: string;
   stale?: boolean; repickNow?: () => void; removeNow?: () => void; attach?: (files: File[], links: string[]) => void; detach?: (attachmentId: string) => void;
   region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; layer: number; controlsLayer: number; select: () => void;
   begin: (event: PointerEvent, kind: Gesture['kind'], region?: Region) => void;
@@ -1836,9 +1842,10 @@ function RequestBox({ reports, wholePage, region, number, rect, bounds, zoom, ma
       {!!report.skipped.length && <ul>{report.skipped.map((item, i) => <li key={i}>{item.name}: <ProblemBanner message={userError(item.reason)} /></li>)}</ul>}
     </details>)}
     </div>}
-    {selected && attach && <div className="request-attach-row">
-      <button type="button" className="request-attach" title="Attach pictures, text files or ZIPs (or drop them on the box)" aria-label={`Attach files to request ${number}`} onPointerDown={event => event.stopPropagation()} onClick={() => attachInput.current?.click()}>📎</button>
-      <input ref={attachInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html,.zip,application/zip,text/plain" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) attach(files, []); }} />
+    {selected && <div className="request-attach-row">
+      <RequestPages pages={pages} hostPageId={hostPageId} selection={region.pages ?? []} change={selection => { void change({ pages: selection }).catch(() => {}); }} />
+      {attach && <><button type="button" className="request-attach" title="Attach pictures, text files or ZIPs (or drop them on the box)" aria-label={`Attach files to request ${number}`} onPointerDown={event => event.stopPropagation()} onClick={() => attachInput.current?.click()}>📎</button>
+      <input ref={attachInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html,.zip,application/zip,text/plain" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) attach(files, []); }} /></>}
     </div>}
   </div>
     {selected && !target && <div className="request-controls" data-region-id={region.id} style={{ ...paintStyle(shown, bounds, zoom), zIndex: controlsLayer }} onFocusCapture={select}><button ref={move} className="annotation-grip move-grip" aria-label={`Move request ${number}`} aria-describedby="canvas-keyboard-help" title="Drag to move. Arrow keys change placement."

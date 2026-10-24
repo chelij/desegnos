@@ -356,3 +356,6 @@
 
 /* Queued notice sources retain their Escape handling without an empty banner. */
 .workspace-banner:not(:has(> header)):has(> .surface-content:empty) { display: none; }
+
+/* A changed page keeps a dot in the tab strip until the result is kept or undone. */
+.page-tab-shell > .page-tab.changed::after { content: ""; flex: none; width: 6px; height: 6px; margin-left: 2px; border-radius: 50%; background: var(--accent); }

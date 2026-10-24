@@ -179,7 +179,7 @@ fn a_request_drawn_before_framed_editing_gains_its_document_before_prepare() {
     assert_eq!(adopted.adopt_frame_targets().unwrap(), adopted);
 
     let snapshot = adopted.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 23);
+    assert_eq!(snapshot.format_version().unwrap(), 24);
     assert!(snapshot.markdown.contains("## Framed document requests"));
     assert!(snapshot.markdown.contains("All projects"));
     assert!(
@@ -545,4 +545,268 @@ fn history_and_validation_fingerprints_cover_every_included_document() {
             .contains(&format!("\"documents\":[\"page:{atlas}\"]"))
     );
     snapshot.validate_current(&project).unwrap();
+}
+
+fn select_pages(project: Project, region_id: Uuid, pages: Vec<PageSelection>) -> Project {
+    let page_id = project.pages[0].id;
+    project
+        .apply(
+            project.revision,
+            Command::SetRegionPages {
+                page_id,
+                region_id,
+                pages,
+            },
+        )
+        .unwrap()
+}
+
+fn included(snapshot: &RequirementsSnapshot) -> Vec<DocumentTarget> {
+    snapshot
+        .documents
+        .iter()
+        .map(|document| document.document.clone())
+        .collect()
+}
+
+#[test]
+fn chosen_pages_are_editable_and_changed_in_flexible_and_precise() {
+    for mode in [GenerationMode::Fuzzy, GenerationMode::Strict] {
+        let (project, index, atlas, borealis) = page_project(mode);
+        let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+        let project = select_pages(project, region_id, vec![PageSelection::page(atlas)]);
+        let project = project.adopt_frame_targets().unwrap();
+        let region = &project.pages[0].regions[0];
+        assert_eq!(region.pages, vec![PageSelection::page(atlas)]);
+        let snapshot = project.prepare_requirements().unwrap();
+        assert_eq!(snapshot.format_version().unwrap(), 24);
+        assert_eq!(
+            included(&snapshot),
+            vec![DocumentTarget::page(index), DocumentTarget::page(atlas)]
+        );
+        assert_eq!(snapshot.documents[1].reason, DocumentReason::Selected);
+        assert!(!included(&snapshot).contains(&DocumentTarget::page(borealis)));
+        assert!(
+            snapshot
+                .markdown
+                .contains("## Editable documents for this request")
+        );
+        assert!(snapshot.markdown.contains("/projects/atlas"));
+        snapshot.validate_current(&project).unwrap();
+        // Request history keeps the chosen page's fingerprint for later context.
+        let entries = earlier_requests(&snapshot, 10, "applied", "Tidied the gap", &[]);
+        assert!(
+            entries[0]
+                .document_fingerprints
+                .contains_key(&DocumentTarget::page(atlas).key())
+        );
+
+        let index_source = project.page(index).unwrap().content.clone().unwrap();
+        let changed = candidate(
+            &project,
+            &snapshot,
+            vec![
+                GeneratedPage {
+                    page_id: index,
+                    content: index_source,
+                },
+                GeneratedPage {
+                    page_id: atlas,
+                    content: content(
+                        "<!doctype html>\n<html><body><main><h1>Atlas without the gap</h1></main></body></html>",
+                    ),
+                },
+            ],
+            vec![],
+        );
+        changed.validate(&snapshot, &project).unwrap();
+        let applied = project.apply_generation(&snapshot, &changed, &[]).unwrap();
+        assert!(
+            applied
+                .page(atlas)
+                .unwrap()
+                .content
+                .as_ref()
+                .unwrap()
+                .html
+                .contains("without the gap")
+        );
+        assert_eq!(
+            applied.page(borealis).unwrap().content,
+            project.page(borealis).unwrap().content
+        );
+    }
+}
+
+#[test]
+fn precise_rejects_a_page_outside_the_chosen_set() {
+    let (project, index, atlas, borealis) = page_project(GenerationMode::Strict);
+    let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+    let project = select_pages(project, region_id, vec![PageSelection::page(atlas)]);
+    let project = project.adopt_frame_targets().unwrap();
+    let snapshot = project.prepare_requirements().unwrap();
+    let rejected = candidate(
+        &project,
+        &snapshot,
+        vec![
+            GeneratedPage {
+                page_id: index,
+                content: project.page(index).unwrap().content.clone().unwrap(),
+            },
+            GeneratedPage {
+                page_id: borealis,
+                content: content(
+                    "<!doctype html>\n<html><body><main><h1>Borealis without the gap</h1></main></body></html>",
+                ),
+            },
+        ],
+        vec![],
+    );
+    assert!(rejected.validate(&snapshot, &project).is_err());
+}
+
+#[test]
+fn a_page_group_and_all_pages_expand_on_the_request() {
+    let (project, index, atlas, borealis) = page_project(GenerationMode::Fuzzy);
+    let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+    let about = project.pages[4].id;
+    let project = select_pages(
+        project,
+        region_id,
+        vec![PageSelection::prefix("/projects/").unwrap()],
+    );
+    let project = project.adopt_frame_targets().unwrap();
+    let targets: Vec<(&Page, &Region)> = project.pages[0]
+        .regions
+        .iter()
+        .map(|region| (&project.pages[0], region))
+        .collect();
+    assert_eq!(
+        project.selected_documents(&targets),
+        vec![
+            DocumentTarget::page(index),
+            DocumentTarget::page(atlas),
+            DocumentTarget::page(borealis)
+        ]
+    );
+    let snapshot = project.prepare_requirements().unwrap();
+    let documents = included(&snapshot);
+    for page_id in [index, atlas, borealis] {
+        assert!(documents.contains(&DocumentTarget::page(page_id)));
+    }
+    assert!(!documents.contains(&DocumentTarget::page(about)));
+
+    let all = select_pages(
+        project.clone(),
+        region_id,
+        vec![PageSelection::All],
+    );
+    let all = all.adopt_frame_targets().unwrap();
+    let snapshot = all.prepare_requirements().unwrap();
+    assert!(included(&snapshot).contains(&DocumentTarget::page(about)));
+}
+
+#[test]
+fn a_selection_larger_than_the_source_budget_reports_how_many_pages_fit() {
+    let (project, _index, atlas, borealis) = page_project(GenerationMode::Fuzzy);
+    let mut project = project;
+    let filler = "Tall case study text. ".repeat(7_600);
+    for page_id in [atlas, borealis, project.pages[4].id] {
+        let page = project
+            .pages
+            .iter_mut()
+            .find(|page| page.id == page_id)
+            .unwrap();
+        page.content = Some(content(&format!(
+            "<!doctype html>\n<html><body><main><h1>Case study</h1><p>{filler}</p></main></body></html>"
+        )));
+    }
+    let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+    let project = select_pages(project, region_id, vec![PageSelection::All]);
+    let project = project.adopt_frame_targets().unwrap();
+
+    // The three large pages split into two sequential batches, framed document aside.
+    let documents = vec![
+        DocumentTarget::page(atlas),
+        DocumentTarget::page(borealis),
+        DocumentTarget::page(project.pages[4].id),
+    ];
+    let batches = project
+        .document_batches(&documents, MAX_DOCUMENT_CONTEXT_BYTES)
+        .unwrap();
+    assert_eq!(batches.len(), 2, "{batches:?}");
+    assert_eq!(batches[0].documents.len(), 2);
+    assert!(batches.iter().all(|batch| batch.bytes <= MAX_DOCUMENT_CONTEXT_BYTES));
+
+    let error = project.prepare_requirements().unwrap_err().to_string();
+    assert!(
+        error.contains("These 4 pages are too large for one request. 3 fit")
+            && error.contains("choose fewer pages"),
+        "{error}"
+    );
+}
+
+#[test]
+fn older_projects_load_with_an_empty_page_selection() {
+    let (project, _, _, _) = page_project(GenerationMode::Fuzzy);
+    let (project, region_id) = pending_request(project, PROMPT);
+    let mut value = serde_json::to_value(&project).unwrap();
+    value["schemaVersion"] = serde_json::json!(9);
+    let regions = value["pages"][0]["regions"].as_array().unwrap();
+    // Schema 9 did not persist a page selection.
+    assert!(regions[0].get("pages").is_none());
+    let restored = decode_project(&serde_json::to_vec(&value).unwrap())
+        .unwrap()
+        .project;
+    assert_eq!(restored.schema_version, SCHEMA_VERSION);
+    let region = &restored.pages[0].regions[0];
+    assert_eq!(region.id, region_id);
+    assert!(region.pages.is_empty());
+}
+
+#[test]
+fn precise_requests_include_chosen_site_documents_and_their_stylesheets() {
+    let (project, index, atlas, borealis) = site_project(GenerationMode::Strict);
+    let (project, region_id) = pending_request(project, "Remove the empty space at the top");
+    let project = select_pages(
+        project,
+        region_id,
+        vec![PageSelection::prefix("/projects").unwrap()],
+    );
+    let project = project.adopt_frame_targets().unwrap();
+    let snapshot = project.prepare_requirements().unwrap();
+    let documents = included(&snapshot);
+    assert_eq!(documents[0], DocumentTarget::SiteFile { path: index.clone() });
+    for path in [&atlas, &borealis] {
+        assert!(
+            documents.contains(&DocumentTarget::SiteFile { path: path.clone() }),
+            "{path} is editable"
+        );
+    }
+    assert!(snapshot.markdown.contains("projects/site.css"));
+    snapshot.validate_current(&project).unwrap();
+
+    let index_source = project.site_document_html(&index).unwrap();
+    let changed = candidate(
+        &project,
+        &snapshot,
+        vec![],
+        vec![
+            GeneratedDocument {
+                document: DocumentTarget::SiteFile {
+                    path: index.clone(),
+                },
+                content: content(&index_source),
+            },
+            GeneratedDocument {
+                document: DocumentTarget::SiteFile {
+                    path: atlas.clone(),
+                },
+                content: content(
+                    "<!doctype html>\n<html><body><main><h1>Atlas without the gap</h1></main></body></html>",
+                ),
+            },
+        ],
+    );
+    changed.validate(&snapshot, &project).unwrap();
 }

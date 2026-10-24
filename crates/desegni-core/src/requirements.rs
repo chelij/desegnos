@@ -1,5 +1,5 @@
 /// Requirements contract used for newly prepared requests.
-pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 23;
+pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 24;
 
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
@@ -286,14 +286,18 @@ impl Project {
         }
         let targets = layered_targets.as_slice();
         let flexible = format >= 21 && self.generation_mode == GenerationMode::Fuzzy;
+        // Chosen pages need whole page sources, so they never use the selected-element reply.
+        let multi_page = targets.iter().any(|(_, region)| !region.pages.is_empty());
         let element_fix = !flexible
+            && !multi_page
             && (format == crate::ELEMENT_FIX_FORMAT
                 || (format >= 12
                     && crate::element_fix::eligible(targets)
                     && (format < 18 || !targets.iter().any(|(p, r)| r.is_whole_page(p)))));
         // Format 23: a Flexible framed request may also change the pages it clearly concerns.
+        // Format 24: every request may change the pages chosen on its page picker.
         let document_context = if format >= 23 {
-            self.document_context(targets, flexible)
+            self.document_context(targets, flexible)?
         } else {
             crate::DocumentContext::default()
         };
@@ -629,12 +633,21 @@ impl Project {
                     .documents
                     .iter()
                     .any(|included| included.reason != crate::DocumentReason::Framed);
-                let closing = if format >= 23 && flexible && more {
-                    "A flexible request may also change the other editable documents listed below."
+                let closing = if format >= 23 && more {
+                    if flexible {
+                        "A flexible request may also change the other editable documents listed below."
+                    } else {
+                        "Only the framed document and the other editable documents listed below may change; return every other page's source exactly as it is."
+                    }
                 } else {
                     "No other document may change."
                 };
-                md.push_str(&format!("\n## Framed document requests\n\nSome requests target a document shown inside an iframe on their page. frameTarget names the host page, the iframe's editor ID, the target document (a project page or an editable site HTML file) and the request box mapped into that document's CSS pixels. Change the request inside that document. The framed document's complete current source is supplied below; return its new source as a pages entry for a page document or as a documents entry for a site HTML file. In Precise mode only the framed document may change: return the host page's HTML, CSS and JavaScript exactly as they are, including the iframe element. In Flexible mode you may also change the host page's iframe element and CSS when the request needs it, and then return the host page source too. Preserve unrelated content in every document, keep existing data-desegnos-id values on retained elements and leave new elements without IDs; Desegnos assigns them afterwards. Account for every framed request once. {closing}\n\n"));
+                let precise = if format >= 23 && more {
+                    "In Precise mode the framed document and the other editable documents listed below may change; return every other page's source exactly as it is, including the iframe element. In Flexible mode you may also change the host page's iframe element and CSS when the request needs it, and then return the host page source too."
+                } else {
+                    "In Precise mode only the framed document may change: return the host page's HTML, CSS and JavaScript exactly as they are, including the iframe element. In Flexible mode you may also change the host page's iframe element and CSS when the request needs it, and then return the host page source too."
+                };
+                md.push_str(&format!("\n## Framed document requests\n\nSome requests target a document shown inside an iframe on their page. frameTarget names the host page, the iframe's editor ID, the target document (a project page or an editable site HTML file) and the request box mapped into that document's CSS pixels. Change the request inside that document. The framed document's complete current source is supplied below; return its new source as a pages entry for a page document or as a documents entry for a site HTML file. {precise} Preserve unrelated content in every document, keep existing data-desegnos-id values on retained elements and leave new elements without IDs; Desegnos assigns them afterwards. Account for every framed request once. {closing}\n\n"));
                 let mut shown = std::collections::BTreeSet::new();
                 for (_, _, frame) in &framed {
                     if !shown.insert(frame.document.key()) {
@@ -674,13 +687,25 @@ impl Project {
             .iter()
             .filter(|included| included.reason != crate::DocumentReason::Framed)
             .collect();
-        if format >= 23 && flexible && !extra_documents.is_empty() {
-            let paths: Vec<_> = document_context
-                .documents
-                .iter()
-                .map(|included| format!("{} ({})", included.path, included.title))
-                .collect();
-            md.push_str(&format!("\n## Editable documents for this request\n\nFlexible: these documents are editable for this request and you may change all of them: {}. The framed documents above are editable too; their sources are supplied there. Each remaining document's complete current source is supplied below with its path. Do not report a document's source as unavailable. Return a project page's new source as a pages entry with its pageId, and an imported site file's new HTML as a documents entry with its document target. Return every changed document in this one reply; Desegnos applies them as one change and the user reviews it with Keep/Undo. Only the documents listed here and above may change.\n\n", paths.join(", ")));
+        if format >= 23 && !extra_documents.is_empty() {
+            let paths: Vec<_> = if flexible {
+                document_context
+                    .documents
+                    .iter()
+                    .map(|included| format!("{} ({})", included.path, included.title))
+                    .collect()
+            } else {
+                extra_documents
+                    .iter()
+                    .map(|included| format!("{} ({})", included.path, included.title))
+                    .collect()
+            };
+            let rules = if flexible {
+                "Flexible: these documents are editable for this request and you may change all of them: {}. The framed documents above are editable too; their sources are supplied there. Each remaining document's complete current source is supplied below with its path. Do not report a document's source as unavailable. Return a project page's new source as a pages entry with its pageId, and an imported site file's new HTML as a documents entry with its document target. Return every changed document in this one reply; Desegnos applies them as one change and the user reviews it with Keep/Undo. Only the documents listed here and above may change."
+            } else {
+                "Precise: these documents are editable for this request: {}. Changes to any other page are rejected. Each document's complete current source is supplied below with its path. Do not report a document's source as unavailable. Return a project page's new source as a pages entry with its pageId, and an imported site file's new HTML as a documents entry with its document target. Return every changed document in this one reply; Desegnos applies them as one change and the user reviews it with Keep/Undo. Only the documents listed here and above may change."
+            };
+            md.push_str(&format!("\n## Editable documents for this request\n\n{}\n\n", rules.replace("{}", &paths.join(", "))));
             for included in extra_documents {
                 let content = self.document_content(&included.document)?;
                 let source = match &included.document {

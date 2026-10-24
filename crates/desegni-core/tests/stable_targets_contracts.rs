@@ -182,7 +182,7 @@ fn multi_target_scope_accepts_only_selected_subtrees_and_preserves_shared_source
     let b = target(&p, "article:nth-of-type(2)");
     let p = describe(p, &[a.clone(), b]);
     let snapshot = p.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 23);
+    assert_eq!(snapshot.format_version().unwrap(), 24);
     assert!(snapshot.markdown.contains("\"elements\""));
     let original = &p.pages[0].content.as_ref().unwrap().html;
     let c = candidate(
@@ -316,6 +316,7 @@ fn migration_assigns_and_remaps_without_modifying_original_bytes_or_revision() {
         source_sha256: p.pages[0].content.as_ref().unwrap().sha256().unwrap(),
     };
     p.pages[0].regions.push(Region {
+        pages: vec![],
         shape: Default::default(),
         area_bounds: vec![],
         id: Uuid::new_v4(),
@@ -634,7 +635,7 @@ fn migration_preserves_frozen_receipts_but_never_rebinds_them_to_changed_source(
     assert_eq!(serde_json::to_vec(&snapshot).unwrap(), receipt);
     let new = preserved.prepare_requirements().unwrap();
     assert_ne!(new.sha256, snapshot.sha256);
-    assert_eq!(new.format_version().unwrap(), 23);
+    assert_eq!(new.format_version().unwrap(), 24);
     assert_eq!(
         preserved.pages[0].regions[0].prompt,
         original.pages[0].regions[0].prompt

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 9;
+pub const SCHEMA_VERSION: u32 = 10;
 pub const MAX_PAGES: usize = 100;
 pub const MAX_PROMPT_CHARS: usize = 16_384;
 
@@ -219,6 +219,73 @@ impl RegionShape {
     }
 }
 
+/// A page or page group a request may also change. An empty request selection means its own
+/// page or framed document.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum PageSelection {
+    /// One project page.
+    Page { page_id: Uuid },
+    /// Every page and editable site document below one path, for example `projects`.
+    Prefix { path: String },
+    /// Every page and editable site document.
+    All,
+}
+
+impl PageSelection {
+    pub fn page(page_id: Uuid) -> Self {
+        Self::Page { page_id }
+    }
+
+    /// Accept `/projects/`, `projects` and `/projects` as the same directory prefix.
+    pub fn prefix(path: &str) -> Result<Self> {
+        let path = path.trim().trim_matches('/');
+        ensure(
+            !path.is_empty()
+                && path.chars().count() <= 1024
+                && !path.split('/').any(|part| part.is_empty() || part == ".."),
+            "Choose a page group for this request.",
+        )?;
+        Ok(Self::Prefix { path: path.into() })
+    }
+
+    /// Whether this selection covers a page route or site path, written without a leading slash.
+    pub fn covers(&self, location: &str, page_id: Option<Uuid>) -> bool {
+        let location = location.trim_matches('/');
+        match self {
+            Self::Page { page_id: selected } => page_id == Some(*selected),
+            Self::Prefix { path } => {
+                location == path
+                    || location
+                        .strip_prefix(path.as_str())
+                        .is_some_and(|rest| rest.starts_with('/'))
+            }
+            Self::All => true,
+        }
+    }
+
+    pub fn validate(&self, project: &Project) -> Result<()> {
+        match self {
+            Self::Page { page_id } => {
+                project.page(*page_id)?;
+            }
+            Self::Prefix { path } => {
+                ensure(
+                    !path.trim().is_empty() && path.chars().count() <= 1024,
+                    "Choose a page group for this request.",
+                )?;
+            }
+            Self::All => {}
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Region {
@@ -252,6 +319,9 @@ pub struct Region {
     pub whole_page: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub whole_page_disabled: bool,
+    /// Pages this request may also change; empty means only its own page or framed document.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pages: Vec<PageSelection>,
     /// Files and links dropped on the request.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<crate::RequestAttachment>,
@@ -544,6 +614,11 @@ pub enum Command {
         region_id: Uuid,
         mobile_only: bool,
     },
+    SetRegionPages {
+        page_id: Uuid,
+        region_id: Uuid,
+        pages: Vec<PageSelection>,
+    },
     AddRegionAttachment {
         page_id: Uuid,
         region_id: Uuid,
@@ -772,6 +847,13 @@ impl Project {
                     "Runtime repairs require a page request.",
                 )?;
                 validate_text(&region.prompt, "Area description", MAX_PROMPT_CHARS, false)?;
+                ensure(
+                    region.pages.len() <= MAX_PAGES,
+                    "A request supports at most 100 pages.",
+                )?;
+                for selection in &region.pages {
+                    selection.validate(self)?;
+                }
                 for attachment in &region.attachments {
                     attachment.validate()?;
                 }
@@ -1035,6 +1117,7 @@ impl Project {
                     .unwrap_or(-1)
                     .saturating_add(1);
                 p.regions.push(Region {
+                    pages: vec![],
                     id: Uuid::new_v4(),
                     rect,
                     shape: area_shape,
@@ -1069,6 +1152,7 @@ impl Project {
                     .unwrap_or(-1)
                     .saturating_add(1);
                 page.regions.push(Region {
+                    pages: vec![],
                     id: Uuid::new_v4(),
                     rect,
                     shape: RegionShape::Rect,
@@ -1105,6 +1189,7 @@ impl Project {
                     .unwrap_or(-1)
                     .saturating_add(1);
                 page.regions.push(Region {
+                    pages: vec![],
                     id: Uuid::new_v4(),
                     rect,
                     shape: RegionShape::Rect,
@@ -1233,6 +1318,35 @@ impl Project {
                 if mobile_only {
                     region.whole_page = false;
                 }
+            }
+            Command::SetRegionPages {
+                page_id,
+                region_id,
+                pages,
+            } => {
+                ensure(
+                    pages.len() <= MAX_PAGES,
+                    "A request supports at most 100 pages.",
+                )?;
+                let mut unique = BTreeSet::new();
+                let mut selections = Vec::new();
+                for selection in pages {
+                    let selection = match selection {
+                        PageSelection::Prefix { path } => PageSelection::prefix(&path)?,
+                        selection => selection,
+                    };
+                    selection.validate(&next)?;
+                    if unique.insert(selection.clone()) {
+                        selections.push(selection);
+                    }
+                }
+                let region = next
+                    .page_mut(page_id)?
+                    .regions
+                    .iter_mut()
+                    .find(|r| r.id == region_id && !r.completed)
+                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
+                region.pages = selections;
             }
             Command::SetRegionFrameTarget {
                 page_id,

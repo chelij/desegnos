@@ -4,7 +4,6 @@ import { fixLabel, jobOutcome } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
 import { scopeLabel } from './Notes';
-import { documentKey } from './elementTargets';
 import { SourceView } from './Preview';
 import type { AiSettingsView, GenerationJobView, Project, ResponseCorrelation, ResponseRejection } from './types';
 import type { GenerationController } from './useGeneration';
@@ -131,15 +130,15 @@ export function GenerationDetails({ controller, project, settings, openSettings,
   const bodyKinds = { unavailable: 'Not read completely', eventStream: 'Generation event stream', empty: 'Empty', jsonError: 'JSON error', jsonDetail: 'JSON admission detail', jsonResponse: 'JSON response without a stream', jsonOther: 'Other JSON', html: 'HTML', text: 'Text', binary: 'Binary' };
   const affectedPageIds = new Set(Object.keys(job?.requirements.dependencies ?? {}).filter(key => key.startsWith('source:')).map(key => key.slice(7)));
   const affectedPages = project.pages.filter(page => affectedPageIds.has(page.id)).map(page => page.name);
-  // Documents the request itself targets; anything else the reply changed is listed separately.
-  const primaryDocuments = new Set((candidate?.regions ?? []).flatMap(region => {
-    const owner = project.pages.find(page => page.regions.some(item => item.id === region.regionId));
-    if (!owner) return [];
-    const request = owner.regions.find(item => item.id === region.regionId);
-    return [request?.frameTarget ? documentKey(request.frameTarget.document) : documentKey({ kind: 'page', pageId: owner.id })];
-  }));
-  const alsoChanged = [...(candidate?.pages ?? []).map(page => documentKey({ kind: 'page', pageId: page.pageId })), ...(candidate?.documents ?? []).map(document => documentKey(document.document))]
-    .filter(key => !primaryDocuments.has(key)).length;
+  // Every document this reply changed, so a multi-page result names each page.
+  const changedDocuments = [...new Set([
+    ...(candidate?.pages ?? []).map(page => project.pages.find(item => item.id === page.pageId)?.name ?? page.pageId),
+    ...(candidate?.documents ?? []).map(document => {
+      if (document.document.kind === 'siteFile') return document.document.path;
+      const pageId = document.document.pageId;
+      return project.pages.find(item => item.id === pageId)?.name ?? pageId;
+    }),
+  ])];
   async function usage() {
     setOpeningUsage(true); setUsageError('');
     try { await manageUsage(); }
@@ -214,7 +213,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
             })}</ul>
             <details><summary>Technical details</summary><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></details>
           </section> : <><h3>Your page</h3><p>{candidate.summary}</p></>}
-          {alsoChanged > 0 && <p className="small muted">Also changed: {alsoChanged} {alsoChanged === 1 ? 'page' : 'pages'}</p>}
+          {changedDocuments.length > 1 && <p className="small muted">Changed: {changedDocuments.join(', ')}</p>}
           {generatedImages.length > 0 && <section aria-label="Generated images"><h3>Generated images</h3>{generatedImages.map((image, index) => <figure key={index}>
             {image.src.startsWith('data:image/png;base64,') && !image.failed && <img src={image.src} alt="Generated result" width={144} height={144} style={{ objectFit: 'contain' }} />}
             <figcaption><strong>{image.regionId ? requestLabel(project, image.regionId) : project.pages.find(page => page.id === image.pageId)?.name}</strong><p>{image.prompt}</p>{image.failed && <p>Image generation failed. Replace this image or try again.</p>}</figcaption>

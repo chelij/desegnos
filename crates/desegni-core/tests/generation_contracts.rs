@@ -399,7 +399,7 @@ fn current_conflicts_keep_other_pages_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 23"));
+    assert!(snapshot.markdown.contains("Requirements format: 24"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -683,6 +683,7 @@ fn source_candidate_and_requirements_limits_fail_without_truncation() {
     let mut excessive = project.clone();
     excessive.pages[0].regions = (0..MAX_GENERATION_REGIONS + 1)
         .map(|_| Region {
+            pages: vec![],
             shape: Default::default(),
             area_bounds: vec![],
             element: None,

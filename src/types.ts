@@ -49,7 +49,8 @@ export type AcrossPagesChange = { document: DocumentTarget; target: ElementTarge
 export type AcrossPagesView = { workspace: WorkspaceView; changes: AcrossPagesChange[] };
 export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string; textAlign?: string };
 export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; preview?: string; text?: string; url?: string };
-export type Region = { shape?: RegionShape; areaBounds?: { target: ElementTarget; rect: Rect }[]; attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; frameTarget?: FrameTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; runtimeErrors?: string[]; wholePage?: boolean; wholePageDisabled?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
+export type PageSelection = { kind: 'page'; pageId: string } | { kind: 'prefix'; path: string } | { kind: 'all' };
+export type Region = { pages?: PageSelection[]; shape?: RegionShape; areaBounds?: { target: ElementTarget; rect: Rect }[]; attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; frameTarget?: FrameTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; runtimeErrors?: string[]; wholePage?: boolean; wholePageDisabled?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
 export type SiteContent = { html: string; css: string; javascript: string };
 export type Page = { id: string; name: string; path: string; included: boolean; viewport: Viewport; appearance: Appearance; regions: Region[]; content: SiteContent | null };
 export type Brief = { purpose: string; audience: string; brandName: string; tone: string };
@@ -138,6 +139,7 @@ export type Command =
   | { type: 'set_region_frame_target'; page_id: string; region_id: string; frame_target: FrameTarget | null }
   | { type: 'set_region_whole_page'; page_id: string; region_id: string; whole_page: boolean }
   | { type: 'set_region_mobile_only'; page_id: string; region_id: string; mobile_only: boolean }
+  | { type: 'set_region_pages'; page_id: string; region_id: string; pages: PageSelection[] }
   | { type: 'add_region_attachment'; page_id: string; region_id: string; attachment: RequestAttachment }
   | { type: 'remove_region_attachment'; page_id: string; region_id: string; attachment_id: string }
   | { type: 'delete_elements'; page_id: string; elements: ElementTarget[]; document?: DocumentTarget | null }

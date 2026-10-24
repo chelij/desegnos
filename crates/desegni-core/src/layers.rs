@@ -917,6 +917,7 @@ impl Project {
             order.sort_by_key(|index| page.regions[*index].z_index);
             order.push(page.regions.len());
             page.regions.push(crate::Region {
+                pages: vec![],
                 id,
                 rect,
                 shape: shape.clone(),

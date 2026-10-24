@@ -104,6 +104,7 @@ fn request(
 ) -> Uuid {
     let id = Uuid::new_v4();
     project.pages[0].regions.push(Region {
+        pages: vec![],
         shape: Default::default(),
         area_bounds: vec![],
         id,
@@ -359,6 +360,7 @@ fn request_arrangements_keep_array_order_stable_ties_history_and_safe_integer_ra
         assert_eq!(
             before,
             &Region {
+                pages: vec![],
                 z_index: before.z_index,
                 ..after.clone()
             }
