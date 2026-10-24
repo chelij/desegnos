@@ -132,8 +132,8 @@ impl Project {
         targets: &[ElementTarget],
     ) -> Result<Vec<ElementTarget>> {
         ensure(
-            !targets.is_empty() && targets.len() <= 8,
-            "Select between one and eight elements.",
+            !targets.is_empty() && targets.len() <= crate::MAX_BATCH_ELEMENT_EDITS,
+            "Select between one and 500 elements.",
         )?;
         let content = self.document_content(document)?;
         let hash = self.document_hash(document)?;
@@ -185,7 +185,7 @@ impl Project {
         bounds: &[TargetBounds],
     ) -> Result<Rect> {
         ensure(
-            !bounds.is_empty() && bounds.len() <= 8,
+            !bounds.is_empty() && bounds.len() <= crate::MAX_BATCH_ELEMENT_EDITS,
             "Supply the selected element positions.",
         )?;
         let viewport = self.document_viewport(document)?;

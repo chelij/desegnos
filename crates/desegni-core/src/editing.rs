@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 const MAX_NODES: usize = 20_000;
+/// One screen can select a whole page of similar items; a batch edit stays bounded.
+pub const MAX_BATCH_ELEMENT_EDITS: usize = 500;
 const ATTRIBUTES: &[&str] = &[
     "href",
     "target",
@@ -63,6 +65,14 @@ pub enum ElementEdit {
         styles: Vec<ElementStyleEdit>,
     },
     Remove,
+}
+/// One target and the change applied to it in a batch edit. Every change lands in
+/// one document pass, one revision and one history step.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ElementBatchEdit {
+    pub target: ElementTarget,
+    pub edit: ElementEdit,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -292,6 +302,176 @@ pub(crate) fn tracked<'a>(
         .collect()
 }
 
+fn apply_element_edit<'a>(
+    doc: &'a Document,
+    node: NodeRef<'a>,
+    selected: &ElementTarget,
+    edit: &ElementEdit,
+) -> Result<Option<NodeRef<'a>>> {
+    let mut retained = Some(node);
+    match edit {
+        ElementEdit::Update {
+            texts,
+            attributes,
+            style,
+        } => {
+            ensure(
+                texts.len() <= 64 && attributes.len() <= ATTRIBUTES.len(),
+                "Too many element fields were supplied.",
+            )?;
+            let nodes = text_nodes(node);
+            let mut indexes = BTreeSet::new();
+            for text in texts {
+                check_value(&text.text, crate::MAX_SITE_SOURCE_BYTES)?;
+                ensure(
+                    indexes.insert(text.index),
+                    "A text block was supplied twice.",
+                )?;
+                let text_node = nodes.get(text.index).ok_or_else(|| {
+                    Error("The text changed. Reopen the element editor.".into())
+                })?;
+                if text_node.text().as_ref() != text.text {
+                    clear_found_ancestry(*text_node);
+                    text_node.set_text(text.text.as_str());
+                }
+            }
+            for (name, value) in attributes {
+                ensure(
+                    ATTRIBUTES.contains(&name.as_str()),
+                    "This attribute cannot be edited with this control.",
+                )?;
+                if name == "src" && node.attr(name).as_deref() != value.as_deref() {
+                    clear_found_ancestry(node);
+                }
+                if let Some(value) = value {
+                    check_value(value, crate::MAX_SITE_SOURCE_BYTES)?;
+                    if name == "href" {
+                        let lower = value.trim().to_lowercase();
+                        ensure(
+                            !lower.contains(':')
+                                || ["http:", "https:", "mailto:", "tel:"]
+                                    .iter()
+                                    .any(|prefix| lower.starts_with(prefix)),
+                            "Use a website address, email, telephone number or page link.",
+                        )?;
+                    }
+                    if name == "src" {
+                        ensure(
+                            node.node_name().as_deref() == Some("img")
+                                && (value.starts_with("data:image/")
+                                    || value.starts_with(crate::PROJECT_ASSET_SCHEME)
+                                    || value.starts_with('/')
+                                    || value.starts_with("https://")
+                                    || value.starts_with("http://")),
+                            "Choose an image file or a valid image address.",
+                        )?;
+                    }
+                    node.set_attr(name, value);
+                } else {
+                    node.remove_attr(name);
+                }
+            }
+            if let Some(style) = style {
+                check_value(style, 65_536)?;
+                if style.is_empty() {
+                    node.remove_attr("style");
+                } else {
+                    node.set_attr("style", style);
+                }
+            }
+        }
+        ElementEdit::Replace { html, keep_style } => {
+            ensure(
+                selected.selector != "body",
+                "Select an item inside the page to replace it.",
+            )?;
+            check_value(html, crate::MAX_SITE_SOURCE_BYTES)?;
+            let parent = node
+                .parent()
+                .ok_or_else(|| Error("This element has no parent.".into()))?;
+            let context = parent
+                .query(|value| value.as_element().map(|element| element.name.clone()))
+                .flatten()
+                .ok_or_else(|| Error("The replacement context is invalid.".into()))?;
+            let fragment = html5ever::parse_fragment(
+                Document::fragment_sink(),
+                ParseOpts {
+                    tree_builder: TreeBuilderOpts {
+                        scripting_enabled: false,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                context,
+                vec![],
+                false,
+            )
+            .one(html.as_str());
+            bounded(&fragment)?;
+            let root = fragment
+                .root()
+                .first_child()
+                .ok_or_else(|| Error("Enter an element to replace this item.".into()))?;
+            let children = root
+                .children()
+                .into_iter()
+                .filter(|child| {
+                    child.is_element() || child.is_text() && !child.text().trim().is_empty()
+                })
+                .collect::<Vec<_>>();
+            ensure(
+                children.len() == 1 && children[0].is_element(),
+                "Replacement must contain exactly one element.",
+            )?;
+            let replacement = children[0];
+            if let Some(id) = node.attr(crate::ELEMENT_ID_ATTRIBUTE) {
+                replacement.set_attr(crate::ELEMENT_ID_ATTRIBUTE, &id);
+            }
+            if *keep_style {
+                for name in ["id", "class", "style"] {
+                    if !replacement.has_attr(name)
+                        && let Some(value) = node.attr(name)
+                    {
+                        replacement.set_attr(name, &value);
+                    }
+                }
+            }
+            let previous = node.prev_sibling();
+            Selection::from(node).replace_with_selection(&Selection::from(replacement));
+            retained = match previous {
+                Some(previous) => previous.next_sibling(),
+                None => parent.first_child(),
+            };
+        }
+        ElementEdit::Reorder { direction } => {
+            ensure(
+                selected.selector != "body",
+                "The page itself cannot be reordered.",
+            )?;
+            let adjacent = sibling(node, direction).ok_or_else(|| {
+                Error("This item is already at that end of its layout.".into())
+            })?;
+            node.remove_from_parent();
+            match direction {
+                ElementOrder::Before => adjacent.insert_before(&node),
+                ElementOrder::After => adjacent.insert_after(&node),
+            }
+        }
+        ElementEdit::LayerStyles { styles } => {
+            crate::layers::apply_layer_styles(&doc, node, selected, styles)?;
+        }
+        ElementEdit::Remove => {
+            ensure(
+                selected.selector != "body",
+                "The page itself cannot be deleted. Select an item inside it.",
+            )?;
+            node.remove_from_parent();
+            retained = None;
+        }
+    }
+    Ok(retained)
+}
+
 impl Project {
     pub(crate) fn parse_page_html(&self, html: &str) -> Result<Document> {
         parse_document(html, self.website.is_some())
@@ -400,167 +580,7 @@ impl Project {
             crate::DocumentTarget::Page { page_id } => tracked(&doc, self.page(*page_id)?, &hash)?,
             crate::DocumentTarget::SiteFile { .. } => vec![],
         };
-        let mut retained = Some(node);
-        match edit {
-            ElementEdit::Update {
-                texts,
-                attributes,
-                style,
-            } => {
-                ensure(
-                    texts.len() <= 64 && attributes.len() <= ATTRIBUTES.len(),
-                    "Too many element fields were supplied.",
-                )?;
-                let nodes = text_nodes(node);
-                let mut indexes = BTreeSet::new();
-                for text in texts {
-                    check_value(&text.text, crate::MAX_SITE_SOURCE_BYTES)?;
-                    ensure(
-                        indexes.insert(text.index),
-                        "A text block was supplied twice.",
-                    )?;
-                    let text_node = nodes.get(text.index).ok_or_else(|| {
-                        Error("The text changed. Reopen the element editor.".into())
-                    })?;
-                    if text_node.text().as_ref() != text.text {
-                        clear_found_ancestry(*text_node);
-                        text_node.set_text(text.text.as_str());
-                    }
-                }
-                for (name, value) in attributes {
-                    ensure(
-                        ATTRIBUTES.contains(&name.as_str()),
-                        "This attribute cannot be edited with this control.",
-                    )?;
-                    if name == "src" && node.attr(name).as_deref() != value.as_deref() {
-                        clear_found_ancestry(node);
-                    }
-                    if let Some(value) = value {
-                        check_value(value, crate::MAX_SITE_SOURCE_BYTES)?;
-                        if name == "href" {
-                            let lower = value.trim().to_lowercase();
-                            ensure(
-                                !lower.contains(':')
-                                    || ["http:", "https:", "mailto:", "tel:"]
-                                        .iter()
-                                        .any(|prefix| lower.starts_with(prefix)),
-                                "Use a website address, email, telephone number or page link.",
-                            )?;
-                        }
-                        if name == "src" {
-                            ensure(
-                                node.node_name().as_deref() == Some("img")
-                                    && (value.starts_with("data:image/")
-                                        || value.starts_with(crate::PROJECT_ASSET_SCHEME)
-                                        || value.starts_with('/')
-                                        || value.starts_with("https://")
-                                        || value.starts_with("http://")),
-                                "Choose an image file or a valid image address.",
-                            )?;
-                        }
-                        node.set_attr(name, value);
-                    } else {
-                        node.remove_attr(name);
-                    }
-                }
-                if let Some(style) = style {
-                    check_value(style, 65_536)?;
-                    if style.is_empty() {
-                        node.remove_attr("style");
-                    } else {
-                        node.set_attr("style", style);
-                    }
-                }
-            }
-            ElementEdit::Replace { html, keep_style } => {
-                ensure(
-                    selected.selector != "body",
-                    "Select an item inside the page to replace it.",
-                )?;
-                check_value(html, crate::MAX_SITE_SOURCE_BYTES)?;
-                let parent = node
-                    .parent()
-                    .ok_or_else(|| Error("This element has no parent.".into()))?;
-                let context = parent
-                    .query(|value| value.as_element().map(|element| element.name.clone()))
-                    .flatten()
-                    .ok_or_else(|| Error("The replacement context is invalid.".into()))?;
-                let fragment = html5ever::parse_fragment(
-                    Document::fragment_sink(),
-                    ParseOpts {
-                        tree_builder: TreeBuilderOpts {
-                            scripting_enabled: false,
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    },
-                    context,
-                    vec![],
-                    false,
-                )
-                .one(html.as_str());
-                bounded(&fragment)?;
-                let root = fragment
-                    .root()
-                    .first_child()
-                    .ok_or_else(|| Error("Enter an element to replace this item.".into()))?;
-                let children = root
-                    .children()
-                    .into_iter()
-                    .filter(|child| {
-                        child.is_element() || child.is_text() && !child.text().trim().is_empty()
-                    })
-                    .collect::<Vec<_>>();
-                ensure(
-                    children.len() == 1 && children[0].is_element(),
-                    "Replacement must contain exactly one element.",
-                )?;
-                let replacement = children[0];
-                if let Some(id) = node.attr(crate::ELEMENT_ID_ATTRIBUTE) {
-                    replacement.set_attr(crate::ELEMENT_ID_ATTRIBUTE, &id);
-                }
-                if *keep_style {
-                    for name in ["id", "class", "style"] {
-                        if !replacement.has_attr(name)
-                            && let Some(value) = node.attr(name)
-                        {
-                            replacement.set_attr(name, &value);
-                        }
-                    }
-                }
-                let previous = node.prev_sibling();
-                Selection::from(node).replace_with_selection(&Selection::from(replacement));
-                retained = match previous {
-                    Some(previous) => previous.next_sibling(),
-                    None => parent.first_child(),
-                };
-            }
-            ElementEdit::Reorder { direction } => {
-                ensure(
-                    selected.selector != "body",
-                    "The page itself cannot be reordered.",
-                )?;
-                let adjacent = sibling(node, direction).ok_or_else(|| {
-                    Error("This item is already at that end of its layout.".into())
-                })?;
-                node.remove_from_parent();
-                match direction {
-                    ElementOrder::Before => adjacent.insert_before(&node),
-                    ElementOrder::After => adjacent.insert_after(&node),
-                }
-            }
-            ElementEdit::LayerStyles { styles } => {
-                crate::layers::apply_layer_styles(&doc, node, selected, styles)?;
-            }
-            ElementEdit::Remove => {
-                ensure(
-                    selected.selector != "body",
-                    "The page itself cannot be deleted. Select an item inside it.",
-                )?;
-                node.remove_from_parent();
-                retained = None;
-            }
-        }
+        let retained = apply_element_edit(&doc, node, selected, edit)?;
         bounded(&doc)?;
         let html = serialized(&doc)?;
         if html == before {
@@ -573,6 +593,73 @@ impl Project {
             )?;
         }
         self.finish_document_edit(document, revision, &doc, retained, tracked, None)
+    }
+
+    /// Apply several element changes to one document as a single revision. Every target is
+    /// located before the document is stored, so a stale or duplicate target rejects the whole
+    /// batch and leaves the project unchanged.
+    pub fn edit_elements_in(
+        &self,
+        document: &crate::DocumentTarget,
+        revision: u64,
+        edits: &[ElementBatchEdit],
+    ) -> Result<(Self, Vec<Option<ElementTarget>>)> {
+        self.validate()?;
+        ensure(
+            revision == self.revision,
+            "The project changed. Try the edit again.",
+        )?;
+        ensure(
+            !edits.is_empty() && edits.len() <= crate::MAX_BATCH_ELEMENT_EDITS,
+            "Select between one and 500 elements for one change."
+        )?;
+        let content = self.document_content(document)?;
+        let hash = self.document_hash(document)?;
+        let doc = self.parse_document_target(document, &content.html)?;
+        let before = serialized(&doc)?;
+        let before_ids = ids(&doc);
+        let tracked = match document {
+            crate::DocumentTarget::Page { page_id } => {
+                tracked(&doc, self.page(*page_id)?, &hash)?
+            }
+            crate::DocumentTarget::SiteFile { .. } => vec![],
+        };
+        let mut retained = Vec::with_capacity(edits.len());
+        let mut seen = BTreeSet::new();
+        for edit in edits {
+            ensure(
+                !edit.target.id.is_empty() || hash == edit.target.source_sha256,
+                "The document changed. Select these elements again."
+            )?;
+            let node = locate(&doc, &edit.target)?;
+            ensure(
+                seen.insert(node.id),
+                "An element was supplied twice in one change."
+            )?;
+            retained.push(apply_element_edit(&doc, node, &edit.target, &edit.edit)?);
+        }
+        bounded(&doc)?;
+        let html = serialized(&doc)?;
+        if html == before {
+            return Ok((
+                self.clone(),
+                edits.iter().map(|edit| Some(edit.target.clone())).collect(),
+            ));
+        }
+        for (id, count) in ids(&doc) {
+            ensure(
+                count <= before_ids.get(&id).copied().unwrap_or(1),
+                "This replacement introduces a duplicate element ID. Use unique IDs.",
+            )?;
+        }
+        let (next, _) = self.finish_document_edit(document, revision, &doc, None, tracked, None)?;
+        let next_hash = next.document_hash(document)?;
+        let body = body(&doc)?;
+        let targets = retained
+            .into_iter()
+            .map(|node| node.and_then(|node| target(node, body, &next_hash)))
+            .collect();
+        Ok((next, targets))
     }
 
     /// Give one element its editor identity without changing what the document shows. A framed

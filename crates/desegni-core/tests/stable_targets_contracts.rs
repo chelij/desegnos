@@ -254,8 +254,11 @@ fn nested_targets_prune_and_bounds_union_is_validated() {
         }
     );
     assert!(
-        p.canonical_targets(p.home_page_id, &vec![outer; 9])
-            .is_err()
+        p.canonical_targets(
+            p.home_page_id,
+            &vec![outer; desegni_core::MAX_BATCH_ELEMENT_EDITS + 1]
+        )
+        .is_err()
     );
     assert!(
         p.target_bounds_union(

@@ -8,6 +8,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTauri } from '@tauri-apps/api/core';
 import { flushSync } from 'react-dom';
 import { canonicalSelections, documentKey, regionTargets, sameDocument, sameTarget, targetKey, unionRect } from './elementTargets';
+import { MAX_SELECTION, marqueeSelections } from './elementSelection';
 import { adoptRequestFrame, frameTargetShown, pageRectToInnerDocument, remapFramedRequest, requestFrame } from './frameDocuments';
 import { useDraftText } from './DraftText';
 import { escapeHtml, imageFile } from './elementEditing';
@@ -23,7 +24,7 @@ import type { LiveHistoryAction } from './liveBar';
 import { overlayPlacement, placeOverlays, type CollectedFrame } from './previewFrames';
 import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
-import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
+import type { ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
 import type { RequestShapeKind } from './CanvasTools';
 import './canvas.css';
@@ -32,6 +33,7 @@ import './canvas.css';
 export type RequestPatch = { wholePage?: boolean; prompt?: string | (() => string); rect?: RectChange | Partial<Rect> };
 export type CanvasViewAction = { serial: number; kind: 'guide' | 'selection' | 'fit' };
 type Gesture = GeometryGesture & { pointerId: number; region?: Region; active: boolean; shapeKind: RequestShapeKind; points: Point[]; freehand?: RegionShape };
+type BatchChange = { selection: ElementSelection; change: ElementEdit };
 type CanvasContext = { point: Point } & ({ kind: 'element'; selection: ElementSelection } | { kind: 'request'; regionId: string } | { kind: 'canvas'; at: Point });
 type Measurements = { left: number; top: number; width: number; height: number };
 const emptyMeasurements: Measurements = { left: 0, top: 0, width: 0, height: 0 };
@@ -93,10 +95,11 @@ type CanvasProps = {
   openSource?: (target: ElementTarget) => void;
   resolveGenerationFix?: (fix: OutcomeFix, regionId: string) => void;
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
+  editElements: (edits: { target: ElementTarget; change: ElementEdit }[]) => Promise<(ElementTarget | null)[]>; copyElements: (targets: ElementTarget[], styles: ElementStyleEdit[][]) => Promise<void>;
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => Promise<Region | null>; pickElement: (selection: ElementSelection[]) => void; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
-export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; selectSimilar: () => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveView = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
   const [problemErrors, setProblemErrors] = useState<Record<string, string>>({});
   const [problemBusy, setProblemBusy] = useState(false);
@@ -131,6 +134,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const stage = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
   const pan = useRef<{ pointerId: number; origin: Point; start: Point; click: boolean; active: boolean } | null>(null);
+  const marquee = useRef<{ pointerId: number; clientStart: Point; start: Point; base: ElementSelection[]; active: boolean } | null>(null);
+  const [marqueeRect, setMarqueeRect] = useState<Rect | null>(null);
   const plainClicks = useRef(0);
   const lastPlainClick = useRef<{ at: number; point: Point } | null>(null);
   const [element, setElement] = useState<ElementSelection | null>(null);
@@ -141,7 +146,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const inlineTicket = useRef(0);
   const inlineSaving = useRef<Promise<void> | null>(null);
   const [requestFocus, setRequestFocus] = useState({ id: '', serial: 0 });
-  const elementDrag = useRef<{ pointerId: number; pageId: string; version: string; start: Point; world: Point; original: ElementSelection; mover: ElementMover | null; resizer: ElementResizer | null; corner?: ResizeCorner; active: boolean; fine: boolean; x: number; y: number; rect: Rect } | null>(null);
+  const elementDrag = useRef<{ pointerId: number; pageId: string; version: string; start: Point; world: Point; original: ElementSelection; mover: ElementMover | null; resizer: ElementResizer | null; group: { selection: ElementSelection; mover: ElementMover }[] | null; corner?: ResizeCorner; active: boolean; fine: boolean; x: number; y: number; rect: Rect } | null>(null);
   const [editingElement, setEditingElement] = useState(false);
   const [nudging, setNudging] = useState(false);
   const selectionSerial = useRef(0);
@@ -177,6 +182,24 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   useEffect(() => { if (liveView) { deselectElement(); setExtras([]); } }, [!!liveView]);
   const [extras, setExtrasState] = useState<ElementSelection[]>([]);
   const extrasRef = useRef<ElementSelection[]>([]);
+  // Every operation below works on this canonical list: the primary selection first.
+  function selectionsNow(): ElementSelection[] {
+    return canonicalSelections([elementRef.current, ...extrasRef.current].flatMap(item => item ? [item] : []));
+  }
+  function commonDocument(selections: ElementSelection[]): ElementTarget['document'] {
+    const document = selections[0]?.element.document;
+    if (selections.some(item => !sameDocument(item.element.document, document))) throw new Error('Select items in one document to change them together.');
+    return document;
+  }
+  function applySelection(items: ElementSelection[]) {
+    const unique = canonicalSelections(items);
+    setElementError('');
+    if (unique.length > MAX_SELECTION) setElementError(`Select up to ${MAX_SELECTION} elements at a time.`);
+    select(null);
+    const next = unique.slice(0, MAX_SELECTION);
+    pendingSelection.current = next[0]?.element ?? null;
+    storeElement(next[0] ?? null); setExtras(next.slice(1));
+  }
   // Element requests whose element can no longer be found on the rendered page.
   const [stale, setStale] = useState<Set<string>>(new Set());
   function refreshStaleTargets() {
@@ -323,9 +346,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   function point(client: Point): Point {
     return clientToCanvas(client, stage.current!.getBoundingClientRect(), zoom, { x: boundsRef.current.left, y: boundsRef.current.top });
   }
+  function beginMarquee(event: PointerEvent, additive: boolean) {
+    if (gesture.current || pan.current || elementDrag.current || marquee.current) return;
+    event.preventDefault(); event.stopPropagation(); setContext(null);
+    plainClicks.current = 0; lastPlainClick.current = null;
+    const client = { x: event.clientX, y: event.clientY };
+    marquee.current = { pointerId: event.pointerId, clientStart: client, start: point(client), base: additive ? selectionsNow() : [], active: false };
+    stage.current!.focus({ preventScroll: true }); stage.current!.setPointerCapture(event.pointerId); setCursor(null);
+  }
   function cancel(resetClicks = true, restoreElement = true) {
     if (resetClicks) { plainClicks.current = 0; lastPlainClick.current = null; }
-    const pointerId = gesture.current?.pointerId ?? pan.current?.pointerId ?? elementDrag.current?.pointerId;
+    const pointerId = gesture.current?.pointerId ?? pan.current?.pointerId ?? elementDrag.current?.pointerId ?? marquee.current?.pointerId;
+    marquee.current = null; setMarqueeRect(null);
     if (elementDrag.current) {
       const drag = elementDrag.current;
       if (restoreElement) {
@@ -498,14 +530,42 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   // Nested picks keep the outer element, since its descendants are in scope anyway.
   function toggleElement(hit: ElementSelection | null) {
     if (!hit || hit.element.selector === 'body') return;
-    const primary = elementRef.current;
-    if (!primary) { chooseElement(hit); return; }
-    const all = [primary, ...extrasRef.current];
+    const all = selectionsNow();
+    if (!all.length) { chooseElement(hit); return; }
     const rest = all.some(item => sameTarget(item.element, hit.element))
-      ? all.filter(item => !sameTarget(item.element, hit.element)) : canonicalSelections([...all, hit]);
-    if (rest.length > 8) { setElementError('Select up to 8 elements for one request.'); return; }
-    setElementError(''); select(null);
-    storeElement(rest[0] ?? null); setExtras(rest.slice(1));
+      ? all.filter(item => !sameTarget(item.element, hit.element)) : [...all, hit];
+    applySelection(rest);
+  }
+  // Elements matching the reference's tag and class list, or its structural role.
+  function selectSimilar() {
+    const current = elementRef.current;
+    if (!current || editingElement || current.element.selector === 'body') return;
+    try {
+      const items = site.current?.similar(current.element) ?? [];
+      if (items.length) applySelection(items);
+    } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+  }
+  // One native batch edit for the whole selection: one revision, one undo step.
+  async function applyBatch(changes: BatchChange[]) {
+    if (!changes.length) return [];
+    const selections = changes.map(item => item.selection);
+    commonDocument(selections);
+    const ticket = selectionSerial.current; const pageId = page.id;
+    setEditingElement(true); setElementError('');
+    try {
+      const results = await editElements(changes.map(item => ({ target: item.selection.element, change: item.change })));
+      if (pageRef.current.id === pageId && selectionSerial.current === ticket) {
+        const next = results.flatMap((element, index) => element ? [{ element, rect: selections[index].rect }] : []);
+        if (next.length) {
+          pendingSelection.current = next[0].element;
+          storeElement(next[0]); setExtras(next.slice(1));
+        } else deselectElement();
+      }
+      return results;
+    } catch (error) {
+      if (pageRef.current.id === pageId && selectionSerial.current === ticket) setElementError(error instanceof Error ? error.message : String(error));
+      throw error;
+    } finally { setEditingElement(false); }
   }
   const [confirmMany, setConfirmMany] = useState<{ count: number; skip: boolean; targets: ElementTarget[]; pageId: string } | null>(null);
   useEffect(() => { setConfirmMany(null); }, [page.id, element?.element.id, extras.length]);
@@ -522,8 +582,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     void applyElement({ kind: 'remove' }).catch(() => {});
   }
   async function deleteSelected(confirmed = false, targets?: ElementTarget[]) {
-    const all = targets ?? canonicalSelections([elementRef.current, ...extrasRef.current].flatMap(item => item ? [item] : [])).map(item => item.element);
+    const all = targets ?? selectionsNow().map(item => item.element);
     if (all.length < 2 || editingElement) return;
+    if (new Set(all.map(target => documentKey(target.document))).size > 1) { setElementError('Select items in one document to delete them together.'); return; }
     if (!confirmed && askBeforeDelete()) { setConfirmMany({ count: all.length, skip: false, targets: all, pageId: page.id }); return; }
     setEditingElement(true);
     try { await deleteElements(all); deselectElement(); }
@@ -532,17 +593,46 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   function chooseElement(selection: ElementSelection | null) { deselectElement(); storeElement(selection); setElementError(''); select(null); }
   const [styleOpen, setStyleOpen] = useState(() => { try { return localStorage.getItem('desegnos.style-bar') === 'open'; } catch { return false; } });
   function toggleStyle() { setStyleOpen(value => { try { localStorage.setItem('desegnos.style-bar', value ? 'closed' : 'open'); } catch {} return !value; }); }
-  // Quick style edits update the element's own inline style, the same way the Edit dialog does.
+  // Quick style edits update each element's own inline style, the same way the Edit dialog does.
   async function applyStyles(change: StyleChange) {
-    const current = elementRef.current; if (!current) return;
+    const selections = selectionsNow(); if (!selections.length) return;
     try {
-      const details = await inspectElement(current.element);
-      const css = document.createElement('div').style; css.cssText = details.inlineStyle;
-      for (const [name, value] of Object.entries(change)) {
-        if (!CSS.supports(name, value)) throw new Error('That style value is not supported.');
-        css.setProperty(name, value, 'important');
+      if (selections.length === 1) {
+        const details = await inspectElement(selections[0].element);
+        const css = document.createElement('div').style; css.cssText = details.inlineStyle;
+        for (const [name, value] of Object.entries(change)) {
+          if (!CSS.supports(name, value)) throw new Error('That style value is not supported.');
+          css.setProperty(name, value, 'important');
+        }
+        await applyElement({ kind: 'update', texts: [], attributes: {}, style: css.cssText }, selections[0]);
+        return;
       }
-      await applyElement({ kind: 'update', texts: [], attributes: {}, style: css.cssText }, current);
+      const details = await Promise.all(selections.map(selection => inspectElement(selection.element)));
+      const changes = selections.map((selection, index) => {
+        const css = document.createElement('div').style; css.cssText = details[index].inlineStyle;
+        for (const [name, value] of Object.entries(change)) {
+          if (!CSS.supports(name, value)) throw new Error('That style value is not supported.');
+          css.setProperty(name, value, 'important');
+        }
+        return { selection, change: { kind: 'update', texts: [], attributes: {}, style: css.cssText } as ElementEdit };
+      });
+      await applyBatch(changes);
+    } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+  }
+  // Give every selected item the first item's width or height, one edit for the batch.
+  async function resizeSelection(axis: 'width' | 'height') {
+    const selections = selectionsNow(); if (selections.length < 2 || editBusy) return;
+    try {
+      commonDocument(selections);
+      const changes = selections.map(selection => {
+        const resizer = site.current?.beginResize(selection.element, 'se');
+        if (!resizer) throw new Error('This item cannot be resized in its current layout.');
+        try {
+          const rect = { ...selection.rect, [axis]: axis === 'width' ? selections[0].rect.width : selections[0].rect.height };
+          return { selection, change: { kind: 'update', texts: [], attributes: {}, style: resizer.style(rect) } as ElementEdit };
+        } finally { resizer.cancel(); }
+      });
+      await applyBatch(changes);
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
   }
   async function applyElement(change: ElementEdit, selected = elementRef.current) {
@@ -608,24 +698,28 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     inlineSaving.current = pending; return pending;
   }
   async function moveElement(x: number, y: number) {
-    const selected = elementRef.current;
-    if (!selected || !x && !y) return;
-    const mover = site.current?.beginMove(selected.element);
-    if (!mover) throw new Error('This item cannot be moved here. Select it again.');
-    const css = mover.style(x, y);
-    const source = site.current?.sourceOf(selected.element); const pageId = pageRef.current.id;
-    const target = { ...selected.rect, x: selected.rect.x + x, y: selected.rect.y + y };
-    // Move the box with the nudge and keep it as the target until the committed
+    const selections = selectionsNow();
+    if (!selections.length || !x && !y) return;
+    commonDocument(selections);
+    const movers = selections.map(selection => ({ selection, mover: site.current?.beginMove(selection.element) ?? null }));
+    if (movers.some(item => !item.mover)) {
+      movers.forEach(item => item.mover?.cancel());
+      throw new Error('Some selected items cannot be moved here. Select them again.');
+    }
+    const source = site.current?.sourceOf(selections[0].element); const pageId = pageRef.current.id;
+    // Move the boxes with the nudge and keep them as targets until the committed
     // preview settles; a measurement taken before then can describe another layout.
-    expectSelection(selected.element, target);
-    storeElement({ ...selected, rect: target });
+    const boxes = selections.map(selection => ({ ...selection, rect: { ...selection.rect, x: selection.rect.x + x, y: selection.rect.y + y } }));
+    expectSelection(selections[0].element, boxes[0].rect);
+    storeElement(boxes[0]); setExtras(boxes.slice(1));
     try {
-      await applyElement({ kind: 'update', texts: [], attributes: {}, style: css }, selected);
+      if (selections.length === 1) await applyElement({ kind: 'update', texts: [], attributes: {}, style: movers[0].mover!.style(x, y) }, selections[0]);
+      else await applyBatch(movers.map(item => ({ selection: item.selection, change: { kind: 'update', texts: [], attributes: {}, style: item.mover!.style(x, y) } as ElementEdit })));
       // Stable IDs also resolve in the retained old frame. Wait for the committed
       // document before another queued nudge reads its computed translation.
       await waitForSite(pageId, elementRef.current?.element, source);
     }
-    finally { mover.cancel(); }
+    finally { movers.forEach(item => item.mover?.cancel()); }
   }
   const moveElementRef = useRef(moveElement); moveElementRef.current = moveElement;
   async function waitForSite(pageId: string, target?: ElementTarget, previousSource?: string | null) {
@@ -800,12 +894,17 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     const target = elementRef.current?.element;
     if (target) await waitForSite(pageRef.current.id, target);
   }
+  async function copySelection() {
+    const selections = selectionsNow();
+    commonDocument(selections);
+    await copyElements(selections.map(item => item.element), selections.map(item => site.current!.copyStyles(item.element)));
+  }
   async function copyLayer() {
-    if (extrasRef.current.length) { setElementError('Select one item to copy it.'); return; }
     if (layerBusy) return;
     setLayerBusy(true); setElementError('');
     try {
       await finishLayerDraft();
+      if (selectionsNow().length > 1) { await copySelection(); return; }
       const region = pageRef.current.regions.find(item => item.id === selected && !item.completed);
       if (region) await copyNative({ kind: 'request', regionId: region.id }, []);
       else if (elementRef.current && elementRef.current.element.selector !== 'body') {
@@ -816,22 +915,38 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     finally { setLayerBusy(false); }
   }
   async function cutLayer() {
-    if (extrasRef.current.length) { setElementError('Select one item to cut it.'); return; }
     if (layerBusy || editingElement || nudging) return;
     setLayerBusy(true); setElementError('');
     try {
       await finishLayerDraft();
       const ticket = selectionSerial.current, pageId = pageRef.current.id;
-      const region = pageRef.current.regions.find(item => item.id === selected && !item.completed);
-      if (region) await cutNative({ kind: 'request', regionId: region.id }, []);
-      else if (elementRef.current && elementRef.current.element.selector !== 'body') {
-        const target = elementRef.current.element;
-        await cutNative({ kind: 'element', target }, site.current!.copyStyles(target));
-      } else throw new Error('Select a layer to cut.');
+      if (selectionsNow().length > 1) {
+        const selections = selectionsNow();
+        await copySelection();
+        await deleteElements(selections.map(item => item.element));
+      } else {
+        const region = pageRef.current.regions.find(item => item.id === selected && !item.completed);
+        if (region) await cutNative({ kind: 'request', regionId: region.id }, []);
+        else if (elementRef.current && elementRef.current.element.selector !== 'body') {
+          const target = elementRef.current.element;
+          await cutNative({ kind: 'element', target }, site.current!.copyStyles(target));
+        } else throw new Error('Select a layer to cut.');
+      }
       if (pageRef.current.id === pageId && selectionSerial.current === ticket) { deselectElement(); select(null, false); }
       refreshLayers();
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
     finally { setLayerBusy(false); }
+  }
+  // Copy the selection, then paste it once beside the anchor: one undo step for the copies.
+  async function duplicateSelection() {
+    if (layerBusy || editingElement || nudging) return;
+    setLayerBusy(true); setElementError('');
+    try {
+      await finishLayerDraft();
+      await copySelection();
+    } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); return; }
+    finally { setLayerBusy(false); }
+    await pasteLayer();
   }
   async function pasteLayer() {
     if (layerBusy) return;
@@ -845,10 +960,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       if (!ownsSelection()) return;
       const pastedPage = result.workspace.project?.pages.find(item => item.id === pageId);
       if (!pastedPage) return;
-      if (result.selection.element) {
+      const pasted = result.selection.elements?.length ? result.selection.elements : result.selection.element ? [result.selection.element] : [];
+      if (pasted.length) {
         const document = elementRef.current?.element.document ?? pageRef.current.regions.find(region => region.id === selected)?.frameTarget?.document ?? null;
-        const target = document ? { ...result.selection.element, document } : result.selection.element;
-        pendingSelection.current = target;
+        const targets = pasted.map(element => document ? { ...element, document } : element);
+        pendingSelection.current = targets[0];
         storeElement(null);
         const expected = JSON.stringify([pastedPage.content, pastedPage.viewport, pastedPage.appearance]);
         const deadline = performance.now() + 4000;
@@ -858,8 +974,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           if (!ownsSelection()) return;
           if (acceptedVersionRef.current === expected) rendered = true;
           else if (rendered) return; // Undo or another edit owns the new page now.
-          const item = rendered ? site.current?.find(target) : null;
-          if (item) { deselectElement(); storeElement(item); select(null, false); reveal(item.rect, false); refreshLayers(); return; }
+          const items = rendered ? targets.flatMap(target => { const item = site.current?.find(target); return item ? [item] : []; }) : [];
+          if (items.length) { applySelection(items); reveal(items[0].rect, false); refreshLayers(); return; }
         } while (performance.now() < deadline);
         if (acceptedVersionRef.current !== expected) return;
         throw new Error('The pasted layer is saved, but the editable page is still loading. Select it in Layers when it appears.');
@@ -874,17 +990,25 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     finally { setLayerBusy(false); }
   }
   async function arrangeLayer(direction: LayerDirection) {
-    if (extrasRef.current.length) { setElementError('Select one item to arrange it.'); return; }
     if (layerBusy || editingElement || nudging) return;
     setLayerBusy(true); setElementError('');
     try {
       await finishLayerDraft();
-      const region = pageRef.current.regions.find(item => item.id === selected && !item.completed);
-      if (region) await arrangeRequest(region.id, direction);
-      else if (elementRef.current) {
-        const styles = site.current!.layerStyles(elementRef.current.element, direction);
-        if (styles) await applyElement({ kind: 'layerStyles', styles });
-      } else throw new Error('Select a layer to arrange.');
+      if (selectionsNow().length > 1) {
+        const changes = selectionsNow().map(selection => {
+          const styles = site.current!.layerStyles(selection.element, direction);
+          if (!styles) throw new Error('Some selected items are already at that end of their layout.');
+          return { selection, change: { kind: 'layerStyles', styles } as ElementEdit };
+        });
+        await applyBatch(changes);
+      } else {
+        const region = pageRef.current.regions.find(item => item.id === selected && !item.completed);
+        if (region) await arrangeRequest(region.id, direction);
+        else if (elementRef.current) {
+          const styles = site.current!.layerStyles(elementRef.current.element, direction);
+          if (styles) await applyElement({ kind: 'layerStyles', styles });
+        } else throw new Error('Select a layer to arrange.');
+      }
       refreshLayers();
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
     finally { setLayerBusy(false); }
@@ -923,7 +1047,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     if (found) { chooseElement(found); reveal(found.rect, false); }
     return found;
   }
-  useImperativeHandle(ref, () => ({ liveHistory: action => liveSite.current?.liveHistory(action), focusElement, addRequest: addRequestInView, focusRequest: focusRegion, askAI, undoElement: stepBackElement, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
+  useImperativeHandle(ref, () => ({ liveHistory: action => liveSite.current?.liveHistory(action), focusElement, selectSimilar, addRequest: addRequestInView, focusRequest: focusRegion, askAI, undoElement: stepBackElement, copyLayer, cutLayer, pasteLayer, arrangeLayer, async synchronize(requireBounds = false) {
     await flushImages();
     if (inlineSaving.current) await inlineSaving.current;
     const text = inlineTextRef.current;
@@ -941,24 +1065,36 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     if (liveView) { if (tool === 'request' && liveRequests) begin(event, 'new'); else startPan(event, false); return; }
     const at = point({ x: event.clientX, y: event.clientY });
     const hit = page.content ? site.current?.pick(at.x, at.y) : null;
+    // Alt-drag on empty space marquees; plain drag still pans and Shift-drag still draws an area.
+    if (tool === 'select' && event.altKey && page.content && (!hit || hit.element.tag === 'body')) { beginMarquee(event, event.shiftKey || event.ctrlKey || event.metaKey); return; }
     if (tool === 'request' || event.shiftKey && (!hit || hit.element.tag === 'body')) { begin(event, 'new'); return; }
     if (event.shiftKey || event.ctrlKey || event.metaKey || repicking) { startPan(event, true); return; }
     const current = elementRef.current;
-    if (!panKey.current && current && !extrasRef.current.length && current.element.selector !== 'body' && at.x >= current.rect.x && at.x <= current.rect.x + current.rect.width && at.y >= current.rect.y && at.y <= current.rect.y + current.rect.height) beginElementGesture(event);
+    const inSelection = current && selectionsNow().some(item => item.element.selector !== 'body' && at.x >= item.rect.x && at.x <= item.rect.x + item.rect.width && at.y >= item.rect.y && at.y <= item.rect.y + item.rect.height);
+    if (!panKey.current && inSelection) beginElementGesture(event);
     else startPan(event, !panKey.current);
   }
   function beginElementGesture(event: PointerEvent, corner?: ResizeCorner) {
     if (event.button !== 0 || !element || editingElement || nudging || gesture.current || pan.current || elementDrag.current) return;
     if (panKey.current || tool === 'pan') { startPan(event, false); return; }
     if (tool === 'request') { begin(event, 'new'); return; }
-    if (extrasRef.current.length) return;
     if ((event.shiftKey || event.ctrlKey || event.metaKey || repicking) && !corner) { startPan(event, true); return; }
     event.preventDefault(); event.stopPropagation(); setContext(null);
-    const mover = corner ? null : site.current?.beginMove(element.element) ?? null;
+    const selections = selectionsNow();
+    if (!corner && selections.length > 1) {
+      try { commonDocument(selections); } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); return; }
+    }
+    const group = !corner && selections.length > 1 ? selections.map(selection => ({ selection, mover: site.current?.beginMove(selection.element) ?? null })) : null;
+    if (group?.some(item => !item.mover)) {
+      group.forEach(item => item.mover?.cancel());
+      setElementError('Some selected items cannot be moved here. Select them again.');
+      return;
+    }
+    const mover = corner || group ? null : site.current?.beginMove(element.element) ?? null;
     const resizer = corner ? site.current?.beginResize(element.element, corner) ?? null : null;
-    if (!mover && !resizer) { setElementError('Choose a container to change this item’s layout.'); return; }
+    if (!mover && !resizer && !group) { setElementError('Choose a container to change this item’s layout.'); return; }
     const client = { x: event.clientX, y: event.clientY };
-    elementDrag.current = { pointerId: event.pointerId, pageId: page.id, version: acceptedVersion, start: client, world: point(client), original: element, mover, resizer, corner, active: false, fine: event.altKey, x: 0, y: 0, rect: element.rect };
+    elementDrag.current = { pointerId: event.pointerId, pageId: page.id, version: acceptedVersion, start: client, world: point(client), original: element, mover, resizer, group: group?.map(item => ({ selection: item.selection, mover: item.mover! })) ?? null, corner, active: false, fine: event.altKey, x: 0, y: 0, rect: element.rect };
     lastPointer.current = client; setDragging(true);
     stage.current!.setPointerCapture(event.pointerId); stage.current!.focus({ preventScroll: true });
   }
@@ -973,6 +1109,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       if (drag.resizer && drag.corner) {
         drag.rect = elementResizeRect(drag.original.rect, { x, y }, drag.corner, step, gridSettings.snap && !fine);
         moved = drag.resizer.preview(drag.rect);
+      } else if (drag.group) {
+        drag.x = gridSettings.snap && !fine ? Math.round((drag.original.rect.x + x) / step.x) * step.x - drag.original.rect.x : x;
+        drag.y = gridSettings.snap && !fine ? Math.round((drag.original.rect.y + y) / step.y) * step.y - drag.original.rect.y : y;
+        const movedGroup = drag.group.map(item => {
+          const result = item.mover.preview(drag.x, drag.y);
+          if (!result) throw new Error('This item left its editable page.');
+          return { ...item.selection, rect: result.rect };
+        });
+        moved = movedGroup[0];
+        expectSelection(moved.element, moved.rect);
+        storeElement(moved); setExtras(movedGroup.slice(1));
+        return;
       } else {
         drag.x = gridSettings.snap && !fine ? Math.round((drag.original.rect.x + x) / step.x) * step.x - drag.original.rect.x : x;
         drag.y = gridSettings.snap && !fine ? Math.round((drag.original.rect.y + y) / step.y) * step.y - drag.original.rect.y : y;
@@ -1031,6 +1179,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   }
   function move(event: PointerEvent) {
     const client = { x: event.clientX, y: event.clientY };
+    const band = marquee.current;
+    if (band?.pointerId === event.pointerId) {
+      if (!band.active && Math.hypot(client.x - band.clientStart.x, client.y - band.clientStart.y) < 3) return;
+      band.active = true; plainClicks.current = 0;
+      const now = point(client);
+      setMarqueeRect({ x: Math.min(band.start.x, now.x), y: Math.min(band.start.y, now.y), width: Math.abs(now.x - band.start.x), height: Math.abs(now.y - band.start.y) });
+      return;
+    }
     const drag = elementDrag.current;
     if (drag?.pointerId === event.pointerId) { lastPointer.current = client; updateElementDrag(client, event.altKey); return; }
     const currentPan = pan.current;
@@ -1047,17 +1203,41 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     lastPointer.current = client; gesture.current.proportional = gesture.current.shapeKind === 'ellipse' && event.shiftKey; updateDrag(client);
   }
   function finish(event: PointerEvent) {
+    if (marquee.current?.pointerId === event.pointerId) {
+      const band = marquee.current; cancel(false);
+      const end = point({ x: event.clientX, y: event.clientY });
+      const rect = { x: Math.min(band.start.x, end.x), y: Math.min(band.start.y, end.y), width: Math.abs(end.x - band.start.x), height: Math.abs(end.y - band.start.y) };
+      if (band.active && rect.width >= 2 && rect.height >= 2) {
+        try {
+          const items = site.current?.elementsWithin(rect) ?? [];
+          const next = marqueeSelections(items, rect, band.base);
+          applySelection(next);
+          if (items.length > MAX_SELECTION) setElementError(`Select up to ${MAX_SELECTION} elements at a time.`);
+        } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
+      }
+      return;
+    }
     if (elementDrag.current?.pointerId === event.pointerId) {
       updateElementDrag({ x: event.clientX, y: event.clientY }, event.altKey);
       const drag = elementDrag.current; if (!drag) return;
       let css: string | null = null;
+      let groupStyles: string[] | null = null;
       try {
-        if (drag.active && (drag.resizer ? !sameRect(drag.rect, drag.original.rect) : drag.x || drag.y)) css = drag.resizer ? drag.resizer.style(drag.rect) : drag.mover!.style(drag.x, drag.y);
+        if (drag.active && (drag.resizer ? !sameRect(drag.rect, drag.original.rect) : drag.x || drag.y)) {
+          if (drag.group) groupStyles = drag.group.map(item => item.mover.style(drag.x, drag.y));
+          else css = drag.resizer ? drag.resizer.style(drag.rect) : drag.mover!.style(drag.x, drag.y);
+        }
       } catch (error) { setElementError(String(error)); }
       // Retain the gesture's final pixels and bounds until the committed preview swaps in.
       const placed = elementRef.current;
-      cancel(drag.active || !!drag.corner, css === null);
-      if (css !== null) void applyElement({ kind: 'update', texts: [], attributes: {}, style: css }, placed ?? drag.original).catch(() => { drag.mover?.cancel(); drag.resizer?.cancel(); refreshElement(); });
+      const group = drag.group;
+      const placedGroup = [elementRef.current, ...extrasRef.current].flatMap(item => item ? [item] : []);
+      cancel(drag.active || !!drag.corner, css === null && groupStyles === null);
+      if (groupStyles !== null && group) {
+        void applyBatch(group.map((item, index) => ({ selection: placedGroup[index] ?? item.selection, change: { kind: 'update', texts: [], attributes: {}, style: groupStyles![index] } as ElementEdit })))
+          .catch(() => { group.forEach(item => item.mover.cancel()); refreshElement(); });
+      }
+      else if (css !== null) void applyElement({ kind: 'update', texts: [], attributes: {}, style: css }, placed ?? drag.original).catch(() => { drag.mover?.cancel(); drag.resizer?.cancel(); refreshElement(); });
       else if (!drag.active && !drag.corner) {
         finishPlainClick({ x: event.clientX, y: event.clientY }, !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey, event.shiftKey || event.ctrlKey || event.metaKey);
       }
@@ -1165,7 +1345,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       createRequestInBackground(requestAt({ x: snapped.x, y: snapped.y }, zoom)); return;
     }
     if (!region && element) {
-      if (extrasRef.current.length) { if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void deleteSelected().catch(error => setElementError(String(error))); } return; }
+      if (extrasRef.current.length) {
+        if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); void deleteSelected().catch(error => setElementError(String(error))); return; }
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+          event.preventDefault(); const step = event.shiftKey ? 10 : 1;
+          nudgeElement(event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0, event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0); return;
+        }
+        return;
+      }
       if (event.key === 'F2' && !nudge.current.promise && !editingElement) { event.preventDefault(); setElementDialog('edit'); return; }
       if ((event.key === 'Delete' || event.key === 'Backspace') && !nudge.current.promise && !editingElement) { event.preventDefault(); deleteElement(); return; }
       if (['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) {
@@ -1251,6 +1438,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const px = (value: number) => `${Math.round(value * 10) / 10}`;
 
   const editBusy = layerBusy || editingElement || nudging;
+  // Mixed values across a multi-selection are shown as mixed instead of as the first item's value.
+  const styleVisual = element ? site.current?.visual(element.element) ?? null : null;
+  const multiVisuals = extras.length ? [element, ...extras].flatMap(item => item ? [site.current?.visual(item.element) ?? null] : []) : [];
+  const mixedStyle = <K extends keyof ElementVisual>(key: K) => multiVisuals.length > 1 && multiVisuals.some(value => (value?.[key] ?? '') !== (multiVisuals[0]?.[key] ?? ''));
+  const styleMixed: Partial<Record<keyof ElementVisual, boolean>> = extras.length ? {
+    color: mixedStyle('color'), backgroundColor: mixedStyle('backgroundColor'), fontSize: mixedStyle('fontSize'), padding: mixedStyle('padding'), textAlign: mixedStyle('textAlign'),
+  } : {};
   // Requests line up with the design only at the page's own width, so they show (and can be added) there.
   const liveRequests = !liveView || liveView.width === page.viewport.width;
   // Keep callbacks stable so prompt edits cannot re-render the memoized live layer.
@@ -1293,6 +1487,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     ...(context.kind === 'element' ? [
       { id: 'edit', label: 'Edit', disabled: editBusy, action: () => setElementDialog('edit') },
       { id: 'generate', label: 'Ask AI', disabled: editBusy, action: askAI },
+      { id: 'select-similar', label: 'Select similar', shortcut: 'Ctrl/Cmd+Shift+A', disabled: editBusy, action: selectSimilar },
       ...(fixOnPhones && elementRef.current && elementRef.current.element.selector !== 'body' && !elementRef.current.element.document ? [{ id: 'phones', label: 'Fix on phones', disabled: editBusy, action: () => { const current = elementRef.current; if (current) fixOnPhones(current); } }] : []),
       { id: 'replace', label: 'Replace', disabled: editBusy, action: () => setElementDialog('replace') },
       ...(undoElement && elementRef.current && elementRef.current.element.selector !== 'body' ? [{ id: 'undo-element', label: 'Undo changes to this element', shortcut: 'Alt+Z', disabled: editBusy, action: () => { void stepBackElement(); } }] : []),
@@ -1302,6 +1497,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     ...(context.kind !== 'canvas' ? [
       { id: 'copy', label: 'Copy', disabled: editBusy, shortcut: 'Ctrl/Cmd+C', action: () => { void copyLayer(); } },
       { id: 'cut', label: 'Cut', disabled: editBusy, shortcut: 'Ctrl/Cmd+X', action: () => { void cutLayer(); } },
+      { id: 'duplicate', label: 'Duplicate', disabled: editBusy, action: () => { void duplicateSelection(); } },
     ] : []),
     { id: 'paste', label: 'Paste', disabled: editBusy, shortcut: 'Ctrl/Cmd+V', action: () => { void pasteLayer(); } },
     ...(context.kind !== 'canvas' ? [
@@ -1316,7 +1512,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   ] : [];
   return <div className={`free-workspace ${page.appearance} tool-${tool} ${gridSettings.rulers && !liveView ? 'with-rulers' : ''} ${panReady ? 'pan-ready' : ''} ${panning ? 'panning' : ''} ${repicking ? 'repicking' : ''} ${liveView ? 'live' : ''}`}
     onKeyDownCapture={event => { if (!(event.target instanceof Element && event.target.closest('.workspace-surface')) && event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
-    <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 8 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
+    <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 500 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Alt-drag on empty space selects everything the rectangle touches; add Shift to keep the current selection. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Ctrl or Command Shift A selects every item similar to the selected one. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
     {(() => {
       const key = `page:${generation?.job?.jobId ?? 'start'}:${page.id}`;
       const outcome = jobOutcome(generation?.job ?? null, id => page.regions.find(region => region.id === id)?.prompt);
@@ -1416,6 +1612,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           {guides.x.map(x => <div key={`x${x}`} className="alignment-guide alignment-x" aria-hidden="true" style={{ left: (x - bounds.left) * zoom, zIndex: overlayLayer + 1 }} />)}
           {guides.y.map(y => <div key={`y${y}`} className="alignment-guide alignment-y" aria-hidden="true" style={{ top: (y - bounds.top) * zoom, zIndex: overlayLayer + 1 }} />)}
           {preview && gesture.current?.kind === 'new' && (gesture.current.shapeKind === 'rect' ? <div className="annotation-draft" style={{ ...paintStyle(preview, bounds, zoom), zIndex: overlayLayer }} /> : <RegionOutline shape={draftShape} rect={preview} bounds={bounds} zoom={zoom} layer={overlayLayer} draft />)}
+          {marqueeRect && <div className="marquee-selection" data-testid="marquee-selection" style={{ ...paintStyle(marqueeRect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />}
         </div>
       </div>
     </div>
@@ -1430,7 +1627,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       {extras.length > 0 ? <>
         <span className="multi-count">{extras.length + 1} selected</span>
         <button className="ask-ai" disabled={editBusy} onClick={askAI}>Ask AI</button>
+        {element && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}
+        <button className="wide" disabled={editBusy} title="Select every item with the same tag and classes" onClick={selectSimilar}>Select similar</button>
+        <button className="wide" disabled={editBusy} title="Copy the selection beside itself" onClick={() => { void duplicateSelection(); }}>Duplicate</button>
+        <button className="wide" disabled={editBusy} title="Give every selected item the first item’s width" onClick={() => { void resizeSelection('width'); }}>Same width</button>
+        <button className="wide" disabled={editBusy} title="Give every selected item the first item’s height" onClick={() => { void resizeSelection('height'); }}>Same height</button>
         <button aria-label="Delete selected items" title="Delete all selected items" disabled={editBusy} onClick={() => { void deleteSelected().catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}><QuickIcon name="delete" /></button>
+        {element && styleOpen && <StyleBar key={`multi:${extras.length}:${element.element.selector}`} visual={styleVisual} mixed={styleMixed} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </> : <>
       {element?.element.tag === 'img' ? <>
         <button className="ask-ai" title="Choose a picture from your computer, or drop one onto the image" disabled={editBusy} onClick={() => browseImage(elementRef.current)}>Replace image</button>
@@ -1439,13 +1642,14 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         {element.element.tag === 'iframe' && overlaySelection && <button className="ask-ai" aria-pressed={interacting} title={interacting ? 'Stop playing this frame' : 'Play this frame in place'}
           onClick={() => setInteractingFrame(value => value === overlaySelection.key ? null : overlaySelection.key)}>{interacting ? 'Done' : 'Interact'}</button>}
         <button className="ask-ai" title="Change text, links and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>
+        <button className="wide" title="Select every item with the same tag and classes · Ctrl/⌘+Shift+A" disabled={editBusy} onClick={selectSimilar}>Select similar</button>
         <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
         {element.element.selector !== 'body' && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}
       </>}
       {element && foundUrl && openSource && !element.element.document && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
       {element && undoElement && element.element.selector !== 'body' && <button aria-label="Undo changes to this element" title="Step this element back to its previous version · Alt+Z" disabled={editBusy} onClick={() => { void stepBackElement(); }}><QuickIcon name="undo" /></button>}
       <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
-      {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={site.current?.visual(element.element) ?? null} busy={editBusy} apply={change => { void applyStyles(change); }} />}
+      {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={styleVisual} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </>}
       </>}
     </div>}

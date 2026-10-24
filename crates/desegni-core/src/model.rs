@@ -743,8 +743,8 @@ impl Project {
                     )?;
                 }
                 ensure(
-                    region.elements.len() <= 8,
-                    "A request supports at most eight selected elements.",
+                    region.elements.len() <= crate::MAX_BATCH_ELEMENT_EDITS,
+                    "A request supports at most 500 selected elements.",
                 )?;
                 ensure(
                     region.elements.is_empty() || region.element.is_none(),

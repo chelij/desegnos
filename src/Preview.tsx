@@ -10,6 +10,7 @@ import { liveCommand, liveLocation, type LiveHistoryAction } from './liveBar';
 import { collectFrame, frameKey, resolveFrameSource, type CollectedFrame } from './previewFrames';
 import { frameAt, frameContentRect, frameDocumentBase, frameDocumentSource, frameMapping, innerRectToPage, pageRectToInnerViewport, type EditableFrame, type FrameMapping } from './frameDocuments';
 import { documentKey } from './elementTargets';
+import { similarSelections, type ElementProfile } from './elementSelection';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
 import type { DocumentTarget, ElementSelection, ElementTarget, ElementStyleEdit, FrameDocumentView, LayerDirection, ElementVisual, Page, PreviewDescriptor, Rect, SiteContent } from './types';
 
@@ -32,7 +33,7 @@ export type ElementResizer = { preview: (rect: Rect) => ElementSelection | null;
 export type InlineText = { selection: ElementSelection; index: number; text: string; rect: Rect; style: CSSProperties };
 export type FrameView = { pageUrl: string | null; frames: CollectedFrame[] };
 export type ConstrainedFrame = { node: HTMLIFrameElement; document: Document; target: DocumentTarget; hash: string; selector: string; liveSrc: string | null };
-export type CanvasPreviewHandle = { liveHistory: (action: LiveHistoryAction) => void; frameOverlays: () => FrameView; hideStaticFrames: (keys: readonly string[]) => void; frames: () => EditableFrame[]; measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; sourceOf: (target: ElementTarget) => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
+export type CanvasPreviewHandle = { liveHistory: (action: LiveHistoryAction) => void; frameOverlays: () => FrameView; hideStaticFrames: (keys: readonly string[]) => void; frames: () => EditableFrame[]; measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; sourceOf: (target: ElementTarget) => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; elementsWithin: (rect: Rect) => ElementSelection[]; similar: (target: ElementTarget) => ElementSelection[]; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 const identityMapping: FrameMapping = { frame: { x: 0, y: 0, width: 0, height: 0 }, scaleX: 1, scaleY: 1, insetX: 0, insetY: 0, scrollX: 0, scrollY: 0 };
 function delay(ms: number) { return new Promise<void>(resolve => setTimeout(resolve, ms)); }
 function paints(count: number) { return new Promise<void>(resolve => { let left = count; const step = () => { if (--left <= 0) resolve(); else requestAnimationFrame(step); }; requestAnimationFrame(step); }); }
@@ -126,7 +127,17 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     }
     return ['body', ...parts].join(' > ');
   }
-  function identify(node: Element | null, exact = true): { node: Element; target: ElementTarget } | null {
+  // Peers of a similar control are matched by tag and class list, or by structural role.
+  function profileOf(node: Element): ElementProfile {
+    const role = /^h[1-6]$/.test(node.localName) ? node.localName : node.localName === 'a' ? 'link'
+      : ['button', 'summary'].includes(node.localName) ? node.localName : ['input', 'select', 'textarea'].includes(node.localName) ? 'field' : '';
+    return { tag: node.localName, classes: Array.from(node.classList).sort(), role };
+  }
+  function elementCandidates(container: Document): Element[] {
+    if (!container.body) return [];
+    return Array.from(container.body.querySelectorAll('*')).filter(node => !['script', 'style', 'link', 'meta', 'template', 'noscript', 'source', 'track'].includes(node.localName) && node.getClientRects().length > 0);
+  }
+  function identify(node: Element | null, exact = true, withLabel = true): { node: Element; target: ElementTarget } | null {
     const doc = measurable();
     if (!doc || doc.URL !== 'about:srcdoc' || !node) return null;
     const framed = frameForNode(node);
@@ -137,19 +148,21 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     if (!container.body.contains(node) || !/^[A-Za-z][A-Za-z0-9-]{0,79}$/.test(node.localName)) return null;
     const selector = structuralSelector(node, container.body); if (!selector) return null;
     let label = '';
-    const walker = Document.prototype.createTreeWalker.call(container, node, NodeFilter.SHOW_TEXT);
-    let visits = 0;
-    while (label.length < 240 && visits++ < 1024) {
-      const text = walker.nextNode(); if (!text) break;
-      if (!['SCRIPT', 'STYLE'].includes(text.parentElement?.tagName ?? '')) label += ` ${text.nodeValue?.slice(0, 240) ?? ''}`;
+    if (withLabel) {
+      const walker = Document.prototype.createTreeWalker.call(container, node, NodeFilter.SHOW_TEXT);
+      let visits = 0;
+      while (label.length < 240 && visits++ < 1024) {
+        const text = walker.nextNode(); if (!text) break;
+        if (!['SCRIPT', 'STYLE'].includes(text.parentElement?.tagName ?? '')) label += ` ${text.nodeValue?.slice(0, 240) ?? ''}`;
+      }
+      label = node.getAttribute('aria-label') || label.trim() || node.getAttribute('alt') || node.getAttribute('title') || '';
     }
-    label = node.getAttribute('aria-label') || label.trim() || node.getAttribute('alt') || node.getAttribute('title') || '';
     const id = node.getAttribute('data-desegnos-id');
     return { node, target: { selector, tag: node.localName,
       label: Array.from(label.replace(/\s+/g, ' ').trim()).slice(0, 240).join(''), ...(id ? { id } : { sourceSha256: hash }), ...(framed ? { document: framed.target } : {}) } };
   }
-  function selected(node: Element | null, remember = false, exact = false): ElementSelection | null {
-    const found = identify(node, exact); if (!found) return null;
+  function selected(node: Element | null, remember = false, exact = false, withLabel = true): ElementSelection | null {
+    const found = identify(node, exact, withLabel); if (!found) return null;
     const box = Element.prototype.getBoundingClientRect.call(found.node);
     if (![box.x, box.y, box.width, box.height, box.right, box.bottom].every(Number.isFinite) || box.width < 1 || box.height < 1) return null;
     const framed = frameForNode(found.node);
@@ -373,6 +386,33 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       const nodes = Array.from(doc.querySelectorAll('[data-desegnos-id]'));
       if (nodes.length > 10_000) throw new Error('This page has more than 10,000 elements. Select individual elements for this request.');
       return nodes.map(node => selected(node, false, true)).filter((item): item is ElementSelection => !!item);
+    },
+    // Every measurable element the marquee can reach, including editable framed documents.
+    elementsWithin(rect) {
+      const doc = measurable();
+      if (!doc || !identify(doc.body)) return [];
+      const nodes = [doc, ...frameEntries().filter(frameShown).map(entry => entry.document)].flatMap(elementCandidates)
+        // A marquee over a frame reaches the document inside it, not the wrapper and its contents.
+        .filter(node => node.localName !== 'iframe');
+      if (nodes.length > 20_000) throw new Error('This page has more than 20,000 elements. Select a smaller area.');
+      return nodes.flatMap(node => {
+        const found = selected(node, false, true, false);
+        return found && found.rect.x < rect.x + rect.width && found.rect.x + found.rect.width > rect.x && found.rect.y < rect.y + rect.height && found.rect.y + found.rect.height > rect.y ? [found] : [];
+      });
+    },
+    // Elements matching the reference's tag and class list, or its structural role.
+    similar(target) {
+      const node = findNode(target);
+      const container = node?.ownerDocument;
+      if (!node || !container?.body) return [];
+      const nodes = elementCandidates(container);
+      if (nodes.length > 20_000) throw new Error('This page has more than 20,000 elements. Select a smaller group.');
+      const profile = profileOf(node);
+      const items = nodes.flatMap(candidate => {
+        const selection = selected(candidate, false, true, false);
+        return selection ? [{ selection, profile: profileOf(candidate) }] : [];
+      });
+      return similarSelections(profile, items);
     },
     layerStyles(target, direction) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteLayerStyles(node, direction, value => identify(value)?.target ?? null); },
     copyStyles(target) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteCopyStyles(node, value => identify(value)?.target ?? null); },

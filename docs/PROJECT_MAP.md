@@ -186,7 +186,7 @@ Shell configuration: [Cargo.toml](../src-tauri/Cargo.toml), [tauri.conf.json](..
 
 1. [Canvas.tsx](../src/Canvas.tsx) converts pointer coordinates through [canvasGeometry.ts](../src/canvasGeometry.ts) → [Preview.tsx](../src/Preview.tsx) `pick`/`textAt` → stable `ElementTarget`; selection controls and [Layers.tsx](../src/Layers.tsx) share that target.
 2. Move/resize gestures call `beginMove`/`beginResize` for temporary DOM feedback; geometry/snapping and `translatedStyle` compute the final inline style. Double-click text → `InlineTextEditor` → `finishText`.
-3. App `editElement` → native [edit_element](../src-tauri/src/workspace.rs) → [Session::edit_element](../crates/desegni-core/src/session.rs) → [editing.rs](../crates/desegni-core/src/editing.rs), with stable-target validation and journaled history. Canvas `synchronize` flushes text, queued edits and measured bounds before dependent actions.
+3. App `editElement` → native [edit_element](../src-tauri/src/workspace.rs) → [Session::edit_element](../crates/desegni-core/src/session.rs) → [editing.rs](../crates/desegni-core/src/editing.rs), with stable-target validation and journaled history. A multi-selection sends one native `edit_elements` batch ([Project::edit_elements_in](../crates/desegni-core/src/editing.rs)) so every target changes in one revision and one undo step; a stale target rejects the whole batch. Canvas `synchronize` flushes text, queued edits and measured bounds before dependent actions.
 
 ### Project save, open, recovery and journal
 

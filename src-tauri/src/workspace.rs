@@ -1885,6 +1885,42 @@ pub fn edit_element(
     })
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ElementBatchEditView {
+    workspace: WorkspaceView,
+    elements: Vec<Option<desegni_core::ElementTarget>>,
+}
+
+/// Apply several element changes to one document as one revision and one history step.
+#[tauri::command]
+pub fn edit_elements(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    edits: Vec<desegni_core::ElementBatchEdit>,
+    document: Option<desegni_core::DocumentTarget>,
+) -> NativeResult<ElementBatchEditView> {
+    let mut state = state.lock().map_err(message)?;
+    let Workspace {
+        session, journal, ..
+    } = &mut *state;
+    let session = session.as_mut().ok_or("Open a project first.")?;
+    if session.project().id != project_id {
+        return Err("Return to the project that owns these elements.".into());
+    }
+    let journal = journal.as_ref().ok_or("Open a project first.")?;
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let elements = session
+        .edit_elements_document(revision, &document, &edits, |next| journal.append(next))
+        .map_err(message)?;
+    Ok(ElementBatchEditView {
+        workspace: state.view(),
+        elements,
+    })
+}
+
 /// Steps the selected element back to its previous version; other changes stay.
 #[tauri::command]
 pub fn undo_element(
@@ -1951,6 +1987,40 @@ pub async fn copy_layer(
     };
     // OS clipboard owners can need their GUI thread to answer a transfer.
     // Never hold the workspace lock or use the GUI thread while waiting.
+    tauri::async_runtime::spawn_blocking(move || crate::clipboard::write(&app, packet))
+        .await
+        .map_err(message)?
+}
+
+/// Copy several elements from one document into the OS clipboard as one packet.
+#[tauri::command]
+pub async fn copy_elements(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+    page_id: Uuid,
+    revision: u64,
+    targets: Vec<desegni_core::ElementTarget>,
+    visual_styles: Vec<Vec<desegni_core::ElementStyleEdit>>,
+    document: Option<desegni_core::DocumentTarget>,
+) -> NativeResult<()> {
+    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let packet = {
+        let state = state.lock().map_err(message)?;
+        let project = state
+            .session
+            .as_ref()
+            .ok_or("Open a project first.")?
+            .project();
+        if project.id != project_id || project.revision != revision {
+            return Err("The project changed before the elements were copied. Select them again.".into());
+        }
+        project
+            .copy_elements_in(&document, &targets, &visual_styles)
+            .map_err(message)?
+            .to_json()
+            .map_err(message)?
+    };
     tauri::async_runtime::spawn_blocking(move || crate::clipboard::write(&app, packet))
         .await
         .map_err(message)?

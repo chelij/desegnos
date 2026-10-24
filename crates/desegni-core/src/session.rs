@@ -212,6 +212,26 @@ impl Session {
         Ok(target)
     }
 
+    /// Apply several element changes to one document as one history step. The durable write
+    /// and the history entry cover the whole batch; a rejected target leaves all of it alone.
+    pub fn edit_elements_document(
+        &mut self,
+        revision: u64,
+        document: &crate::DocumentTarget,
+        edits: &[crate::ElementBatchEdit],
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<Vec<Option<crate::ElementTarget>>> {
+        self.assert_revision(revision)?;
+        let (next, targets) = self
+            .project
+            .edit_elements_in(document, self.project.revision, edits)?;
+        if next.revision != self.project.revision {
+            durable(&next)?;
+            self.commit(next);
+        }
+        Ok(targets)
+    }
+
     pub fn paste_layer(
         &mut self,
         revision: u64,

@@ -35,13 +35,15 @@ export type LayerDirection = 'forward' | 'backward' | 'front' | 'back';
 export type LayerPseudoStyle = { pseudo: 'before' | 'after' | 'marker'; style: string };
 export type ElementStyleEdit = { target: ElementTarget; style: string; pseudoStyles?: LayerPseudoStyle[] };
 export type LayerTarget = { kind: 'request'; regionId: string } | { kind: 'element'; target: ElementTarget };
-export type LayerPasteView = { workspace: WorkspaceView; selection: { element: ElementTarget | null; regionId: string | null } };
+export type LayerPasteView = { workspace: WorkspaceView; selection: { element: ElementTarget | null; regionId: string | null; elements?: ElementTarget[] } };
 export type ElementSelection = { element: ElementTarget; rect: Rect };
 export type ElementEdit = { kind: 'update'; texts: { index: number; text: string }[]; attributes: Record<string, string | null>; style: string | null }
   | { kind: 'replace'; html: string; keepStyle: boolean } | { kind: 'reorder'; direction: 'before' | 'after' } | { kind: 'layerStyles'; styles: ElementStyleEdit[] } | { kind: 'remove' };
 export type ElementBounds = { regionId: string; bounds: { target: ElementTarget; rect: Rect }[] };
 export type ElementDetails = { target: ElementTarget; texts: { index: number; text: string }[]; textsTruncated: boolean; attributes: Record<string, string>; inlineStyle: string; html: string; canMove: boolean; canMoveBefore: boolean; canMoveAfter: boolean };
 export type ElementEditView = { workspace: WorkspaceView; element: ElementTarget | null };
+export type ElementBatchEdit = { target: ElementTarget; change: ElementEdit };
+export type ElementBatchEditView = { workspace: WorkspaceView; elements: (ElementTarget | null)[] };
 export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string; textAlign?: string };
 export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; preview?: string; text?: string; url?: string };
 export type Region = { shape?: RegionShape; areaBounds?: { target: ElementTarget; rect: Rect }[]; attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; frameTarget?: FrameTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; runtimeErrors?: string[]; wholePage?: boolean; wholePageDisabled?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };

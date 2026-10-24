@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const MAX_LAYER_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_LAYER_CLIPBOARD_ITEMS: usize = 500;
 pub const MAX_LAYER_STYLE_EDITS: usize = 512;
 pub const MAX_LAYER_STYLE_BYTES: usize = 65_536;
 const MAX_LAYER_STYLES_BYTES: usize = 2 * 1024 * 1024;
@@ -72,6 +73,14 @@ pub struct LayerElementContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LayerElementContent {
+    pub html: String,
+    pub context: LayerElementContext,
+    pub visual_styles: Vec<LayerVisualStyle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -90,6 +99,9 @@ pub enum LayerClipboardContent {
         context: LayerElementContext,
         visual_styles: Vec<LayerVisualStyle>,
     },
+    Elements {
+        items: Vec<LayerElementContent>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -105,6 +117,8 @@ pub struct LayerClipboard {
 pub struct LayerPasteSelection {
     pub element: Option<ElementTarget>,
     pub region_id: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elements: Vec<ElementTarget>,
 }
 
 #[derive(Clone)]
@@ -515,6 +529,58 @@ fn unique_ids(doc: &Document) -> Result<()> {
     )
 }
 
+fn validate_element_content(
+    html: &str,
+    context: &LayerElementContext,
+    visual_styles: &[LayerVisualStyle],
+) -> Result<()> {
+    check_value(html, crate::MAX_SITE_SOURCE_BYTES)?;
+    let doc = fragment(html, context_name(context)?)?;
+    let root = fragment_root(&doc)?;
+    ensure(
+        root.node_name().as_deref() != Some("body"),
+        "Copy an item inside the page, not the page itself.",
+    )?;
+    ensure(
+        root.try_html().is_some_and(|value| value.as_ref() == html),
+        "The clipboard markup would be repaired by the browser. Copy a valid visual layer.",
+    )?;
+    unique_ids(&doc)?;
+    static_subtree(root)?;
+    let nodes = element_paths(root)?;
+    ensure(
+        visual_styles.len() == nodes.len(),
+        "The copied visual styles must cover the complete layer.",
+    )?;
+    let mut seen = BTreeSet::new();
+    let mut bytes = 0_usize;
+    for style in visual_styles {
+        ensure(
+            seen.insert(&style.path),
+            "A copied visual style was supplied twice.",
+        )?;
+        let node = nodes
+            .iter()
+            .find(|(path, _)| *path == style.path)
+            .map(|(_, node)| *node)
+            .ok_or_else(|| Error("A copied visual style refers outside its layer.".into()))?;
+        bytes += style.style.len() + pseudo_bytes(&style.pseudo_styles)?;
+        ensure(
+            bytes <= MAX_LAYER_STYLES_BYTES,
+            "The copied styles exceed the 2 MiB limit.",
+        )?;
+        let inline = node
+            .attr("style")
+            .map(|value| value.to_string())
+            .unwrap_or_default();
+        ensure(
+            visual_style(&inline, &style.style)? == inline,
+            "The copied visual styles disagree with its HTML.",
+        )?;
+    }
+    Ok(())
+}
+
 impl LayerClipboard {
     pub fn from_json(source: &str) -> Result<Self> {
         check_value(source, MAX_LAYER_CLIPBOARD_BYTES)?;
@@ -552,52 +618,14 @@ impl LayerClipboard {
                 html,
                 context,
                 visual_styles,
-            } => {
-                check_value(html, crate::MAX_SITE_SOURCE_BYTES)?;
-                let doc = fragment(html, context_name(context)?)?;
-                let root = fragment_root(&doc)?;
+            } => validate_element_content(html, context, visual_styles)?,
+            LayerClipboardContent::Elements { items } => {
                 ensure(
-                    root.node_name().as_deref() != Some("body"),
-                    "Copy an item inside the page, not the page itself.",
+                    !items.is_empty() && items.len() <= MAX_LAYER_CLIPBOARD_ITEMS,
+                    "The copied selection must contain between one and 500 elements.",
                 )?;
-                ensure(
-                    root.try_html().is_some_and(|value| value.as_ref() == html),
-                    "The clipboard markup would be repaired by the browser. Copy a valid visual layer.",
-                )?;
-                unique_ids(&doc)?;
-                static_subtree(root)?;
-                let nodes = element_paths(root)?;
-                ensure(
-                    visual_styles.len() == nodes.len(),
-                    "The copied visual styles must cover the complete layer.",
-                )?;
-                let mut seen = BTreeSet::new();
-                let mut bytes = 0_usize;
-                for style in visual_styles {
-                    ensure(
-                        seen.insert(&style.path),
-                        "A copied visual style was supplied twice.",
-                    )?;
-                    let node = nodes
-                        .iter()
-                        .find(|(path, _)| *path == style.path)
-                        .map(|(_, node)| *node)
-                        .ok_or_else(|| {
-                            Error("A copied visual style refers outside its layer.".into())
-                        })?;
-                    bytes += style.style.len() + pseudo_bytes(&style.pseudo_styles)?;
-                    ensure(
-                        bytes <= MAX_LAYER_STYLES_BYTES,
-                        "The copied styles exceed the 2 MiB limit.",
-                    )?;
-                    let inline = node
-                        .attr("style")
-                        .map(|value| value.to_string())
-                        .unwrap_or_default();
-                    ensure(
-                        visual_style(&inline, &style.style)? == inline,
-                        "The copied visual styles disagree with its HTML.",
-                    )?;
+                for item in items {
+                    validate_element_content(&item.html, &item.context, &item.visual_styles)?;
                 }
             }
         }
@@ -653,87 +681,15 @@ impl Project {
                 }
             }
             LayerTarget::Element { target } => {
-                ensure(
-                    target.selector != "body",
-                    "Copy an item inside the page, not the page itself.",
-                )?;
                 let source = self.document_content(document)?;
-                ensure(
-                    !target.id.is_empty() || self.document_hash(document)? == target.source_sha256,
-                    "The document changed. Select this layer again.",
-                )?;
+                let hash = self.document_hash(document)?;
                 let doc = self.parse_document_target(document, &source.html)?;
                 unique_ids(&doc)?;
-                let root = locate(&doc, target)?;
-                static_subtree(root)?;
-                let parent = root
-                    .parent()
-                    .ok_or_else(|| Error("This layer has no editable parent.".into()))?;
-                let parent_name = qual_name(parent)?;
-                let nodes = element_paths(root)?;
-                ensure(
-                    visual_styles.len() == nodes.len(),
-                    "Capture the current visual styles for this layer and every item inside it.",
-                )?;
-                let mut seen = BTreeSet::new();
-                let mut snapshots = Vec::new();
-                let mut bytes = 0_usize;
-                for style in visual_styles {
-                    ensure(
-                        !style.target.id.is_empty() && !target.id.is_empty()
-                            || style.target.source_sha256 == target.source_sha256,
-                        "The page changed while copying this layer. Select it again.",
-                    )?;
-                    let node = locate(&doc, &style.target)?;
-                    ensure(
-                        seen.insert(node.id),
-                        "A copied visual style was supplied twice.",
-                    )?;
-                    let path = nodes
-                        .iter()
-                        .find(|(_, descendant)| descendant.id == node.id)
-                        .map(|(path, _)| path.clone())
-                        .ok_or_else(|| {
-                            Error("A copied visual style refers outside the selected layer.".into())
-                        })?;
-                    let original = node
-                        .attr("style")
-                        .map(|value| value.to_string())
-                        .unwrap_or_default();
-                    let baked = visual_style(&original, &style.style)?;
-                    bytes += style.style.len() + pseudo_bytes(&style.pseudo_styles)?;
-                    ensure(
-                        bytes <= MAX_LAYER_STYLES_BYTES,
-                        "The copied styles exceed the 2 MiB limit.",
-                    )?;
-                    if baked.is_empty() {
-                        node.remove_attr("style");
-                    } else {
-                        node.set_attr("style", &baked);
-                    }
-                    snapshots.push(LayerVisualStyle {
-                        path,
-                        style: style.style.clone(),
-                        pseudo_styles: style.pseudo_styles.clone(),
-                    });
-                }
-                snapshots.sort_by(|left, right| left.path.cmp(&right.path));
+                let content = self.copy_element_content(&doc, &hash, target, visual_styles)?;
                 LayerClipboardContent::Element {
-                    html: self
-                        .resolve_site_content(&crate::SiteContent {
-                            html: root
-                                .try_html()
-                                .ok_or_else(|| Error("This layer could not be copied.".into()))?
-                                .to_string(),
-                            css: String::new(),
-                            javascript: String::new(),
-                        })?
-                        .html,
-                    context: LayerElementContext {
-                        namespace: parent_name.ns.to_string(),
-                        parent_tag: parent_name.local.to_string(),
-                    },
-                    visual_styles: snapshots,
+                    html: content.html,
+                    context: content.context,
+                    visual_styles: content.visual_styles,
                 }
             }
         };
@@ -741,6 +697,126 @@ impl Project {
             format: "desegnos-layer".into(),
             version: 1,
             content,
+        };
+        clipboard.validate()?;
+        Ok(clipboard)
+    }
+
+    /// One element's clipboard content, read against an already parsed document.
+    fn copy_element_content(
+        &self,
+        doc: &dom_query::Document,
+        hash: &str,
+        target: &ElementTarget,
+        visual_styles: &[ElementStyleEdit],
+    ) -> Result<LayerElementContent> {
+        ensure(
+            target.selector != "body",
+            "Copy an item inside the page, not the page itself.",
+        )?;
+        ensure(
+            !target.id.is_empty() || hash == target.source_sha256,
+            "The document changed. Select this layer again.",
+        )?;
+        let root = locate(doc, target)?;
+        static_subtree(root)?;
+        let parent = root
+            .parent()
+            .ok_or_else(|| Error("This layer has no editable parent.".into()))?;
+        let parent_name = qual_name(parent)?;
+        let nodes = element_paths(root)?;
+        ensure(
+            visual_styles.len() == nodes.len(),
+            "Capture the current visual styles for this layer and every item inside it.",
+        )?;
+        let mut seen = BTreeSet::new();
+        let mut snapshots = Vec::new();
+        let mut bytes = 0_usize;
+        for style in visual_styles {
+            ensure(
+                !style.target.id.is_empty() && !target.id.is_empty()
+                    || style.target.source_sha256 == target.source_sha256,
+                "The page changed while copying this layer. Select it again.",
+            )?;
+            let node = locate(doc, &style.target)?;
+            ensure(
+                seen.insert(node.id),
+                "A copied visual style was supplied twice.",
+            )?;
+            let path = nodes
+                .iter()
+                .find(|(_, descendant)| descendant.id == node.id)
+                .map(|(path, _)| path.clone())
+                .ok_or_else(|| {
+                    Error("A copied visual style refers outside the selected layer.".into())
+                })?;
+            let original = node
+                .attr("style")
+                .map(|value| value.to_string())
+                .unwrap_or_default();
+            let baked = visual_style(&original, &style.style)?;
+            bytes += style.style.len() + pseudo_bytes(&style.pseudo_styles)?;
+            ensure(
+                bytes <= MAX_LAYER_STYLES_BYTES,
+                "The copied styles exceed the 2 MiB limit.",
+            )?;
+            if baked.is_empty() {
+                node.remove_attr("style");
+            } else {
+                node.set_attr("style", &baked);
+            }
+            snapshots.push(LayerVisualStyle {
+                path,
+                style: style.style.clone(),
+                pseudo_styles: style.pseudo_styles.clone(),
+            });
+        }
+        snapshots.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(LayerElementContent {
+            html: self
+                .resolve_site_content(&crate::SiteContent {
+                    html: root
+                        .try_html()
+                        .ok_or_else(|| Error("This layer could not be copied.".into()))?
+                        .to_string(),
+                    css: String::new(),
+                    javascript: String::new(),
+                })?
+                .html,
+            context: LayerElementContext {
+                namespace: parent_name.ns.to_string(),
+                parent_tag: parent_name.local.to_string(),
+            },
+            visual_styles: snapshots,
+        })
+    }
+
+    /// Copy several elements from one document. The packet pastes them together as one edit.
+    pub fn copy_elements_in(
+        &self,
+        document: &crate::DocumentTarget,
+        targets: &[ElementTarget],
+        styles: &[Vec<ElementStyleEdit>],
+    ) -> Result<LayerClipboard> {
+        self.validate()?;
+        ensure(
+            !targets.is_empty()
+                && targets.len() <= MAX_LAYER_CLIPBOARD_ITEMS
+                && styles.len() == targets.len(),
+            "Copy between one and 500 elements with their visual styles.",
+        )?;
+        let content = self.document_content(document)?;
+        let hash = self.document_hash(document)?;
+        let doc = self.parse_document_target(document, &content.html)?;
+        unique_ids(&doc)?;
+        let mut items = Vec::with_capacity(targets.len());
+        for (target, visual_styles) in targets.iter().zip(styles) {
+            items.push(self.copy_element_content(&doc, &hash, target, visual_styles)?);
+        }
+        let clipboard = LayerClipboard {
+            format: "desegnos-layer".into(),
+            version: 1,
+            content: LayerClipboardContent::Elements { items },
         };
         clipboard.validate()?;
         Ok(clipboard)
@@ -841,16 +917,22 @@ impl Project {
                 LayerPasteSelection {
                     element: None,
                     region_id: Some(id),
+                    elements: vec![],
                 },
             ));
         }
-        let LayerClipboardContent::Element {
-            html,
-            context,
-            visual_styles,
-        } = &clipboard.content
-        else {
-            unreachable!()
+        let items = match &clipboard.content {
+            LayerClipboardContent::Element {
+                html,
+                context,
+                visual_styles,
+            } => vec![LayerElementContent {
+                html: html.clone(),
+                context: context.clone(),
+                visual_styles: visual_styles.clone(),
+            }],
+            LayerClipboardContent::Elements { items } => items.clone(),
+            LayerClipboardContent::Request { .. } => unreachable!(),
         };
         let source = match self.document_content(document) {
             Ok(content) => content,
@@ -865,77 +947,119 @@ impl Project {
         };
         let doc = self.parse_document_target(document, &source.html)?;
         unique_ids(&doc)?;
-        let body = body(&doc)?;
-        let anchor = insertion.map(|target| locate(&doc, target)).transpose()?;
+        let page_body = body(&doc)?;
+        let anchor = insertion
+            .map(|target| locate(&doc, target))
+            .transpose()?
+            .filter(|node| node.id != page_body.id);
         let parent = match anchor {
-            Some(node) if node.id != body.id => node
+            Some(node) => node
                 .parent()
                 .ok_or_else(|| Error("This insertion point has no parent.".into()))?,
-            _ => body,
+            None => page_body,
         };
-        let source_fragment = fragment(html, context_name(context)?)?;
-        let source_root = fragment_root(&source_fragment)?;
-        let incoming = fragment(html, qual_name(parent)?)?;
-        let root = fragment_root(&incoming)?;
-        ensure(
-            qual_name(root)? == qual_name(source_root)?
-                && root.try_html().is_some_and(|value| value.as_ref() == html),
-            "This layer cannot be pasted into that layout without changing its markup. Select a compatible sibling or paste on the empty page.",
-        )?;
         let hash = self.document_hash(document).ok();
         let tracked = match (host_page_id, hash.as_deref()) {
             (Some(page_id), Some(hash)) => tracked(&doc, self.page(page_id)?, hash)?,
             _ => vec![],
         };
-        let copied_nodes: Vec<_> = std::iter::once(root).chain(root.descendants_it()).collect();
-        for node in copied_nodes {
-            node.remove_attr(crate::ELEMENT_ID_ATTRIBUTE);
-        }
-        let replacements = rewrite_ids(root, &ids(&doc), visual_styles)?;
-        let css = pseudo_stylesheet(
-            root,
-            visual_styles,
-            &replacements,
-            match document {
-                crate::DocumentTarget::Page { page_id } => self
-                    .page(*page_id)?
-                    .content
-                    .as_ref()
-                    .map(|content| content.css.as_str())
-                    .unwrap_or_default(),
-                crate::DocumentTarget::SiteFile { .. } => "",
-            },
-        )?;
-        offset_root(
-            root,
-            visual_styles
-                .iter()
-                .find(|style| style.path.is_empty())
-                .ok_or_else(|| Error("The copied root style is missing.".into()))?,
-        )?;
-        Selection::from(parent).append_selection(&Selection::from(root));
-        let pasted = parent
-            .last_child()
-            .ok_or_else(|| Error("The layer could not be inserted.".into()))?;
-        if let Some(anchor) = anchor
-            && anchor.id != body.id
-        {
-            pasted.remove_from_parent();
-            anchor.insert_after(&pasted);
+        let base_css = match document {
+            crate::DocumentTarget::Page { page_id } => self
+                .page(*page_id)?
+                .content
+                .as_ref()
+                .map(|content| content.css.clone())
+                .unwrap_or_default(),
+            crate::DocumentTarget::SiteFile { .. } => String::new(),
+        };
+        let mut css: Option<String> = None;
+        let mut previous = None;
+        let mut pasted = Vec::with_capacity(items.len());
+        for item in &items {
+            let node = paste_element_content(
+                &doc, parent, anchor, previous, item, &base_css, &mut css,
+            )?;
+            previous = Some(node);
+            pasted.push(node);
         }
         unique_ids(&doc)?;
-        let (next, selected) =
-            self.finish_document_edit(document, revision, &doc, Some(pasted), tracked, css)?;
-        let selected =
-            selected.ok_or_else(|| Error("The pasted layer has no selectable element.".into()))?;
+        let (next, _) = self.finish_document_edit(
+            document,
+            revision,
+            &doc,
+            pasted.first().copied(),
+            tracked,
+            css,
+        )?;
+        let next_hash = next.document_hash(document)?;
+        let elements = pasted
+            .into_iter()
+            .filter_map(|node| crate::editing::target(node, page_body, &next_hash))
+            .collect::<Vec<_>>();
+        let selected = elements
+            .first()
+            .cloned()
+            .ok_or_else(|| Error("The pasted layer has no selectable element.".into()))?;
         Ok((
             next,
             LayerPasteSelection {
                 element: Some(selected),
                 region_id: None,
+                elements,
             },
         ))
     }
+}
+
+/// Paste one clipboard element beside the previous one (or its anchor) and return the new node.
+fn paste_element_content<'a>(
+    doc: &'a Document,
+    parent: NodeRef<'a>,
+    anchor: Option<NodeRef<'a>>,
+    previous: Option<NodeRef<'a>>,
+    content: &LayerElementContent,
+    base_css: &str,
+    css: &mut Option<String>,
+) -> Result<NodeRef<'a>> {
+    let source_fragment = fragment(&content.html, context_name(&content.context)?)?;
+    let source_root = fragment_root(&source_fragment)?;
+    let incoming = fragment(&content.html, qual_name(parent)?)?;
+    let root = fragment_root(&incoming)?;
+    ensure(
+        qual_name(root)? == qual_name(source_root)?
+            && root
+                .try_html()
+                .is_some_and(|value| value.as_ref() == content.html),
+        "This layer cannot be pasted into that layout without changing its markup. Select a compatible sibling or paste on the empty page.",
+    )?;
+    let copied_nodes: Vec<_> = std::iter::once(root).chain(root.descendants_it()).collect();
+    for node in copied_nodes {
+        node.remove_attr(crate::ELEMENT_ID_ATTRIBUTE);
+    }
+    let replacements = rewrite_ids(root, &ids(doc), &content.visual_styles)?;
+    let original = css.as_deref().unwrap_or(base_css);
+    if let Some(next) =
+        pseudo_stylesheet(root, &content.visual_styles, &replacements, original)?
+    {
+        *css = Some(next);
+    }
+    offset_root(
+        root,
+        content
+            .visual_styles
+            .iter()
+            .find(|style| style.path.is_empty())
+            .ok_or_else(|| Error("The copied root style is missing.".into()))?,
+    )?;
+    Selection::from(parent).append_selection(&Selection::from(root));
+    let pasted = parent
+        .last_child()
+        .ok_or_else(|| Error("The layer could not be inserted.".into()))?;
+    if let Some(after) = previous.or(anchor) {
+        pasted.remove_from_parent();
+        after.insert_after(&pasted);
+    }
+    Ok(pasted)
 }
 
 fn offset_root(root: NodeRef<'_>, snapshot: &LayerVisualStyle) -> Result<()> {
