@@ -65,8 +65,8 @@
 .live-bar { position: absolute; z-index: 9; top: var(--space-4); left: 50%; transform: translateX(-50%); width: max-content; flex-wrap: wrap; justify-content: center; row-gap: var(--space-1); }
 .live-bar .live-device button { display: grid; place-items: center; width: calc(var(--control-md) - 2px); padding: 0; }
 .live-path-field {
-  display: inline-flex; align-items: center; gap: var(--space-3); flex: 0 1 auto; min-width: 96px; max-width: min(260px, 42vw); height: var(--control-md);
-  padding: 0 var(--space-4); border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  display: inline-flex; align-items: center; gap: var(--space-2); flex: 0 1 auto; min-width: 0; max-width: min(260px, 42vw); height: var(--control-md);
+  padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface-muted); color: var(--muted); font: 12px/1 var(--font-mono); text-align: left;
 }
 .live-path-field > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
