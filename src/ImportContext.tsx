@@ -236,7 +236,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Choose another location', disabled: !!locked, onClick: () => { void pick(folder ? 'folder' : 'file'); } }} />}
       {folder?.website && <WebsiteChoice folder={folder} brand={brand} disabled={!!locked} update={setFolder}
-        chooseBrand={() => { void readBrand(folder); }} edit={async () => { setBrand(false); if (folder.website && (folder.website.fresh || (folder.website.output && folder.website.buildUnavailable))) await run(async () => { await editWebsite(folder.id); close(); }); }} /> }
+        chooseBrand={() => { void readBrand(folder); }} chooseEdit={() => setBrand(false)} edit={async () => { setBrand(false); if (folder.website && (folder.website.fresh || (folder.website.output && folder.website.buildUnavailable))) await run(async () => { await editWebsite(folder.id); close(); }); }} /> }
       <section className="identity-import" aria-label="Use my existing brand">
         {!editMode && <>
         <h2>Source</h2>
@@ -254,7 +254,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
           {!candidate && <>
           <details className="identity-file-review" key={source.id}><summary>Choose files yourself</summary>
             <p className="field-help">{files.length} file{files.length === 1 ? '' : 's'} picked.</p>
-            <button type="button" disabled={locked || !!candidate} onClick={() => { setAutomatic(true); setSelection(null); setPickVersion(current => current + 1); }}>Pick for me</button>
+            {!automatic && <button type="button" disabled={locked || !!candidate} onClick={() => { setAutomatic(true); setSelection(null); setPickVersion(current => current + 1); }}>Pick for me</button>}
             <div className="identity-files">{source.files.map(file => <label className="identity-choice" key={file.id}><input type="checkbox" disabled={locked || !!candidate} checked={files.includes(file.id)} onChange={event => { setAutomatic(false); setSelection(null); setFiles(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id)); setAnalysis(null); }} /><span>{file.name}<small>{file.asset ? 'Logo' : `${Math.ceil(file.textBytes / 1024)} KB`}</small></span></label>)}</div>
             {source.skipped.length > 0 && <><p className="field-help">Left out: {skippedSummary(source.skipped)}.</p><details><summary>See all skipped files</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details></>}
           </details>
@@ -262,7 +262,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
           {!candidate && selection?.message && <ProblemBanner message={userError(selection.message)} />}
           </>}
           {analyzing ? <div className="identity-progress" role="status"><span>Reading your brand…</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Stop reading</button></div> : !candidate ? <>
-            {analysis && (analysis.status === 'cancelled' ? <Notice message="Reading stopped." /> : <ProblemBanner message={userError(analysis.error || 'The AI could not read your brand. Try again.')} action={needsAiSettings(analysis.error || '') ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!locked || !selection?.fits || !connected, onClick: () => { void analyze(); } }} />)}
+            {analysis && (analysis.status === 'cancelled' ? <Notice message="Reading stopped." /> : <ProblemBanner message={userError(analysis.error || 'The AI could not read your brand. Try again.')} action={needsAiSettings(analysis.error || '') ? { label: 'AI settings', onClick: openSettings } : undefined} />)}
             <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || !selection?.fits || !connected} onClick={() => { void analyze(); }}>Read my brand</button>{aiNeedsFixing && <button type="button" disabled={locked} onClick={openSettings}>{connected ? 'Check AI settings' : 'Connect AI'}</button>}</div>
           </> : <div className="identity-result" aria-label="Brand review">
             <div className="identity-review-intro"><h3>Choose what to keep</h3></div>

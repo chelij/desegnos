@@ -5,8 +5,8 @@ import { native } from './api';
 import type { WebsiteFolderSelection } from './types';
 
 type BuildStatus = { running: boolean; line: string; error: string | null; folder: WebsiteFolderSelection | null };
-export function WebsiteChoice({ folder, brand, disabled, chooseBrand, edit, update }: {
-  folder: WebsiteFolderSelection; brand: boolean; disabled: boolean; chooseBrand: () => void;
+export function WebsiteChoice({ folder, brand, disabled, chooseBrand, chooseEdit, edit, update }: {
+  folder: WebsiteFolderSelection; brand: boolean; disabled: boolean; chooseBrand: () => void; chooseEdit: () => void;
   edit: () => Promise<void>; update: (folder: WebsiteFolderSelection) => void;
 }) {
   const [build, setBuild] = useState<BuildStatus | null>(null);
@@ -32,7 +32,7 @@ export function WebsiteChoice({ folder, brand, disabled, chooseBrand, edit, upda
   if (!site) return null;
   return <section aria-label="Website import" className="website-choice">
     <div className="segmented" role="group" aria-label="Use this folder">
-      <button type="button" aria-pressed={!brand} disabled={disabled || build?.running} onClick={() => { void edit().catch(error => setError(String(error))); }}>Edit this website</button>
+      <button type="button" aria-pressed={!brand} disabled={disabled || build?.running} onClick={chooseEdit}>Edit this website</button>
       <button type="button" aria-pressed={brand} disabled={disabled || build?.running} onClick={chooseBrand}>Use it for my brand only</button>
     </div>
     {!brand && <>
@@ -45,6 +45,6 @@ export function WebsiteChoice({ folder, brand, disabled, chooseBrand, edit, upda
         : <button type="button" disabled={disabled || build?.running || !site.buildCommand} onClick={() => { void action('start'); }}>Build site</button>}
     </>}
     {build && <p role="status">{build.line} {build.running && <button type="button" onClick={() => { void action('stop'); }}>Stop</button>}</p>}
-    {(error || build?.error) && <ProblemBanner message={userError(error || build?.error)} dismiss={() => { setError(''); setBuild(value => value ? { ...value, error: null } : value); }} action={site.buildCommand && !site.buildUnavailable ? { label: 'Try again', disabled: disabled || build?.running, onClick: () => { void action('start'); } } : undefined} />}
+    {(error || build?.error) && <ProblemBanner message={userError(error || build?.error)} dismiss={() => { setError(''); setBuild(value => value ? { ...value, error: null } : value); }} />}
   </section>;
 }

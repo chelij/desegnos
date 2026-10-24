@@ -82,4 +82,8 @@ try {
     assert.match(html, /Preparing AI instructions/);
     assert.doesNotMatch(html, /generation-status|generation-dialog|0:00/);
   });
+  await test('the conversation leaves out Change request for the request already being edited', () => {
+    assert.doesNotMatch(renderToStaticMarkup(React.createElement(GenerationLog, { ...props, requestEditorOpen: () => true })), />Change request</);
+    assert.match(renderToStaticMarkup(React.createElement(GenerationLog, { ...props, requestEditorOpen: () => false })), />Change request</);
+  });
 } finally { await rm(temporary, { recursive: true, force: true }); }

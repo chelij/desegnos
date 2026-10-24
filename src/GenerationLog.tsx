@@ -13,8 +13,8 @@ import type { GenerationHistory, GenerationJobView, Project } from './types';
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
-export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, openImport, openBrief, manageUsage, editRequest, resultApplied }: {
-  resultApplied?: boolean;
+export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, openImport, openBrief, manageUsage, editRequest, resultApplied, requestEditorOpen }: {
+  resultApplied?: boolean; requestEditorOpen?: (regionId: string) => boolean;
   settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
   job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; controller: GenerationController; close: () => void;
 }) {
@@ -84,10 +84,10 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             {review.blocked.map(item => <div key={item.regionId}>
               <span className="log-meta">{label(item.regionId)}</span>
               <p className="log-text">{item.reason}</p>
-              <div className="log-actions">
-                <button type="button" onClick={() => editRequest(item.regionId)}>Change request</button>
+              {(!requestEditorOpen?.(item.regionId) || (item.fix && openFix(item.fix))) && <div className="log-actions">
+                {!requestEditorOpen?.(item.regionId) && <button type="button" onClick={() => editRequest(item.regionId)}>Change request</button>}
                 {item.fix && openFix(item.fix) && <button type="button" onClick={() => applyFix(item.fix!)}>{fixLabel(item.fix)}</button>}
-              </div>
+              </div>}
             </div>)}
           </section>}
           {candidate && candidate.decisionProposals.length > 0 && <details><summary>Suggested rules ({candidate.decisionProposals.length})</summary><ul>{candidate.decisionProposals.map((proposal, index) => <li key={index}><strong>{humanText(proposal.topic)}</strong><p className="log-text">{humanText(proposal.value)}</p><p className="log-meta">{scopeLabel(project, proposal.scope)}</p></li>)}</ul></details>}

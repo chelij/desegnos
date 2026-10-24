@@ -18,7 +18,7 @@ export function FirstRunTips() {
     <p className="tip-count">Tip {step + 1} of {TIPS.length}</p>
     <strong>{tip.title}</strong>
     <div className="tip-actions">
-      <button type="button" className="link-button" onClick={finish}>Skip tips</button>
+      {step < TIPS.length - 1 && <button type="button" className="link-button" onClick={finish}>Skip tips</button>}
       {step < TIPS.length - 1 ? <button type="button" className="primary" onClick={() => setStep(step + 1)}>Next</button> : <button type="button" className="primary" onClick={finish}>Got it</button>}
     </div>
   </aside>;

@@ -46,4 +46,11 @@ try {
     const failed = render({ jobId: 'job', status: 'failed', requirements: { markdown: '' }, areas: [], drafts: [], candidate: null });
     assert.match(failed, />Try again</);
   });
+  await test('a request whose editor is already open keeps only its fix', () => {
+    const opened = render(base, { requestEditorOpen: region => region === id });
+    assert.doesNotMatch(opened, />Change request</);
+    assert.match(opened, />AI settings</);
+    const closed = render(base, { requestEditorOpen: region => region !== id });
+    assert.match(closed, />Change request</);
+  });
 } finally { await rm(temporary, { recursive: true, force: true }); }

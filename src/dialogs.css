@@ -63,6 +63,8 @@
 .sg-found-colour summary { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px solid var(--border-soft); border-radius: 999px; font: 12px ui-monospace, monospace; cursor: pointer; list-style: none; }
 .sg-found-colour summary::-webkit-details-marker { display: none; }
 .sg-found-colour summary span { width: 14px; height: 14px; border-radius: 50%; border: 1px solid #0003; }
+.sg-found-set { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border: 1px dashed var(--border-soft); border-radius: 999px; font: 12px ui-monospace, monospace; color: var(--muted); }
+.sg-found-set span { width: 14px; height: 14px; border-radius: 50%; border: 1px solid #0003; }
 .sg-found-menu { position: absolute; z-index: 5; top: calc(100% + 4px); left: 0; display: grid; min-width: 200px; padding: 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); box-shadow: 0 4px 14px #0003; }
 .sg-found-menu button { justify-content: flex-start; border-color: transparent; background: transparent; text-align: left; font-size: 12px; }
 .sg-found-menu button:hover { background: var(--selected); }

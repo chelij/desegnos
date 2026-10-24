@@ -211,7 +211,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         <div className={usesChatgpt ? undefined : 'field-pair'}>{!usesChatgpt && <label>Maximum output tokens<input disabled={busy} type="number" required min={1} max={32768} step={1} value={settings.maxOutputTokens} onChange={event => setSettings({ ...settings, maxOutputTokens: Number(event.target.value) })} /></label>}
           <label>Reasoning effort<select disabled={busy || pending || !model} value={settings.reasoningEffort} onChange={event => setSettings({ ...settings, reasoningEffort: event.target.value })}>{model?.reasoningEfforts.map(level => <option key={level} value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>)}</select></label></div>
         </fieldset></details>
-        <div className="form-actions ai-save-actions">{status && <Notice variant="success" message={status} />}{dirty && <button type="button" disabled={busy || pending} onClick={() => setSettings(view.settings)}>Reset changes</button>}<button className="primary" disabled={busy || pending || (!model && !view.configurationError)}>Save AI settings</button></div>
+        <div className="form-actions ai-save-actions">{status && <Notice variant="success" message={status} />}{dirty && <button type="button" disabled={busy || pending} onClick={() => setSettings(view.settings)}>Reset changes</button>}{dirty && <button className="primary" disabled={busy || pending || (!model && !view.configurationError)}>Save AI settings</button>}</div>
       </form>
     </>}
   </div>;

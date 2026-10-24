@@ -20,7 +20,8 @@ export function noticePriority(notice: NoticeProps): number {
 export function firstNotice<T extends NoticeProps>(entries: T[]): T | undefined {
   return entries.reduce<T | undefined>((best, entry) => !best || noticePriority(entry) > noticePriority(best) ? entry : best, undefined);
 }
-export function isToast(notice?: NoticeProps): boolean {
+type NoticeKind = Pick<NoticeProps, 'variant' | 'action' | 'secondaryAction'>;
+export function isToast(notice?: NoticeKind): boolean {
   return !!notice && (notice.variant === 'info' || notice.variant === 'success' || !notice.variant) && !notice.action && !notice.secondaryAction;
 }
 const NoticeDisplay = createContext<ReactElement<NoticeProps> | null>(null);
@@ -64,13 +65,17 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
     }} /> : null}>{children}</NoticeDisplay.Provider></Notices.Provider>;
 }
 
+/// A toast closes itself, so it carries no dismiss button; a notice that waits for the user keeps one.
+export function showsDismissButton(notice: NoticeKind): boolean {
+  return !isToast(notice);
+}
 export function NoticeRow({ variant = 'info', title, message, action, secondaryAction, dismiss, className = '' }: NoticeProps) {
   return <div className={`notice notice-${variant} ${className}`.trim()} role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'} onPointerDown={event => event.stopPropagation()}>
     <div className="notice-copy" title={[title, message].filter(Boolean).join(' · ')}>{title && <strong>{title}</strong>}{message && <span>{message}</span>}</div>
     <div className="notice-actions">
       {action && <button type="button" className="primary" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>}
       {secondaryAction && <button type="button" disabled={secondaryAction.disabled} onClick={secondaryAction.onClick}>{secondaryAction.label}</button>}
-      <button type="button" className="notice-dismiss" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}>×</button>
+      {showsDismissButton({ variant, action, secondaryAction }) && <button type="button" className="notice-dismiss" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}>×</button>}
     </div>
   </div>;
 }

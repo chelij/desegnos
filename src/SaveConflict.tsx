@@ -13,6 +13,6 @@ export function SaveConflictDialog({ conflict, choose }: { conflict: SaveConflic
   return <WorkspaceSurface place="banner" title="Save conflict" showHeader={false} close={() => choose('cancel')}>
     <ProblemBanner className="save-conflict" dismissKey={conflict.token} autoFocus={conflict.defaultChoice === 'copy' ? 'primary' : 'dismiss'} variant="warning" message={sentence} dismiss={() => choose('cancel')}
       action={{ label: 'Save as copy', onClick: () => choose('copy') }}
-      secondaryAction={conflict.canReplace ? { label: 'Replace it', onClick: () => choose('replace') } : { label: 'Cancel', onClick: () => choose('cancel') }} />
+      secondaryAction={conflict.canReplace ? { label: 'Replace it', onClick: () => choose('replace') } : undefined} />
   </WorkspaceSurface>;
 }

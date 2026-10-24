@@ -78,10 +78,16 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
         <div><strong>{topic}</strong><span>{value ?? 'Not set'}</span>{value && <button type="button" className="link-button" disabled={busy} onClick={() => { void clear(topic); }}>Clear</button>}</div>
       </div>; })}
     </div>
-      {found.colours.length > 0 && <><h4>Used on your pages</h4><div className="sg-found">{found.colours.map(colour => <details key={colour} className="sg-found-colour">
-        <summary title={colour}><span style={{ background: colour }} />{colour}</summary>
-        <div className="sg-found-menu">{COLOUR_ROLES.map(topic => <button key={topic} type="button" disabled={busy} onClick={event => { (event.currentTarget.closest('details') as HTMLDetailsElement).open = false; void save(topic, colour); }}>Use as {topic.toLowerCase()}</button>)}</div>
-      </details>)}</div></>}
+      {found.colours.length > 0 && <><h4>Used on your pages</h4><div className="sg-found">{found.colours.map(colour => {
+        const unset = COLOUR_ROLES.filter(topic => normal(rule(topic)?.value ?? '') !== colour);
+        const applied = COLOUR_ROLES.filter(topic => normal(rule(topic)?.value ?? '') === colour).map(topic => topic.toLowerCase());
+        // A colour that every role already uses has no change left to apply.
+        if (!unset.length) return <span key={colour} className="sg-found-colour sg-found-set" title={`Already the ${applied.join(' and ')}`}><span style={{ background: colour }} />{colour}</span>;
+        return <details key={colour} className="sg-found-colour">
+          <summary title={colour}><span style={{ background: colour }} />{colour}</summary>
+          <div className="sg-found-menu">{unset.map(topic => <button key={topic} type="button" disabled={busy} onClick={event => { (event.currentTarget.closest('details') as HTMLDetailsElement).open = false; void save(topic, colour); }}>Use as {topic.toLowerCase()}</button>)}</div>
+        </details>;
+      })}</div></>}
     </section>
     <section aria-label="Brand fonts"><h3>Fonts</h3><div className="sg-roles">
       {FONT_ROLES.map(topic => { const value = rule(topic)?.value ?? ''; const choices = [...new Set([...(value ? [value] : []), ...found.fonts, ...FONT_CHOICES])]; return <label key={topic} className="sg-font">

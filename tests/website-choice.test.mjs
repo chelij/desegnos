@@ -24,7 +24,7 @@ try {
     pages: ['index.html'], buildCommand: ['npm', 'run', 'build'], installCommand: null, buildUnavailable: 'Needs Node.js to rebuild.' };
   const render = (site, brand = false) => renderToStaticMarkup(React.createElement(WebsiteChoice, {
     folder: { id: 'folder', name: 'Site', website: site }, brand, disabled: false,
-    chooseBrand() {}, async edit() {}, update() {},
+    chooseBrand() {}, chooseEdit() {}, async edit() {}, update() {},
   }));
   await test('missing Node hides Build site and offers existing output with a warning', () => {
     const html = render(website);

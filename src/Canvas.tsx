@@ -19,6 +19,7 @@ import { LayersPopover, LayerIcon } from './Layers';
 import type { SiteLayer } from './siteLayers';
 import { ElementDialog, type ElementDialogMode } from './ElementTools';
 import { ContextMenu, type MenuItem } from './Menus';
+import { requestEditorOpen } from './visibleActions';
 import { PreviewFrame, type CanvasPreviewHandle, type ElementMover, type ElementResizer, type FrameView, type InlineText } from './Preview';
 import { FrameOverlay, useLiveFrameSession, type LiveFrameSession } from './FrameOverlays';
 import type { LiveHistoryAction } from './liveBar';
@@ -1590,7 +1591,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       if (runtimeProblems.length && !dismissedProblems.includes(`runtime:${key}`)) return <ProblemBanner message={runtimeError(runtimeProblems[0])} action={{ label: 'Fix with AI', disabled: aiDisabled, onClick: () => fixRuntimeErrors?.(runtimeProblems) }} dismiss={() => dismissProblem(`runtime:${key}`)} />;
       if (!failed || dismissedProblems.includes(key)) return null;
       if (gap) return <ProblemBanner message={gap.reason}
-        action={{ label: 'Change request', disabled: busy || !!generation?.operation, onClick: () => { select(gap.regionId); setRequestFocus(previous => ({ id: gap.regionId, serial: previous.serial + 1 })); } }}
+        action={requestEditorOpen(gap.regionId, { selectedRegionId: selected, focusedRegionId: focusRequest }) ? undefined : { label: 'Change request', disabled: busy || !!generation?.operation, onClick: () => { select(gap.regionId); setRequestFocus(previous => ({ id: gap.regionId, serial: previous.serial + 1 })); } }}
         secondaryAction={gap.fix && resolveGenerationFix ? { label: fixLabel(gap.fix), onClick: () => resolveGenerationFix(gap.fix!, gap.regionId) } : undefined}
         dismiss={() => dismissProblem(key)} />;
       return <ProblemBanner message={userError(failed)} action={outcome.retryable.length || outcome.retryAll ? { label: 'Try again', disabled: aiDisabled, onClick: () => { void generation?.prepare(undefined, outcome.retryable.length ? outcome.retryable : undefined).catch(() => {}); } } : undefined} dismiss={() => dismissProblem(key)} />;
@@ -1661,12 +1662,12 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
             return <div key={problem.key} role="alert" className="area-problem" style={{ left: position.x, top: position.y, width: position.width, height: position.height, zIndex: overlayLayer + 5 }} onPointerDown={event => event.stopPropagation()}>
               <span>{error ? generationError(error, page.regions.find(r => r.id === problem.regionId)?.prompt) : problem.message}</span>
               <div>{!problem.retryable ? <>
-                <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>
+                {!requestEditorOpen(problem.regionId, { selectedRegionId: selected, focusedRegionId: focusRequest }) && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>}
                 {problem.fix && resolveGenerationFix && <button disabled={busy} onClick={() => resolveGenerationFix(problem.fix!, problem.regionId)}>{fixLabel(problem.fix)}</button>}
               </> : <>
-                <button disabled={busy || !problem.draftId || !!error} onClick={() => { void applyProblem(problem.regionId, problem.draftId!, problem.key); }}>Apply anyway</button>
+                {problem.draftId && <button disabled={busy || !!error} onClick={() => { void applyProblem(problem.regionId, problem.draftId!, problem.key); }}>Apply anyway</button>}
                 <button disabled={busy || aiDisabled} onClick={() => { void generation?.prepare(undefined, [problem.regionId]).catch(() => {}); }}>Try again</button>
-                {!problem.stale && !error && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>}
+                {!problem.stale && !error && !requestEditorOpen(problem.regionId, { selectedRegionId: selected, focusedRegionId: focusRequest }) && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>}
               </>}
               <button aria-label="Dismiss problem" onClick={() => dismissProblem(problem.key)}>×</button></div>
             </div>;
@@ -1709,7 +1710,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       </> : element && <>
         {element.element.tag === 'iframe' && overlaySelection && <button className="ask-ai" aria-pressed={interacting} title={interacting ? 'Stop playing this frame' : 'Play this frame in place'}
           onClick={() => setInteractingFrame(value => value === overlaySelection.key ? null : overlaySelection.key)}>{interacting ? 'Done' : 'Interact'}</button>}
-        <button className="ask-ai" title="Change text, links and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>
+        {elementDialog !== 'edit' && <button className="ask-ai" title="Change text, links and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>}
         <button className="wide" title="Select every item with the same tag and classes · Ctrl/⌘+Shift+A" disabled={editBusy} onClick={selectSimilar}>Select similar</button>
         <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
         {element.element.selector !== 'body' && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}

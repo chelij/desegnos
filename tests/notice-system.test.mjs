@@ -59,9 +59,13 @@ test('notice queue preempts, resumes and dismisses duplicates; layout stays read
         check(row().textContent.includes('A warning'), 'warning resumes');
         for (const theme of ['light', 'dark']) { document.documentElement.dataset.theme = theme; const style = getComputedStyle(row()); check(contrast(style.color, style.backgroundColor) >= 4.5, theme + ' warning contrast'); }
         await dismiss(); check(row().textContent.includes('Page updated'), 'result resumes');
-        await dismiss(); check(row().textContent.includes('First info'), 'first info resumes');
-        await dismiss(); check(row().textContent.includes('Second info'), 'second info resumes');
-        await dismiss(); check(!row(), 'queue drains');
+        check(!row().querySelector('.notice-dismiss'), 'a toast that closes itself has no second close');
+        items.splice(items.findIndex(item => item.key === 'result'), 1); render(); await pause();
+        check(row().textContent.includes('First info'), 'first info resumes');
+        items.splice(items.findIndex(item => item.key === 'info1'), 1); render(); await pause();
+        check(row().textContent.includes('Second info'), 'second info resumes');
+        items.splice(items.findIndex(item => item.key === 'info2'), 1); render(); await pause();
+        check(!row(), 'queue drains');
         items.splice(0, items.length, { key: 'timer', dismissKey: 'job-1', title: 'Building', message: '0:01', autoFocus: 'primary', action: { label: 'Stop', onClick() {} } });
         render(); await pause(); check(document.activeElement === row().querySelector('.primary'), 'safe default receives focus');
         await dismiss(); items[0].message = '0:02'; render(); await pause(); check(!row(), 'timer updates do not reopen dismissed notices');

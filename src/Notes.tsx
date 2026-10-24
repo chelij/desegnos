@@ -88,7 +88,7 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
       <div className="record-list">{project.decisions.length === 0 ? <p className="empty-message">No rules yet.</p> : project.decisions.map(decision => <article className="note-record" key={decision.id}>
         <div className="record-heading"><h3>{decision.topic}</h3>{decision.protected && <span className="badge">Fixed</span>}</div>
         <p className="preserve-text">{decision.value}</p><p className="small muted">{scopeLabel(project, decision.scope)}</p>
-        <div className="inline-actions"><button onClick={() => editDecision(decision)}>Edit rule</button><button className="subtle danger" onClick={() => { void apply({ type: 'remove_decision', decision_id: decision.id }).catch(() => {}); if (editing?.id === decision.id) resetDecision(); }}>Remove rule</button></div>
+        <div className="inline-actions">{editing?.id !== decision.id && <button onClick={() => editDecision(decision)}>Edit rule</button>}<button className="subtle danger" onClick={() => { void apply({ type: 'remove_decision', decision_id: decision.id }).catch(() => {}); if (editing?.id === decision.id) resetDecision(); }}>Remove rule</button></div>
       </article>)}</div>
       <form className="notes-entry" onSubmit={saveDecision}><h3>{editing ? 'Edit choice' : 'Add a choice'}</h3>
         <label>Topic<input required maxLength={120} value={topic} onChange={event => setTopic(event.target.value)} disabled={!!editing} /></label>

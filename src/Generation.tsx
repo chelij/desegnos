@@ -49,10 +49,10 @@ function requestLabel(project: Project, id: string) {
   return 'Request';
 }
 
-export function GenerationFeedback({ controller, action, openSettings, openImport, openBrief, changeRequest, project, details }: {
+export function GenerationFeedback({ controller, action, openSettings, openImport, openBrief, changeRequest, requestEditorOpen, project, details }: {
   details?: () => void;
   controller: GenerationController; action?: ProblemAction; openSettings?: () => void; openImport?: () => void; openBrief?: () => void;
-  changeRequest?: (regionId: string) => void; project?: Project;
+  changeRequest?: (regionId: string) => void; requestEditorOpen?: (regionId: string) => boolean; project?: Project;
 }) {
   const { job: currentJob, operation, elapsedSeconds, error } = controller;
   const job = operation === 'Preparing AI instructions…' ? null : currentJob;
@@ -71,17 +71,20 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
     open?.();
   } : undefined;
   const fixAction = blocked?.fix && fix ? { label: fixLabel(blocked.fix), onClick: fix } : undefined;
-  const changeAction = blocked && changeRequest ? { label: 'Change request', onClick: () => changeRequest(blocked.regionId) } : fixAction;
+  // A request whose editor is already open has nothing to gain from Change request.
+  const change = blocked && changeRequest && !requestEditorOpen?.(blocked.regionId) ? { label: 'Change request', onClick: () => changeRequest(blocked.regionId) } : undefined;
+  const changeAction = change ?? fixAction;
   // Keep the resolving surface visible beside the request change when both exist.
-  const secondaryAction = needsInput && changeAction && changeAction !== fixAction && fixAction ? fixAction : details ? { label: 'Details', onClick: details } : undefined;
+  const secondaryAction = needsInput && change && fixAction ? fixAction : details ? { label: 'Details', onClick: details } : undefined;
   return <Notice className={`generation-notice status-${job?.status ?? 'preparing'}`} variant={error || job && ['failed', 'blocked', 'unknown'].includes(job.status) ? 'error' : job?.status === 'applied' ? 'success' : 'info'} priority="result" title={heading} dismissKey={`${job?.jobId}:${job?.status}:${operation}:${error}`}
     message={error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : blocked?.reason ?? ''}
     action={action ?? (needsAiSettings(error || job?.message || '') && openSettings ? { label: 'AI settings', onClick: openSettings } : controller.canStop ? { label: 'Stop', onClick: () => { void controller.cancel(); } } : changeAction ?? (retry ? { label: 'Try again', onClick: () => { void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); } } : undefined))}
     secondaryAction={secondaryAction} />;
 }
 
-export function GenerationDetails({ controller, project, settings, openSettings, openImport, openBrief, manageUsage, editRequest }: {
+export function GenerationDetails({ controller, project, settings, openSettings, openImport, openBrief, manageUsage, editRequest, requestEditorOpen }: {
   controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
+  requestEditorOpen?: (regionId: string) => boolean;
 }) {
   const { job, operation } = controller;
   const [tab, setTab] = useState<'review' | 'requirements' | 'attempts' | 'details'>('review');
@@ -206,10 +209,10 @@ export function GenerationDetails({ controller, project, settings, openSettings,
               const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
               const gap = review.blocked.find(item => item.regionId === region.regionId);
               return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
-                {gap ? <><p className="preserve-text">{gap.reason}</p><div className="form-actions">
-                  <button type="button" onClick={() => changeRequest(region.regionId)}>Change request</button>
+                {gap ? <><p className="preserve-text">{gap.reason}</p>{(!requestEditorOpen?.(region.regionId) || gap.fix) && <div className="form-actions">
+                  {!requestEditorOpen?.(region.regionId) && <button type="button" onClick={() => changeRequest(region.regionId)}>Change request</button>}
                   {gap.fix && <button type="button" onClick={() => openFix(gap.fix!)}>{fixLabel(gap.fix)}</button>}
-                </div></> : <span>Needs attention</span>}</li>;
+                </div>}</> : <span>Needs attention</span>}</li>;
             })}</ul>
             <details><summary>Technical details</summary><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></details>
           </section> : <><h3>Your page</h3><p>{candidate.summary}</p></>}

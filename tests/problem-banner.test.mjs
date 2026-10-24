@@ -31,6 +31,18 @@ try {
       assert.doesNotMatch(html, /<p|dialog|modal|helper/i);
     });
   }
+  await test('a notice that closes itself keeps no second close', () => {
+    for (const variant of ['success', 'info', undefined]) {
+      const html = renderToStaticMarkup(React.createElement(NoticeRow, { variant, message: 'Saved', dismiss() {} }));
+      assert.doesNotMatch(html, /notice-dismiss/, `${variant} toast carries no dismiss button`);
+      assert.equal((html.match(/<button/g) ?? []).length, 0);
+    }
+    for (const notice of [
+      { variant: 'warning', message: 'Changed on disk' },
+      { message: 'Page updated', action: { label: 'Undo', onClick() {} } },
+      { message: 'Page updated', secondaryAction: { label: 'Details', onClick() {} } },
+    ]) assert.match(renderToStaticMarkup(React.createElement(NoticeRow, { ...notice, dismiss() {} })), /notice-dismiss/);
+  });
   await test('problems default to the error variant and keep existing fixes', () => {
     const html = renderToStaticMarkup(React.createElement(ProblemBanner, { message: 'The page stopped.', action: { label: 'Fix with AI', disabled: true, onClick() {} } }));
     assert.match(html, /notice-error/);
