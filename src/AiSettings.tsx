@@ -3,6 +3,7 @@ import { userError } from './userErrors.js';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { native } from './api';
 import { MenuButton, type MenuItem } from './Menus';
+import { Icon } from './icons';
 import './dialogs.css';
 import type { AiSettingsView, ProviderSettings } from './types';
 
@@ -146,7 +147,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           {usesChatgpt && view.chatgpt.accounts.length > 1 && <select aria-label="ChatGPT account" className="ai-account-switcher" value={view.chatgpt.activeAccountId ?? ''} disabled={busy || pending} onChange={event => { if (event.target.value) void action('select_chatgpt_account', { accountId: event.target.value }); }}>
             {!account && <option value="" disabled>Choose account</option>}{view.chatgpt.accounts.map((item, index) => <option key={item.id} value={item.id}>{item.email ?? item.label}{view.chatgpt.accounts.filter(other => (other.email ?? other.label) === (item.email ?? item.label)).length > 1 ? ` (${index + 1})` : ''}{!item.connected ? ' · Not connected' : !item.planEnabled ? ' · Plan permission needed' : ''}</option>)}
           </select>}
-          <MenuButton className="ai-account-options" align="end" reserveSpace label="⋯" ariaLabel="Account options" title={canTest ? 'Account options' : testHelp} showChevron={false} items={[
+          <MenuButton className="ai-account-options" align="end" reserveSpace label={<Icon name="more" />} ariaLabel="Account options" title={canTest ? 'Account options' : testHelp} showChevron={false} items={[
             ...(usesChatgpt ? [
               { id: 'add', label: 'Add account', disabled: busy || pending, action: () => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: null }); } },
               ...(account ? [{ id: 'reconnect', label: 'Reconnect', disabled: busy || pending, action: () => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: account.id }); } }] : []),
@@ -183,13 +184,13 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           const chosen = view.catalogue.find(model => model.id === event.target.value);
           setSettings({ ...settings, model: event.target.value, reasoningEffort: chosen?.reasoningEfforts.includes(settings.reasoningEffort) ? settings.reasoningEffort : chosen?.reasoningEfforts[0] ?? '' });
         }}>{!model && <option value={settings.model} disabled>{settings.model} · unavailable</option>}{view.catalogue.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
-          {usesChatgpt && <button type="button" className="ai-usage-link" disabled={busy} onClick={() => { void usage(); }}>Usage ↗</button>}
+          {usesChatgpt && <button type="button" className="ai-usage-link" disabled={busy} onClick={() => { void usage(); }}>Usage <Icon name="external" size={14} /></button>}
         </div>
         {usesChatgpt && view.chatgpt.modelsError && <ProblemBanner message={userError(view.chatgpt.modelsError)} action={{ label: 'Test connection', disabled: busy || !canTest, onClick: () => { void testAccess(); } }} />}
         {!model && <ProblemBanner message="No available AI model is selected." />}
         {(!usesChatgpt || view.imageKey.configured) && <label className="ai-inline-field ai-budget">Budget per generation (USD)<input disabled={busy || pending} type="number" required min={0.01} step={0.01} aria-label="API budget per generation (USD)" aria-describedby="ai-budget-help" value={budget ?? String(settings.spendingLimitUsd)} onChange={event => { setBudget(event.target.value); if (event.target.value.trim() && Number.isFinite(event.target.valueAsNumber)) setSettings({ ...settings, spendingLimitUsd: event.target.valueAsNumber }); }} onBlur={() => setBudget(null)} /><span id="ai-budget-help" className="field-help">Blocks estimates over budget; not a guaranteed billing cap.</span></label>}
         <section className="ai-features" aria-label="Features">
-          <div className="ai-feature-row image-generation-access"><div className="ai-feature-copy"><label htmlFor="ai-image-generation">Image generation</label><div className="ai-feature-meta"><span className="ai-feature-pill" id="ai-image-status" role="status">{imageStatus}</span><button type="button" className="ai-refresh" aria-label="Check again" title="Check again" disabled={busy || !canTest || view.imageAccessChecking} onClick={() => { void testAccess(); }}>↻</button></div></div>
+          <div className="ai-feature-row image-generation-access"><div className="ai-feature-copy"><label htmlFor="ai-image-generation">Image generation</label><div className="ai-feature-meta"><span className="ai-feature-pill" id="ai-image-status" role="status">{imageStatus}</span><button type="button" className="ai-refresh icon-button sm" aria-label="Check again" title="Check again" disabled={busy || !canTest || view.imageAccessChecking} onClick={() => { void testAccess(); }}><Icon name="refresh" /></button></div></div>
             <input id="ai-image-generation" className="ai-switch" type="checkbox" role="switch" aria-describedby="ai-image-status" disabled={busy || pending || checkingImages || view.imageAccessChecking || view.imageAccess?.available !== 'yes' || !connected || (usesChatgpt && !account?.planEnabled) || !provider?.capabilities.imageGeneration} checked={settings.imageGeneration} onChange={event => setSettings({ ...settings, imageGeneration: event.target.checked })} />
           </div>
           {view.provider === 'openai' && <div className="ai-feature-meta">

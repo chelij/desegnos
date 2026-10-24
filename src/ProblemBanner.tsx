@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ReactElement } from 'react';
+import { Icon } from './icons';
 
 export type ProblemAction = { label: string; onClick: () => void; disabled?: boolean };
 export type NoticeProps = {
@@ -75,7 +76,7 @@ export function NoticeRow({ variant = 'info', title, message, action, secondaryA
     <div className="notice-actions">
       {action && <button type="button" className="primary" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>}
       {secondaryAction && <button type="button" disabled={secondaryAction.disabled} onClick={secondaryAction.onClick}>{secondaryAction.label}</button>}
-      {showsDismissButton({ variant, action, secondaryAction }) && <button type="button" className="notice-dismiss" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}>×</button>}
+      {showsDismissButton({ variant, action, secondaryAction }) && <button type="button" className="notice-dismiss icon-button sm" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}><Icon name="close" /></button>}
     </div>
   </div>;
 }

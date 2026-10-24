@@ -21,7 +21,8 @@ import type { ProjectLocationView } from './types';
 import { Notes, type DossierSection } from './Notes';
 import { MenuButton, type MenuItem } from './Menus';
 import './shell.css';
-import { editorShortcut, SHORTCUT_HELP } from './shortcuts';
+import { editorShortcut, SHORTCUT_HELP, withShortcut } from './shortcuts';
+import { Icon } from './icons';
 import { closePageTab, loadPageTabs, savePageTabs, showPageTab, visiblePageTabs } from './pageTabs';
 import { steppedZoom } from './canvasGeometry';
 import { pathPage } from './liveBar';
@@ -45,7 +46,7 @@ type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
 type Confirmation = { title: string; message: string; action: () => Promise<void>; skippable?: boolean };
 
-const PROJECT_COLOURS = ['#2f6fde', '#d9480f', '#2b8a3e', '#ae3ec9', '#0c8599', '#e67700'];
+const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
 function errorMessage(error: unknown) { return error instanceof Error ? error.message : String(error); }
 // Open each page fitted to the window: web pages by width, mobile pages by height.
 function initialZoom(width: number, height = 900) { const fit = width > 600 ? (window.innerWidth - 96) / width : (window.innerHeight - 240) / height; return Math.max(0.1, Math.min(1, fit)); }
@@ -1137,15 +1138,15 @@ function Editor() {
   return <div className="application editor-shell">
     {closeRequest && <WorkspaceSurface place="banner" title="Close Desegnos?" close={() => { closeRequest.resolve(false); setCloseRequest(null); }}><p>{closeRequest.message}</p><div className="form-actions"><button onClick={() => { closeRequest.resolve(true); setCloseRequest(null); }}>Close Desegnos</button><button onClick={() => { closeRequest.resolve(false); setCloseRequest(null); }}>Keep editing</button></div></WorkspaceSurface>}
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
-      {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot">●</span>}</button>}
+      {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot" />}</button>}
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
-        <button type="button" className="theme-toggle" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="3.6" /><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.3 4.3l1.4 1.4M14.3 14.3l1.4 1.4M4.3 15.7l1.4-1.4M14.3 5.7l1.4-1.4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M15.5 12.5A6.5 6.5 0 0 1 7.5 4.5a6.5 6.5 0 1 0 8 8Z" /></svg>}</button>
+        <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
         {project && showsOpener({ available: true, open: showImport }) && <button type="button" onClick={() => { setImportSource(null); setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import…</button>}
-        {project && <>{view?.canUndo && <button aria-label="Undo last change" title="Undo · Ctrl/Cmd+Z" onClick={() => run(() => travel('undo_project'))}>Undo</button>}{view?.canRedo && <button aria-label="Redo last change" title="Redo · Ctrl/Cmd+Shift+Z" onClick={() => run(() => travel('redo_project'))}>Redo</button>}
+        {project && <>{view?.canUndo && <button className="compact" aria-label="Undo last change" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}>Undo</button>}{view?.canRedo && <button className="compact" aria-label="Redo last change" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}>Redo</button>}
           <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
-        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live view'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? 'Live ●' : 'Live'}</button>}
+        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live view'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>{live ? <>Live<span className="live-dot" aria-hidden="true" /></> : 'Live'}</button>}
         {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export'}</button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {showsOpener({ available: !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" onClick={() => setShowLog(true)}>AI log</button>}
@@ -1168,8 +1169,8 @@ function Editor() {
     </main> : <>
       <div className="page-strip"><div className="page-tabs" ref={tabStrip} role="tablist" aria-label="Project pages">
         {(view.openProjects?.length ? view.openProjects : [{ id: project.id, name: project.name, dirty: !!view.dirty, active: true, pages: [] }]).map((open, groupIndex, groups) => <div key={open.id} data-project-id={open.id} className={`project-tab-group${open.active ? ' active' : ''}${groups.length > 1 ? ' labelled' : ''}`} style={{ '--project-colour': PROJECT_COLOURS[groupIndex % PROJECT_COLOURS.length] } as CSSProperties} role="group" aria-label={`Project ${open.name}`}>
-          {groups.length > 1 && <div className="project-tab-head"><span className="project-tab-label" title={open.name}>{open.name}{open.dirty ? ' •' : ''}</span>
-            {showsOpener({ available: true, open: closeChoice === open.id }) && <button type="button" className="project-tab-close" aria-label={`Close ${open.name}`} title={`Close ${open.name}`} onClick={() => { if (open.dirty) setCloseChoice(open.id); else run(() => closeProjectTab(open.id, false)); }}>×</button>}</div>}
+          {groups.length > 1 && <div className="project-tab-head"><span className="project-tab-label" title={open.name}><span>{open.name}{open.dirty && <span className="project-dirty-dot" aria-hidden="true" />}</span></span>
+            {showsOpener({ available: true, open: closeChoice === open.id }) && <button type="button" className="project-tab-close icon-button sm" aria-label={`Close ${open.name}`} title={`Close ${open.name}`} onClick={() => { if (open.dirty) setCloseChoice(open.id); else run(() => closeProjectTab(open.id, false)); }}><Icon name="close" /></button>}</div>}
           <div className="project-tab-row">{closeChoice === open.id ? <div className="project-close-choice" role="group" aria-label={`Close ${open.name}`}>
             <button type="button" className="primary" disabled={pending > 0} onClick={() => run(() => saveAndCloseProjectTab(open.id))}>Save</button>
             <button type="button" className="danger" disabled={pending > 0} onClick={() => run(() => closeProjectTab(open.id, true))}>Don’t save</button>
@@ -1184,9 +1185,9 @@ function Editor() {
               const next = event.key === 'Home' ? 0 : event.key === 'End' ? openPageIds.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + openPageIds.length) % openPageIds.length;
               document.getElementById(`page-tab-${openPageIds[next]}`)?.focus(); run(() => selectPage(openPageIds[next]));
             }}><span>{item.name}</span>{!item.included && <span className="page-draft">Hidden</span>}</button>
-          <button type="button" className="page-tab-close" aria-label={`Close ${item.name} tab`} title="Close tab" disabled={openPageIds.length <= 1} onClick={() => closePageTabInStrip(item.id)}>×</button>
+          <button type="button" className="page-tab-close icon-button sm" aria-label={`Close ${item.name} tab`} title={withShortcut('Close tab', 'closePage')} disabled={openPageIds.length <= 1} onClick={() => closePageTabInStrip(item.id)}><Icon name="close" /></button>
         </div>; })}
-          <button className="add-page-tab" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}>+</button>
+          <button className="add-page-tab icon-button sm" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}><Icon name="plus" /></button>
           <MenuButton label="Pages" ariaLabel="All pages" title="All pages" className="page-list-menu" items={project.pages.map(item => ({ id: `page-list-${item.id}`, label: item.name, checked: openPageIds.includes(item.id), action: () => run(() => selectPage(item.id)) }))} /></> : open.pages.map(item => <button key={item.id} type="button" className="parked-tab" title={`Switch to ${open.name}`} onClick={() => run(() => switchProject(open.id, item.id))}><span>{item.name}</span></button>)}</div>
         </div>)}
       </div></div>
@@ -1203,9 +1204,9 @@ function Editor() {
       {live && page?.content && <div className="live-bar" role="group" aria-label="Live view">
         <strong>Live</strong>
         <div className="live-history" role="group" aria-label="Live history">
-          <button type="button" aria-label="Back" title="Back" onClick={() => canvas.current?.liveHistory('back')}>←</button>
-          <button type="button" aria-label="Forward" title="Forward" onClick={() => canvas.current?.liveHistory('forward')}>→</button>
-          <button type="button" aria-label="Reload" title="Reload" onClick={() => canvas.current?.liveHistory('reload')}>⟳</button>
+          <button type="button" className="icon-button sm" aria-label="Back" title="Back" onClick={() => canvas.current?.liveHistory('back')}><Icon name="arrow-left" /></button>
+          <button type="button" className="icon-button sm" aria-label="Forward" title="Forward" onClick={() => canvas.current?.liveHistory('forward')}><Icon name="arrow-right" /></button>
+          <button type="button" className="icon-button sm" aria-label="Reload" title="Reload" onClick={() => canvas.current?.liveHistory('reload')}><Icon name="reload" /></button>
         </div>
         {livePage
           ? <button type="button" className="live-path" title="Edit this page" aria-label={`Edit this page: ${livePath}`} onClick={() => run(async () => { await selectPage(livePage.id); setLive(false); })}>{livePath}</button>

@@ -15,9 +15,9 @@ try {
     '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/WebsiteChoice.tsx'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   // Node ESM needs extensions; preserve the app's bundler-style source imports.
-  for (const file of ['WebsiteChoice.js', 'api.js']) {
+  for (const file of ['WebsiteChoice.js', 'api.js', 'ProblemBanner.js']) {
     const path = join(temporary, file);
-    await writeFile(path, (await readFile(path, 'utf8')).replaceAll("'./api'", "'./api.js'").replaceAll("'./usage'", "'./usage.js'"));
+    await writeFile(path, (await readFile(path, 'utf8')).replaceAll("'./api'", "'./api.js'").replaceAll("'./usage'", "'./usage.js'").replaceAll("'./icons'", "'./icons.js'"));
   }
   const { WebsiteChoice } = await import(pathToFileURL(join(temporary, 'WebsiteChoice.js')).href);
   const website = { path: '/site', framework: 'Vite', output: '/site/dist', fresh: false,

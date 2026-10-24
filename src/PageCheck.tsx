@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Icon } from './icons';
 import type { Project } from './types';
 
 export type CheckKind = 'placeholder' | 'issue' | 'found';
@@ -73,7 +74,7 @@ export function PageCheckPanel({ items, busy, close, show, fix, source }: {
 }) {
   const groups = useMemo(() => [['placeholder', 'Still placeholder'], ['issue', 'Things to fix'], ['found', 'Found online']] as const, []);
   return <section className="page-check" role="dialog" aria-label="Page check">
-    <header><h2>Page check</h2><button type="button" className="page-check-close" aria-label="Close page check" onClick={close}>×</button></header>
+    <header><h2>Page check</h2><button type="button" className="page-check-close icon-button sm" aria-label="Close page check" title="Close" onClick={close}><Icon name="close" /></button></header>
     {items.filter(item => item.kind !== 'found').length === 0 && <p className="page-check-empty">No issues found.</p>}{groups.map(([kind, label]) => {
       const list = items.filter(item => item.kind === kind);
       return list.length > 0 && <section key={kind}><h3>{label} ({list.length})</h3><ul>{list.map(item => <li key={item.id}>

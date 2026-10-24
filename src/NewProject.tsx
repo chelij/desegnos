@@ -5,6 +5,7 @@ import { useState, type FormEvent } from 'react';
 import type { AiSettingsView, ProjectLocationView, Viewport } from './types';
 import { native } from './api';
 import { ProjectLocationSettings } from './ProjectLocation';
+import { Icon } from './icons';
 import './newProject.css';
 
 const sizes = {
@@ -45,8 +46,8 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={missingRecent ? { label: 'Remove from recent', disabled: locked, onClick: () => { void run(() => forgetRecent(missingRecent)); } } : mode === 'blank' ? { label: 'Choose another location', disabled: locked, onClick: () => { void run(async () => { const chosen = await native<string | null>('pick_project_location'); if (chosen) setParentDirectory(chosen); }); } } : { label: 'Choose another location', disabled: locked, onClick: () => { void run(open); } }} />}
     {!mode ? <>
       <div className="project-start-choices">
-        <button type="button" aria-label="Blank website" disabled={locked} onClick={() => setMode('blank')}><span className="start-icon" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="M10 4v12M4 10h12" /></svg></span><strong>Blank website</strong></button>
-        <button type="button" disabled={locked} onClick={importBrand}><strong>Use my existing brand</strong></button>
+        <button type="button" aria-label="Blank website" disabled={locked} onClick={() => setMode('blank')}><span className="start-icon" aria-hidden="true"><Icon name="plus" /></span><strong>Blank website</strong></button>
+        <button type="button" disabled={locked} onClick={importBrand}><span className="start-icon" aria-hidden="true"><Icon name="fill-color" /></span><strong>Use my existing brand</strong></button>
       </div>
       {!connected && <p className="start-ai-note"><button type="button" className="link-button" onClick={openSettings}>Connect now</button></p>}
       <div className="start-open"><button type="button" className="link-button" onClick={() => { void run(open); }} disabled={locked}>Open project</button><span><button type="button" className="link-button" onClick={() => { void run(openFolder); }} disabled={locked}>Open folder…</button></span></div>
@@ -56,7 +57,7 @@ export function NewProject({ importBrand, busy, create, open, openFolder, locati
         {recovering && recovery ? <RecoveryChoice variant="card" {...recovery} /> : <><button className="recent-open" type="button" disabled={locked} title={project.path} onClick={() => { if (openRecent) void run(() => openRecent(project.path), project.path); }}>
         <span className="recent-avatar" aria-hidden="true">{project.name.trim().charAt(0).toUpperCase() || '·'}</span>
         <span className="recent-text"><strong>{project.name}</strong><span>{project.path.split(/[\\/]/).slice(-2, -1)[0] ?? project.path}</span></span>
-      </button><button className="recent-remove" type="button" disabled={locked} aria-label={`Remove ${project.name} from recent projects`} title="Remove from recent" onClick={() => { void run(() => forgetRecent(project.path)); }}><span aria-hidden="true">×</span></button></>}</li>; })}</ul></section>}
+      </button><button className="recent-remove icon-button sm" type="button" disabled={locked} aria-label={`Remove ${project.name} from recent projects`} title="Remove from recent" onClick={() => { void run(() => forgetRecent(project.path)); }}><Icon name="close" /></button></>}</li>; })}</ul></section>}
     </> : <>
       <label>Project name<input name="projectName" autoFocus required maxLength={120} value={name} onChange={event => setName(event.target.value)} autoComplete="off" disabled={locked} /></label>
       <div><strong>Location</strong><p className="field-help" style={{ overflowWrap: 'anywhere' }}>{parentDirectory ?? location?.path ?? 'Loading project location…'}</p>

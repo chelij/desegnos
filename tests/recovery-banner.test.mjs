@@ -16,7 +16,9 @@ try {
   // Node ESM needs extensions; preserve the app's bundler-style source imports and stub stylesheets.
   await writeFile(join(temporary, 'style-stub.js'), 'export {};\n');
   for (const [file, replacements] of [
-    ['NewProject.js', [["'./api'", "'./api.js'"], ["'./ProjectLocation'", "'./ProjectLocation.js'"], ["'./newProject.css'", "'./style-stub.js'"]]],
+    ['NewProject.js', [["'./api'", "'./api.js'"], ["'./ProjectLocation'", "'./ProjectLocation.js'"], ["'./newProject.css'", "'./style-stub.js'"], ["'./icons'", "'./icons.js'"]]],
+    ['RecoveryBanner.js', [["'./icons'", "'./icons.js'"]]],
+    ['ProblemBanner.js', [["'./icons'", "'./icons.js'"]]],
     ['api.js', [["'./usage'", "'./usage.js'"]]],
   ]) {
     const path = join(temporary, file);
@@ -36,7 +38,7 @@ try {
   });
   await test('the choice has only the sentence, two actions, and dismiss', () => {
     const html = renderToStaticMarkup(React.createElement(RecoveryChoice, choices()));
-    assert.equal(html.replace(/<[^>]+>/g, ''), 'Unsaved changes from an earlier sessionRecoverOpen saved version×');
+    assert.equal(html.replace(/<[^>]+>/g, ''), 'Unsaved changes from an earlier sessionRecoverOpen saved version');
     assert.match(html, /class="recovery-choice recovery-choice-row" role="alert"/);
     assert.match(html, /class="primary">Recover</);
     assert.match(html, />Open saved version</);

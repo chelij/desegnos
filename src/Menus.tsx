@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Icon } from './icons';
 
 export type MenuItem = {
   id: string;
@@ -47,7 +48,7 @@ export function MenuButton({ label, items, ariaLabel, title, className = '', sho
         if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
           event.preventDefault(); setStartAtEnd(event.key === 'ArrowUp'); setOpen(true);
         } else if (event.key === 'Escape' && open) { event.preventDefault(); close(); }
-      }}>{label}{showChevron && <span className="menu-chevron" aria-hidden="true">⌄</span>}</button>
+      }}>{label}{showChevron && <Icon name="chevron-down" size={12} className="menu-chevron" />}</button>
     {open && <MenuLevel id={id} label={ariaLabel ?? (typeof label === 'string' ? label : 'Menu')} items={items} anchor={trigger.current} align={align} measured={reserveSpace ? setMenuHeight : undefined} last={startAtEnd} rootClose={close} />}
   </div>;
 }
@@ -118,8 +119,8 @@ function MenuLevel({ id, label, items, anchor, last = false, nested = false, bac
         role={item.role ?? (item.checked === undefined ? 'menuitem' : 'menuitemcheckbox')} aria-label={item.label} aria-checked={item.checked} disabled={item.disabled} tabIndex={-1}
         aria-haspopup={item.children?.length ? 'menu' : undefined} aria-expanded={item.children?.length ? submenu === index : undefined}
         aria-controls={submenu === index ? `${id}-${item.id}` : undefined} onClick={() => activate(index)}>
-        <span className="menu-check" aria-hidden="true">{item.checked ? '✓' : ''}</span><span className="menu-label">{item.label}</span>
-        {item.shortcut && <span className="menu-shortcut">{item.shortcut}</span>}{item.children?.length && <span className="menu-arrow" aria-hidden="true">›</span>}
+        <span className="menu-check" aria-hidden="true">{item.checked && <Icon name="check" size={14} />}</span><span className="menu-label">{item.label}</span>
+        {item.shortcut && <span className="menu-shortcut">{item.shortcut}</span>}{item.children?.length && <Icon name="chevron-right" size={14} className="menu-arrow" />}
       </button>
       {submenu === index && item.children && <MenuLevel id={`${id}-${item.id}`} label={item.label} items={item.children} anchor={buttons.current.get(index) ?? null} nested back={() => returnTo(index)} rootClose={rootClose} />}
     </li>)}

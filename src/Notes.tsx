@@ -1,6 +1,7 @@
 import { useId, useState, type FormEvent } from 'react';
 import { DraftText } from './DraftText';
 import type { Brief, Command, Decision, Project, Scope } from './types';
+import { Icon } from './icons';
 
 export function scopeLabel(project: Project, scope: Scope) {
   if (scope.kind === 'project') return 'Whole site';
@@ -75,7 +76,7 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
     <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={`${tabId}-${tab}`}>
     {tab === 'overview' && <div className="notes-section dossier-overview">
       {project.importedIdentity && <section aria-label="Imported brand"><h3>Imported brand</h3><p className="preserve-text">{project.importedIdentity.summary}</p><p className="field-help">From {project.importedIdentity.sourceName}</p>{project.importedIdentity.assets.length > 0 && <div className="dossier-identity-logos">{project.importedIdentity.assets.map(asset => <figure key={asset.id}><img src={asset.dataUri} alt={asset.name} /><figcaption>{asset.name}</figcaption></figure>)}</div>}</section>}
-      {latest && reviewGeneration && <button className="conversation-link" onClick={reviewGeneration}>Latest generation · AI conversation →</button>}
+      {latest && reviewGeneration && <button className="conversation-link" onClick={reviewGeneration}>Latest generation · AI conversation <Icon name="chevron-right" size={14} /></button>}
       {!latest && !project.importedIdentity && <p className="empty-message">No brief yet.</p>}
     </div>}
     {tab === 'brief' && <div className="notes-section brief-form">

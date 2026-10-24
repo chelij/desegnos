@@ -28,6 +28,8 @@ import { shownSelectionRect } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { AcrossPagesChange, AcrossPagesMatch, DocumentTarget, ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, PageSelection, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
+import { Icon } from './icons';
+import { withShortcut } from './shortcuts';
 import { RequestPages } from './RequestPages';
 import type { RequestShapeKind } from './CanvasTools';
 import './canvas.css';
@@ -1669,7 +1671,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
                 <button disabled={busy || aiDisabled} onClick={() => { void generation?.prepare(undefined, [problem.regionId]).catch(() => {}); }}>Try again</button>
                 {!problem.stale && !error && !requestEditorOpen(problem.regionId, { selectedRegionId: selected, focusedRegionId: focusRequest }) && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>}
               </>}
-              <button aria-label="Dismiss problem" onClick={() => dismissProblem(problem.key)}>×</button></div>
+              <button className="icon-button sm" aria-label="Dismiss problem" title="Dismiss" onClick={() => dismissProblem(problem.key)}><Icon name="close" /></button></div>
             </div>;
           })}
           {changing.map(({ rect, shape }, index) => shape && shape.kind !== 'rect' ? <RegionOutline key={index} shape={shape} rect={rect} bounds={bounds} zoom={zoom} layer={overlayLayer + 2} draft /> : <div key={index} className="generation-blur" data-testid="generation-blur" style={{ ...paintStyle(rect, bounds, zoom), zIndex: overlayLayer + 2 }} aria-hidden="true" />)}
@@ -1695,24 +1697,24 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       {!element && selectedRequest && <button className="ask-ai" aria-pressed={isWholePage(selectedRequest, page)} disabled={editBusy} title="Allow this request to change the page layout, CSS and JavaScript" onClick={() => { void change(selectedRequest.id, { wholePage: !isWholePage(selectedRequest, page) }).catch(() => {}); }}>Whole page</button>}
       {extras.length > 0 ? <>
         <span className="multi-count">{extras.length + 1} selected</span>
-        <button className="ask-ai" disabled={editBusy} onClick={askAI}>Ask AI</button>
+        <button className="ask-ai" title={withShortcut('Ask AI', 'askAI')} disabled={editBusy} onClick={askAI}>Ask AI</button>
         {element && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}
-        <button className="wide" disabled={editBusy} title="Select every item with the same tag and classes" onClick={selectSimilar}>Select similar</button>
+        <button className="wide" disabled={editBusy} title={withShortcut('Select similar', 'selectSimilar')} onClick={selectSimilar}>Select similar</button>
         <button className="wide" disabled={editBusy} title="Copy the selection beside itself" onClick={() => { void duplicateSelection(); }}>Duplicate</button>
         <button className="wide" disabled={editBusy} title="Give every selected item the first item’s width" onClick={() => { void resizeSelection('width'); }}>Same width</button>
         <button className="wide" disabled={editBusy} title="Give every selected item the first item’s height" onClick={() => { void resizeSelection('height'); }}>Same height</button>
-        <button aria-label="Delete selected items" title="Delete all selected items" disabled={editBusy} onClick={() => { void deleteSelected().catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}><QuickIcon name="delete" /></button>
+        <button className="icon-button" aria-label="Delete selected items" title={withShortcut('Delete selected items', 'remove')} disabled={editBusy} onClick={() => { void deleteSelected().catch(error => setElementError(error instanceof Error ? error.message : String(error))); }}><QuickIcon name="delete" /></button>
         {element && styleOpen && <StyleBar key={`multi:${extras.length}:${element.element.selector}`} visual={styleVisual} mixed={styleMixed} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </> : <>
       {element?.element.tag === 'img' ? <>
         <button className="ask-ai" title="Choose a picture from your computer, or drop one onto the image" disabled={editBusy} onClick={() => browseImage(elementRef.current)}>Replace image</button>
-        <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
+        <button className="ask-ai" title={withShortcut('Ask AI', 'askAI')} disabled={editBusy} onClick={askAI}>Ask AI</button>
       </> : element && <>
         {element.element.tag === 'iframe' && overlaySelection && <button className="ask-ai" aria-pressed={interacting} title={interacting ? 'Stop playing this frame' : 'Play this frame in place'}
           onClick={() => setInteractingFrame(value => value === overlaySelection.key ? null : overlaySelection.key)}>{interacting ? 'Done' : 'Interact'}</button>}
-        {elementDialog !== 'edit' && <button className="ask-ai" title="Change text, links and style · F2" disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>}
-        <button className="wide" title="Select every item with the same tag and classes · Ctrl/⌘+Shift+A" disabled={editBusy} onClick={selectSimilar}>Select similar</button>
-        <button className="ask-ai" title="Describe a change for AI · Ctrl/⌘ K" disabled={editBusy} onClick={askAI}>Ask AI</button>
+        {elementDialog !== 'edit' && <button className="ask-ai" title={withShortcut('Change text, links and style', 'editElement')} disabled={editBusy} onClick={() => setElementDialog('edit')}>Edit</button>}
+        <button className="wide" title={withShortcut('Select similar', 'selectSimilar')} disabled={editBusy} onClick={selectSimilar}>Select similar</button>
+        <button className="ask-ai" title={withShortcut('Ask AI', 'askAI')} disabled={editBusy} onClick={askAI}>Ask AI</button>
         {element.element.selector !== 'body' && <button className="ask-ai" aria-pressed={styleOpen} title="Show or hide quick style controls" onClick={toggleStyle}>Style</button>}
       </>}
       {element && element.element.selector !== 'body' && acrossMatches.length > 0 && <>
@@ -1721,10 +1723,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           {acrossMatches.map(match => { const key = documentKey(match.document); return <label key={key} className="check-label"><input type="checkbox" checked={!across.excluded.includes(key)} onChange={event => setAcross(current => toggleAcrossPage(current, match.document, event.target.checked))} />{match.label || key}</label>; })}
         </div>}
       </>}
-      {element && foundUrl && openSource && !element.element.document && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} ↗</button>}
-      {element && undoElement && element.element.selector !== 'body' && <button aria-label="Undo changes to this element" title="Step this element back to its previous version · Alt+Z" disabled={editBusy} onClick={() => { void stepBackElement(); }}><QuickIcon name="undo" /></button>}
+      {element && foundUrl && openSource && !element.element.document && <button className="ask-ai" title={`Open where this came from: ${foundUrl}`} onClick={() => openSource(element.element)}>Found online{foundHost ? ` · ${foundHost}` : ''} <Icon name="external" size={12} /></button>}
+      {element && undoElement && element.element.selector !== 'body' && <button className="icon-button" aria-label="Undo changes to this element" title={withShortcut('Undo changes to this element', 'undoElement')} disabled={editBusy} onClick={() => { void stepBackElement(); }}><QuickIcon name="undo" /></button>}
       {element && <RequestPages pages={pages} hostPageId={page.id} selection={requestPages} change={setRequestPages} />}
-      <button aria-label="Delete layer" title="Delete" disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
+      <button className="icon-button" aria-label="Delete layer" title={withShortcut('Delete layer', 'remove')} disabled={editBusy || element?.element.selector === 'body'} onClick={() => { if (element) deleteElement(); else if (selected) remove(selected); }}><QuickIcon name="delete" /></button>
       {element && styleOpen && !layersOpen && element.element.tag !== 'img' && element.element.selector !== 'body' && <StyleBar key={element.element.selector} visual={styleVisual} busy={editBusy} apply={change => { void applyStyles(change); }} />}
       </>}
       </>}
@@ -1833,8 +1835,8 @@ function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rec
     {hasMore && <button type="button" className="request-expand" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>{expanded ? 'Less' : '… More'}</button>}
     {(attachments.length > 0 || reports.length > 0) && <div className="request-attachment-group">
     {attachments.length > 0 && <ul className="request-attachments" aria-label="Attachments" onPointerDown={event => event.stopPropagation()}>{(attachmentsExpanded ? attachments : attachments.slice(0, 3)).map(item => <li key={item.id} title={item.kind === 'link' ? item.url : item.name}>
-      {item.kind === 'image' && item.dataUri ? <img src={item.preview ?? item.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true">{item.kind === 'link' ? '🔗' : '¶'}</span>}
-      <span className="attachment-name">{item.name}</span>{detach && <button type="button" aria-label={`Remove ${item.name}`} onClick={() => detach(item.id)}>×</button>}
+      {item.kind === 'image' && item.dataUri ? <img src={item.preview ?? item.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true"><Icon name={item.kind === 'link' ? 'link' : 'text'} size={12} /></span>}
+      <span className="attachment-name">{item.name}</span>{detach && <button type="button" className="icon-button sm" aria-label={`Remove ${item.name}`} title={`Remove ${item.name}`} onClick={() => detach(item.id)}><Icon name="close" /></button>}
     </li>)}
       {attachments.length > 3 && <li><button type="button" aria-expanded={attachmentsExpanded} aria-label={attachmentsExpanded ? 'Show fewer attachments' : `Show ${attachments.length - 3} more attachments`} onClick={() => setAttachmentsExpanded(value => !value)}>{attachmentsExpanded ? 'Less' : `+${attachments.length - 3}`}</button></li>}
     </ul>}
@@ -1845,7 +1847,7 @@ function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rec
     </div>}
     {selected && <div className="request-attach-row">
       <RequestPages pages={pages} hostPageId={hostPageId} selection={region.pages ?? []} change={selection => { void change({ pages: selection }).catch(() => {}); }} />
-      {attach && <><button type="button" className="request-attach" title="Attach pictures, text files or ZIPs (or drop them on the box)" aria-label={`Attach files to request ${number}`} onPointerDown={event => event.stopPropagation()} onClick={() => attachInput.current?.click()}>📎</button>
+      {attach && <><button type="button" className="request-attach icon-button sm" title="Attach pictures, text files or ZIPs (or drop them on the box)" aria-label={`Attach files to request ${number}`} onPointerDown={event => event.stopPropagation()} onClick={() => attachInput.current?.click()}><Icon name="paperclip" /></button>
       <input ref={attachInput} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html,.zip,application/zip,text/plain" onChange={event => { const files = Array.from(event.target.files ?? []); event.target.value = ''; if (files.length) attach(files, []); }} /></>}
     </div>}
   </div>
@@ -1890,8 +1892,6 @@ function elementName(tag: string): string {
   return ({ a: 'Link', button: 'Button', img: 'Image', input: 'Input', textarea: 'Text area', select: 'Dropdown', h1: 'Heading', h2: 'Heading', h3: 'Heading', h4: 'Heading', h5: 'Heading', h6: 'Heading', p: 'Paragraph', span: 'Text', div: 'Container', section: 'Section', nav: 'Navigation', header: 'Header', footer: 'Footer', main: 'Main', body: 'Page', ul: 'List', ol: 'List', li: 'List item', form: 'Form' } as Record<string, string>)[tag] ?? tag.charAt(0).toUpperCase() + tag.slice(1);
 }
 
-function QuickIcon({ name }: { name: 'copy' | 'cut' | 'delete' | 'undo' }) {
-  return <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    {name === 'undo' ? <path d="M7 4L3 8L7 12M3 8H12A5 5 0 0 1 12 18H8" /> : name === 'copy' ? <path d="M7 7H17V17H7ZM3 13V3H13" /> : name === 'cut' ? <><circle cx="5" cy="5" r="2.5"/><circle cx="5" cy="15" r="2.5"/><path d="M7 6.5L17 17M7 13.5L17 3M10 10L7 7"/></> : <><path d="M3 5H17M7 5V2H13V5M5 5L6 18H14L15 5M8 8V15M12 8V15"/></>}
-  </svg>;
+function QuickIcon({ name }: { name: 'delete' | 'undo' }) {
+  return <Icon name={name === 'delete' ? 'trash' : 'undo'} />;
 }

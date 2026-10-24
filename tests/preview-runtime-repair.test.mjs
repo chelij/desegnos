@@ -17,6 +17,8 @@ try {
       const useEffect = () => {}; const useLayoutEffect = () => {};
       const useState = initial => realUseState(Array.isArray(initial) ? ['TypeError: pause is null', 'TypeError: null is not an object (evaluating pause.addEventListener)'] : initial);`)
     .replace(/^import (?!.*(?:userErrors|ProblemBanner)).* from '\.\/[^']+';$/gm, '');
+  const banner = join(temporary, 'ProblemBanner.js');
+  await writeFile(banner, (await readFile(banner, 'utf8')).replaceAll("from './icons'", "from './icons.js'"));
   await writeFile(join(temporary, 'Preview.mjs'), source);
   const { PreviewFrame } = await import(pathToFileURL(join(temporary, 'Preview.mjs')));
   const props = { pageId: 'page', title: 'Live page', fixRuntimeErrors() {} };

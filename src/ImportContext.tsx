@@ -7,6 +7,7 @@ import { groupIdentityPages, selectedPageContent, findingSection, parseColours, 
 import './newProject.css';
 import { ImportWebsite } from './ImportWebsite';
 import { WebsiteChoice } from './WebsiteChoice';
+import { Icon } from './icons';
 import type { WebsiteFolderSelection } from './types';
 
 // One source supplies the page import and the optional brand review.
@@ -43,12 +44,12 @@ function ReviewCard({ name, checked, disabled, toggle, children, className = '',
   return <div className={`identity-card-wrap ${className}`}>
     <label className="identity-card" title={finding ? finding.value : name}>
       <input className="sr-only" type="checkbox" aria-label={`Keep ${name}`} checked={checked} disabled={disabled} onChange={toggle} />
-      <span className="identity-check" aria-hidden="true">✓</span>
+      <span className="identity-check" aria-hidden="true"><Icon name="check" size={12} /></span>
       {children}
       {finding?.confidence === 'low' && <span className="identity-unsure">Not sure</span>}
       {linked && <span className="sr-only">Choices from this finding are kept together.</span>}
     </label>
-    {finding && <details className="identity-card-info"><summary aria-label={`Details: ${name}`} title="Details and source">i</summary><div>
+    {finding && <details className="identity-card-info"><summary aria-label={`Details: ${name}`} title="Details and source"><Icon name="info" size={12} /></summary><div>
       <strong>{finding.topic}</strong><p>{finding.value}</p>
       {finding.evidence.length > 0 && <><strong>Source</strong><ul>{finding.evidence.map(id => <li key={id}>{source?.files.find(file => file.id === id)?.name ?? id}</li>)}</ul></>}
     </div></details>}

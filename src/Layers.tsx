@@ -3,6 +3,8 @@ import type { SiteLayer } from './siteLayers';
 import { documentKey, targetKey } from './elementTargets';
 import type { LayerDirection, Page, Region } from './types';
 import { RequestShapeIcon } from './RegionOutline';
+import { Icon, type IconName } from './icons';
+import { withShortcut } from './shortcuts';
 
 export function layerName(tag: string, text: string): string {
   return ({ main: 'Main content', header: 'Header', footer: 'Footer', nav: 'Navigation' }[tag]) || text.trim().slice(0, 80) || ({ div: 'Group', section: 'Section', img: 'Image', svg: 'Graphic', button: 'Button', a: 'Link', p: 'Paragraph', form: 'Form', input: 'Input', h1: 'Main heading', h2: 'Heading' }[tag] ?? 'Page item');
@@ -54,7 +56,7 @@ export function LayersPopover({ open, page, siteLayers, selectedElement, selecte
     const key = targetKey(item.element);
     return <div key={key} className="layer-branch" role="group">
     <div className="layer-row" data-selector={item.element.selector} data-document={item.element.document ? documentKey(item.element.document) : undefined} data-selected={selectedElement === key} style={{ paddingInlineStart: 6 + depth * 14 }} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); contextElement(item, { x: event.clientX, y: event.clientY }); }}>
-      {item.children.length ? <button type="button" className="layer-disclosure" aria-label={`${collapsed.has(key) ? 'Expand' : 'Collapse'} ${layerName(item.element.tag, item.element.label)}`} aria-expanded={!collapsed.has(key)} onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })}>{collapsed.has(key) ? '▸' : '▾'}</button> : <span className="layer-spacer" />}
+      {item.children.length ? <button type="button" className="layer-disclosure" aria-label={`${collapsed.has(key) ? 'Expand' : 'Collapse'} ${layerName(item.element.tag, item.element.label)}`} title={collapsed.has(key) ? 'Expand' : 'Collapse'} aria-expanded={!collapsed.has(key)} onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; })}><Icon name="chevron-right" size={12} className={collapsed.has(key) ? undefined : 'expanded'} /></button> : <span className="layer-spacer" />}
       <button type="button" className="layer-select" data-layer-selector={item.element.selector} aria-pressed={selectedElement === key} title={item.element.label || layerName(item.element.tag, '')} onClick={() => chooseElement(item)} disabled={busy}><LayerIcon /><span>{layerName(item.element.tag, item.element.label)}</span>{item.element.tag === 'iframe' && item.children.length ? <span className="layer-frame-tag" aria-hidden="true">frame</span> : null}</button>
     </div>
     {!collapsed.has(key) && rows(item.children, depth + 1)}
@@ -68,15 +70,15 @@ export function LayersPopover({ open, page, siteLayers, selectedElement, selecte
       event.preventDefault(); event.stopPropagation(); buttons[event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1 : Math.max(0, Math.min(buttons.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]?.focus({ preventScroll: true });
     }
   }}>
-    <header><h2>Layers</h2><button type="button" className="layers-close" aria-label="Close Layers" onClick={close}>×</button></header>
+    <header><h2>Layers</h2><button type="button" className="layers-close icon-button sm" aria-label="Close Layers" title="Close" onClick={close}><Icon name="close" /></button></header>
     <div className="layer-actions" role="toolbar" aria-label="Layer actions">
-      <button type="button" title="Bring to front · Ctrl/Cmd+Shift+]" aria-label="Bring to front" disabled={busy || !canForward} onClick={() => arrange('front')}><LayerIcon direction="front" /></button>
-      <button type="button" title="Bring forward · Ctrl/Cmd+]" aria-label="Bring forward" disabled={busy || !canForward} onClick={() => arrange('forward')}><LayerIcon direction="forward" /></button>
-      <button type="button" title="Send backward · Ctrl/Cmd+[" aria-label="Send backward" disabled={busy || !canBackward} onClick={() => arrange('backward')}><LayerIcon direction="backward" /></button>
-      <button type="button" title="Send to back · Ctrl/Cmd+Shift+[" aria-label="Send to back" disabled={busy || !canBackward} onClick={() => arrange('back')}><LayerIcon direction="back" /></button>
+      <button type="button" title={withShortcut('Bring to front', 'front')} aria-label="Bring to front" disabled={busy || !canForward} onClick={() => arrange('front')}><LayerIcon direction="front" /></button>
+      <button type="button" title={withShortcut('Bring forward', 'forward')} aria-label="Bring forward" disabled={busy || !canForward} onClick={() => arrange('forward')}><LayerIcon direction="forward" /></button>
+      <button type="button" title={withShortcut('Send backward', 'backward')} aria-label="Send backward" disabled={busy || !canBackward} onClick={() => arrange('backward')}><LayerIcon direction="backward" /></button>
+      <button type="button" title={withShortcut('Send to back', 'back')} aria-label="Send to back" disabled={busy || !canBackward} onClick={() => arrange('back')}><LayerIcon direction="back" /></button>
       <span className="tool-divider" />
-      <button type="button" title="Copy layer · Ctrl/Cmd+C" aria-label="Copy layer" disabled={busy || !selected} onClick={copy}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 7H17V17H7ZM3 13V3H13" /></svg></button>
-      <button type="button" title="Paste layer · Ctrl/Cmd+V" aria-label="Paste layer" disabled={busy} onClick={paste}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 4H4V18H16V4H13M7 2H13V6H7ZM7 10H13M7 14H12" /></svg></button>
+      <button type="button" title={withShortcut('Copy layer', 'copy')} aria-label="Copy layer" disabled={busy || !selected} onClick={copy}><Icon name="copy" /></button>
+      <button type="button" title={withShortcut('Paste layer', 'paste')} aria-label="Paste layer" disabled={busy} onClick={paste}><Icon name="paste" /></button>
     </div>
     <div className="layer-list">
       <h3>Website</h3>
@@ -90,5 +92,6 @@ export function LayersPopover({ open, page, siteLayers, selectedElement, selecte
 }
 
 export function LayerIcon({ direction }: { direction?: LayerDirection }) {
-  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 6L10 2L18 6L10 10ZM2 10L10 14L18 10M2 14L10 18L18 14" />{direction && <><path d={direction === 'forward' || direction === 'front' ? 'M16 12V3M13 6L16 3L19 6' : 'M16 3V12M13 9L16 12L19 9'} />{(direction === 'front' || direction === 'back') && <path d={direction === 'front' ? 'M13 1H19' : 'M13 14H19'} />}</>}</svg>;
+  const name: IconName = direction ? (`arrange-${direction}` as IconName) : 'layers';
+  return <Icon name={name} />;
 }

@@ -12,6 +12,8 @@ try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--jsx', 'react-jsx', '--moduleResolution', 'bundler', '--types', 'vite/client', '--skipLibCheck', '--outDir', temporary, 'src/GenerationLog.tsx'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
+  const banner = join(temporary, 'ProblemBanner.js');
+  await writeFile(banner, (await readFile(banner, 'utf8')).replaceAll("from './icons'", "from './icons.js'"));
   for (const name of ['GenerationLog']) {
     let source = await readFile(join(temporary, `${name}.js`), 'utf8');
     source = source.replace(/^import .* from '\.\/WorkspaceSurface';$/m, 'const WorkspaceSurface = ({ children }) => children;')

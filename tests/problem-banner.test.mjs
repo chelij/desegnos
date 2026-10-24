@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
@@ -12,7 +12,10 @@ try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--jsx', 'react-jsx', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/ProblemBanner.tsx', 'src/noticeSummary.ts'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  const { Notice, NoticeRow, ProblemBanner, needsAiSettings, firstNotice } = await import(pathToFileURL(join(temporary, 'ProblemBanner.js')));
+  // Node ESM needs extensions; keep the app's bundler-style source import.
+  const bannerPath = join(temporary, 'ProblemBanner.js');
+  await writeFile(bannerPath, (await readFile(bannerPath, 'utf8')).replaceAll("from './icons'", "from './icons.js'"));
+  const { Notice, NoticeRow, ProblemBanner, needsAiSettings, firstNotice } = await import(pathToFileURL(bannerPath));
   const { summarizeOutsideChanges } = await import(pathToFileURL(join(temporary, 'noticeSummary.js')));
   for (const variant of ['success', 'info', 'warning', 'error']) {
     await test(`${variant} has one message, a full-text tooltip, two actions and an accessible dismiss`, () => {
@@ -26,9 +29,9 @@ try {
       assert.match(html, /<strong>Update<\/strong><span>/);
       assert.match(html, /class="primary">Fix/);
       assert.match(html, /disabled="">Details/);
-      assert.match(html, /aria-label="Dismiss notice" title="Dismiss">×/);
+      assert.match(html, /aria-label="Dismiss notice" title="Dismiss"><svg/);
       assert.equal((html.match(/<button/g) ?? []).length, 3);
-      assert.doesNotMatch(html, /<p|dialog|modal|helper/i);
+      assert.doesNotMatch(html, /<p\b|dialog|modal|helper/i);
     });
   }
   await test('a notice that closes itself keeps no second close', () => {

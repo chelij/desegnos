@@ -168,6 +168,14 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
   await driver.button('Generate');
   await waitFor(async () => ['applied', 'blocked', 'failed'].includes((await driver.invoke('get_generation', { projectId: p.id }))?.status), 'Initial generation did not finish', 30000);
   await writeFile(join(evidence, 'initial-job.json'), JSON.stringify(await driver.invoke('get_generation', { projectId: p.id }), null, 2));
+  await surface(28, 'generation-notice', 'A floating notice above the canvas tools', async () => {
+    await driver.ready('.generation-notice');
+  });
+  await surface(29, 'ai-conversation-current', 'AI conversation for the applied generation', async () => {
+    await driver.button('AI log');
+    await driver.ready('[aria-label="AI conversation"]');
+    await driver.ready('.log-messages .log-message');
+  });
   await surface(3, 'retry-confirmation', 'Inline retry confirmation inside the Page updated status bubble', async () => {
     await driver.click('//div[contains(@class,"generation-notice")]//button[normalize-space(.)="Details"]', 'xpath');
     await driver.button('Try again');
@@ -250,6 +258,16 @@ export async function uiTour(driver, physical, step, evidence, provider, restart
   }
   await surface(17, 'live-mode', 'Live mode with device controls', async () => { await driver.menu(['Live preview']); await driver.ready('.live-bar'); });
   if (await driver.execute(() => !!document.querySelector('.live-bar'))) await driver.button('Exit live');
+  await surface(26, 'element-toolbar-style', 'Selected element toolbar with its quick style row', async () => {
+    await driver.button('Fit'); await selectElement('p'); await driver.ready('.element-toolbar');
+    if (!await driver.execute(() => !!document.querySelector('.style-bar'))) await driver.button('Style');
+    await driver.ready('.style-bar');
+  });
+  // The capture switches theme first, so open the menu from the ready callback.
+  await surface(27, 'editor-menu', 'Editor menu with grouped commands and shortcut hints', async () => {}, async () => {
+    if (!await driver.execute(() => !!document.querySelector('.editor-menu'))) await driver.click('//button[@aria-label="Editor menu"]', 'xpath');
+    await driver.ready('//ul[@role="menu"]/li/button[@role="menuitem"]', 'xpath');
+  });
   await surface(20, 'request-resize', 'Request resized with its size label outside the box', async () => {
     await driver.button('Layers');
     await driver.click(`.layer-row[data-region-id="${region.id}"] button.layer-select`); await driver.button('Close Layers');

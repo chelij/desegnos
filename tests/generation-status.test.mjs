@@ -17,6 +17,8 @@ try {
     .replace(/^import \{ scopeLabel \} from '\.\/Notes';$/m, "const scopeLabel = () => 'Whole site';")
     .replace(/^import \{ documentKey \} from '\.\/elementTargets';$/m, "const documentKey = () => 'page';")
     .replace(/^import \{ SourceView \} from '\.\/Preview';$/m, 'const SourceView = () => null;');
+  const banner = join(temporary, 'ProblemBanner.js');
+  await writeFile(banner, (await readFile(banner, 'utf8')).replaceAll("from './icons'", "from './icons.js'"));
   await writeFile(join(temporary, 'Generation.mjs'), source);
   const { GenerationFeedback } = await import(pathToFileURL(join(temporary, 'Generation.mjs')));
   const id = '12345678-1234-1234-1234-123456789abc';

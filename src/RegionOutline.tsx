@@ -3,7 +3,7 @@ import { clipToWorkspace, type WorkspaceBounds } from './canvasGeometry';
 import type { Rect, RegionShape } from './types';
 
 export function RequestShapeIcon({ kind }: { kind: RegionShape['kind'] }) {
-  return <svg viewBox="0 0 18 18" aria-hidden="true">{kind === 'ellipse' ? <ellipse cx="9" cy="9" rx="7" ry="6" /> : kind === 'freehand' ? <path d="M3 6Q0 1 6 3Q13 0 15 6Q19 12 12 14Q6 18 3 12Q1 9 3 6Z" /> : <rect x="2" y="3" width="14" height="12" />}</svg>;
+  return <svg className="icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" aria-hidden="true">{kind === 'ellipse' ? <ellipse cx="8" cy="8" rx="6" ry="5" /> : kind === 'freehand' ? <path d="M2.5 5Q0 1 5 2.5Q11 0 13 5Q16.5 10 10.5 12Q5 15.5 2.5 10.5Q1 8 2.5 5Z" /> : <rect x="2" y="2.5" width="12" height="11" />}</svg>;
 }
 
 export function RegionOutline({ shape, rect, bounds, zoom, layer, selected = false, draft = false, regionId, onPointerDown, onContextMenu }: {

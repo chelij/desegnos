@@ -3,9 +3,9 @@ export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; meta
 
 export const SHORTCUT_HELP = [
   ['New project', 'Ctrl/Cmd+N'], ['Open project', 'Ctrl/Cmd+O'], ['Save', 'Ctrl/Cmd+S'], ['Save as', 'Ctrl/Cmd+Shift+S'],
-  ['Copy / cut / paste selected layer', 'Ctrl/Cmd+C / X / V outside text'], ['Bring forward / send backward', 'Ctrl/Cmd+] / ['], ['Bring to front / send to back', 'Ctrl/Cmd+Shift+] / ['],
+  ['Copy / cut / paste selected layer', 'Ctrl/Cmd+C / Ctrl/Cmd+X / Ctrl/Cmd+V outside text'], ['Bring forward / send backward', 'Ctrl/Cmd+] / Ctrl/Cmd+['], ['Bring to front / send to back', 'Ctrl/Cmd+Shift+] / Ctrl/Cmd+Shift+['],
   ['Undo', 'Ctrl/Cmd+Z'], ['Undo changes to the selected element only', 'Alt+Z'], ['Redo', 'Ctrl/Cmd+Shift+Z · Ctrl+Y'],
-  ['Zoom in / out', 'Ctrl/Cmd++ / − · Ctrl+wheel'], ['Fit screen guide', 'Ctrl/Cmd+0'], ['Actual size', 'Ctrl/Cmd+1'], ['200% view', 'Ctrl/Cmd+2'],
+  ['Zoom in / out', 'Ctrl/Cmd++ / Ctrl/Cmd+− · Ctrl+wheel'], ['Fit screen guide', 'Ctrl/Cmd+0'], ['Actual size', 'Ctrl/Cmd+1'], ['200% view', 'Ctrl/Cmd+2'],
   ['Next / previous page', 'Ctrl+Tab / Ctrl+Shift+Tab · Ctrl+Page Down / Page Up'], ['Close page tab', 'Ctrl/Cmd+W'],
   ['Select an element', 'Single-click · Shift/Ctrl/Cmd-click to add'], ['Select similar', 'Ctrl/Cmd+Shift+A'], ['Marquee select', 'Alt-drag on empty canvas · add Shift to keep'], ['Edit selected element', 'F2'], ['Move selected element', 'Arrow keys · Shift for 10 px'], ['Delete selected element', 'Delete / Backspace'],
   ['Move / resize element', 'Drag selection / its corners'], ['Element actions', 'Right-click'],
@@ -18,6 +18,27 @@ export const SHORTCUT_HELP = [
   ['Move / resize request', 'Arrow keys on handles · Alt for 1 px'], ['Remove selected request', 'Delete / Backspace outside text'],
   ['Cancel gesture / close dialog', 'Escape'], ['Keyboard shortcuts', 'F1 · ? outside text'],
 ] as const;
+
+// Compact hints for icon buttons. Values mirror SHORTCUT_HELP so a tooltip names the
+// same key the editor listens for; keep them in step when a binding changes.
+export const TOOL_SHORTCUTS = {
+  newProject: 'Ctrl/Cmd+N', openProject: 'Ctrl/Cmd+O', save: 'Ctrl/Cmd+S', saveAs: 'Ctrl/Cmd+Shift+S',
+  copy: 'Ctrl/Cmd+C', cut: 'Ctrl/Cmd+X', paste: 'Ctrl/Cmd+V',
+  forward: 'Ctrl/Cmd+]', backward: 'Ctrl/Cmd+[', front: 'Ctrl/Cmd+Shift+]', back: 'Ctrl/Cmd+Shift+[',
+  undo: 'Ctrl/Cmd+Z', undoElement: 'Alt+Z', redo: 'Ctrl/Cmd+Shift+Z',
+  zoomIn: 'Ctrl/Cmd++', zoomOut: 'Ctrl/Cmd+−', fit: 'Ctrl/Cmd+0', actualSize: 'Ctrl/Cmd+1',
+  nextPage: 'Ctrl+Tab', previousPage: 'Ctrl+Shift+Tab', closePage: 'Ctrl/Cmd+W',
+  selectSimilar: 'Ctrl/Cmd+Shift+A', editElement: 'F2', remove: 'Delete', askAI: 'Ctrl/Cmd+K',
+  selectTool: 'V', requestTool: 'R', panTool: 'H',
+  rectangleTool: 'Shift+R', circleTool: 'C', freehandTool: 'L', help: 'F1',
+} as const;
+
+export type ToolShortcut = keyof typeof TOOL_SHORTCUTS;
+
+/** A tooltip with its shortcut, e.g. "Ask AI · Ctrl/Cmd+K". */
+export function withShortcut(label: string, action?: ToolShortcut) {
+  return action ? `${label} · ${TOOL_SHORTCUTS[action]}` : label;
+}
 
 export function editorShortcut(event: ShortcutInput, editingText: boolean): EditorShortcut | null {
   if (event.defaultPrevented || event.isComposing) return null;

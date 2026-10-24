@@ -1,3 +1,4 @@
+import { Icon } from './icons';
 export type PendingRecovery = { code: 'pendingRecovery'; projectId: string; path: string };
 
 export function isPendingRecovery(error: unknown): error is PendingRecovery {
@@ -16,6 +17,6 @@ export function RecoveryChoice({ variant = 'row', busy, recover, openSaved, dism
       <button type="button" className="primary" disabled={busy} onClick={recover}>Recover</button>
       <button type="button" disabled={busy} onClick={openSaved}>Open saved version</button>
     </span>
-    <button type="button" className="recovery-dismiss" aria-label="Dismiss recovery choice" title="Dismiss" onClick={dismiss}>×</button>
+    <button type="button" className="recovery-dismiss icon-button sm" aria-label="Dismiss recovery choice" title="Dismiss" onClick={dismiss}><Icon name="close" /></button>
   </div>;
 }

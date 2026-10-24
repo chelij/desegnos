@@ -11,7 +11,7 @@ try {
   const result = spawnSync(process.execPath, [compiler.pathname, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--outDir', temporary, 'src/pageTabs.ts', 'src/shortcuts.ts'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const { pageTabsKey, visiblePageTabs, showPageTab, closePageTab, loadPageTabs, savePageTabs } = await import(pathToFileURL(join(temporary, 'pageTabs.js')).href);
-  const { editorShortcut, SHORTCUT_HELP } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
+  const { editorShortcut, SHORTCUT_HELP, TOOL_SHORTCUTS, withShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
 
   const pages = ['home', 'about', 'pricing'];
   function storage(initial = {}) {
@@ -82,12 +82,20 @@ try {
     assert.ok(SHORTCUT_HELP.some(([label, keys]) => label === 'Close page tab' && /Ctrl\/Cmd\+W/.test(keys)));
   });
 
+  await test('tool tooltips use the documented shortcut list', () => {
+    for (const [action, keys] of Object.entries(TOOL_SHORTCUTS)) {
+      assert.ok(SHORTCUT_HELP.some(([, text]) => text.includes(keys)), `${action} (${keys}) is missing from SHORTCUT_HELP`);
+    }
+    assert.equal(withShortcut('Ask AI', 'askAI'), 'Ask AI · Ctrl/Cmd+K');
+    assert.equal(withShortcut('Close'), 'Close');
+  });
+
   await test('the strip wires the close button, the page list and the shortcut', async () => {
     const { readFile } = await import('node:fs/promises');
     const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
-    assert.match(app, /className="page-tab-close"/);
+    assert.match(app, /className="page-tab-close icon-button sm"/);
     assert.match(app, /aria-label=\{`Close \$\{item\.name\} tab`\}/);
-    assert.match(app, /className="project-tab-close"/);
+    assert.match(app, /className="project-tab-close icon-button sm"/);
     assert.match(app, /<MenuButton label="Pages"/);
     assert.match(app, /shortcut === 'closePageTab'/);
     assert.match(app, /closePageTabInStrip\(page\.id\)/);

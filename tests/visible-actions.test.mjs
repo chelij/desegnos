@@ -52,8 +52,8 @@ try {
 
   await test('Undo and Redo appear only when they would change the page', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /\{view\?\.canUndo && <button aria-label="Undo last change"/);
-    assert.match(app, /\{view\?\.canRedo && <button aria-label="Redo last change"/);
+    assert.match(app, /\{view\?\.canUndo && <button className="compact" aria-label="Undo last change"/);
+    assert.match(app, /\{view\?\.canRedo && <button className="compact" aria-label="Redo last change"/);
     assert.doesNotMatch(app, /disabled=\{!view\?\.can/);
     // The keyboard shortcut still travels through the same history commands.
     assert.match(app, /shortcut === 'undo' \? current\.current\?\.canUndo : current\.current\?\.canRedo/);
@@ -78,7 +78,7 @@ try {
     assert.doesNotMatch(canvas, /disabled=\{busy \|\| !problem\.draftId \|\| !!error\}/);
     // The element toolbar leaves out Edit while the Edit dialog is already open; F2 and the
     // context menu still open it.
-    assert.match(canvas, /\{elementDialog !== 'edit' && <button className="ask-ai" title="Change text, links and style · F2"/);
+    assert.match(canvas, /\{elementDialog !== 'edit' && <button className="ask-ai" title=\{withShortcut\('Change text, links and style', 'editElement'\)\}/);
     assert.match(canvas, /event\.key === 'F2' && !nudge\.current\.promise && !editingElement\) \{ event\.preventDefault\(\); setElementDialog\('edit'\)/);
   });
 
@@ -95,7 +95,7 @@ try {
     const banner = await read('ProblemBanner.tsx');
     assert.match(banner, /export function showsDismissButton\(notice: NoticeKind\): boolean \{/);
     assert.match(banner, /return !isToast\(notice\);/);
-    assert.match(banner, /\{showsDismissButton\(\{ variant, action, secondaryAction \}\) && <button type="button" className="notice-dismiss"/);
+    assert.match(banner, /\{showsDismissButton\(\{ variant, action, secondaryAction \}\) && <button type="button" className="notice-dismiss icon-button sm"/);
   });
 
   await test('a save conflict keeps the close button as its only cancel', async () => {

@@ -2,6 +2,7 @@ import { ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useMemo, useState } from 'react';
 import type { Command, Project } from './types';
+import { Icon } from './icons';
 
 // A visual view of the brand: the colour and font rules the AI follows, values found in the pages,
 // and real samples rendered with the site's own CSS. Choosing a value saves it as a project brief rule.
@@ -73,7 +74,7 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
     <section aria-label="Brand colours"><h3>Colours</h3><div className="sg-roles">
       {COLOUR_ROLES.map(topic => { const value = normal(rule(topic)?.value ?? '') ?? null; return <div key={topic} className="sg-role">
         <label className="sg-swatch" style={{ background: value ?? undefined }} title={value ? `Change ${topic.toLowerCase()}` : `Choose ${topic.toLowerCase()}`}>
-          {!value && <span aria-hidden="true">+</span>}<input type="color" aria-label={topic} value={value ?? '#888888'} disabled={busy} onChange={event => { void save(topic, event.target.value); }} />
+          {!value && <Icon name="plus" />}<input type="color" aria-label={topic} value={value ?? '#888888'} disabled={busy} onChange={event => { void save(topic, event.target.value); }} />
         </label>
         <div><strong>{topic}</strong><span>{value ?? 'Not set'}</span>{value && <button type="button" className="link-button" disabled={busy} onClick={() => { void clear(topic); }}>Clear</button>}</div>
       </div>; })}

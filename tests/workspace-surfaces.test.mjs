@@ -35,7 +35,7 @@ try {
     const document = { get activeElement() { return state.active; }, querySelector: () => state.menu ? {} : null };
     const window = { addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name) };
     const jsx = (type, props) => ({ type, props });
-    const components = new Function('hooks', 'document', 'window', 'HTMLElement', '_jsx', '_jsxs', 'createPortal', `const { createContext, useContext, useRef, useState, useLayoutEffect, useCallback } = hooks;\n${source}\nreturn { WorkspaceSurfaces, WorkspaceSurface };`)(hooks, document, window, Element, jsx, jsx, (node, target) => ({ node, target }));
+    const components = new Function('hooks', 'document', 'window', 'HTMLElement', 'Icon', '_jsx', '_jsxs', 'createPortal', `const { createContext, useContext, useRef, useState, useLayoutEffect, useCallback } = hooks;\n${source}\nreturn { WorkspaceSurfaces, WorkspaceSurface };`)(hooks, document, window, Element, 'icon', jsx, jsx, (node, target) => ({ node, target }));
     state.context = components.WorkspaceSurfaces({ children: null }).props.value;
     const stop = effects.shift()();
     const escape = () => {
