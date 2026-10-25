@@ -1,37 +1,36 @@
 # Generation quality benchmark
 
-Status: **UNVERIFIED** for the 18-scenario owner-rated gate. Prepared on 19 October 2026. The separate owner-authorized cleanup check below used one connected ChatGPT-plan generation; none of the 18 scenarios has been assigned a quality rating. Offline fixture validation proves valid inputs, not model quality.
+Status: **UNVERIFIED** for the 13-scenario owner-rated gate. Prepared on 19 October 2026; narrowed from 18 to 13 scenarios on 25 October 2026 for the 0.1.0 preview. The separate owner-authorized cleanup check below used one connected ChatGPT-plan generation; no scenario has been assigned a quality rating. Offline fixture validation proves valid inputs, not model quality.
 
-This implements preparation for priority 1 in `FEATURE_PRIORITIES.md`. Later feature work does not establish this gate.
+This implements preparation for priority 1 in `FEATURE_PRIORITIES.md` and is blocker 1 for the 0.1.0 preview in `RELEASE_PLAN.md`. Later feature work does not establish this gate.
 
 ## Fixed scenarios
 
 The complete prompts, page sizes, placement boxes, existing source and review criteria are frozen in [scenarios.json](../benchmarks/generation/scenarios.json). Each row has a real, validated `.desegni` input in [projects](../benchmarks/generation/projects). [fixtures.json](../benchmarks/generation/fixtures.json) records archive fingerprints and project IDs. The runner verifies both the fingerprints and the current core/storage validation before execution.
 
+The 0.1.0 gate uses these 13:
+
 | ID | Scenario | Interpretation | Owner checks beyond basic usability |
 | --- | --- | --- | --- |
 | 01-hero | Studio landing hero | Flexible | Clear hierarchy, useful action and self-contained visual |
 | 02-pricing | Three-tier pricing | Precise | Exact prices, comparable benefits, recommended tier, honest local interaction |
-| 03-contact | Contact form | Precise | Labels, native validation and no false “message sent” claim |
 | 04-about | Two-column About | Flexible | Balanced columns, reading order and narrow-screen stacking |
 | 05-mobile-home | Complete 390 px homepage | Flexible | Touch targets, readable content and no horizontal overflow |
 | 06-button-revision | Bigger green booking button | Precise | Requested height/color; existing text, behavior and other content preserved |
-| 07-multi-flexible | Header, hero, services, footer | Flexible | Coherent interpretation of all four requests |
-| 08-multi-precise | The same four requests | Precise | Header → hero → grouped services → footer; compare with 07 |
+| 08-multi-precise | Header, hero, services, footer | Precise | Header → hero → grouped services → footer |
 | 09-imported-brand | Already approved imported identity | Precise | Exact palette, actual supplied star logo and consistent language |
 | 10-faq | Accessible FAQ | Precise | Five native keyboard-operable disclosures and visible focus |
-| 11-testimonials | Sample testimonial cards | Flexible | Clear sample labels, balanced copy, no invented client claims |
 | 12-navigation-footer | Navigation and footer | Precise | Navigation → content sections → footer, working local section links |
 | 13-mobile-contact | 390 px contact form | Precise | One-column controls, honest local review state and no overflow |
-| 14-dashboard | Summary cards and project list | Flexible | Scannable hierarchy and visibly identified demonstration data |
 | 15-long-copy | Long reading page | Precise | Requested section order, 80–100 words per section, readable line length |
 | 16-two-pages | Linked Home and About | Precise | Both pages complete; native links work in the exported site |
 | 17-responsive-layout | Wide hero and narrow adaptation | Precise | Hero group before feature group; 390 px adaptation preserves content |
-| 18-preserve-revision | Targeted booking-button revision | Precise | Only intended button changes; unrelated source and behavior remain intact |
+
+Retired from the gate on 25 October 2026, with their fixtures kept: 03-contact, 07-multi-flexible, 11-testimonials, 14-dashboard and 18-preserve-revision. They can still run for comparison but do not count.
 
 Every scenario also requires readable, complete content, keyboard access, sufficient contrast, and truthful treatment of unavailable services/assets. “Usable without manual fixes” means the owner could use the generated result for its stated purpose without correcting code, copy, layout or interactions. Cosmetic preferences alone need not fail an otherwise usable design; record them in notes.
 
-The imported-brand case uses a deliberately fixed, already approved identity with actual portable SVG bytes. It does **not** pretend that an AI identity-analysis request was performed. The element-revision cases start from real accepted HTML/CSS/JavaScript and a source-hash-bound button target. Scenarios 07 and 08 have identical descriptions and placement, with only their global interpretation differing.
+The imported-brand case uses a deliberately fixed, already approved identity with actual portable SVG bytes. It does **not** pretend that an AI identity-analysis request was performed. The element-revision cases start from real accepted HTML/CSS/JavaScript and a source-hash-bound button target. Scenarios 07 and 08 have identical descriptions and placement, with only their global interpretation differing; only 08 counts toward the gate.
 
 ## Owner execution
 
@@ -60,7 +59,7 @@ Run one scenario at a time. The runner submits once; it never retries. A new exp
 
 4. Open the printed evidence folder. Review its screenshots and `result.desegnos` in Desegnos, including interaction behavior and the narrow-screen requirements where relevant. Fill `owner-rating.json` with your name, review timestamp, `usableWithoutManualFixes` and, for Precise scenarios, `strictOrderAndGrouping`. Enter confirmed billing in `actualBilledUsd` if available; otherwise leave it null. Leave explanatory notes for any failure.
 
-5. Repeat for the remaining fixed cases, then summarize the whole evidence directory:
+5. Repeat for the remaining gate cases, then summarize the whole evidence directory:
 
    ```sh
    node scripts/generation-benchmark.mjs --summarize test-results/benchmark
@@ -85,7 +84,7 @@ API keys stay in the runner/native process memory and are cleared from native se
 
 ## Passing the gate
 
-The gate stays **UNVERIFIED** until all 18 cases have real attempts, available outcome evidence, owner ratings, and recorded duration and cost information. At least **15 of 18** must have complete applied output and be rated usable without manual fixes. Failed attempts count as unusable, rather than disappearing from the set. Every Precise case must also pass the owner's relative-order/grouping check. No failed, cancelled, missing or unrated case is silently removed from the denominator.
+The gate stays **UNVERIFIED** until all 13 gate cases have real attempts, available outcome evidence, owner ratings, and recorded duration and cost information. **All 13** must have complete applied output and be rated usable without manual fixes. A failed attempt counts as unusable until a newer attempt passes. Every Precise case must also pass the owner's relative-order/grouping check. No failed, cancelled, missing or unrated gate case is silently removed from the denominator.
 
 The summary uses the **newest attempt for each scenario**, including a newer failure. Token-based cost is a labelled estimate using the frozen native catalogue; it is not confirmed billing and can differ because of cached input, reasoning, long-context pricing or provider adjustments. Report confirmed billing separately when available. Missing usage requires confirmed billing from the owner to establish cost; missing duration blocks the gate.
 
@@ -96,6 +95,7 @@ Offline checks performed: all 18 archives load through current core/storage, val
 | Date | Change | Evidence/effect |
 | --- | --- | --- |
 | 2026-10-19 | Established version 1, 18 fixed native project inputs and owner-run evidence capture | Offline inputs valid; generation quality **UNVERIFIED** |
+| 2026-10-25 | Owner narrowed the 0.1.0 gate to 13 scenarios, all required to pass; retired 03, 07, 11, 14 and 18 from the gate | Fixtures unchanged; `--summarize` counts only the 13 gate cases and passes only when all are usable |
 
 After a real failure, append its scenario/run, the concrete problem, the exact requirement or instruction change and the next measured result. Preserve old runs and version changed fixtures. Do not claim prompt improvements from synthetic provider responses or offline validation.
 

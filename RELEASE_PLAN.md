@@ -8,12 +8,48 @@ Desegnos itself maintains a private PROJECT.md from accepted user decisions. Cli
 
 The editor has no sidebars. Users type plain prompt text boxes directly on the website canvas, like a client pointing at where something belongs. Fuzzy/Strict is one generation setting beside Generate. Annotation placement communicates intent; the agent coordinates the actual website layout and responsive dimensions.
 
+## 0.1.0 public preview
+
+Decided 25 October 2026. Before 1.0, Desegnos ships a public preview of the working core loop: canvas requests → Generate → Keep/Undo → visual edits → save/reopen → export a website folder. The rest of this document remains the 1.0 target.
+
+| Point | Decision |
+| --- | --- |
+| Version | 0.1.0 |
+| Platforms | Tested on Linux only. CI also builds unsigned Windows and macOS artifacts, labelled untested. |
+| Linux support | Any system with WebKitGTK 4.1, shipped as an AppImage and a Debian package. |
+| AI providers | Only providers that have passed a real generation appear in the app. |
+| Quality gate | All 13 kept benchmark scenarios pass ([docs/GENERATION_BENCHMARK.md](docs/GENERATION_BENCHMARK.md)). The owner's own sites, built with the app during development, are the real-use check. |
+| Name | Ships as Desegnos without trademark clearance. |
+| Rename | Full rename from Desegni: app identifier `io.github.chelij.desegnos`, crates, the `desegni-preview` scheme and internal names. |
+| Hosting | GitHub: repository, Actions CI, Releases with checksums and source. |
+| Support | GitHub Issues for bugs and features; GitHub private vulnerability reporting for security. |
+| Crash reports | Opt-in. After a crash, the app offers to open a prefilled GitHub issue with a scrubbed log. No telemetry otherwise. |
+| Updates | Manual Check for Updates against GitHub Releases, linking the download. No automatic install. |
+| Docs | Install and first-site guide. |
+
+### Preview blockers
+
+The preview ships only when all of these are done:
+
+1. **Quality gate.** All 13 kept benchmark scenarios have real owner-run attempts and are rated usable without manual fixes; every Precise case keeps order and grouping.
+2. **Rename and migration.** The full rename is complete. Existing app data and vault entries move to the new identifier, and `.desegni` projects still open.
+3. **Linux packages.** Bundling produces an AppImage and a Debian package. The package declares WebKitGTK 4.1, the desktop portal and Secret Service.
+4. **GitHub release pipeline.** Public repository; CI runs the frontend build, Rust tests, clippy and editor tests, and builds untested Windows/macOS artifacts. The release job publishes artifacts, checksums and the exact source.
+5. **Portable test harness.** Native tests and the startup check find `xvfb-run` and other tools on PATH instead of an owner-specific path.
+6. **Providers.** Each listed provider has one recorded live generation; the rest are hidden.
+7. **Startup failures.** An unwritable data directory or a missing desktop portal shows a plain error with a way forward, instead of failing silently ([docs/STANDALONE_AUDIT.md](docs/STANDALONE_AUDIT.md) lines 18 and 23).
+8. **Crash reports.** The opt-in prompt, log scrubbing and prefilled-issue link work.
+9. **Update check.** The menu item reports the newest GitHub release and links it.
+10. **Release files.** SECURITY.md points to private reporting; each release names its GPL source; the install and first-site guide exists.
+
+Deferred past the preview: signing, notarization and the signed updater; Windows-only audit items; proxy support, non-UTF-8 import and local capture of remote assets; Tier 1–3 features and the remaining 1.0 contract.
+
 ## Current execution order
 
 [FEATURE_PRIORITIES.md](FEATURE_PRIORITIES.md) now controls sequencing; [UX_AUDIT.md](UX_AUDIT.md) controls the accepted interface changes. The full contract below remains the public-release target, rather than a claim that every item is implemented. Core validation, transactional apply, Undo/Redo, recovery and credential isolation remain requirements throughout.
 
 1. Finish the accepted UX audit and portable website-folder export. The owner additionally prioritized floating Layers, local stacking controls and layer copy/paste; implement that bounded authoring slice before the remaining tiers. Preserve the no-sidebar design and keep all development in WebMaker.
-2. Prepare and run the fixed generation benchmark. Only the owner runs paid generation with their own credentials. Record exact requirements, output, screenshots, usage, cost and duration, plus owner ratings. Quality remains unverified until at least 80% are usable without manual fixes and Precise placement preserves order/grouping. See `docs/GENERATION_BENCHMARK.md` for scenarios and execution.
+2. Prepare and run the fixed generation benchmark. Only the owner runs paid generation with their own credentials. Record exact requirements, output, screenshots, usage, cost and duration, plus owner ratings. Quality remains unverified until all 13 kept scenarios are usable without manual fixes and Precise placement preserves order/grouping. See `docs/GENERATION_BENCHMARK.md` for scenarios and execution.
 3. After that gate, complete Tier 1 in order: streaming read-only preview, variations, request reference images and persistent visible version history. Preview never bypasses final validation or transactional apply. Implement history storage with variation retention before shipping variations.
 4. Complete Tier 2: responsive preview/per-size requests, authoritative global styles, generated/stock images and one real publishing provider.
 5. Complete Tier 3: additional provider adapters and editable starter-section prompts. Reassess the order using benchmark results.

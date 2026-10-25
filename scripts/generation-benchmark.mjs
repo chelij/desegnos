@@ -17,6 +17,8 @@ const guardedXvfb = '~/.local/bin/xvfb-run';
 const digest = value => createHash('sha256').update(value).digest('hex');
 const catalogue = JSON.parse(await readFile(join(fixtureRoot, 'scenarios.json'), 'utf8'));
 const fixtures = JSON.parse(await readFile(join(fixtureRoot, 'fixtures.json'), 'utf8'));
+// The 0.1.0 gate (docs/GENERATION_BENCHMARK.md); retired scenarios stay runnable but do not count.
+const gateScenarioIds = ['01-hero', '02-pricing', '04-about', '05-mobile-home', '06-button-revision', '08-multi-precise', '09-imported-brand', '10-faq', '12-navigation-footer', '13-mobile-contact', '15-long-copy', '16-two-pages', '17-responsive-layout'];
 const help = `Desegnos generation benchmark — OWNER RUN ONLY; quality remains UNVERIFIED until rated.
 
 Offline commands (no app launch, credentials or provider request):
@@ -56,6 +58,7 @@ function argumentsFor(values) {
 async function validateFixtures() {
   assert.equal(catalogue.version, 1); assert.equal(catalogue.scenarios.length, 18);
   assert.equal(fixtures.scenarios.length, 18); assert.equal(new Set(catalogue.scenarios.map(item => item.id)).size, 18);
+  for (const id of gateScenarioIds) assert.ok(catalogue.scenarios.some(item => item.id === id), `Unknown gate scenario ${id}`);
   for (const scenario of catalogue.scenarios) {
     assert.match(scenario.id, /^\d{2}-[a-z-]+$/);
     const fixture = fixtures.scenarios.find(item => item.id === scenario.id); assert.ok(fixture);
@@ -97,11 +100,12 @@ async function summarize(directory) {
     const strict = scenario.mode !== 'strict' || applied && rated && run.rating.strictOrderAndGrouping === true;
     const costRecorded = Number.isFinite(run?.result.usageCostEstimateUsd) && run.result.usageCostEstimateUsd >= 0 || Number.isFinite(run?.rating?.actualBilledUsd) && run.rating.actualBilledUsd >= 0;
     const accounting = Number.isFinite(run?.result.durationMs) && run.result.durationMs > 0 && costRecorded;
-    return { id: scenario.id, placeholdersPerPage: run?.result.placeholdersPerPage ?? null, run: run?.path ?? null, attempted: (run?.result.providerAttempts ?? 0) > 0, applied, rated, usable: rated && run.rating.usableWithoutManualFixes, strictOrderAndGrouping: strict, costAndDurationRecorded: accounting };
+    return { id: scenario.id, gate: gateScenarioIds.includes(scenario.id), placeholdersPerPage: run?.result.placeholdersPerPage ?? null, run: run?.path ?? null, attempted: (run?.result.providerAttempts ?? 0) > 0, applied, rated, usable: rated && run.rating.usableWithoutManualFixes, strictOrderAndGrouping: strict, costAndDurationRecorded: accounting };
   });
-  const usable = scenarios.filter(item => item.applied && item.rated && item.usable).length;
-  const complete = scenarios.every(item => item.attempted && item.rated && item.strictOrderAndGrouping && item.costAndDurationRecorded);
-  return { status: complete && usable / 18 >= 0.8 ? 'OWNER_RATED_GATE_PASSED' : 'UNVERIFIED', usable, denominator: 18, requiredUsable: 15, usablePercent: usable * 100 / 18, costBasis: 'Usage × frozen local catalogue standard token prices; conservative estimate, not confirmed billing.', scenarios };
+  const gate = scenarios.filter(item => item.gate);
+  const usable = gate.filter(item => item.applied && item.rated && item.usable).length;
+  const complete = gate.every(item => item.attempted && item.rated && item.strictOrderAndGrouping && item.costAndDurationRecorded);
+  return { status: complete && usable === gate.length ? 'OWNER_RATED_GATE_PASSED' : 'UNVERIFIED', usable, denominator: gate.length, requiredUsable: gate.length, usablePercent: usable * 100 / gate.length, costBasis: 'Usage × frozen local catalogue standard token prices; conservative estimate, not confirmed billing.', scenarios };
 }
 
 async function stdinKey() {
