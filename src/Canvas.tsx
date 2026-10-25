@@ -25,7 +25,7 @@ import { FrameOverlay, useLiveFrameSession, type LiveFrameSession } from './Fram
 import type { LiveHistoryAction } from './liveBar';
 import { liveFrame, liveVisibility, type LiveDevice } from './liveFrame';
 import { overlayPlacement, placeOverlays, type CollectedFrame } from './previewFrames';
-import { shownSelectionRect } from './previewMeasurement';
+import { shownSelectionRects } from './previewMeasurement';
 import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { AcrossPagesChange, AcrossPagesMatch, DocumentTarget, ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, PageSelection, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
@@ -98,7 +98,7 @@ type CanvasProps = {
   arrangeRequest: (id: string, direction: LayerDirection) => Promise<void>; copyNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; cutNative: (target: LayerTarget, styles: ElementStyleEdit[]) => Promise<void>; pasteNative: (after: ElementTarget | null) => Promise<LayerPasteView>;
   requestShape?: RequestShapeKind; grid: boolean; gridSettings?: CanvasGridSettings; tool?: 'select' | 'request' | 'pan'; rulerUnit?: 'pixels' | 'percent'; zoom: number; selected: string | null; focusRequest: string | null; viewAction?: CanvasViewAction; changing?: { rect: Rect; shape?: RegionShape }[]; highlighted?: { rect: Rect; shape?: RegionShape }[];
   frameDocuments?: FrameDocumentView[]; ensureElementId: (target: ElementTarget) => Promise<ElementTarget | null>; setFrameTarget: (regionId: string, frameTarget: FrameTarget | null) => Promise<void>;
-  refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[]) => Promise<void>;
+  refreshElementBounds: (pageId: string, viewport: Viewport, bounds: ElementBounds[], fingerprint: string) => Promise<void>;
   openSource?: (target: ElementTarget) => void;
   resolveGenerationFix?: (fix: OutcomeFix, regionId: string) => void;
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
@@ -168,10 +168,22 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const elementRef = useRef(element); elementRef.current = element;
   const dialogRef = useRef(elementDialog); dialogRef.current = elementDialog;
   const pendingSelection = useRef<ElementTarget | null>(null);
-  // The box the current edit aims at. A promoted frame is measured before its layout has
-  // settled, so the canvas keeps drawing this box until the settled measurement arrives.
-  const expectedSelection = useRef<{ element: ElementTarget; rect: Rect } | null>(null);
-  function expectSelection(element: ElementTarget, rect: Rect) { expectedSelection.current = { element, rect }; }
+  // The boxes the current edit aims at, the primary and every extra. A promoted frame is
+  // measured before its layout has settled, so the canvas keeps drawing these boxes until
+  // the settled measurement arrives.
+  const expectedSelections = useRef<ElementSelection[]>([]);
+  // The revision whose settled measurement has arrived; request bounds are only recorded from it.
+  const settledVersion = useRef<string | null>(null);
+  function expectSelections(items: ElementSelection[]) {
+    for (const item of items) expectedSelections.current = [...expectedSelections.current.filter(held => !sameTarget(held.element, item.element)), item];
+  }
+  function expectedRect(element: ElementTarget): Rect | undefined {
+    return expectedSelections.current.find(held => sameTarget(held.element, element))?.rect;
+  }
+  // An edit may report a new identity for the same element; the held box belongs to it either way.
+  function retargetExpected(from: ElementTarget, to: ElementTarget) {
+    expectedSelections.current = expectedSelections.current.map(held => sameTarget(held.element, from) ? { ...held, element: to } : held);
+  }
   const pageRef = useRef(page); pageRef.current = page;
   const nudge = useRef({ x: 0, y: 0, promise: null as Promise<void> | null });
   const syncing = useRef<Promise<void> | null>(null);
@@ -289,8 +301,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   }
   function browseImage(selection: ElementSelection | null) { browseFor.current = selection; imagePicker.current?.click(); }
   function storeElement(value: ElementSelection | null) { elementRef.current = value; setElement(value); selectionChanged(value?.element ?? null); }
-  function deselectElement() { setElementDialog(null); setConfirmMany(null); setExtras([]); setContext(null); inlineTicket.current++; selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; expectedSelection.current = null; storeElement(null); }
-  useLayoutEffect(() => { deselectElement(); setRepicking(null); setStale(new Set()); setElementDialog(null); setElementError(''); }, [page.id]);
+  function deselectElement() { setElementDialog(null); setConfirmMany(null); setExtras([]); setContext(null); inlineTicket.current++; selectionSerial.current++; nudge.current.x = 0; nudge.current.y = 0; pendingSelection.current = null; expectedSelections.current = []; storeElement(null); }
+  useLayoutEffect(() => { deselectElement(); settledVersion.current = null; setRepicking(null); setStale(new Set()); setElementDialog(null); setElementError(''); }, [page.id]);
   const zoomIntent = useRef<{ pageId: string; zoom: number; origin: Point } | null>(null);
   const live = useRef({ zoom, changeZoom, pageId: page.id });
   live.current = { zoom, changeZoom, pageId: page.id };
@@ -379,7 +391,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       const drag = elementDrag.current;
       if (restoreElement) {
         drag.mover?.cancel(); drag.resizer?.cancel();
-        expectedSelection.current = null;
+        expectedSelections.current = [];
         if (drag.pageId === pageRef.current.id && drag.version === acceptedVersionRef.current) storeElement(drag.original);
         else deselectElement();
       }
@@ -596,7 +608,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           if (next) {
             const latest = elementRef.current;
             const shown = latest && sameTarget(latest.element, selected.element) ? latest : selected;
-            if (expectedSelection.current && sameTarget(expectedSelection.current.element, selected.element)) expectedSelection.current = { element: next, rect: expectedSelection.current.rect };
+            if (expectedRect(selected.element)) retargetExpected(selected.element, next);
             pendingSelection.current = next;
             storeElement({ ...shown, element: next });
           } else {
@@ -622,7 +634,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     try {
       const results = await editElements(changes.map(item => ({ target: item.selection.element, change: item.change })));
       if (pageRef.current.id === pageId && selectionSerial.current === ticket) {
-        const next = results.flatMap((element, index) => element ? [{ element, rect: selections[index].rect }] : []);
+        // Every element the batch edited keeps its aimed box until the settled measurement,
+        // including any new identity the batch gave it.
+        results.forEach((element, index) => { if (element) retargetExpected(selections[index].element, element); });
+        const next = results.flatMap((element, index) => element ? [{ element, rect: expectedRect(element) ?? selections[index].rect }] : []);
         if (next.length) {
           pendingSelection.current = next[0].element;
           storeElement(next[0]); setExtras(next.slice(1));
@@ -691,14 +706,16 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     const selections = selectionsNow(); if (selections.length < 2 || editBusy) return;
     try {
       commonDocument(selections);
-      const changes = selections.map(selection => {
+      const size = axis === 'width' ? selections[0].rect.width : selections[0].rect.height;
+      const aimed = selections.map(selection => ({ ...selection, rect: { ...selection.rect, [axis]: size } }));
+      const changes = aimed.map(selection => {
         const resizer = site.current?.beginResize(selection.element, 'se');
         if (!resizer) throw new Error('This item cannot be resized in its current layout.');
-        try {
-          const rect = { ...selection.rect, [axis]: axis === 'width' ? selections[0].rect.width : selections[0].rect.height };
-          return { selection, change: { kind: 'update', texts: [], attributes: {}, style: resizer.style(rect) } as ElementEdit };
-        } finally { resizer.cancel(); }
+        try { return { selection, change: { kind: 'update', texts: [], attributes: {}, style: resizer.style(selection.rect) } as ElementEdit }; }
+        finally { resizer.cancel(); }
       });
+      // Hold every resized box at its aimed size until the committed preview settles.
+      expectSelections(aimed);
       await applyBatch(changes);
     } catch (error) { setElementError(error instanceof Error ? error.message : String(error)); }
   }
@@ -720,7 +737,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         const shown = latest && sameTarget(latest.element, selected.element) ? latest : selected;
         // The edit may report a new identity for the same element; the box the canvas is
         // drawing belongs to it either way.
-        if (next && expectedSelection.current && sameTarget(expectedSelection.current.element, selected.element)) expectedSelection.current = { element: next, rect: expectedSelection.current.rect };
+        if (next) retargetExpected(selected.element, next);
         pendingSelection.current = next;
         storeElement(next ? { ...shown, element: next } : null);
       }
@@ -779,7 +796,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     // Move the boxes with the nudge and keep them as targets until the committed
     // preview settles; a measurement taken before then can describe another layout.
     const boxes = selections.map(selection => ({ ...selection, rect: { ...selection.rect, x: selection.rect.x + x, y: selection.rect.y + y } }));
-    expectSelection(selections[0].element, boxes[0].rect);
+    expectSelections(boxes);
     storeElement(boxes[0]); setExtras(boxes.slice(1));
     try {
       if (selections.length === 1) await applyElement({ kind: 'update', texts: [], attributes: {}, style: movers[0].mover!.style(x, y) }, selections[0]);
@@ -863,6 +880,18 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     }
     return changed;
   }
+  // Request boxes describe the frame the canvas is showing, so their bounds are only read
+  // once that frame's layout has settled. A promotion-time or replaced reading would record
+  // positions the user never sees, on every element the request targets.
+  async function settledFrame(): Promise<boolean> {
+    const deadline = performance.now() + 2000;
+    do {
+      if (elementDrag.current) return false;
+      if (settledVersion.current === acceptedVersionRef.current) return true;
+      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    } while (performance.now() < deadline);
+    return false;
+  }
   function synchronizeBounds(): Promise<void> {
     if (syncing.current) return syncing.current;
     const work = async () => {
@@ -870,6 +899,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       if (!current.content || !current.regions.some(region => !region.completed)) { setStale(new Set()); return; }
       await waitForSite(current.id);
       if (await adoptFrameTargets()) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      if (!await settledFrame()) return;
+      const version = acceptedVersionRef.current;
       if (JSON.stringify(pageRef.current.content) !== JSON.stringify(current.content) || pageRef.current.id !== current.id) throw new Error('The page changed while measuring its items. Try again.');
       const regions = pageRef.current.regions.filter(region => !region.completed && !region.frameTarget);
       const bounds: ElementBounds[] = []; const missing = new Set<string>();
@@ -889,7 +920,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       }
       setStale(missing);
       if (missing.size) throw new Error('This element was removed. Pick it again or remove its request before generating.');
-      if (bounds.length) await refreshElementBounds(current.id, current.viewport, bounds);
+      if (bounds.length) await refreshElementBounds(current.id, current.viewport, bounds, version);
     };
     syncing.current = work().finally(() => { syncing.current = null; });
     return syncing.current;
@@ -1198,7 +1229,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           return { ...item.selection, rect: result.rect };
         });
         moved = movedGroup[0];
-        expectSelection(moved.element, moved.rect);
+        expectSelections(movedGroup);
         storeElement(moved); setExtras(movedGroup.slice(1));
         return;
       } else {
@@ -1207,7 +1238,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
         moved = drag.mover!.preview(drag.x, drag.y);
       }
       if (!moved) throw new Error('This item left its editable page.');
-      expectSelection(moved.element, moved.rect);
+      expectSelections([moved]);
       storeElement(moved);
     } catch (error) { cancel(); setElementError(error instanceof Error ? error.message : String(error)); }
   }
@@ -1235,9 +1266,15 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     // A measurement from an earlier revision describes a layout the canvas has already
     // replaced; the frame loading now owns the selection.
     if (revision !== undefined && revision !== acceptedVersionRef.current) return;
+    if (settled && revision !== undefined) settledVersion.current = acceptedVersionRef.current;
     refreshLayers();
     setFrameView(page.content ? site.current?.frameOverlays() ?? { pageUrl: null, frames: [] } : { pageUrl: null, frames: [] });
-    setExtras(extrasRef.current.flatMap(item => { const found = site.current?.find(item.element); return found ? [{ ...found, rect: settled ? found.rect : item.rect }] : []; }));
+    // Every box the edit aimed at is held until the settled measurement arrives, so a
+    // multi-selection does not jump to the promotion's interim reading either.
+    const extrasBefore = extrasRef.current;
+    const foundExtras = extrasBefore.flatMap(item => { const found = site.current?.find(item.element); return found ? [{ found, before: item }] : []; });
+    const extraRects = shownSelectionRects(foundExtras.map(entry => entry.found.rect), foundExtras.map(entry => expectedRect(entry.found.element) ?? entry.before.rect), settled);
+    setExtras(foundExtras.map((entry, index) => ({ ...entry.found, rect: extraRects[index] })));
     for (const item of pendingImages.current) site.current?.previewImage(item.selection.element, item.src);
     setPlaceholders(page.content ? (site.current?.placeholders() ?? []).filter(item => !pendingImages.current.some(pending => sameTarget(pending.selection.element, item.element))) : []);
     refreshStaleTargets();
@@ -1247,15 +1284,17 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       if (found) {
         pendingSelection.current = null;
         // The edit's own target box, or the box already drawn when there is none.
-        const aimed = expectedSelection.current && sameTarget(expectedSelection.current.element, found.element) ? expectedSelection.current.rect : current.rect;
-        if (settled) expectedSelection.current = null;
-        storeElement({ ...found, rect: shownSelectionRect(found.rect, aimed, settled) });
+        const [rect] = shownSelectionRects([found.rect], [expectedRect(found.element) ?? current.rect], settled);
+        if (settled) expectedSelections.current = [];
+        storeElement({ ...found, rect });
       }
       else if (!dialogRef.current && (pendingSelection.current !== current.element || (site.current?.source() && !site.current?.find(current.element)))) deselectElement();
     }
     // Missing targets already have an actionable request banner. The Generate
     // path requires valid bounds and reports an error if any remain unresolved.
-    void synchronizeBounds().catch(() => {});
+    // Request bounds come from the settled frame only; a promotion-time reading is not
+    // what the canvas shows and must not be recorded.
+    if (settled) void synchronizeBounds().catch(() => {});
   }
   function move(event: PointerEvent) {
     const client = { x: event.clientX, y: event.clientY };

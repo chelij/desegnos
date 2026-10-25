@@ -12,7 +12,7 @@ try {
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022',
     '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/previewMeasurement.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { measurableDocument, needsReferenceMeasure, pendingFrameHeight, promotionHeight, shownSelectionRect } = await import(pathToFileURL(join(temporary, 'previewMeasurement.js')).href);
+  const { measurableDocument, needsReferenceMeasure, pendingFrameHeight, promotionHeight, shownSelectionRect, shownSelectionRects } = await import(pathToFileURL(join(temporary, 'previewMeasurement.js')).href);
 
   // Preview documents are opaque tokens: only identity matters for the guard.
   const promotedDocument = { id: 'promoted' };
@@ -114,6 +114,26 @@ try {
     assert.deepEqual(shownSelectionRect(settled, aimed, true), settled);
     assert.notDeepEqual(shownSelectionRect(settled, aimed, true), promotion);
     assert.deepEqual(shownSelectionRect(promotion, aimed, true), promotion);
+  });
+
+  await test('a multi-selection holds every aimed box until the settled measurement', () => {
+    // Two pictures dragged together: both boxes are the drag targets, neither the reading.
+    const aimed = [{ x: 40, y: 120, width: 200, height: 60 }, { x: 300, y: 90, width: 120, height: 120 }];
+    const promotion = [{ x: 40, y: 30, width: 200, height: 60 }, { x: 300, y: 10, width: 120, height: 120 }];
+    const settled = [{ x: 40, y: 121, width: 200, height: 60 }, { x: 300, y: 91, width: 120, height: 120 }];
+    assert.deepEqual(shownSelectionRects(promotion, aimed, false), aimed);
+    assert.deepEqual(shownSelectionRects(settled, aimed, false), aimed);
+    assert.deepEqual(shownSelectionRects(settled, aimed, true), settled);
+    // One element aimed at (a resize of the whole selection) still holds the other boxes drawn.
+    const resized = { x: 300, y: 90, width: 200, height: 120 };
+    const held = shownSelectionRects(settled, [aimed[0], resized], false);
+    assert.deepEqual(held, [aimed[0], resized]);
+    // An element the edit did not aim at keeps the box already drawn, not the reading.
+    assert.deepEqual(shownSelectionRects(promotion, [aimed[0], undefined], false), [aimed[0], promotion[1]]);
+    // A settled reading of every element replaces every held box.
+    assert.deepEqual(shownSelectionRects(settled, [aimed[0], null], true), settled);
+    // Boxes line up with the measured selection, so a shorter list cannot borrow another element's hold.
+    assert.deepEqual(shownSelectionRects([settled[1]], [undefined, aimed[1]], false), [settled[1]]);
   });
 } finally {
   await rm(temporary, { recursive: true, force: true });

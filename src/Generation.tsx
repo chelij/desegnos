@@ -1,6 +1,6 @@
 import { Notice, ProblemBanner, needsAiSettings, type ProblemAction } from './ProblemBanner.js';
 import { userError, outcomeReason } from './userErrors.js';
-import { fixLabel, jobOutcome } from './generationProblems.js';
+import { fixLabel, jobOutcome, staleResult } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
 import { scopeLabel } from './Notes';
@@ -69,7 +69,7 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   };
   const blocked = review.blocked[0];
   const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your page…' : 'Building your page…',
-    ready: 'Updating your page…', blocked: needsInput ? 'Needs your input' : 'Needs attention', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
+    ready: 'Updating your page…', blocked: staleResult(job) ? 'Page changed — not applied' : needsInput ? 'Needs your input' : 'Needs attention', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your page…', applied: 'Page updated' };
   const heading = operation === 'Stopping…' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
   const fix = blocked?.fix ? () => {

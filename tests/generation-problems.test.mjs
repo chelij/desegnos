@@ -10,7 +10,7 @@ try {
   const compiler = new URL('bin/tsc', import.meta.resolve('typescript/package.json')).pathname;
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--outDir', temporary, 'src/generationProblems.ts'], { encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  const { areaProblems, placeCallouts, areaOutcome, jobOutcome, resolutionAction } = await import(pathToFileURL(join(temporary, 'generationProblems.js')));
+  const { areaProblems, placeCallouts, areaOutcome, jobOutcome, resolutionAction, staleResult, staleResultMessage } = await import(pathToFileURL(join(temporary, 'generationProblems.js')));
   const rect = { x: 100, y: 200, width: 200, height: 80 };
   const other = { x: 110, y: 50, width: 200, height: 80 };
   const intersects = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -85,6 +85,26 @@ try {
     assert.equal(areaOutcome(whole, 'a', 'Add scrolling chat').retryable, true);
     const limited = { ...declared, validationEvents: [{ kind: 'repairLimit', disposition: 'conflicted', regionId: null, message: 'Skipped the repair because it would exceed the spending limit.' }] };
     assert.equal(areaOutcome(limited, 'a', 'Add scrolling chat').retryable, false);
+  });
+  await test('a stale result is retryable even when every area is implemented', () => {
+    const implemented = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', regionId: 'a' }], drafts: [], candidate: { regions: [{ regionId: 'a', status: 'implemented' }] } };
+    for (const message of [
+      'The generated result is stale: Existing page source changed. Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements.',
+      'This candidate is stale: Existing page source changed. Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements.',
+    ]) assert.equal(staleResult({ ...implemented, message }), true);
+    assert.equal(staleResult({ ...implemented, message: 'Some requests need a choice.' }), false);
+    assert.equal(staleResult({ ...implemented, status: 'failed' }), false);
+    assert.equal(staleResult(null), false);
+    assert.deepEqual(jobOutcome({ ...implemented, message: 'Some requests need a choice.' }).retryable, []);
+    const review = jobOutcome({ ...implemented, message: 'The generated result is stale: Existing page source changed.' });
+    assert.deepEqual(review.retryable, ['a']); assert.deepEqual(review.blocked, []);
+    const [problem] = areaProblems({ ...implemented, message: 'The generated result is stale: Existing page source changed.' }, page);
+    assert.equal(problem.message, staleResultMessage); assert.equal(problem.retryable, true); assert.equal(problem.stale, true);
+  });
+  await test('an implemented result that is not stale still offers nothing', () => {
+    const applied = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', regionId: 'a' }], drafts: [], message: 'Some requests need a choice.', candidate: { regions: [{ regionId: 'a', status: 'implemented' }] } };
+    assert.deepEqual(jobOutcome(applied).retryable, []);
+    assert.deepEqual(areaProblems(applied, page), []);
   });
   await test('unavailable capabilities and missing areas keep their classification', () => {
     const capability = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', regionId: 'a' }], drafts: [], candidate: { regions: [{ regionId: 'a', status: 'implemented', explanation: 'Done' }], componentRequests: [{ regionId: 'a', capability: 'Video player', resolution: 'unavailable', reason: 'No video service is connected.' }] } };

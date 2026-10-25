@@ -55,3 +55,13 @@ export function needsReferenceMeasure(stagedHeight: number, referenceHeight: num
 export function shownSelectionRect<Rect>(measured: Rect, aimed: Rect, settled: boolean): Rect {
   return settled ? measured : aimed;
 }
+
+// The boxes to draw for a whole selection.
+//
+// Every element an edit moved or resized keeps the box that edit aimed at until the settled
+// measurement arrives, and an element without an aimed box keeps the box already drawn. Once
+// settled, only the measurements are drawn, so a multi-selection never shows one interim
+// element while the others are final.
+export function shownSelectionRects<Rect>(measured: Rect[], aimed: Array<Rect | null | undefined>, settled: boolean): Rect[] {
+  return measured.map((rect, index) => shownSelectionRect(rect, aimed[index] ?? rect, settled));
+}

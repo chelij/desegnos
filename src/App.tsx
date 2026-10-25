@@ -568,6 +568,11 @@ function Editor() {
       }
       const shortcut = editorShortcut(event, editingText);
       if (!shortcut) return;
+      // Selected interface text (a notice, the AI conversation) copies as text, not as a layer.
+      const selection = window.getSelection()?.toString() ?? '';
+      if (shortcut === 'copyLayer' && selection.trim()) {
+        event.preventDefault(); void native('copy_text', { text: selection }).catch(() => {}); return;
+      }
       // Side panels keep focus while editing, so app-wide commands still work there.
       if (event.target instanceof Element && event.target.closest('.workspace-surface') && !['save', 'saveAs', 'open', 'new', 'undo', 'redo', 'zoomIn', 'zoomOut', 'fit', 'actualSize', 'doubleSize', 'nextPage', 'previousPage', 'closePageTab'].includes(shortcut)) return;
       if (event.repeat && ['new', 'open', 'saveAs', 'help', 'remove', 'closePageTab'].includes(shortcut)) { event.preventDefault(); return; }
@@ -767,6 +772,18 @@ function Editor() {
   function editGenerationRequest(id: string) {
     const owner = project?.pages.find(item => item.regions.some(region => region.id === id));
     if (owner) run(async () => { await selectPage(owner.id, id); setSelected(id); setFocusPrompt(true); });
+  }
+  async function replyToGeneration(targets: { pageId: string; regionId: string }[], text: string) {
+    const regionIds: string[] = [];
+    for (const target of targets) {
+      const region = project?.pages.find(page => page.id === target.pageId)?.regions.find(region => region.id === target.regionId);
+      if (!region) continue;
+      const prompt = region.prompt.trim();
+      await changeRegion(target.pageId, target.regionId, { prompt: prompt ? `${prompt}\n\nFeedback: ${text}` : `Feedback: ${text}` });
+      regionIds.push(target.regionId);
+    }
+    if (!regionIds.length) throw new Error('Those requests are no longer in the project.');
+    await generation.prepare(undefined, regionIds);
   }
   const requestEditorIsOpen = (regionId: string) => requestEditorOpen(regionId, { selectedRegionId: selected, focusedRegionId: focusPrompt ? selected : null });
   function openImportDialog() { setImportSource(null); setImportFolder(null); setImportAsNew(false); setShowImport(true); }
@@ -1004,12 +1021,17 @@ function Editor() {
       accept(next); setNotice('Layer cut.');
     }, false);
   }
-  async function refreshElementBounds(pageId: string, viewport: Viewport, bounds: ElementBounds[]) {
+  // Element bounds are measured in the settled promoted frame. If the workspace moved to a
+  // revision with other page content in the meantime, that reading describes a replaced
+  // layout and must not be recorded into the new one.
+  async function refreshElementBounds(pageId: string, viewport: Viewport, bounds: ElementBounds[], fingerprint: string) {
     const projectId = project?.id;
     await queue(async workspace => {
       if (!projectId || workspace?.project?.id !== projectId) throw new Error('The project changed before its element positions were recorded.');
+      const target = workspace.project.pages.find(item => item.id === pageId);
+      if (!target || JSON.stringify([target.content, target.viewport, target.appearance]) !== fingerprint) return workspace!;
       const next = await native<WorkspaceView>('refresh_element_target_bounds', { projectId, pageId, viewport, bounds });
-      accept(next);
+      accept(next); return next;
     }, false);
   }
   function changeRegion(targetPageId: string, regionId: string, patch: RequestPatch): Promise<Region> {
@@ -1235,7 +1257,7 @@ function Editor() {
         {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}
         <CodePane ref={code} saveProject={() => run(() => save())} tidy={page?.content && !framedCode ? () => run(async () => { await synchronize(); await mutate({ type: 'format_page_code', page_id: page.id }); setNotice('Code tidied. Undo puts it back.'); }) : undefined} key={`${page?.id}:${framedCode ? documentKey(activeLayer?.document) : 'page'}`} content={framedCode ?? page?.content ?? null} target={activeLayer} map={framedCode ? null : sourceMap} save={!framedCode && page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id, framedCode ? activeLayer?.document : undefined); }} />
       </>}
-      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} resultApplied={!!resultReview} requestEditorOpen={requestEditorIsOpen} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} manageUsage={manageChatgptUsage} editRequest={editGenerationRequest} close={() => setShowLog(false)} />}
+      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} resultApplied={!!resultReview} requestEditorOpen={requestEditorIsOpen} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} manageUsage={manageChatgptUsage} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => setShowLog(false)} />}
       <SurfaceHost place="panel" />
       </main>
       <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} selected` : region && page ? `Box ${page.regions.indexOf(region) + 1}` : ''}</span><div className="canvas-status-actions">{showsOpener({ available: fixCount > 0, open: showCheck }) && <StatusChip tone="warning" className="check-chip" onClick={() => setShowCheck(true)} role="status" ariaLabel="Open page check">{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</StatusChip>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>

@@ -11,6 +11,12 @@ export const fixLabel = (fix: OutcomeFix) => fix === 'aiSettings' ? 'AI settings
 
 const terminal = ['failed', 'unknown', 'cancelled', 'blocked', 'applied'];
 
+/// A finished result the page changed out from under; both app messages contain "is stale".
+export const staleResultMessage = "The page changed while the AI was working, so this result wasn't applied.";
+export function staleResult(job: GenerationJobView | null): boolean {
+  return job?.status === 'blocked' && /\bis stale\b/i.test(job.message ?? '');
+}
+
 /// Read the fenced JSON blocks a generation snapshot carries.
 export function jsonBlocks(markdown: string): any[] {
   const blocks: any[] = [];
@@ -73,12 +79,14 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (regionId: s
   for (const outcome of job.candidate?.regions ?? []) ids.add(outcome.regionId);
   const retryable: string[] = [];
   const blocked: JobOutcome['blocked'] = [];
+  // A stale result was never applied, so even its finished areas are worth resending.
+  const stale = staleResult(job);
   for (const regionId of ids) {
     const outcome = areaOutcome(job, regionId, promptOf(regionId));
     if (!outcome.retryable) { blocked.push({ regionId, reason: outcome.reason, fix: outcome.fix }); continue; }
     const latest = job.drafts?.filter(draft => draft.regionIds.includes(regionId)).at(-1);
     const implemented = job.candidate?.regions?.some(region => region.regionId === regionId && region.status === 'implemented');
-    if (!implemented && !latest?.applied) retryable.push(regionId);
+    if (stale || (!implemented && !latest?.applied)) retryable.push(regionId);
   }
   // A batched job keeps its finished parts; a failed part is retried on its own.
   const retryBatches = (job.batches ?? []).some(batch => ['failed', 'unknown', 'cancelled', 'blocked'].includes(batch.status));
@@ -87,24 +95,28 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (regionId: s
 
 export function areaProblems(job: GenerationJobView | null, page: Page): AreaProblem[] {
   if (!job || ['prepared', 'generating', 'ready', 'applying'].includes(job.status)) return [];
-  return page.regions.flatMap(region => {
+  const stale = staleResult(job);
+  return page.regions.flatMap((region): AreaProblem[] => {
     if (!job.areas.some(area => area.pageId === page.id && area.regionId === region.id)) return [];
     const drafts = job.drafts?.filter(draft => draft.pageId === page.id && draft.regionIds.includes(region.id)) ?? [];
     const latest = drafts.at(-1);
     if (latest?.applied || latest?.dismissed) return [];
     const outcome = job.candidate?.regions?.find(item => item.regionId === region.id);
+    const result = areaOutcome(job, region.id, region.prompt);
+    // A stale result did nothing to the page; say so where the visible box is.
+    if (stale && result.retryable && !region.completed) return [{ key: `${job.jobId}:${region.id}`, regionId: region.id,
+      message: staleResultMessage, stale: true, retryable: true, rect: region.rect }];
     if (!latest && (!outcome || outcome.status === 'implemented')) return [];
     if (region.completed && (!latest || outcome?.status === 'implemented')) return [];
-    const result = areaOutcome(job, region.id, region.prompt);
-    const stale = !!latest?.baseContent && JSON.stringify(latest.baseContent) !== JSON.stringify(page.content);
+    const oldBase = !!latest?.baseContent && JSON.stringify(latest.baseContent) !== JSON.stringify(page.content);
     let reason = latest?.reason || outcome?.explanation || job.message;
     // Resolve a validator's area identity to the user's visible box number.
     const affected = page.regions.findIndex(item => item.id !== region.id && reason.includes(item.id));
     const message = result.retryable
-      ? generationError(stale ? 'stale revision' : reason, region.prompt, affected >= 0 ? `Box ${affected + 1}` : undefined)
+      ? generationError(oldBase ? 'stale revision' : reason, region.prompt, affected >= 0 ? `Box ${affected + 1}` : undefined)
       : result.reason;
     return [{ key: `${job.jobId}:${region.id}`, regionId: region.id, draftId: latest?.id,
-      message, stale, retryable: result.retryable, fix: result.fix, rect: region.rect }];
+      message, stale: oldBase, retryable: result.retryable, fix: result.fix, rect: region.rect }];
   });
 }
 

@@ -168,7 +168,7 @@ button.status-chip { height: 20px; min-height: 20px; padding: 0 var(--space-4); 
 .design-pane:has(.live-bar) > .notice-host { top: calc(var(--ruler-size, 28px) + 50px); }
 .design-pane > .notice-host.toast { position: fixed; inset: auto 0 96px; }
 .design-pane > .notice-host > .notice { top: 0; margin: 0; }
-.notice-copy { padding-inline: var(--space-3); }
+.notice-copy { padding-inline: var(--space-3); -webkit-user-select: text; user-select: text; }
 .application:has(.surface-host-panel:not(:empty), .workspace > .generation-log) .notice-host:not(.toast) > .notice { left: 50%; max-width: min(760px, calc(100% - 24px)); }
 .notice-host > .notice, .notice-host.toast > .notice { min-height: var(--control-md); padding: var(--space-1) var(--space-2) var(--space-1) var(--space-1); border-radius: var(--radius-lg); box-shadow: var(--shadow-2); }
 
