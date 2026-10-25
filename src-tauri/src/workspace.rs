@@ -2313,11 +2313,9 @@ pub async fn open_project(
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
-    let _ = discard; // Opening adds a tab group; the active project stays open.
-    let before = {
-        let state = state.lock().map_err(message)?;
-        state.session.as_ref().map(|s| s.project().clone())
-    };
+    // Opening adds a tab group and leaves the active project as it is, so edits made while
+    // the dialog is open don't conflict with it.
+    let _ = discard;
     let path = if let Some(path) = path {
         path
     } else {
@@ -2348,13 +2346,6 @@ pub async fn open_project(
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
-    if let Some(before) = before {
-        state.check_snapshot(&before)?;
-    } else if state.session.is_some() {
-        return Err(
-            "A project was opened while the dialog was active. Open the file again.".into(),
-        );
-    }
     if path.is_dir()
         && desegni_storage::project_in_folder(&path)
             .map_err(message)?
