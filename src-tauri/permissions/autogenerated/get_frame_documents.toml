@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-frame-documents"
+description = "Enables the get_frame_documents command without any pre-configured scope."
+commands.allow = ["get_frame_documents"]
+
+[[permission]]
+identifier = "deny-get-frame-documents"
+description = "Denies the get_frame_documents command without any pre-configured scope."
+commands.deny = ["get_frame_documents"]

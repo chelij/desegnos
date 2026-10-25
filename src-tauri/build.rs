@@ -82,6 +82,16 @@ fn main() {
             "release_preview",
             "editor_heartbeat",
             "reload_workspace",
+            "copy_elements",
+            "copy_text",
+            "edit_element_across_pages",
+            "edit_elements",
+            "element_matches",
+            "ensure_element_id",
+            "get_frame_documents",
+            "get_frame_targets",
+            "open_in_browser",
+            "unpack_request_zip",
         ]),
     ))
     .expect("Desegni's command permission manifest must be valid");
