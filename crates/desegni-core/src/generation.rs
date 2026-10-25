@@ -721,7 +721,11 @@ impl Project {
         if self.applied_job_ids.contains(&candidate.job_id) {
             return Ok(self.clone());
         }
-        candidate.validate(snapshot, self)?;
+        // Edits made while the request was running are merged into the generated sources when
+        // they do not touch the same text; the reply itself is validated against its frozen base.
+        let resolved = crate::resolve_edits_during_generation(snapshot, candidate, self)?;
+        candidate.validate(snapshot, &resolved.base)?;
+        let generated = &resolved.candidate;
         if snapshot.format_version()? >= 17 {
             ensure(
                 candidate.can_apply(snapshot),
@@ -776,7 +780,7 @@ impl Project {
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
         let mut placed = BTreeMap::new();
-        for page in &candidate.pages {
+        for page in &generated.pages {
             let target = next
                 .pages
                 .iter_mut()
@@ -828,7 +832,7 @@ impl Project {
                 }
             }
         }
-        for document in &candidate.documents {
+        for document in &generated.documents {
             let crate::DocumentTarget::SiteFile { path } = &document.document else {
                 return Err(Error(
                     "Page source belongs in pages, not in documents.".into(),

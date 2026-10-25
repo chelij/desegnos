@@ -1754,7 +1754,7 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, before.revision);
     fresh.requirements.validate_current(&before).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 25);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 26);
     assert_eq!(
         fresh.source_fingerprints.get(&before.pages[0].id),
         Some(&desegni_core::source_fingerprints(
@@ -1819,7 +1819,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_while_begin_submits_current_
     status(&fresh, JobStatus::Generating);
     assert_eq!(fresh.base_revision, project.revision);
     fresh.requirements.validate_current(&project).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 25);
+    assert_eq!(fresh.requirements.format_version().unwrap(), 26);
     assert_eq!(
         fresh.source_fingerprints.get(&project.pages[0].id),
         Some(&desegni_core::source_fingerprints(
@@ -2833,5 +2833,173 @@ fn prepare_rejects_a_batched_request_whose_parts_exceed_the_spending_limit() {
     assert!(
         error.contains("batches") && error.contains("combined estimate"),
         "{error}"
+    );
+}
+
+/// A page with accepted source and two box requests, drawn before generation.
+fn mergeable_project() -> (Project, &'static str) {
+    const SOURCE: &str = "<main>\n  <p>Existing accepted content</p>\n</main>";
+    let mut project = project();
+    project.pages[0].content = Some(SiteContent {
+        html: SOURCE.into(),
+        css: "main { color: navy; }".into(),
+        javascript: String::new(),
+    });
+    (project, SOURCE)
+}
+
+fn paragraph_target(project: &Project) -> desegni_core::ElementTarget {
+    desegni_core::ElementTarget {
+        id: String::new(),
+        selector: "body > main:nth-of-type(1) > p:nth-of-type(1)".into(),
+        tag: "p".into(),
+        label: "Intro".into(),
+        source_sha256: project.pages[0].content.as_ref().unwrap().sha256().unwrap(),
+    }
+}
+
+/// Keep the candidate's area roots inside the page, as a real reply places them.
+fn with_roots_inside_main(candidate: &mut GenerationCandidate, source: &str, body: &str) {
+    let roots = candidate.pages[0].content.html[source.len()..].to_string();
+    candidate.pages[0].content.html = format!("<main>\n  <p>{body}</p>\n  {roots}\n</main>");
+}
+
+#[test]
+fn edits_to_other_elements_keep_the_result_ready_and_merge_when_applied() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let (original, source) = mergeable_project();
+    let prepared = service.prepare(&original).unwrap();
+    service.begin(&original, prepared.job_id, false).unwrap();
+    let mut generated = candidate(&original, &prepared, "Merged label");
+    with_roots_inside_main(&mut generated, source, "Existing accepted content");
+    generated.validate(&prepared.requirements, &original).unwrap();
+    let (edited, _) = original
+        .edit_element(
+            original.revision,
+            original.home_page_id,
+            &paragraph_target(&original),
+            &desegni_core::ElementEdit::Update {
+                texts: vec![],
+                attributes: Default::default(),
+                style: Some("letter-spacing:0.02em".into()),
+            },
+        )
+        .unwrap();
+    assert!(prepared.requirements.validate_current(&edited).is_err());
+    service
+        .finish(
+            &original,
+            Some(&edited),
+            prepared.job_id,
+            1,
+            Ok(response(&generated, 1)),
+        )
+        .unwrap();
+    let view = service.latest(&edited).unwrap().unwrap();
+    status(&view, JobStatus::Ready);
+    assert_eq!(view.message, "Result ready to apply.");
+    assert!(view.validation_events.iter().any(|event| {
+        event.kind == "mergedEdits" && event.message.contains("Merged with your edits")
+    }));
+    let applied = edited
+        .apply_generation(
+            &prepared.requirements,
+            view.candidate.as_ref().unwrap(),
+            &[],
+        )
+        .unwrap();
+    let html = &applied.pages[0].content.as_ref().unwrap().html;
+    assert!(html.contains("letter-spacing:0.02em"), "{html}");
+    assert!(html.contains("Merged label"), "{html}");
+    assert!(applied.pages[0].regions[0].completed);
+}
+
+#[test]
+fn a_changed_request_keeps_the_completed_result_blocked() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let (original, source) = mergeable_project();
+    let prepared = service.prepare(&original).unwrap();
+    service.begin(&original, prepared.job_id, false).unwrap();
+    let mut generated = candidate(&original, &prepared, "Merged label");
+    with_roots_inside_main(&mut generated, source, "Existing accepted content");
+    let mut changed = original.clone();
+    changed.revision += 1;
+    changed.pages[0].regions[0].prompt.push_str(" Use a round button.");
+    service
+        .finish(
+            &original,
+            Some(&changed),
+            prepared.job_id,
+            1,
+            Ok(response(&generated, 1)),
+        )
+        .unwrap();
+    let view = service.latest(&changed).unwrap().unwrap();
+    status(&view, JobStatus::Blocked);
+    assert!(view.message.contains("stale"), "{}", view.message);
+    assert!(view.message.contains("A requested area changed"));
+}
+
+#[test]
+fn editing_the_text_a_whole_page_generation_rewrites_stays_blocked() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let (original, source) = mergeable_project();
+    let region = original.pages[0].regions[0].id;
+    let original = original
+        .apply(
+            original.revision,
+            Command::SetRegionWholePage {
+                page_id: original.home_page_id,
+                region_id: region,
+                whole_page: true,
+            },
+        )
+        .unwrap();
+    let prepared = service.prepare(&original).unwrap();
+    service.begin(&original, prepared.job_id, false).unwrap();
+    let mut generated = candidate(&original, &prepared, "Generated wording");
+    with_roots_inside_main(&mut generated, source, "Generated explanation");
+    generated.validate(&prepared.requirements, &original).unwrap();
+    let (edited, _) = original
+        .edit_element(
+            original.revision,
+            original.home_page_id,
+            &paragraph_target(&original),
+            &desegni_core::ElementEdit::Update {
+                texts: vec![desegni_core::TextEdit {
+                    index: 0,
+                    text: "My own wording".into(),
+                }],
+                attributes: Default::default(),
+                style: None,
+            },
+        )
+        .unwrap();
+    service
+        .finish(
+            &original,
+            Some(&edited),
+            prepared.job_id,
+            1,
+            Ok(response(&generated, 1)),
+        )
+        .unwrap();
+    let view = service.latest(&edited).unwrap().unwrap();
+    status(&view, JobStatus::Blocked);
+    assert!(view.message.contains("stale"), "{}", view.message);
+    let error = edited
+        .apply_generation(
+            &prepared.requirements,
+            view.candidate.as_ref().unwrap(),
+            &[],
+        )
+        .unwrap_err();
+    assert!(
+        error.0.contains("Existing page source changed"),
+        "{}",
+        error.0
     );
 }

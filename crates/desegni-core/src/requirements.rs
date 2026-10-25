@@ -1,10 +1,10 @@
 /// Requirements contract used for newly prepared requests.
-pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 25;
+pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 26;
 
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
-    MAX_GENERATION_REGIONS, MAX_REQUIREMENTS_BYTES, Page, Project, Region, Result, Scope, digest,
-    ensure,
+    MAX_GENERATION_REGIONS, MAX_REQUIREMENTS_BYTES, Page, Project, Region, Result, Scope,
+    SiteContent, digest, ensure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -60,7 +60,7 @@ impl GenerationCapabilities {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequirementsSnapshot {
     pub job_id: Uuid,
@@ -78,6 +78,16 @@ pub struct RequirementsSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch: Option<DocumentBatchContext>,
     pub dependencies: BTreeMap<String, String>,
+    /// Format 26: the exact page and document source text each source dependency was frozen
+    /// from, so a result can be merged with edits made while the request was running. `None`
+    /// records a page that had no accepted source yet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub base_sources: BTreeMap<String, Option<SiteContent>>,
+    /// Format 26: the measured geometry each requested area was frozen with. A page measurement
+    /// refreshes it without the user touching the request, so merging compares the request and
+    /// keeps these values apart.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub base_geometry: BTreeMap<String, RegionGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dossier_context: Option<GenerationDossierContext>,
     /// Frozen, bounded context for format 19; never recomputed on retry.
@@ -88,6 +98,21 @@ pub struct RequirementsSnapshot {
     /// Format 13: small previews of attached pictures, sent beside the requirements file.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<RequestImage>,
+}
+
+/// The measured geometry one requested area was frozen with (format 26).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegionGeometry {
+    /// The placement box: the user's box for an area request, or the union of the measured
+    /// positions of an element-anchored request.
+    pub rect: crate::Rect,
+    /// The measured page elements inside a shaped or whole-page area request.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub area_bounds: Vec<crate::TargetBounds>,
+    /// The request box mapped into the framed document's CSS pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_rect: Option<crate::Rect>,
 }
 
 /// How one request's documents were split into sequential parts (format 25).
@@ -914,6 +939,41 @@ impl Project {
                 format,
             )?,
         );
+        // Format 26: the exact base text of every frozen source, for merging later edits.
+        let mut base_sources = BTreeMap::new();
+        if format >= 26 {
+            for key in dependencies.keys() {
+                if let Some(page_id) = key.strip_prefix("source:") {
+                    if let Some(page) = Uuid::parse_str(page_id)
+                        .ok()
+                        .and_then(|id| self.page(id).ok())
+                    {
+                        base_sources.insert(key.clone(), page.content.clone());
+                    }
+                } else if let Some(content) = key
+                    .strip_prefix("document:")
+                    .and_then(|key| crate::DocumentTarget::from_key(key).ok())
+                    .and_then(|target| self.document_content(&target).ok())
+                {
+                    base_sources.insert(key.clone(), Some(content));
+                }
+            }
+        }
+        // Format 26: the geometry a page measurement rewrites on its own, kept so a later merge
+        // can tell it apart from a changed request.
+        let mut base_geometry = BTreeMap::new();
+        if format >= 26 {
+            for (page, region) in targets {
+                base_geometry.insert(
+                    format!("region:{}:{}", page.id, region.id),
+                    RegionGeometry {
+                        rect: region.rect,
+                        area_bounds: region.area_bounds.clone(),
+                        frame_rect: region.frame_target.as_ref().map(|frame| frame.rect),
+                    },
+                );
+            }
+        }
         ensure(
             md.len() <= MAX_REQUIREMENTS_BYTES,
             "The requirements file exceeds the 8 MiB generation input limit. Narrow the request; no content was truncated.",
@@ -971,6 +1031,8 @@ impl Project {
             documents: document_context.documents,
             batch: batch.cloned(),
             dependencies,
+            base_sources,
+            base_geometry,
             dossier_context,
             request_history: String::new(),
             capabilities,

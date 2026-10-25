@@ -28,6 +28,8 @@ mod requirements;
 mod session;
 mod source;
 mod stable_targets;
+mod stale_merge;
+mod text_merge;
 mod website;
 mod website_import;
 mod website_merge;
@@ -63,6 +65,8 @@ pub use requirements::*;
 pub use session::*;
 pub use source::*;
 pub use stable_targets::*;
+pub use stale_merge::*;
+pub use text_merge::*;
 pub use website::*;
 pub use website_import::{
     ImportedWebsite, PREVIEW_INLINE_BYTES, PreviewFile, import_website_files,

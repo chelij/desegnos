@@ -115,7 +115,7 @@ fn capabilities_are_frozen_without_granting_search_to_an_adapter_that_lacks_it()
             image_generation: None,
         })
         .unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 25);
+    assert_eq!(snapshot.format_version().unwrap(), 26);
     assert!(snapshot.markdown.contains("\"webSearch\": false"));
     assert!(
         !snapshot

@@ -301,7 +301,10 @@ impl Project {
             !self.applied_job_ids.contains(&candidate.job_id),
             "This generation job has already been applied.",
         )?;
-        candidate.validate(snapshot, self)?;
+        // Edits made while the request was running are merged; the dossier records the reply
+        // itself, so its fingerprint stays the one this attempt produced.
+        let resolved = crate::resolve_edits_during_generation(snapshot, candidate, self)?;
+        candidate.validate(snapshot, &resolved.base)?;
         let mut next = self.clone();
         next.revision = self
             .revision

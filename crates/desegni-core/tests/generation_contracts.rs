@@ -399,7 +399,7 @@ fn current_conflicts_keep_other_pages_applicable() {
 #[test]
 fn affected_source_mode_and_identity_are_frozen_but_unrelated_edits_remain_valid() {
     let (project, snapshot, candidate) = fixture();
-    assert!(snapshot.markdown.contains("Requirements format: 25"));
+    assert!(snapshot.markdown.contains("Requirements format: 26"));
     assert_eq!(snapshot.markdown.matches("\"generationMode\"").count(), 1);
     assert!(snapshot.markdown.contains("Existing home"));
     assert!(!snapshot.markdown.contains("PRIVATE UNREQUESTED SOURCE"));
@@ -1364,7 +1364,7 @@ fn selecting_another_element_archives_only_empty_selections_and_preserves_ids_fo
 }
 
 #[test]
-fn direct_local_source_edits_invalidate_an_already_frozen_generation() {
+fn direct_local_source_edits_merge_until_they_touch_the_generated_text() {
     let (project, snapshot, candidate) = fixture();
     let page = &project.pages[0];
     let target = ElementTarget {
@@ -1386,11 +1386,41 @@ fn direct_local_source_edits_invalidate_an_already_frozen_generation() {
             },
         )
         .unwrap();
-    assert!(edited.apply_generation(&snapshot, &candidate, &[]).is_err());
+    assert!(snapshot.validate_current(&edited).is_err());
+    // The style edit and the generated text are merged instead of discarding the paid result.
+    let applied = edited.apply_generation(&snapshot, &candidate, &[]).unwrap();
+    let content = applied.pages[0].content.as_ref().unwrap();
+    assert!(content.html.contains("padding:24px"));
+    assert!(content.html.contains("Count</button>"));
+    assert!(content.html.contains("Click to change the label."));
     assert_eq!(
-        edited.pages[0].content.as_ref().unwrap().javascript,
+        content.javascript,
         page.content.as_ref().unwrap().javascript
     );
+    // A local edit of the text this generation rewrites stays stale.
+    let paragraph = ElementTarget {
+        id: String::new(),
+        selector: "body > main:nth-of-type(1) > p:nth-of-type(1)".into(),
+        tag: "p".into(),
+        label: "Existing explanation".into(),
+        source_sha256: page.content.as_ref().unwrap().sha256().unwrap(),
+    };
+    let (same_area, _) = project
+        .edit_element(
+            project.revision,
+            page.id,
+            &paragraph,
+            &ElementEdit::Update {
+                texts: vec![TextEdit {
+                    index: 0,
+                    text: "My own wording".into(),
+                }],
+                attributes: Default::default(),
+                style: None,
+            },
+        )
+        .unwrap();
+    assert!(same_area.apply_generation(&snapshot, &candidate, &[]).is_err());
 }
 
 #[test]

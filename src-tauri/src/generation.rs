@@ -35,6 +35,28 @@ fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+/// Resolve a candidate against the current project, merging edits made while it ran. The reply
+/// itself is validated against its frozen base; the merged sources are validated by the resolver.
+fn resolve_current(
+    view: &GenerationJobView,
+    project: &Project,
+) -> NativeResult<desegni_core::ResolvedGeneration> {
+    let candidate = view
+        .candidate
+        .as_ref()
+        .ok_or("The candidate is unavailable.")?;
+    let resolved = desegni_core::resolve_edits_during_generation(
+        view.request_requirements(),
+        candidate,
+        project,
+    )
+    .map_err(message)?;
+    candidate
+        .validate(view.request_requirements(), &resolved.base)
+        .map_err(message)?;
+    Ok(resolved)
+}
+
 #[cfg(all(debug_assertions, feature = "native-tests"))]
 fn capture_benchmark_output(
     directory: &Path,
@@ -1336,7 +1358,7 @@ impl GenerationService {
             return self.persist(record).map(Some);
         }
         if record.view.status == JobStatus::Ready
-            && let Err(error) = record.view.request_requirements().validate_current(project)
+            && let Err(error) = resolve_current(&record.view, project)
         {
             record.view.status = JobStatus::Blocked;
             record.view.message = format!(
@@ -1359,16 +1381,7 @@ impl GenerationService {
                 .candidate
                 .as_ref()
                 .is_some_and(|candidate| candidate.can_apply(record.view.request_requirements()))
-            && record
-                .view
-                .request_requirements()
-                .validate_current(project)
-                .is_ok()
-            && record.view.candidate.as_ref().is_some_and(|candidate| {
-                candidate
-                    .validate(record.view.request_requirements(), project)
-                    .is_ok()
-            })
+            && resolve_current(&record.view, project).is_ok()
         {
             record.view.status = JobStatus::Ready;
             record.view.message = "Result ready to apply.".into();
@@ -2244,11 +2257,21 @@ impl GenerationService {
                     Ok(candidate)
                 }) {
                     Ok(candidate) => {
-                        let stale = current
+                        let resolved = current
                             .filter(|project| project.id == original.id)
-                            .and_then(|project| {
-                                record.view.requirements.validate_current(project).err()
+                            .map(|project| {
+                                desegni_core::resolve_edits_during_generation(
+                                    &record.view.requirements,
+                                    &candidate,
+                                    project,
+                                )
                             });
+                        let merged = resolved.as_ref().is_some_and(|resolved| {
+                            resolved.as_ref().is_ok_and(|resolved| resolved.merged)
+                        });
+                        let stale = resolved
+                            .as_ref()
+                            .and_then(|resolved| resolved.as_ref().err());
                         // A sequential part is complete when its own reply validated; the merged
                         // result decides whether anything can be applied.
                         let ready = if record.view.batches.is_empty() {
@@ -2256,6 +2279,15 @@ impl GenerationService {
                         } else {
                             candidate.is_ready()
                         };
+                        if merged && ready && stale.is_none() {
+                            record.view.validation_events.push(desegni_core::ValidationEvent {
+                                kind: "mergedEdits".into(),
+                                disposition: "normalised".into(),
+                                region_id: None,
+                                message: "Merged with your edits made during generation."
+                                    .into(),
+                            });
+                        }
                         record.view.status = if ready && stale.is_none() {
                             JobStatus::Ready
                         } else {

@@ -25,6 +25,7 @@ swc_html_ast = { version = "=26.0.0", default-features = false }
 swc_html_parser = { version = "=26.1.0", default-features = false }
 
 url = "=2.5.8"
+diffy = "0.5"
 
 [lints]
 workspace = true
