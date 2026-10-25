@@ -26,7 +26,7 @@ import type { LiveHistoryAction } from './liveBar';
 import { liveFrame, liveVisibility, type LiveDevice } from './liveFrame';
 import { overlayPlacement, placeOverlays, type CollectedFrame } from './previewFrames';
 import { shownSelectionRects } from './previewMeasurement';
-import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
+import { freehandArea, pointInRegion, alignmentLines, elementResizeRect, elementToolbarPosition, selectionLabelPosition, attachedRequestRect, clamp, clientToCanvas, DEFAULT_GRID, expandWorkspace, geometryForGesture, gridSteps, workspaceWindow, keyboardRectChange, percent, percentageTicks, pixelTicks, requestAt, requestPlacement, sameBounds, sameRect, intersectsWorkspace, clipToWorkspace, validWorkspace, MIN_ZOOM, wheelZoom, zoomOrigin, type CanvasGridSettings, type GeometryGesture, type Point, type RectChange, type WorkspaceBounds, type ResizeCorner } from './canvasGeometry';
 import type { AcrossPagesChange, AcrossPagesMatch, DocumentTarget, ElementBounds, ElementDetails, ElementEdit, ElementSelection, ElementTarget, ElementStyleEdit, ElementVisual, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, Page, PageSelection, Rect, Region, RegionShape, Viewport } from './types';
 import { RegionOutline } from './RegionOutline';
 import { FloatingBar } from './FloatingBar';
@@ -58,10 +58,6 @@ function windowStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSProp
 function paintStyle(rect: Rect, bounds: WorkspaceBounds, zoom: number): CSSProperties {
   const clipped = clipToWorkspace(rect, bounds);
   return clipped ? viewStyle(clipped, { x: bounds.left, y: bounds.top }, zoom) : { visibility: 'hidden', left: 0, top: 0, width: 0, height: 0 };
-}
-
-function requestPromptRect(rect: Rect, zoom: number): Rect {
-  return { x: rect.x, y: rect.y + rect.height + 10 / zoom, width: Math.max(260 / zoom, Math.min(rect.width, 420 / zoom)), height: 112 / zoom };
 }
 
 // The live layer depends on the page's code and viewport, never on its requests. Typing a
@@ -1530,7 +1526,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const occupied = useMemo(() => element ? site.current?.occupied(element.element) ?? [] : [], [element, acceptedVersion]);
   const inViewport = (rect: Rect): Rect => ({ x: (rect.x - bounds.left) * zoom - measurements.left + inset.x, y: (rect.y - bounds.top) * zoom - measurements.top + inset.y, width: rect.width * zoom, height: rect.height * zoom });
   const selectedRequest = page.regions.find(item => item.id === selected && !item.completed);
-  const shapedPrompt = selectedRequest?.shape && selectedRequest.shape.kind !== 'rect' ? inViewport({ ...requestPromptRect(preview ?? selectedRequest.rect, zoom), height: Math.max(160, measurements.height * .55) / zoom }) : null;
+  const shapedPrompt = selectedRequest?.shape && selectedRequest.shape.kind !== 'rect' ? inViewport(attachedRequestRect(preview ?? selectedRequest.rect, zoom, frameViewport, Math.max(160, measurements.height * .55) / zoom)) : null;
   const occupiedInViewport = [...occupied.map(inViewport), ...(shapedPrompt ? [shapedPrompt] : [])];
   const toolbarRect = element ? unionRect([element.rect, ...extras.map(item => item.rect)]) : selectedRequest?.rect;
   const toolbarPoint = toolbarRect ? elementToolbarPosition(inViewport(toolbarRect), { x: toolbarSize.width, y: toolbarSize.height }, { x: inset.x, y: inset.y, width: measurements.width, height: measurements.height }, occupiedInViewport) : null;
@@ -1714,7 +1710,7 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           {liveRequests && page.regions.map((region, index) => {
             if (region.completed) return null;
             const rect = gesture.current?.region?.id === region.id && preview ? preview : region.rect;
-            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} wholePage={isWholePage(region, page)} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0} badgeTop={requestBadgeTops.get(region.id)}
+            return <RequestBox reports={archiveReports[`${projectId}:${region.id}`] ?? []} key={region.id} wholePage={isWholePage(region, page)} region={region} number={index + 1} rect={rect} bounds={bounds} zoom={zoom} viewport={frameViewport} maxHeight={Math.max(160, measurements.height * 0.55)} selected={selected === region.id} focus={focusRequest === region.id} focusToken={requestFocus.id === region.id ? requestFocus.serial : 0} badgeTop={requestBadgeTops.get(region.id)}
               pages={pages} hostPageId={page.id} layer={requestRanks.get(region.id)!} controlsLayer={overlayLayer + 1} stale={stale.has(region.id)} repickNow={() => { deselectElement(); setRepicking(region.id); }} removeNow={() => remove(region.id)} attach={attach ? (files, links) => attach(region.id, files, links) : undefined} detach={detach ? id => detach(region.id, id) : undefined} select={() => { deselectElement(); select(region.id); }} begin={begin} keyboard={keyboard} change={patch => changeRequest(region.id, patch)} />;
           })}
           {element && !liveView && <div className="element-selection direct-selection" data-testid="direct-element-selection" data-selector={element.element.selector} data-element-id={element.element.id} data-source-hash={element.element.sourceSha256} style={{ ...paintStyle(element.rect, bounds, zoom), zIndex: overlayLayer + 1 }} role="group" aria-label="Selected element bounds">
@@ -1824,10 +1820,10 @@ function Ruler({ axis, unit, start, length, reference, zoom, cursor, selection }
   </div>;
 }
 
-function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rect, bounds, zoom, maxHeight, selected, focus, focusToken, badgeTop, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
+function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rect, bounds, zoom, viewport, maxHeight, selected, focus, focusToken, badgeTop, layer, controlsLayer, select, begin, keyboard, change, stale = false, repickNow, removeNow, attach, detach }: {
   reports: import('./types').ArchiveReport[]; wholePage: boolean; pages: Page[]; hostPageId: string;
   stale?: boolean; repickNow?: () => void; removeNow?: () => void; attach?: (files: File[], links: string[]) => void; detach?: (attachmentId: string) => void;
-  region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; badgeTop?: number; layer: number; controlsLayer: number; select: () => void;
+  region: Region; number: number; rect: Rect; bounds: WorkspaceBounds; zoom: number; viewport: Rect; maxHeight: number; selected: boolean; focus: boolean; focusToken: number; badgeTop?: number; layer: number; controlsLayer: number; select: () => void;
   begin: (event: PointerEvent, kind: Gesture['kind'], region?: Region) => void;
   keyboard: (event: KeyboardEvent, region?: Region, resize?: boolean) => void; change: (patch: RequestPatch) => Promise<Region>;
 }) {
@@ -1853,7 +1849,7 @@ function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rec
   const framed = !!region.frameTarget;
   const attached = target || framed;
   const shaped = !target && !!region.shape && region.shape.kind !== 'rect';
-  const promptRect = requestPlacement(attached || shaped ? requestPromptRect(rect, zoom) : rect, zoom);
+  const promptRect = requestPlacement(attached || shaped ? attachedRequestRect(rect, zoom, viewport) : rect, zoom);
   useLayoutEffect(() => {
     const node = text.current; if (!node) return;
     const old = node.style.height; node.style.height = '0px'; const style = getComputedStyle(node);
@@ -1867,7 +1863,9 @@ function RequestBox({ reports, wholePage, region, number, pages, hostPageId, rec
   const hasMore = fullHeight > collapseHeight;
   useLayoutEffect(() => { if (attached && hasMore && document.activeElement === text.current) setExpanded(true); }, [attached, hasMore, draft]);
   const displayHeight = expanded ? fullHeight : Math.min(collapseHeight, fullHeight);
-  const shown = { ...promptRect, height: (displayHeight + (hasMore ? 30 : 0)) / zoom };
+  const cardHeight = (displayHeight + (hasMore ? 30 : 0)) / zoom;
+  // Placement uses the card's displayed height, so a card that had to move up stays fully in view.
+  const shown = { ...(attached || shaped ? attachedRequestRect(rect, zoom, viewport, cardHeight) : promptRect), height: cardHeight };
   // Only placement controls are clipped to the workspace. The card grows below
   // its text without changing the area's geometry or clipping wrapped attachments.
   const painted = clipToWorkspace(shown, bounds);

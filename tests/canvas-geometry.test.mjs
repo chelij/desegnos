@@ -13,7 +13,7 @@ try {
     '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/canvasGeometry.ts', 'src/shortcuts.ts', 'src/layerOrder.ts', 'src/wholePageScope.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { pointInEllipse, pointInPolygon, pointInRegion, absolutePoints, relativePoints, simplifyFreehand, freehandArea, resizedElementSize, elementResizeRect, clientToCanvas, geometryForGesture, gridSteps, keyboardRectChange, rectDelta, requestAt, requestPlacement,
-    workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, selectionLabelPosition, elementToolbarPosition, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom, zoomLabel } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
+    workspaceWindow, expandWorkspace, percent, percentageTicks, pixelTicks, selectionLabelPosition, elementToolbarPosition, attachedRequestRect, alignmentLines, intersectsWorkspace, clipToWorkspace, validWorkspace, wheelZoom, zoomOrigin, steppedZoom, zoomLabel } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
   const { editorShortcut } = await import(pathToFileURL(join(temporary, 'shortcuts.js')).href);
   const { reorderedLayers } = await import(pathToFileURL(join(temporary, 'layerOrder.js')).href);
   const { isWholePage } = await import(pathToFileURL(join(temporary, 'wholePageScope.js')).href);
@@ -328,6 +328,18 @@ try {
     assert.deepEqual(selectionLabelPosition(area, size, viewport, handles), { x: 200, y: 122 });
     // A short area must not allow a clamped label back inside its text box.
     assert.equal(selectionLabelPosition({ x: 0, y: 0, width: 336, height: 600 }, size, viewport), null);
+  });
+  await test('attached request cards open below short elements and stay inside the visible canvas for tall ones', () => {
+    const viewport = { x: 0, y: 0, width: 1000, height: 700 };
+    assert.deepEqual(attachedRequestRect({ x: 200, y: 100, width: 300, height: 100 }, 1, viewport), { x: 200, y: 210, width: 300, height: 112 });
+    // A tall element pushes the below-element spot past the bottom edge; the card opens beside it, level with its visible top.
+    assert.deepEqual(attachedRequestRect({ x: 200, y: 100, width: 300, height: 2000 }, 1, viewport), { x: 510, y: 100, width: 300, height: 112 });
+    assert.deepEqual(attachedRequestRect({ x: 200, y: -400, width: 300, height: 2000 }, 1, viewport, 300), { x: 510, y: 0, width: 300, height: 300 });
+    assert.deepEqual(attachedRequestRect({ x: 600, y: 100, width: 390, height: 2000 }, 1, viewport), { x: 200, y: 100, width: 390, height: 112 });
+    // No room on either side: the card sits on the element, inside the view.
+    assert.deepEqual(attachedRequestRect({ x: 0, y: 100, width: 1000, height: 2000 }, 1, viewport), { x: 0, y: 110, width: 420, height: 112 });
+    // Off-screen elements and narrow elements clamp both axes into view without changing the area.
+    assert.deepEqual(attachedRequestRect({ x: 900, y: -500, width: 50, height: 50 }, 1, viewport), { x: 740, y: 0, width: 260, height: 112 });
   });
   await test('request text boxes stay readable at every zoom without being constrained to mobile screen width', () => {
     for (const zoom of [0.25, 0.5, 0.75, 1, 1.5, 2]) {

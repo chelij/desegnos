@@ -154,6 +154,19 @@ export function requestAt(point: Point, zoom: number): Rect {
   return requestPlacement({ x: point.x, y: point.y, width: 320 / zoom, height: 160 / zoom }, zoom);
 }
 
+// An attached card opens just below its element. When a tall element pushes that spot
+// past the visible canvas, it opens beside the element (right, then left) level with its
+// visible top, or on the element when neither side has room. The area never moves.
+export function attachedRequestRect(rect: Rect, zoom: number, viewport: Rect, height = 112 / zoom): Rect {
+  const width = Math.max(260 / zoom, Math.min(rect.width, 420 / zoom)), gap = 10 / zoom;
+  const place = (value: number, start: number, span: number, size: number) => span > 0 ? clamp(value, start, Math.max(start, start + span - size)) : value;
+  const below = rect.y + rect.height + gap;
+  if (viewport.height <= 0 || below + height <= viewport.y + viewport.height) return { x: place(rect.x, viewport.x, viewport.width, width), y: place(below, viewport.y, viewport.height, height), width, height };
+  const right = rect.x + rect.width + gap, left = rect.x - gap - width;
+  const x = right + width <= viewport.x + viewport.width ? right : left >= viewport.x ? left : place(rect.x, viewport.x, viewport.width, width);
+  return { x, y: place(Math.max(rect.y, viewport.y) + (x === right || x === left ? 0 : gap), viewport.y, viewport.height, height), width, height };
+}
+
 // Keep browser scroll coordinates small. Rebase the window around the camera
 // instead of growing a DOM element across the entire logical canvas.
 export function workspaceWindow(origin: Point, visible: Point): WorkspaceBounds {
