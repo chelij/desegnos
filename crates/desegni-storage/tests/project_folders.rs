@@ -290,7 +290,7 @@ fn import_plain_folder_preserves_original_bytes_pages_styles_scripts_and_picture
         .unwrap()
         .unwrap();
     assert!(rendered.html.contains("color: purple"));
-    assert!(rendered.html.contains("data:image/png;base64,"));
+    assert!(rendered.html.contains("/pictures/pixel.png"));
     assert!(rendered.html.contains("/about#team"));
     for (p, bytes) in &originals {
         assert_eq!(fs::read(temp.0.join(p)).unwrap(), *bytes, "source {p}");

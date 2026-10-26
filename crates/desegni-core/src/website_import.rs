@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 struct Importer<'a> {
     keep_scripts: bool,
+    /// Canvas documents load site files from the preview session, so they keep their paths.
+    inline_assets: bool,
     files: &'a BTreeMap<String, Vec<u8>>,
     routes: BTreeMap<String, String>,
     pictures: BTreeMap<String, (Uuid, std::sync::Arc<str>)>,
@@ -102,6 +104,9 @@ impl Importer<'_> {
             "css" => "text/css",
             _ => return Ok(value.into()),
         };
+        if !self.inline_assets {
+            return Ok(format!("/{path}{suffix}"));
+        }
         let transformed;
         let bytes = if extension == "css" {
             ensure(
@@ -453,6 +458,7 @@ pub(crate) fn import_website_pages(
         .collect();
     let importer = Importer {
         keep_scripts: false,
+        inline_assets: true,
         files,
         routes,
         pictures,
@@ -568,6 +574,7 @@ impl LivePage {
     fn render(&self) -> Result<Arc<[u8]>> {
         let importer = Importer {
             keep_scripts: true,
+            inline_assets: true,
             files: &self.render,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -725,28 +732,47 @@ fn insert_page_script(html: &mut String, tag: &str) {
 
 impl Project {
     pub fn website_files(&self) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
+        self.website_source_files(|_, encoded| self.decode_site_file(encoded))
+    }
+
+    /// Canvas documents only read HTML, CSS, and scripts as text; other files just need a path.
+    fn website_canvas_files(&self) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
+        self.website_source_files(|path, encoded| {
+            if preview_text_path(path) {
+                self.decode_site_file(encoded)
+            } else {
+                Ok(Vec::new())
+            }
+        })
+    }
+
+    fn decode_site_file(&self, encoded: &str) -> Result<Vec<u8>> {
+        let value = self
+            .resolve_site_content(&SiteContent {
+                html: encoded.to_string(),
+                css: String::new(),
+                javascript: String::new(),
+            })?
+            .html;
+        let value = value
+            .strip_prefix("data:")
+            .and_then(|v| v.split_once(";base64,"))
+            .map_or(value.as_str(), |(_, v)| v);
+        STANDARD
+            .decode(value)
+            .map_err(|_| Error("Invalid imported website resource.".into()))
+    }
+
+    fn website_source_files(
+        &self,
+        decode: impl Fn(&str, &str) -> Result<Vec<u8>>,
+    ) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
         let Some(site) = &self.website else {
             return Ok(None);
         };
         let mut files = BTreeMap::new();
         for (path, encoded) in &site.files {
-            let value = self
-                .resolve_site_content(&SiteContent {
-                    html: encoded.to_string(),
-                    css: String::new(),
-                    javascript: String::new(),
-                })?
-                .html;
-            let value = value
-                .strip_prefix("data:")
-                .and_then(|v| v.split_once(";base64,"))
-                .map_or(value.as_str(), |(_, v)| v);
-            files.insert(
-                path.clone(),
-                STANDARD
-                    .decode(value)
-                    .map_err(|_| Error("Invalid imported website resource.".into()))?,
-            );
+            files.insert(path.clone(), decode(path, encoded)?);
         }
         for page in self.pages.iter().filter(|p| p.included) {
             if let Some(content) = &page.content {
@@ -801,6 +827,7 @@ impl Project {
         };
         let importer = Importer {
             keep_scripts: true,
+            inline_assets: true,
             files: &files,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -1024,7 +1051,7 @@ impl Project {
     }
     /// Rendering changes are disposable; the editor source and saved resources remain intact.
     pub fn website_canvas_content(&self, page: &Page) -> Result<Option<SiteContent>> {
-        let Some(files) = self.website_files()? else {
+        let Some(files) = self.website_canvas_files()? else {
             return Ok(None);
         };
         let site = self.website.as_ref().expect("website files");
@@ -1042,6 +1069,7 @@ impl Project {
             .collect();
         let importer = Importer {
             keep_scripts: false,
+            inline_assets: false,
             files: &files,
             routes,
             pictures: BTreeMap::new(),
@@ -1181,6 +1209,7 @@ mod tests {
         let render = inline_files(&static_files);
         let importer = Importer {
             keep_scripts: true,
+            inline_assets: true,
             files: &render,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -1189,6 +1218,69 @@ mod tests {
             let (_, content) = importer.page(source).unwrap();
             assert_eq!(content.html.into_bytes(), body(&eager[source]), "{source}");
         }
+    }
+
+    fn media_files() -> BTreeMap<String, Vec<u8>> {
+        BTreeMap::from([
+            ("index.html".into(), b"<!doctype html><html><head><link rel='stylesheet' href='site.css'></head><body><img src='images/photo.png'><p style=\"background:url('images/tile.png')\"></p></body></html>".to_vec()),
+            ("site.css".into(), b"body{background:url(images/bg.png)}".to_vec()),
+            ("images/photo.png".into(), b"photo".to_vec()),
+            ("images/bg.png".into(), b"bg".to_vec()),
+            ("images/tile.png".into(), b"tile".to_vec()),
+        ])
+    }
+
+    fn media_site() -> Project {
+        crate::import_website_files("Website", &media_files()).unwrap()
+    }
+
+    #[test]
+    fn canvas_content_references_site_assets_by_path() {
+        let project = media_site();
+        let page = project.page(project.home_page_id).unwrap();
+        let content = project.website_canvas_content(page).unwrap().unwrap();
+        for reference in ["/images/photo.png", "/images/bg.png", "/images/tile.png"] {
+            assert!(
+                content.html.contains(reference),
+                "{reference} in {}",
+                content.html
+            );
+        }
+        assert!(!content.html.contains("data:image/"), "{}", content.html);
+    }
+
+    #[test]
+    fn canvas_content_does_not_decode_binary_site_files() {
+        let mut project = media_site();
+        project
+            .website
+            .as_mut()
+            .unwrap()
+            .files
+            .insert("images/photo.png".into(), "not base64!".into());
+        assert!(project.website_files().is_err());
+        let page = project.page(project.home_page_id).unwrap();
+        let content = project.website_canvas_content(page).unwrap().unwrap();
+        assert!(content.html.contains("/images/photo.png"));
+    }
+
+    #[test]
+    fn inline_imports_still_embed_site_assets() {
+        let files = media_files();
+        let importer = Importer {
+            keep_scripts: true,
+            inline_assets: true,
+            files: &files,
+            routes: BTreeMap::new(),
+            pictures: BTreeMap::new(),
+        };
+        let (_, content) = importer.page("index.html").unwrap();
+        assert!(
+            content.html.contains("data:image/png;base64,"),
+            "{}",
+            content.html
+        );
+        assert!(!content.html.contains("/images/"), "{}", content.html);
     }
 
     #[test]

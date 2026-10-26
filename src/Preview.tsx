@@ -36,6 +36,23 @@ export type ConstrainedFrame = { node: HTMLIFrameElement; document: Document; ta
 export type CanvasPreviewHandle = { liveHistory: (action: LiveHistoryAction) => void; frameOverlays: () => FrameView; hideStaticFrames: (keys: readonly string[]) => void; frames: () => EditableFrame[]; measuredElements: () => ElementSelection[]; previewImage: (target: ElementTarget, src: string) => boolean; layers: () => SiteLayer[]; layerStyles: (target: ElementTarget, direction: LayerDirection) => ElementStyleEdit[] | null; copyStyles: (target: ElementTarget) => ElementStyleEdit[]; source: () => string | null; sourceOf: (target: ElementTarget) => string | null; find: (target: ElementTarget) => ElementSelection | null; contains: (target: ElementTarget) => boolean; visual: (target: ElementTarget) => ElementVisual | null; elementsWithin: (rect: Rect) => ElementSelection[]; similar: (target: ElementTarget) => ElementSelection[]; textAt: (x: number, y: number) => InlineText | null; occupied: (target: ElementTarget) => Rect[]; beginMove: (target: ElementTarget) => ElementMover | null; beginResize: (target: ElementTarget, corner: ResizeCorner) => ElementResizer | null; pick: (x: number, y: number) => ElementSelection | null; imageAt: (x: number, y: number) => ElementSelection | null; foundSource: (target: ElementTarget) => string | null; found: () => ElementSelection[]; placeholders: () => ElementSelection[]; next: (parent?: boolean, target?: ElementTarget) => ElementSelection | null };
 const identityMapping: FrameMapping = { frame: { x: 0, y: 0, width: 0, height: 0 }, scaleX: 1, scaleY: 1, insetX: 0, insetY: 0, scrollX: 0, scrollY: 0 };
 function delay(ms: number) { return new Promise<void>(resolve => setTimeout(resolve, ms)); }
+// WebKitGTK does not always fire load for a srcdoc frame nested in a srcdoc document, which
+// left every edit waiting out the 4 s fallback; the new document completing counts as loaded.
+function frameLoaded(node: HTMLIFrameElement, timeout = 4000) {
+  const previous = node.contentDocument;
+  return new Promise<void>(resolve => {
+    const started = performance.now();
+    const finish = () => { node.removeEventListener('load', finish); resolve(); };
+    node.addEventListener('load', finish);
+    const poll = () => {
+      const doc = node.contentDocument;
+      if (doc && doc !== previous && doc.URL === 'about:srcdoc' && doc.readyState === 'complete') finish();
+      else if (performance.now() - started >= timeout) finish();
+      else setTimeout(poll, 16);
+    };
+    setTimeout(poll, 16);
+  });
+}
 function paints(count: number) { return new Promise<void>(resolve => { let left = count; const step = () => { if (--left <= 0) resolve(); else requestAnimationFrame(step); }; requestAnimationFrame(step); }); }
 
 export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
@@ -543,9 +560,9 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       node.removeAttribute('src');
       node.setAttribute('sandbox', 'allow-same-origin');
       setLiveSource(node, spec, descriptor);
-      const loaded = new Promise<void>(resolve => node.addEventListener('load', () => resolve(), { once: true }));
+      const loaded = frameLoaded(node);
       node.setAttribute('srcdoc', staticFrameDocument(spec.content, frameDocumentBase(descriptor, spec.path ?? null)));
-      await Promise.race([loaded, delay(4000)]);
+      await loaded;
       const inner = node.contentDocument;
       if (!inner || inner.URL !== 'about:srcdoc') return;
       node.dataset.desegnosFrameHash = spec.sourceSha256;
@@ -583,10 +600,10 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     if (Math.abs(scaleX - 1) > 1e-4 || Math.abs(scaleY - 1) > 1e-4) { css.transform = `scale(${scaleX}, ${scaleY})`; css.transformOrigin = 'top left'; }
     css.border = '0'; css.margin = '0'; css.padding = '0'; css.pointerEvents = 'none';
     css.visibility = 'hidden'; css.zIndex = '2147483647'; css.background = '#fff';
-    const loaded = new Promise<void>(resolve => staging.addEventListener('load', () => resolve(), { once: true }));
     doc.documentElement.append(staging);
+    const loaded = frameLoaded(staging);
     staging.setAttribute('srcdoc', html);
-    await Promise.race([loaded, delay(4000)]);
+    await loaded;
     const fresh = staging.contentDocument;
     if (fresh) await settleInner(fresh);
     await paints(2);
@@ -595,9 +612,9 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     const previousPriority = node.style.getPropertyPriority('visibility');
     staging.style.visibility = 'visible';
     node.style.setProperty('visibility', 'hidden');
-    const reloaded = new Promise<void>(resolve => node.addEventListener('load', () => resolve(), { once: true }));
+    const reloaded = frameLoaded(node);
     node.setAttribute('srcdoc', html);
-    await Promise.race([reloaded, delay(4000)]);
+    await reloaded;
     if (node.contentDocument) await settleInner(node.contentDocument);
     staging.remove();
     if (previousVisibility) node.style.setProperty('visibility', previousVisibility, previousPriority); else node.style.removeProperty('visibility');

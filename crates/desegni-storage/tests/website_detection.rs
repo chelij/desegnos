@@ -111,7 +111,7 @@ fn base_href_root_assets_and_cdn_are_preserved_and_resolved_only_for_canvas() {
         .unwrap()
         .unwrap();
     assert!(canvas.html.contains("body{color:red}"));
-    assert!(canvas.html.contains("data:image/svg+xml;base64,"));
+    assert!(canvas.html.contains("src=\"/pixel.svg\""));
     assert!(canvas.html.contains("https://cdn.example.com/extra.css"));
     assert!(canvas.html.contains("href=\"/about\""));
 }

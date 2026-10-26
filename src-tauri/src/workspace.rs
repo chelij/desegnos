@@ -4482,7 +4482,7 @@ impl From<String> for RecentProjectOpenError {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_recent_project(
     window: tauri::WebviewWindow,
     state: WorkspaceState<'_>,
