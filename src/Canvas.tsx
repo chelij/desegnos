@@ -113,7 +113,9 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
   const [problemBusy, setProblemBusy] = useState(false);
   const [runtimeProblems, setRuntimeProblems] = useState<string[]>([]);
   useEffect(() => { setRuntimeProblems([]); }, [page.id]);
-  const problems = areaProblems(generation?.job ?? null, page);
+  // A restored job keeps its problems in the AI conversation; only this session's job calls out.
+  const announcedJob = generation?.owns ? generation.job ?? null : null;
+  const problems = areaProblems(announcedJob, page);
   const dismissProblem = (key: string) => setDismissedProblems(previous => [...previous, key]);
   async function applyProblem(regionId: string, draftId: string, key: string) {
     if (!generation?.job) return;
@@ -1652,11 +1654,11 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     onKeyDownCapture={event => { if (!(event.target instanceof Element && event.target.closest('.workspace-surface')) && event.code === 'Space' && !isTextInput(event.target) && !(event.target instanceof HTMLElement && event.target.closest('button, a, [role=button], .element-toolbar, .editor-menu')) && !event.ctrlKey && !event.metaKey && !event.altKey) { event.preventDefault(); panKey.current = true; setPanReady(true); } }}>
     <p className="sr-only" id="canvas-keyboard-help">Click a website element to select it. Shift, Control or Command click adds or removes a selection, up to 500 elements. Drag the selected element to move it; drag a corner to resize it. Double-click text to edit it in place. Enter saves text; Escape cancels. Ask AI in the right-click menu, or Ctrl or Command K, opens a change request. Double-click empty canvas to add a request. Select, Add request and Pan tools are in the floating canvas toolbar, with V, R and H shortcuts. In Add request, click to place a text box or drag to draw an area. Left-drag on empty space pans; Space or middle drag pans anywhere. Alt-drag on empty space selects everything the rectangle touches; add Shift to keep the current selection. Shift+drag draws an area. Ctrl or Command with the wheel zooms under the pointer. F2 opens local element settings. Arrow keys move an element one pixel; Shift moves ten. Enter selects the next element; Alt+Enter selects its parent. Ctrl or Command Shift A selects every item similar to the selected one. Also on pages in the element toolbar changes the element on the other pages that have it, and its inline list chooses which pages. Shift+Enter adds a request in view. Escape from a request focuses its move grip. Arrow keys on grips move or resize by the grid setting. Hold Alt for one-pixel changes. Delete on a grip removes its request. Home returns to the screen guide. Escape cancels a drag.</p>
     {(() => {
-      const key = `page:${generation?.job?.jobId ?? 'start'}:${page.id}`;
-      const outcome = jobOutcome(generation?.job ?? null, id => page.regions.find(region => region.id === id)?.prompt);
+      const key = `page:${announcedJob?.jobId ?? 'start'}:${page.id}`;
+      const outcome = jobOutcome(announcedJob, id => page.regions.find(region => region.id === id)?.prompt);
       const gap = outcome.blocked[0];
       const busy = problemBusy || !!generation?.operation || generation?.canStop;
-      const failed = (!problems.length && generation?.error) || (generation?.job && ['failed', 'unknown', 'blocked'].includes(generation.job.status) && !problems.length && !generation.job.drafts?.some(d => d.applied || d.dismissed) ? generationPageError(generation.job.message) : '');
+      const failed = (!problems.length && generation?.error) || (announcedJob && ['failed', 'unknown', 'blocked'].includes(announcedJob.status) && !problems.length && !announcedJob.drafts?.some(d => d.applied || d.dismissed) ? generationPageError(announcedJob.message) : '');
       if (runtimeProblems.length && !dismissedProblems.includes(`runtime:${key}`)) return <ProblemBanner message={runtimeError(runtimeProblems[0])} action={{ label: 'Fix with AI', disabled: aiDisabled, onClick: () => fixRuntimeErrors?.(runtimeProblems) }} dismiss={() => dismissProblem(`runtime:${key}`)} />;
       if (!failed || dismissedProblems.includes(key)) return null;
       if (gap) return <ProblemBanner message={gap.reason}

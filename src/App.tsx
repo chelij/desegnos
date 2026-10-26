@@ -38,7 +38,7 @@ import { FirstRunTips } from './Onboarding';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
 import type { WebsiteFolderSelection } from './types';
-import { pendingDrafts } from './generationDraftState';
+import { announcedDraftCount, announcesStatus } from './generationSession.js';
 import { GenerationLog } from './GenerationLog';
 import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './deletePreference';
 import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
@@ -180,6 +180,7 @@ function Editor() {
   const saveChoice = useRef<((choice: SaveChoice) => void) | null>(null);
   const saveFlight = useRef<Promise<WorkspaceView | null> | null>(null);
   const generationRef = useRef<GenerationJobView | null>(null);
+  const generationOwns = useRef(false);
 
   const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
   const refreshAiSettings = useCallback(async () => {
@@ -729,7 +730,7 @@ function Editor() {
     if (command === 'generation_draft' && (result as import('./types').DraftReview).workspace) accept((result as import('./types').DraftReview).workspace!);
     return result;
   })), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
-  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
+  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (generationOwns.current && workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
@@ -738,6 +739,7 @@ function Editor() {
   // Pages this result changed stay marked in the strip until the user keeps or undoes it.
   const changedPageIds = new Set(resultReview ? (generation.job?.candidate?.pages ?? []).map(item => item.pageId) : []);
   generationRef.current = generation.job;
+  generationOwns.current = generation.owns;
   useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
   useEffect(() => { setLivePath(page?.path ?? '/'); }, [live, page?.id]);
   async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
@@ -774,8 +776,8 @@ function Editor() {
     return () => window.removeEventListener('keydown', leave);
   }, []);
   useEffect(() => { if (generation.visible) { setShowLog(true); generation.close(); } }, [generation.visible]);
-  const draftCount = pendingDrafts(generation.job).length;
-  const showGenerationStatus = generation.stopped || working || !!generation.error || !!generation.job && (['prepared', 'blocked', 'failed', 'unknown', 'cancelled'].includes(generation.job.status) || generation.job.candidate?.regions.some(item => item.status === 'conflict'));
+  const draftCount = announcedDraftCount(generation.job, generation.owns);
+  const showGenerationStatus = !!generation.error || announcesStatus(generation.job, { owns: generation.owns, stopped: generation.stopped, working });
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
   const composeAccountId = composeJob ? composeJob.chatgptAccountId : aiSettings?.chatgpt.activeAccountId;

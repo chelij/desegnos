@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { native } from './api';
+import { ownsJob, type OwnedJob } from './generationSession.js';
 import type { GenerationJobView, WorkspaceView } from './types';
 
 export type GenerationCall = <T>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise<T>;
@@ -8,6 +9,8 @@ const describe = (error: unknown) => error instanceof Error ? error.message : St
 
 export function useGeneration(projectId: string | null, call: GenerationCall, applied: (view: WorkspaceView) => void, recorded?: () => Promise<void>) {
   const [job, setJob] = useState<GenerationJobView | null>(null);
+  // The job this app session created; a restored job never owns the automatic notices.
+  const [owned, setOwned] = useState<OwnedJob>(null);
   const [visible, setVisible] = useState(false);
   const [operation, setOperation] = useState<string | null>(null);
   const [operationStartedAt, setOperationStartedAt] = useState(0);
@@ -40,7 +43,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
   const elapsedSeconds = Number.isFinite(startedAt) && Number.isFinite(finishedAt) ? Math.max(0, Math.floor((finishedAt - startedAt) / 1000)) : null;
   useEffect(() => {
     let active = true;
-    const version = ++epoch.current; action.current += 1; setJob(null); setVisible(false); setOperation(null); setError(''); setRunning(false); setStopped(false); flow.current?.controller.abort(); flow.current = null;
+    const version = ++epoch.current; action.current += 1; setJob(null); setOwned(null); setVisible(false); setOperation(null); setError(''); setRunning(false); setStopped(false); flow.current?.controller.abort(); flow.current = null;
     if (projectId) void native<GenerationJobView | null>('get_generation', { projectId }).then(value => {
       if (active && context.current === projectId && version === epoch.current) { setJob(value); if (value && ['generating', 'ready', 'applying'].includes(value.status)) { automatic.current = value.jobId; } }
     }, error => { if (active && version === epoch.current) setError(describe(error)); });
@@ -72,7 +75,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const id = projectId;
     const version = ++epoch.current;
     const token = ++action.current; setOperationStartedAt(Date.now()); setOperation(label); setError('');
-    try { const value = await call<GenerationJobView>(command, args, signal); if (context.current === id && version === epoch.current) setJob(value); return value; }
+    try { const value = await call<GenerationJobView>(command, args, signal); if (context.current === id && version === epoch.current) { setJob(value); if (id) setOwned({ projectId: id, jobId: value.jobId }); } return value; }
     catch (error) { if (!signal?.aborted && context.current === id && version === epoch.current) setError(describe(error)); throw error; }
     finally { if (!signal?.aborted && context.current === id && token === action.current) setOperation(null); }
   }
@@ -170,7 +173,8 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
       throw error;
     }
   }
-  return { draftAction, repairDraft: (jobId: string, draftId: string) => prepare({ jobId, draftId }), job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
+  const owns = ownsJob(projectId, job, owned);
+  return { draftAction, owns, repairDraft: (jobId: string, draftId: string) => prepare({ jobId, draftId }), job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
     start: () => launch('start_generation', 'Starting generation…'),
     cancel,
     discard: () => perform('discard_generation', 'Discarding candidate…', args()),
