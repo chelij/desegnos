@@ -1500,19 +1500,15 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     measure(); const observer = new ResizeObserver(measure); observer.observe(node); return () => observer.disconnect();
   }, [!!element, !!selected, !!inlineText]);
   const visible = { x: bounds.left + measurements.left / zoom, y: bounds.top + measurements.top / zoom };
-  // Frames on screen get a live overlay; the rest wait until the canvas is scrolled to them.
+  // Frames on screen can offer Interact; none run merely because they are visible.
   const frameViewport = { x: visible.x, y: visible.y, width: measurements.width / zoom, height: measurements.height / zoom };
   const visibleFrames = useMemo(() => page.content && !liveView ? placeOverlays(frameView.frames, frameViewport) : [],
     [frameView, frameViewport.x, frameViewport.y, frameViewport.width, frameViewport.height, liveView, page.content]);
   const overlaySelection = element?.element.tag === 'iframe' && !extras.length ? visibleFrames.find(frame => frame.selector === element.element.selector) ?? null : null;
   const interacting = !!overlaySelection && interactingFrame === overlaySelection.key;
-  // External and unresolvable frames keep their live copy; an editable frame is still until
-  // Interact plays it, so its document can be picked and edited on the canvas.
-  const overlayFrames = useMemo(() => {
-    const frames = visibleFrames.filter(frame => !frame.editable);
-    if (interacting && overlaySelection && !frames.some(frame => frame.key === overlaySelection.key)) frames.push(overlaySelection);
-    return frames;
-  }, [visibleFrames, interacting, overlaySelection]);
+  // Every frame stays frozen while editing. Only an explicit Interact action
+  // mounts a running overlay, including external and runtime-only embeds.
+  const overlayFrames = useMemo(() => interacting && overlaySelection ? [overlaySelection] : [], [interacting, overlaySelection]);
   const frameSession = useLiveFrameSession(page.id, acceptedVersion, overlayFrames.length > 0);
   const liveOverlays = frameSession ? overlayFrames : [];
   const overlayKeys = liveOverlays.map(frame => frame.key).join('|');

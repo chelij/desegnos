@@ -1,14 +1,15 @@
+import { capturePreview, freezeSnapshot, SourceMapping } from './frozenPreview';
 import { Notice, ProblemBanner } from './ProblemBanner.js';
 import { userError, runtimeError } from './userErrors.js';
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { native } from './api';
-import { siteLayerTree, siteLayerStyles, siteCopyStyles, type SiteLayer } from './siteLayers';
+import { siteLayerTree, siteLayerStyles, type SiteLayer } from './siteLayers';
 import { translatedStyle } from './elementEditing';
 import { measurableDocument, needsReferenceMeasure, pendingFrameHeight, promotionHeight } from './previewMeasurement';
-import { hardenStaticFrames, staticBase, staticDocument, staticFrameDocument, staticPolicy } from './previewDocument';
+import { hardenStaticFrames, staticPolicy } from './previewDocument';
 import { liveCommand, liveLocation, type LiveHistoryAction } from './liveBar';
 import { collectFrame, frameKey, resolveFrameSource, type CollectedFrame } from './previewFrames';
-import { frameAt, frameContentRect, frameDocumentBase, frameDocumentSource, frameMapping, innerRectToPage, pageRectToInnerViewport, type EditableFrame, type FrameMapping } from './frameDocuments';
+import { frameAt, frameContentRect, frameDocumentSource, frameMapping, innerRectToPage, pageRectToInnerViewport, type EditableFrame, type FrameMapping } from './frameDocuments';
 import { documentKey } from './elementTargets';
 import { similarSelections, type ElementProfile } from './elementSelection';
 import { resizedElementSize, type ResizeCorner } from './canvasGeometry';
@@ -61,10 +62,12 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   content?: SiteContent; onReady?: (settled: boolean, revision: number | string) => void; referenceHeight?: number; onHeight?: (height: number) => void;
   onLiveLocation?: (path: string) => void; frameDocuments?: FrameDocumentView[];
 }>(function PreviewFrame({ pageId, jobId = null, draftId = null, runScripts = false, title, staticView = false, revision = 0, content, referenceHeight = 900, onHeight, onReady, onRuntimeProblems, fixRuntimeErrors, aiDisabled, observationsVersion, onLiveLocation, frameDocuments = [] }, ref) {
+  const host = useRef<HTMLDivElement>(null);
+  const sourceMapping = useRef(new SourceMapping()).current;
   const frame = useRef<HTMLIFrameElement>(null);
   const stagingFrame = useRef<HTMLIFrameElement>(null);
   const [extent, setExtent] = useState(referenceHeight);
-  type PreparedFrame = { descriptor: PreviewDescriptor; source: SiteContent | null; pageId: string; revision: number | string; runScripts: boolean; frames: ConstrainedFrame[] };
+  type PreparedFrame = { frozen?: string; descriptor: PreviewDescriptor; source: SiteContent | null; pageId: string; revision: number | string; runScripts: boolean; frames: ConstrainedFrame[] };
   const [visible, setVisible] = useState<PreparedFrame | null>(null);
   const descriptor = visible?.descriptor ?? null;
   const [pending, setPending] = useState<PreparedFrame | null>(null);
@@ -90,8 +93,6 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   const frameDocumentsRef = useRef(frameDocuments); frameDocumentsRef.current = frameDocuments;
   // Only documents fetched for this page may render here; a page switch must not reuse the last page's.
   const usableFrames = (documents: FrameDocumentView[]) => documents.filter(spec => !spec.pageId || spec.pageId === pageId);
-  const frameTicket = useRef(0);
-  const onReadyRef = useRef(onReady); onReadyRef.current = onReady;
   const invalidated = useRef(false);
   // The inline opacity we replaced while a static frame sits under its live overlay.
   const previousOpacity = useRef(new WeakMap<Element, string>()).current;
@@ -163,7 +164,9 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     if (!container.body?.contains(node) || !hash) return null;
     if (!exact) node = Element.prototype.closest.call(node, 'button, a, input, select, textarea, label, summary') ?? node;
     if (!container.body.contains(node) || !/^[A-Za-z][A-Za-z0-9-]{0,79}$/.test(node.localName)) return null;
-    const selector = structuralSelector(node, container.body); if (!selector) return null;
+    const original = sourceMapping.source(node);
+    if (!original) return null;
+    const selector = structuralSelector(original, original.ownerDocument.body); if (!selector) return null;
     let label = '';
     if (withLabel) {
       const walker = Document.prototype.createTreeWalker.call(container, node, NodeFilter.SHOW_TEXT);
@@ -174,7 +177,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       }
       label = node.getAttribute('aria-label') || label.trim() || node.getAttribute('alt') || node.getAttribute('title') || '';
     }
-    const id = node.getAttribute('data-desegnos-id');
+    const id = original.getAttribute('data-desegnos-id');
     return { node, target: { selector, tag: node.localName,
       label: Array.from(label.replace(/\s+/g, ' ').trim()).slice(0, 240).join(''), ...(id ? { id } : { sourceSha256: hash }), ...(framed ? { document: framed.target } : {}) } };
   }
@@ -199,7 +202,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       container = entry.document; hash = entry.hash;
     }
     if (!target.id && target.sourceSha256 !== hash) return null;
-    try { const node = Document.prototype.querySelector.call(container, target.id ? `[data-desegnos-id="${CSS.escape(target.id)}"]` : target.selector); return node && (target.id || node.localName === target.tag) ? node : null; } catch { return null; }
+    try { const node = target.id ? sourceMapping.find(container, `id:${target.id}`) : target.selector === 'body' ? container.body : sourceMapping.find(container, `selector:${target.selector}`); return node && sourceMapping.source(node) && (target.id || node.localName === target.tag) ? node : null; } catch { return null; }
   }
   function visual(target: ElementTarget): ElementVisual | null {
     const node = findNode(target); if (!node) return null;
@@ -236,6 +239,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     if (!hit.node || !selection || ['input', 'textarea', 'select', 'svg', 'body'].includes(selection.element.tag)) return null;
     const node = findNode(selection.element); if (!node) return null;
     const doc = node.ownerDocument; const point = hit.frame ? hit.point : { x, y };
+    if (!sourceMapping.textEditable(node)) return null;
     const nodes = textNodes(node);
     for (let index = 0; index < nodes.length; index++) {
       const text = nodes[index]; if (!text.data.trim()) continue;
@@ -431,8 +435,24 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       });
       return similarSelections(profile, items);
     },
-    layerStyles(target, direction) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteLayerStyles(node, direction, value => identify(value)?.target ?? null); },
-    copyStyles(target) { const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.'); return siteCopyStyles(node, value => identify(value)?.target ?? null); },
+    layerStyles(target, direction) {
+      const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.');
+      return siteLayerStyles(node, direction, value => identify(value)?.target ?? null)?.map(edit => {
+        const item = findNode(edit.target);
+        if (!item) throw new Error('The page changed. Select this layer again.');
+        return { ...edit, style: sourceMapping.style(item, item.getAttribute('style') ?? '', edit.style) };
+      }) ?? null;
+    },
+    copyStyles(target) {
+      const node = findNode(target); if (!node) throw new Error('The page changed. Select this layer again.');
+      // Copying a layer copies source markup and source styles. Runtime appearance
+      // must not become authored inline CSS through the clipboard either.
+      const original = sourceMapping.source(node); if (!original) return [];
+      const items = [original, ...original.querySelectorAll('*')];
+      if (items.length > 512) throw new Error('This layer is too large to copy at once. Copy a smaller group.');
+      return items.map(item => ({ target: { ...target, id: item.getAttribute('data-desegnos-id') ?? undefined,
+        selector: structuralSelector(item, item.ownerDocument.body) ?? '', tag: item.localName }, style: item.getAttribute('style') ?? '' }));
+    },
     visual,
     textAt,
     occupied,
@@ -442,7 +462,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       const framed = frameForNode(edit.node);
       const scale = framed ? mappingFor(framed) : { scaleX: 1, scaleY: 1 };
       const style = (x: number, y: number) => edit.offset(edit.original, x / scale.scaleX, y / scale.scaleY);
-      return { style, cancel: edit.restore, preview(x, y) { if (!findNode(target)) return null; edit.set(style(x, y)); return selected(edit.node, false, true); } };
+      return { style: (x, y) => sourceMapping.style(edit.node, edit.original, style(x, y)), cancel: edit.restore, preview(x, y) { if (!findNode(target)) return null; edit.set(style(x, y)); return selected(edit.node, false, true); } };
     },
     beginResize(target, corner) {
       const edit = transformEditor(target); if (!edit) return null;
@@ -488,7 +508,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
           return offset(css,x,y);
         } finally { restore(); }
       };
-      return { style, cancel:restore, preview(rect) { if (!findNode(target)) return null; set(style(rect)); return selected(node, false, true); } };
+      return { style: rect => sourceMapping.style(node, original, style(rect)), cancel:restore, preview(rect) { if (!findNode(target)) return null; set(style(rect)); return selected(node, false, true); } };
     },
     pick(x, y) { try { const hit = hitAt(x, y); const found = selected(hit.node, true); if (found && !(hit.frame && found.element.tag === 'body')) return found; return selected(measurable()?.elementFromPoint(x, y) ?? null, true); } catch { return null; } },
     // The picture under a point, even inside a link or button, for dropping image files.
@@ -534,7 +554,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
     const matches: FrameMatch[] = [];
     const authored = (node: HTMLIFrameElement) => node.getAttribute('data-desegnos-frame-src') ?? node.getAttribute('src') ?? '';
     for (const spec of documents) {
-      let index = spec.iframeId ? nodes.findIndex((node, at) => !used.has(at) && node.getAttribute('data-desegnos-id') === spec.iframeId) : -1;
+      let index = spec.iframeId ? nodes.findIndex((node, at) => !used.has(at) && sourceMapping.source(node)?.getAttribute('data-desegnos-id') === spec.iframeId) : -1;
       if (index < 0) index = nodes.findIndex((node, at) => !used.has(at) && authored(node) === spec.src);
       if (index < 0) continue;
       used.add(index);
@@ -554,18 +574,21 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   // Render framed documents as scriptless, same-origin srcdoc while the page is still hidden.
   async function prepareFrames(doc: Document, specs: FrameDocumentView[], descriptor: PreviewDescriptor): Promise<ConstrainedFrame[]> {
     const nodes = Array.from(doc.querySelectorAll('iframe')) as HTMLIFrameElement[];
-    const matches = matchFrames(nodes, specs);
+    const matches = matchFrames(nodes.filter(node => !!sourceMapping.source(node)), specs);
     await Promise.all(matches.map(async ({ node, spec }) => {
       node.setAttribute('data-desegnos-frame-src', node.getAttribute('data-desegnos-frame-src') ?? node.getAttribute('src') ?? '');
       node.removeAttribute('src');
       node.setAttribute('sandbox', 'allow-same-origin');
       setLiveSource(node, spec, descriptor);
-      const loaded = frameLoaded(node);
-      node.setAttribute('srcdoc', staticFrameDocument(spec.content, frameDocumentBase(descriptor, spec.path ?? null)));
-      await loaded;
+      // The captured nested document already contains its settled appearance.
+      // Never replace it with unexecuted source while preparing the frozen canvas.
+      if (!node.hasAttribute('srcdoc')) return;
+      if (node.contentDocument?.readyState !== 'complete') await frameLoaded(node);
+
       const inner = node.contentDocument;
       if (!inner || inner.URL !== 'about:srcdoc') return;
       node.dataset.desegnosFrameHash = spec.sourceSha256;
+      sourceMapping.bind(inner, spec.content.html, node.dataset.desegnosFrameLiveSrc || undefined);
       await settleInner(inner);
     }));
     return matches.flatMap(({ node, spec }) => {
@@ -574,80 +597,6 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       return [{ node, document: inner, target: spec.document, hash: spec.sourceSha256, selector: structuralSelector(node, doc.body) ?? '', liveSrc: node.dataset.desegnosFrameLiveSrc || null }];
     });
   }
-  // Replace one framed document in place, double-buffered: a hidden fixed copy loads over the
-  // frame, then the frame reloads behind it and the copy steps aside. The frame's box, and so
-  // the canvas selection, never moves and nothing flashes.
-  async function swapFrame(doc: Document, node: HTMLIFrameElement, spec: FrameDocumentView, descriptor: PreviewDescriptor, current: () => boolean): Promise<boolean> {
-    const html = staticFrameDocument(spec.content, frameDocumentBase(descriptor, spec.path ?? null));
-    const box = Element.prototype.getBoundingClientRect.call(node);
-    const style = computed(node);
-    const number = (value: string) => Number.parseFloat(value) || 0;
-    const scaleX = node.offsetWidth ? box.width / node.offsetWidth : 1;
-    const scaleY = node.offsetHeight ? box.height / node.offsetHeight : 1;
-    // The copy must cover the frame's content box, not its border and padding.
-    const insetX = number(style.borderLeftWidth) + number(style.paddingLeft);
-    const insetY = number(style.borderTopWidth) + number(style.paddingTop);
-    const width = Math.max(1, node.clientWidth - number(style.paddingLeft) - number(style.paddingRight));
-    const height = Math.max(1, node.clientHeight - number(style.paddingTop) - number(style.paddingBottom));
-    const staging = doc.createElement('iframe') as HTMLIFrameElement;
-    staging.setAttribute('sandbox', 'allow-same-origin');
-    staging.setAttribute('aria-hidden', 'true');
-    staging.setAttribute('tabindex', '-1');
-    staging.setAttribute('referrerpolicy', 'no-referrer');
-    const css = staging.style;
-    css.position = 'fixed'; css.left = `${box.left + insetX * scaleX}px`; css.top = `${box.top + insetY * scaleY}px`;
-    css.width = `${width}px`; css.height = `${height}px`;
-    if (Math.abs(scaleX - 1) > 1e-4 || Math.abs(scaleY - 1) > 1e-4) { css.transform = `scale(${scaleX}, ${scaleY})`; css.transformOrigin = 'top left'; }
-    css.border = '0'; css.margin = '0'; css.padding = '0'; css.pointerEvents = 'none';
-    css.visibility = 'hidden'; css.zIndex = '2147483647'; css.background = '#fff';
-    doc.documentElement.append(staging);
-    const loaded = frameLoaded(staging);
-    staging.setAttribute('srcdoc', html);
-    await loaded;
-    const fresh = staging.contentDocument;
-    if (fresh) await settleInner(fresh);
-    await paints(2);
-    if (!current()) { staging.remove(); return false; }
-    const previousVisibility = node.style.getPropertyValue('visibility');
-    const previousPriority = node.style.getPropertyPriority('visibility');
-    staging.style.visibility = 'visible';
-    node.style.setProperty('visibility', 'hidden');
-    const reloaded = frameLoaded(node);
-    node.setAttribute('srcdoc', html);
-    await reloaded;
-    if (node.contentDocument) await settleInner(node.contentDocument);
-    staging.remove();
-    if (previousVisibility) node.style.setProperty('visibility', previousVisibility, previousPriority); else node.style.removeProperty('visibility');
-    const inner = node.contentDocument;
-    return !!inner && inner.URL === 'about:srcdoc';
-  }
-  // A framed document that changed on disk re-renders alone; the page around it stays.
-  useEffect(() => {
-    if (!staticView || !frameDocumentsKey) return;
-    const doc = measurable();
-    if (!doc || !descriptor) return;
-    const ticket = ++frameTicket.current;
-    const current = () => ticket === frameTicket.current && measurable() === doc;
-    void (async () => {
-      const entries = frameEntries();
-      for (const { node, spec } of matchFrames(Array.from(doc.querySelectorAll('iframe')) as HTMLIFrameElement[], usableFrames(frameDocumentsRef.current))) {
-        if (!current()) return;
-        if (node.dataset.desegnosFrameHash === spec.sourceSha256) continue;
-        const swapped = await swapFrame(doc, node, spec, descriptor, current).catch(() => false);
-        if (!swapped || !current()) continue;
-        node.dataset.desegnosFrameHash = spec.sourceSha256;
-        setLiveSource(node, spec, descriptor);
-        const holder = shownFrames.current;
-        if (holder && holder.outer === doc && node.contentDocument) {
-          const existing = holder.frames.find(item => item.node === node);
-          const selector = structuralSelector(node, doc.body) ?? existing?.selector ?? '';
-          const entry: ConstrainedFrame = { node, document: node.contentDocument, target: spec.document, hash: spec.sourceSha256, selector, liveSrc: node.dataset.desegnosFrameLiveSrc || null };
-          if (existing) Object.assign(existing, entry); else if (entries.length < 64) holder.frames.push(entry);
-        }
-      }
-      if (current()) onReadyRef.current?.(true, revision);
-    })().catch(() => {});
-  }, [frameDocumentsKey, visible, staticView]);
   useEffect(() => { setObservations([]); }, [observationsVersion]);
   const rate = useRef({ started: 0, count: 0 });
   // Errors reported by the current load; null while a reload is pending.
@@ -655,12 +604,13 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   const stagedProblems = useRef<{ session: string; errors: string[] } | null>(null);
   useEffect(() => {
     let active = true;
+    const abort = new AbortController();
     let registered: string | null = null;
     setPending(null);
     // Keep the last errors until the reloaded page reports again, so the banner doesn't blink on every edit.
     setError(''); setLoading(true); reported.current = null;
     if (registeredVersion.current?.pageId !== pageId) setObservations([]);
-    void native<PreviewDescriptor>('create_preview', { pageId, jobId, draftId, runScripts }).then(async value => {
+    const debounce = setTimeout(() => { void native<PreviewDescriptor>('create_preview', { pageId, jobId, draftId, runScripts: runScripts || staticView }).then(async value => {
       if (!active) { void native('release_preview', { sessionId: value.sessionId }).catch(() => {}); return; }
       registered = value.sessionId;
       if (!validLocation(value, pageId)) {
@@ -673,13 +623,14 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
         const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map(byte => byte.toString(16).padStart(2, '0')).join('');
         if (digest !== value.sourceSha256) throw new Error('The page changed while opening its preview. Reopen the page.');
       }
+      const frozen = staticView && host.current ? freezeSnapshot(await capturePreview(value.url, value.sessionId, host.current, abort.signal)) : undefined;
       if (active) {
         stagedProblems.current = { session: value.sessionId, errors: [] };
-        setPending({ descriptor: value, source: value.content ?? content ?? null, pageId, revision, runScripts, frames: [] });
+        setPending({ frozen, descriptor: value, source: value.content ?? content ?? null, pageId, revision, runScripts, frames: [] });
       }
-    }).catch(error => { if (registered && registered !== visibleSession.current) void native('release_preview', { sessionId: registered }).catch(() => {}); if (active) { setError(error instanceof Error ? error.message : String(error)); setLoading(false); } });
-    return () => { active = false; if (registered && registered !== visibleSession.current) void native('release_preview', { sessionId: registered }).catch(() => {}); };
-  }, [pageId, jobId, draftId, runScripts, revision, retry]);
+    }).catch(error => { if (registered && registered !== visibleSession.current) void native('release_preview', { sessionId: registered }).catch(() => {}); if (active) { setError(error instanceof Error ? error.message : String(error)); setLoading(false); } }); }, registeredVersion.current?.pageId === pageId ? 180 : 0);
+    return () => { active = false; abort.abort(); clearTimeout(debounce); if (registered && registered !== visibleSession.current) void native('release_preview', { sessionId: registered }).catch(() => {}); };
+  }, [pageId, jobId, draftId, runScripts, staticView, revision, retry, frameDocumentsKey]);
   // The old session remains alive until its replacement is painted and committed.
   useEffect(() => () => { if (descriptor) void native('release_preview', { sessionId: descriptor.sessionId }).catch(() => {}); }, [descriptor]);
   useLayoutEffect(() => {
@@ -739,12 +690,12 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
   }, [staticView, extent]);
   const frames = [visible, pending].filter((item): item is PreparedFrame => !!item);
   const visibleExtent = visible ? { pageId: visible.pageId, extent } : null;
-  return <div style={staticView ? undefined : { position: 'relative' }} data-source-hash={descriptor?.sourceSha256 ?? undefined} data-preview-ready={staticView && !loading && !error && visible?.pageId === pageId && visible.revision === revision && readyDocument.current?.session === descriptor?.sessionId ? 'true' : undefined} className={staticView ? 'preview-frame static-preview' : 'preview-frame'}>
+  return <div ref={host} style={staticView ? undefined : { position: 'relative' }} data-source-hash={descriptor?.sourceSha256 ?? undefined} data-preview-ready={staticView && !loading && !error && visible?.pageId === pageId && visible.revision === revision && readyDocument.current?.session === descriptor?.sessionId ? 'true' : undefined} className={staticView ? 'preview-frame static-preview' : 'preview-frame'}>
     {loading && !staticView && !visible && <p role="status" className="preview-status">Preparing preview…</p>}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={!staticView ? { label: 'Retry preview', onClick: () => setRetry(value => value + 1) } : undefined} />}
     {frames.map(candidate => {
       const staging = candidate === pending;
-      const sourceDocument = staticView && candidate.source ? staticDocument(candidate.source.html, staticBase(candidate.descriptor)) : undefined;
+      const sourceDocument = staticView ? candidate.frozen : undefined;
       // The hidden frame is laid out at the extent the visible frame already has, so a
       // viewport-relative page inside it keeps the layout the canvas is showing.
       const frameHeight = staging ? pendingFrameHeight(visibleExtent, candidate.pageId, referenceHeight) : extent;
@@ -766,7 +717,7 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
               if (!doc?.head || !doc.body || doc.URL !== 'about:srcdoc' || doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content') !== staticPolicy) throw new Error('This page left its editable preview. Reopen the page to select elements.');
               // Frames render in the still canvas but never gain scripting.
               hardenStaticFrames(doc);
-              const style = Document.prototype.createElement.call(doc, 'style'); style.textContent = candidate.source.css; doc.head.append(style);
+              sourceMapping.bind(doc, candidate.source.html, candidate.descriptor.url);
               const still = Document.prototype.createElement.call(doc, 'style'); still.setAttribute('data-desegnos-editor-paused', ''); still.textContent = '*,*::before,*::after{animation-play-state:paused!important;transition:none!important}'; doc.head.append(still);
               // Editable framed documents replace their network frames before anything measures.
               const framedDocuments = await prepareFrames(doc, usableFrames(frameDocumentsRef.current), candidate.descriptor);
