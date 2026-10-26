@@ -100,7 +100,8 @@ export function installUsageLog() {
 }
 
 export function recordCommand(command: string, args: Record<string, unknown> | undefined, started: number, ok: boolean) {
-  if (QUIET.test(command)) return;
+  // Quiet reads are left out unless they fail: a failed read can still raise a visible error.
+  if (ok && QUIET.test(command)) return;
   const edit = (args?.command as { type?: string } | undefined)?.type;
   const detail = typeof edit === 'string' ? edit : undefined, ms = Math.round(performance.now() - started);
   // Typing in a request saves on every keystroke; repeats fold into one event with a count.
