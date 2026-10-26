@@ -207,13 +207,19 @@ pub fn recover_generation_reply(
                 };
                 if let Some(html) = generated["content"]["html"].as_str() {
                     let repaired = if snapshot.is_flexible() {
-                        repair_page_metadata(html, page, &mut events)
+                        repair_page_metadata(
+                            html,
+                            page,
+                            &project.framed_region_ids(page.id),
+                            &mut events,
+                        )
                     } else {
                         repair_mechanical_structure(
                             html,
                             page,
                             &targets,
                             &value_regions_implemented,
+                            &project.framed_region_ids(page.id),
                             &mut events,
                         )
                     };
@@ -275,11 +281,10 @@ pub fn recover_generation_reply(
     let text = serde_json::to_string(&value).map_err(|e| Error(e.to_string()))?;
     let mut candidate = GenerationCandidate::from_reply(&text, snapshot, project)?;
     for generated in &mut candidate.pages {
-        generated.content.html = repair_page_metadata(
-            &generated.content.html,
-            project.page(generated.page_id)?,
-            &mut events,
-        )?;
+        let page = project.page(generated.page_id)?;
+        let framed = project.framed_region_ids(page.id);
+        generated.content.html =
+            repair_page_metadata(&generated.content.html, page, &framed, &mut events)?;
     }
     candidate.validate_identity(snapshot)?;
     // Filter shared code even when HTML already validates. A model cannot authorize a
@@ -395,9 +400,10 @@ fn repair_mechanical_structure(
     page: &Page,
     targets: &[(Uuid, Uuid)],
     implemented: &std::collections::BTreeSet<Uuid>,
+    framed: &std::collections::BTreeSet<Uuid>,
     events: &mut Vec<ValidationEvent>,
 ) -> Result<String> {
-    let html = repair_page_metadata(html, page, events)?;
+    let html = repair_page_metadata(html, page, framed, events)?;
     let doc = crate::editing::parse(&html)?;
     let before = crate::editing::parse(page.content.as_ref().map_or("", |c| c.html.as_str()))?;
     let mut changed = false;
@@ -465,6 +471,7 @@ fn repair_mechanical_structure(
 pub(crate) fn repair_page_metadata(
     html: &str,
     page: &Page,
+    framed: &std::collections::BTreeSet<Uuid>,
     events: &mut Vec<ValidationEvent>,
 ) -> Result<String> {
     use std::collections::BTreeMap;
@@ -574,7 +581,8 @@ pub(crate) fn repair_page_metadata(
             let valid = if attr == ELEMENT_ID_ATTRIBUTE {
                 crate::stable_targets::valid_id(&id) && original.is_some()
             } else {
-                Uuid::parse_str(&id).is_ok_and(|id| page.regions.iter().any(|r| r.id == id))
+                Uuid::parse_str(&id)
+                    .is_ok_and(|id| framed.contains(&id) || page.regions.iter().any(|r| r.id == id))
             };
             for (index, node) in nodes.iter().enumerate() {
                 if index == keep && valid {

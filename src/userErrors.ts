@@ -18,6 +18,7 @@ export function generationError(reason: string, request = 'this request', affect
   const subject = request.trim().replace(/[\n\r]+/g, ' ').slice(0, 100).replace(/[.!?]+$/, '') || 'this request';
   if (/cannot be located|original source is unavailable|same styles or behavior|cannot be reconstructed|could not be decoded/i.test(reason)) return `The saved result for “${subject}” cannot be merged into this page.`;
   if (/\b(?:page|project|file|source) (?:was |has |had )?(?:been )?(?:changed|edited) (?:after|while|since|before)|\brevision\b|\bstale\b|edited after/i.test(reason)) return 'The page was edited after the AI made this draft.';
+  if (/\barea ids?\b/i.test(reason)) return "The AI's reply was incomplete. Try again.";
   if (/duplicate|(?:ids?|names?).*unique|unique.*(?:ids?|names?)|same.*(?:id|name)/i.test(reason)) return 'Two items ended up with the same name, so editing one could change the other.';
   if (/JSON|schema|parse|reply|response|format|writing mistake/i.test(reason)) return `The AI did not produce a usable page for “${subject}”.`;
   if (/dynamic|executable|script|JavaScript|shared behavior|CSS outside|CSS selector|stylesheet|sharedCss|outside|scope|another region|overlap/i.test(reason)) return `“${subject}” would also change ${affected ?? 'content outside this area'}.`;

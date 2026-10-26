@@ -33,6 +33,8 @@ try {
     assert.equal(job.message, diagnostic);
     assert.equal(generationError('Region script contains another region', 'Add scrolling chat', 'Box 20'), '“Add scrolling chat” would also change Box 20.');
     assert.equal(generationError('Editor IDs must be unique', 'Add chat'), 'Two items ended up with the same name, so editing one could change the other.');
+    assert.equal(generationError('The page contains invalid or duplicate area IDs.', 'Add chat'), "The AI's reply was incomplete. Try again.");
+    assert.equal(generationError('The draft contains invalid or duplicate area IDs. Copy code to keep it.'), "The AI's reply was incomplete. Try again.");
     assert.equal(generationError('CSS selector reaches outside its box'), '“this request” would also change content outside this area.');
     assert.equal(generationError('Region script cannot be parsed', 'Add chat'), 'The AI did not produce a usable page for “Add chat”.');
     assert.equal(generationError('Invalid candidate schema'), 'The AI did not produce a usable page for “this request”.');

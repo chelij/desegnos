@@ -564,6 +564,92 @@ fn flexible_framed_page_changes_are_not_reported_as_outside_changes() {
 }
 
 #[test]
+fn a_framed_page_reply_marks_its_request_inside_the_framed_document() {
+    let project = project(
+        GenerationMode::Fuzzy,
+        &[(PAGE_IFRAME, "framed/index.html")],
+        true,
+        true,
+    );
+    let framed_page = project.pages[1].id;
+    let document = DocumentTarget::Page {
+        page_id: framed_page,
+    };
+    let (project, region_id) = framed_request(project, PAGE_IFRAME, document);
+    let snapshot = project.prepare_requirements().unwrap();
+    let framed = |body: &str| {
+        vec![GeneratedPage {
+            page_id: framed_page,
+            content: site_content(&format!(
+                "<!doctype html>\n<html><body>{body}</body></html>"
+            )),
+        }]
+    };
+
+    let accepted = reply(
+        &project,
+        &snapshot,
+        framed(&format!(
+            "<main data-desegnos-region=\"{region_id}\"><h1>Framed page updated</h1></main>"
+        )),
+        vec![],
+    );
+    accepted.validate(&snapshot, &project).unwrap();
+    let drafts = retain_generation_drafts(
+        &serde_json::to_string(&accepted).unwrap(),
+        &snapshot,
+        &project,
+        None,
+        &[],
+    );
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(drafts[0].region_ids, vec![region_id]);
+    drafts[0].check_source(&project).unwrap();
+    let applied = project
+        .apply_generation_draft(&snapshot, &drafts[0])
+        .unwrap();
+    assert!(
+        applied
+            .page(project.home_page_id)
+            .unwrap()
+            .regions
+            .iter()
+            .any(|region| region.id == region_id && region.completed)
+    );
+
+    let unknown = Uuid::new_v4();
+    let error = reply(
+        &project,
+        &snapshot,
+        framed(&format!(
+            "<main data-desegnos-region=\"{unknown}\"><h1>Framed page updated</h1></main>"
+        )),
+        vec![],
+    )
+    .validate(&snapshot, &project)
+    .unwrap_err();
+    assert!(
+        error.0.contains("invalid or duplicate area IDs"),
+        "{error:?}"
+    );
+
+    let error = reply(
+        &project,
+        &snapshot,
+        framed(&format!(
+            "<main data-desegnos-region=\"{region_id}\"><p data-desegnos-region=\"{region_id}\">Again</p></main>"
+        )),
+        vec![],
+    )
+    .validate(&snapshot, &project)
+    .unwrap_err();
+    assert!(
+        error.0.contains("invalid or duplicate area IDs"),
+        "{error:?}"
+    );
+}
+
+#[test]
 fn an_authored_iframe_can_gain_its_editor_identity_for_a_framed_request() {
     let mut project = project(GenerationMode::Strict, &[], true, false);
     project.pages[0].content = Some(SiteContent {

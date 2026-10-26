@@ -86,9 +86,12 @@ pub fn retain_generation_drafts(
             if unchanged {
                 continue;
             }
+            let framed = id
+                .map(|id| project.framed_region_ids(id))
+                .unwrap_or_default();
             let region_ids: Vec<_> = targets
                 .iter()
-                .filter(|(p, _)| Some(*p) == id)
+                .filter(|(page_id, region_id)| Some(*page_id) == id || framed.contains(region_id))
                 .map(|(_, r)| *r)
                 .collect();
             let reason = events
@@ -226,12 +229,13 @@ impl GenerationDraft {
         let page = project.page(self.page_id.ok_or_else(|| {
             Error("This reply cannot be reconstructed. Copy code to keep it.".into())
         })?)?;
+        let framed = project.framed_region_ids(page.id);
         ensure(
             !self.region_ids.is_empty()
                 && self
                     .region_ids
                     .iter()
-                    .all(|id| page.regions.iter().any(|r| r.id == *id)),
+                    .all(|id| page.regions.iter().any(|r| r.id == *id) || framed.contains(id)),
             "The draft's requested areas no longer exist. Copy code to keep it.",
         )?;
         let content = self.content.as_ref().ok_or_else(|| {
@@ -258,7 +262,10 @@ impl GenerationDraft {
                 .attr("data-desegnos-region")
                 .and_then(|s| Uuid::parse_str(&s).ok());
             ensure(
-                id.is_some_and(|id| page.regions.iter().any(|r| r.id == id) && seen.insert(id)),
+                id.is_some_and(|id| {
+                    (page.regions.iter().any(|r| r.id == id) || framed.contains(&id))
+                        && seen.insert(id)
+                }),
                 "The draft contains invalid or duplicate area IDs. Copy code to keep it.",
             )?;
         }
@@ -347,6 +354,7 @@ impl GenerationDraft {
             let repaired = crate::generation_recovery::repair_page_metadata(
                 &content.html,
                 &base,
+                &project.framed_region_ids(base.id),
                 &mut vec![],
             )?;
             if repaired != content.html {
@@ -363,12 +371,21 @@ impl GenerationDraft {
             self.page_id
                 .ok_or_else(|| Error("This reply cannot be reconstructed. Try again.".into()))?,
         )?;
+        // A framed request's area lives on the host page, but its marker belongs in this document.
+        let framed = project.framed_region_ids(page.id);
+        let regions: Vec<&crate::Region> = project
+            .pages
+            .iter()
+            .flat_map(|owner| owner.regions.iter().map(move |region| (owner.id, region)))
+            .filter(|(owner_id, region)| *owner_id == page.id || framed.contains(&region.id))
+            .map(|(_, region)| region)
+            .collect();
         ensure(
             !self.region_ids.is_empty()
                 && self
                     .region_ids
                     .iter()
-                    .all(|id| page.regions.iter().any(|r| r.id == *id)),
+                    .all(|id| regions.iter().any(|r| r.id == *id)),
             "The draft's requested areas no longer exist. Try again.",
         )?;
         let content = normalized
@@ -397,11 +414,7 @@ impl GenerationDraft {
             let after = crate::editing::parse(&output.html)?;
             let now = crate::editing::parse(&current.html)?;
             let mut selectors = Vec::new();
-            for region in page
-                .regions
-                .iter()
-                .filter(|r| self.region_ids.contains(&r.id))
-            {
+            for region in regions.iter().filter(|r| self.region_ids.contains(&r.id)) {
                 let root = format!("[data-desegnos-region=\"{}\"]", region.id);
                 let old_roots = before.select(&root).nodes().len();
                 let new_roots = after.select(&root).nodes().len();
@@ -478,11 +491,7 @@ impl GenerationDraft {
                 if old.nodes()[0].html() != new.nodes()[0].html() {
                     // A rejected root may contain another request. Preserve newer content in
                     // that request even when the caller explicitly overrides the enclosing one.
-                    for outside in page
-                        .regions
-                        .iter()
-                        .filter(|r| !self.region_ids.contains(&r.id))
-                    {
+                    for outside in regions.iter().filter(|r| !self.region_ids.contains(&r.id)) {
                         let mut outside_selectors =
                             vec![format!("[data-desegnos-region=\"{}\"]", outside.id)];
                         outside_selectors.extend(outside.targets().iter().map(|target| {
@@ -586,12 +595,10 @@ impl Project {
                 },
             )
             .map_err(|e| Error(e.to_string()))?;
-        for region in &mut next
+        for region in next
             .pages
             .iter_mut()
-            .find(|page| page.id == page_id)
-            .expect("checked")
-            .regions
+            .flat_map(|page| page.regions.iter_mut())
         {
             if draft.region_ids.contains(&region.id) {
                 region.completed = true;

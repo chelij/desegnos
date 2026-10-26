@@ -722,6 +722,22 @@ impl Project {
             .ok_or_else(|| Error("This page no longer exists.".into()))
     }
 
+    /// Requests whose frame target is this page's document. Their region markers belong in this
+    /// page's source even though the region itself lives on the host page.
+    pub(crate) fn framed_region_ids(&self, page_id: Uuid) -> BTreeSet<Uuid> {
+        self.pages
+            .iter()
+            .flat_map(|page| page.regions.iter())
+            .filter(|region| {
+                region
+                    .frame_target
+                    .as_ref()
+                    .is_some_and(|frame| frame.document == crate::DocumentTarget::Page { page_id })
+            })
+            .map(|region| region.id)
+            .collect()
+    }
+
     pub fn pending_count(&self) -> usize {
         self.pages
             .iter()

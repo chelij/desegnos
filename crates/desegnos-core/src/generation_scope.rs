@@ -298,6 +298,7 @@ impl GenerationCandidate {
                 let before = crate::editing::parse(
                     original.content.as_ref().map_or("", |c| c.html.as_str()),
                 )?;
+                let framed = project.framed_region_ids(page.page_id);
                 let mut seen = BTreeSet::new();
                 for node in doc.select("[data-desegnos-region]").nodes() {
                     let id = node
@@ -306,6 +307,7 @@ impl GenerationCandidate {
                     ensure(
                         id.is_some_and(|id| {
                             (original.regions.iter().any(|r| r.id == id)
+                                || framed.contains(&id)
                                 || before
                                     .select(&format!("[data-desegnos-region=\"{id}\"]"))
                                     .nodes()
