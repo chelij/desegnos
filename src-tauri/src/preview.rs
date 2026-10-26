@@ -302,7 +302,7 @@ impl PreviewRegistry {
             Some(package) => package,
             None => {
                 let files = project
-                    .website_preview_files(run_scripts, MAX_PREVIEW_TEXT_BYTES)
+                    .website_preview_package(run_scripts, MAX_PREVIEW_TEXT_BYTES)
                     .map_err(|e| e.to_string())?
                     .expect("website");
                 let package = Arc::new(SitePackage {
