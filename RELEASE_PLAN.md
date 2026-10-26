@@ -33,7 +33,7 @@ The preview ships only when all of these are done:
 
 1. **Quality gate.** All 13 kept benchmark scenarios have real owner-run attempts and are rated usable without manual fixes; every Precise case keeps order and grouping.
 2. **Rename and migration.** The full rename is complete. Existing app data and vault entries move to the new identifier, and `.desegni` projects still open.
-3. **Linux packages.** Bundling produces an AppImage and a Debian package. The package declares WebKitGTK 4.1, the desktop portal and Secret Service.
+3. **Linux packages.** Bundling produces an AppImage and a Debian package. The package declares WebKitGTK 4.1, the desktop portal and Secret Service. Done last, once the app is otherwise ready for 0.1.0.
 4. **GitHub release pipeline.** Public repository; CI runs the frontend build, Rust tests, clippy and editor tests, and builds untested Windows/macOS artifacts. The release job publishes artifacts, checksums and the exact source.
 5. **Portable test harness.** Native tests and the startup check find `xvfb-run` and other tools on PATH instead of an owner-specific path.
 6. **Providers.** Each listed provider has one recorded live generation; the rest are hidden.
