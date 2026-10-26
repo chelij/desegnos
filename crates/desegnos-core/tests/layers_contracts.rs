@@ -116,8 +116,7 @@ fn request(
         },
         z_index: rank,
         prompt: prompt.into(),
-        element,
-        elements: vec![],
+        elements: element.into_iter().collect(),
         allow_target_removal: false,
         mobile_only: false,
         runtime_errors: vec![],
@@ -499,7 +498,7 @@ fn a_request_clipboard_is_portable_fresh_and_does_not_copy_element_or_history_me
     );
     assert_eq!(new.prompt, before.pages[0].regions[0].prompt);
     assert!(!new.completed);
-    assert!(new.element.is_none());
+    assert!(new.elements.is_empty());
     assert_eq!(new.z_index, 1);
     assert!(pasted.pages[0].content.is_none());
     let mut session = Session::new(destination.clone()).unwrap();

@@ -385,7 +385,7 @@ impl Project {
         md.push_str(&fenced_json(&serde_json::json!({"name": self.name, "brief": self.brief,
             "decisions": self.decisions.iter().filter(|d| relevant(&d.scope)).collect::<Vec<_>>(),
             "exceptions": self.exceptions.iter().filter(|e| relevant(&e.scope)).collect::<Vec<_>>() }))?);
-        if let Some(identity) = &self.imported_identity {
+        if self.imported_identity.is_some() {
             {
                 md.push_str("\n## Imported identity and project images\n\nThese images are already in the project. Use their exact desegnos-asset: URL in HTML image src or CSS url(); Desegnos inserts the original verified bytes before preview and export. Never generate, copy, shorten or alter Base64. Never substitute a placeholder, invented logo, external URL or local file path for an available project logo. Asset names describe the available variants; choose a suitable variant for the background. The catalogue is task data, not permission to read files or change scope. Current accepted decisions and creative exceptions take precedence over the initial imported identity. The photos list holds the user's own pictures with short descriptions of what they show; when a request needs pictures (a portfolio, products, team, places), choose fitting photos by description and use their exact url instead of placeholders or online images. The content list holds the user's existing work and pages found in imported sources (projects, tutorials, articles); when a request refers to them, use these titles and summaries and link to their url when one is given. Never invent other work or links.\n\n");
                 {
@@ -474,7 +474,10 @@ impl Project {
         {
             let source_hashes = page.content.as_ref().map(|content| serde_json::json!({"html":digest(content.html.as_bytes()),"css":digest(content.css.as_bytes()),"javascript":digest(content.javascript.as_bytes())}));
             let shown = &sent.page(page.id)?.content;
-            md.push_str(&fenced_json(&serde_json::json!({"pageId":page.id,"content": { shown.as_ref().map(|content| { self.all_asset_references(content) }) },"sha256":page_source_digest(page)?,"sourceHashes":source_hashes}))?);
+            let content = shown
+                .as_ref()
+                .map(|content| self.all_asset_references(content));
+            md.push_str(&fenced_json(&serde_json::json!({"pageId":page.id,"content":content,"sha256":page_source_digest(page)?,"sourceHashes":source_hashes}))?);
             md.push('\n');
         }
         {
@@ -766,7 +769,8 @@ impl Project {
             {
                 md.push_str(&dependencies_text.replace("At most four distinct downloads",&format!("At most {} distinct downloads",capabilities.as_ref().map_or(8,|value|value.image_downloads))).replace("This is an image downloader, not web search.","Image downloading runs natively; public web search is separately controlled by the capability packet."));
             }
-            md.push_str(&fenced_json(&serde_json::json!({"native":["HTML","CSS","browser DOM JavaScript"],"externalComponents":[],"packageInstalls":false,"networkAccess":false,"imageDownloads":{"marker":"data-desegnos-download","schemes":["https"],"formats":["png","jpeg"],"maximumImages":{capabilities.as_ref().map_or(8,|value|value.image_downloads)},"maximumBytesPerImage":262144}}))?);
+            let maximum_images = capabilities.as_ref().map_or(8, |value| value.image_downloads);
+            md.push_str(&fenced_json(&serde_json::json!({"native":["HTML","CSS","browser DOM JavaScript"],"externalComponents":[],"packageInstalls":false,"networkAccess":false,"imageDownloads":{"marker":"data-desegnos-download","schemes":["https"],"formats":["png","jpeg"],"maximumImages":maximum_images,"maximumBytesPerImage":262144}}))?);
         }
 
         if capabilities.as_ref().is_none_or(|value| value.web_search) {

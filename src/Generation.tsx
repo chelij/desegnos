@@ -118,7 +118,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
       src: node.getAttribute('src') ?? '',
       regionId: node.closest('[data-desegnos-region]')?.getAttribute('data-desegnos-region')
         ?? project.pages.find(item => item.id === page.pageId)?.regions.find(region =>
-          [region.element, ...(region.elements ?? [])].some(target => target && node.closest('[data-desegnos-id]')?.getAttribute('data-desegnos-id') === target.id))?.id,
+          (region.elements ?? []).some(target => node.closest('[data-desegnos-id]')?.getAttribute('data-desegnos-id') === target.id))?.id,
       pageId: page.pageId,
       failed: node.hasAttribute('data-desegnos-placeholder'),
     }));

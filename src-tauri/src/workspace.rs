@@ -2667,7 +2667,6 @@ pub fn get_project_notes(state: WorkspaceState<'_>) -> NativeResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use desegnos_core::GENERATION_MIGRATION_NOTICE;
 
     struct Temp(PathBuf);
     impl Temp {
@@ -4272,15 +4271,6 @@ pub fn open_recent_project(
         ProjectOpenError::Message(message) => RecentProjectOpenError::from(message).into(),
         error => error,
     })
-}
-
-#[cfg(test)]
-pub(super) fn open_archive_for_tests(directory: PathBuf, path: &std::path::Path) -> Workspace {
-    let file = ProjectFile::acquire(path).unwrap();
-    let document = file.load_document().unwrap();
-    let mut workspace = Workspace::from_directory(directory).unwrap();
-    workspace.open_document(file, document, false).unwrap();
-    workspace
 }
 
 struct WebsiteImportSnapshot {

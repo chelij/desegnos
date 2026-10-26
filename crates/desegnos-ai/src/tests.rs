@@ -202,8 +202,9 @@ async fn read_request(socket: &mut TcpStream) -> Captured {
 fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
     let job_id = Uuid::new_v4();
     let project_id = Uuid::new_v4();
+    let format = desegnos_core::CURRENT_REQUIREMENTS_FORMAT;
     let markdown = format!(
-        "# Generation requirements\n\nJob: {job_id}\n\n## Generation setting\n\n```json\n{}\n```\n\n## Requested areas\n\nCreate a café page for Desegnos.\r\nKeep this literal: ```md <script>never run</script> ```\nUnicode: 日本語, Bahasa Indonesia, 💡.\n",
+        "# Generation requirements\n\nRequirements format: {format}\n\nJob: {job_id}\n\n## Generation setting\n\n```json\n{}\n```\n\n## Requested areas\n\nCreate a café page for Desegnos.\r\nKeep this literal: ```md <script>never run</script> ```\nUnicode: 日本語, Bahasa Indonesia, 💡.\n",
         json!({"generationMode":mode})
     );
     RequirementsSnapshot {
@@ -221,7 +222,11 @@ fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
         base_geometry: BTreeMap::new(),
         dossier_context: None,
         request_history: String::new(),
-        capabilities: None,
+        capabilities: Some(desegnos_core::GenerationCapabilities {
+            web_search: false,
+            image_downloads: 0,
+            image_generation: None,
+        }),
         images: vec![],
     }
 }
@@ -2191,7 +2196,7 @@ async fn generate_plan(
 }
 
 #[test]
-fn authentication_and_old_persisted_errors_keep_compatible_defaults_and_secret_bounds() {
+fn authentication_and_current_errors_preserve_serialization_and_secret_bounds() {
     assert_eq!(
         AuthenticationMethod::default(),
         AuthenticationMethod::ApiKey
@@ -2208,15 +2213,10 @@ fn authentication_and_old_persisted_errors_keep_compatible_defaults_and_secret_b
         serde_json::to_value(ErrorKind::ChatgptUsageLimit).unwrap(),
         "chatgptUsageLimit"
     );
-    let old: ProviderError = serde_json::from_value(json!({
-        "kind":"cancelled","outcome":"unknown","responseId":"resp_old","usage":null
-    }))
-    .unwrap();
-    assert_eq!(old.authentication, AuthenticationMethod::ApiKey);
-    assert_eq!(old.http_status, None);
-    assert_eq!(old.code, None);
-    assert_eq!(old.param, None);
-    assert_eq!(old.request_id, None);
+    let current = ProviderError::before(ErrorKind::Cancelled);
+    let reopened: ProviderError =
+        serde_json::from_value(serde_json::to_value(&current).unwrap()).unwrap();
+    assert_eq!(reopened, current);
     let settings = serde_json::to_value(ProviderSettings::default()).unwrap();
     assert_eq!(
         settings

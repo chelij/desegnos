@@ -8,7 +8,6 @@ pub const AI_PREVIEW_EDGE: u32 = 512;
 pub const AI_PREVIEW_BYTES: usize = 48 * 1024;
 /// Upper bound reserved per preview when estimating a request.
 pub const AI_PREVIEW_TOKEN_RESERVE: u64 = 512;
-const MIN_PREVIEW_EDGE: u32 = 96;
 /// Rendered pictures keep twice their CSS size so they stay sharp on high-density screens.
 const DISPLAY_DENSITY: u32 = 2;
 

@@ -906,7 +906,7 @@ fn provider_details_survive_restart_and_are_archived_before_explicit_retry() {
     let error: ProviderError = serde_json::from_value(serde_json::json!({
         "kind":"requestRejected","outcome":"received","responseId":null,"usage":null,
         "authentication":"apiKey","httpStatus":200,"code":"unsupported_value","param":"input[0].content",
-        "requestId":"req_json_diagnostic","responseFormat":{"contentType":"application/json","bodyKind":"jsonError","bodyBytes":123}
+        "requestId":"req_json_diagnostic","responseFormat":{"contentType":"application/json","bodyKind":"jsonError","bodyBytes":123,"bodyTruncated":false}
     })).unwrap();
     service
         .finish(
@@ -952,8 +952,8 @@ fn correlation_details_survive_restart_and_are_archived_before_explicit_retry() 
     let prepared = service.prepare(&project).unwrap();
     service.begin(&project, prepared.job_id, false).unwrap();
     let error: ProviderError = serde_json::from_value(serde_json::json!({
-        "kind":"malformed","outcome":"received","responseId":"resp_rejected_final","usage":null,"httpStatus":200,
-        "responseFormat":{"contentType":null,"bodyKind":"eventStream","bodyBytes":512,"rejection":"textLocation",
+        "kind":"malformed","outcome":"received","authentication":"apiKey","responseId":"resp_rejected_final","usage":null,"httpStatus":200,
+        "responseFormat":{"contentType":null,"bodyKind":"eventStream","bodyBytes":512,"bodyTruncated":false,"rejection":"textLocation",
             "correlation":{"terminalOutput":"array","terminalItems":1,"terminalTextParts":2,
                 "streamedParts":3,"finalizedItems":2,"emptyAddedItems":1,"cause":"contentPartAbsent",
                 "outputIndex":9,"contentIndex":7}}
@@ -1421,36 +1421,6 @@ fn provider_selection_survives_restart_and_keeps_keys_and_settings_separate() {
         ProviderId::Anthropic
     );
     assert!(restarted.select_provider(ProviderId::Local, true).is_err());
-}
-
-fn install_frozen_job(temp: &Temp, record: JobRecord) -> (Uuid, Uuid, PathBuf) {
-    let mut service = temp.service();
-    let project_id = record.view.project_id;
-    let job_id = record.view.job_id;
-    let directory = service.job_directory(project_id, job_id);
-    service.persist(record).unwrap();
-    write_json(
-        &service
-            .directory
-            .join(project_id.to_string())
-            .join("latest.json"),
-        &LatestJob { job_id },
-    )
-    .unwrap();
-    (project_id, job_id, directory)
-}
-
-fn workspace_journal(directory: &Path) -> (PathBuf, Vec<u8>) {
-    let path = fs::read_dir(directory)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| {
-            path.extension()
-                .is_some_and(|extension| extension == "journal")
-        })
-        .unwrap();
-    let bytes = fs::read(&path).unwrap();
-    (path, bytes)
 }
 
 #[test]

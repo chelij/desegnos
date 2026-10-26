@@ -786,24 +786,6 @@ fn a_selection_larger_than_the_source_budget_splits_into_sequential_parts() {
 }
 
 #[test]
-fn older_projects_load_with_an_empty_page_selection() {
-    let (project, _, _, _) = page_project(GenerationMode::Fuzzy);
-    let (project, region_id) = pending_request(project, PROMPT);
-    let mut value = serde_json::to_value(&project).unwrap();
-    value["schemaVersion"] = serde_json::json!(9);
-    let regions = value["pages"][0]["regions"].as_array().unwrap();
-    // Schema 9 did not persist a page selection.
-    assert!(regions[0].get("pages").is_none());
-    let restored = decode_project(&serde_json::to_vec(&value).unwrap())
-        .unwrap()
-        .project;
-    assert_eq!(restored.schema_version, SCHEMA_VERSION);
-    let region = &restored.pages[0].regions[0];
-    assert_eq!(region.id, region_id);
-    assert!(region.pages.is_empty());
-}
-
-#[test]
 fn precise_requests_include_chosen_site_documents_and_their_stylesheets() {
     let (project, index, atlas, borealis) = site_project(GenerationMode::Strict);
     let (project, region_id) = pending_request(project, "Remove the empty space at the top");

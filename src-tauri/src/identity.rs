@@ -1438,10 +1438,7 @@ impl IdentityService {
                                 .any(|page| paths.contains(&page.path))
                         })
                 })
-                .map(|(_, item)| {
-                    let mut item = item.clone();
-                    item
-                })
+                .map(|(_, item)| item.clone())
                 .collect(),
         })
     }

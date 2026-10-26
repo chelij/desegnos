@@ -55,8 +55,10 @@ fn brand_import_reads_the_project_without_changing_it() {
     let file = ProjectFile::acquire(&source_path).unwrap();
     file.save(&project).unwrap();
     drop(file);
+    fs::remove_file(temp.0.join("brand.desegnos.lock")).unwrap();
     let original = fs::read(&source_path).unwrap();
     let source = collect_identity_source(&source_path).unwrap();
+    assert!(source.files.iter().any(|file| file.name == "PROJECT.md"));
     assert_eq!(fs::read(&source_path).unwrap(), original);
     assert!(!temp.0.join("brand.desegnos.lock").exists());
 }

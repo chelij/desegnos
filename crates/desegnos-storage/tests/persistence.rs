@@ -8,6 +8,18 @@ use std::{
 };
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
+fn without_editor_ids(html: &str) -> String {
+    let mut result = html.to_owned();
+    while let Some(start) = result.find(" data-desegnos-id=\"") {
+        let end = result[start + 19..]
+            .find('"')
+            .expect("closing editor attribute")
+            + start
+            + 20;
+        result.replace_range(start..end, "");
+    }
+    result
+}
 struct Temp(PathBuf);
 impl Temp {
     fn new() -> Self {

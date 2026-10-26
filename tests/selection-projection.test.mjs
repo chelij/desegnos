@@ -20,15 +20,15 @@ try {
   const target = (id, selector = 'body > div:nth-of-type(1)') => ({ id, selector, tag: 'div', label: '' });
   const select = (id, selector, x = 0, y = 0) => ({ element: target(id, selector), rect: { x, y, width: 100, height: 60 } });
 
-  await test('stable identity survives source and sibling changes; legacy hashes remain bound', () => {
+  await test('stable identity survives source and sibling changes; raw-source hashes remain bound', () => {
     assert.ok(sameTarget(target('a'), { ...target('a'), selector: 'body > div:nth-of-type(4)', sourceSha256: 'changed' }));
     assert.ok(!sameTarget(target('a'), target('b')));
     assert.ok(!sameTarget(target('a'), { selector: target('a').selector }));
     assert.ok(sameTarget({ selector: 'p', sourceSha256: 'old' }, { selector: 'p', sourceSha256: 'old' }));
     assert.ok(!sameTarget({ selector: 'p', sourceSha256: 'old' }, { selector: 'p', sourceSha256: 'new' }));
     assert.ok(sameTargets([target('a'), target('b')], [target('b'), target('a')]));
-    assert.deepEqual(regionTargets({ elements: [target('a')], element: target('old') }), [target('a')]);
-    assert.deepEqual(regionTargets({ element: target('old') }), [target('old')]);
+    assert.deepEqual(regionTargets({ elements: [target('a')] }), [target('a')]);
+    assert.deepEqual(regionTargets({ elements: [] }), []);
   });
   await test('element identity, keys and native payloads stay inside their document', () => {
     const site = { kind: 'siteFile', path: 'play/game.html' };

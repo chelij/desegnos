@@ -2114,7 +2114,7 @@ impl GenerationService {
                     &response.text,
                     std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                match desegnos_core::recover_generation_reply(&response.text, &record.view.requirements, original).and_then(|(mut candidate, events)| {
+                match desegnos_core::recover_generation_reply(&response.text, &record.view.requirements, original).and_then(|(candidate, events)| {
                     record.view.validation_events.extend(events);
                     record.view.requirements.format_version()?;
 

@@ -1,5 +1,4 @@
 use desegnos_core::*;
-use serde_json::json;
 use std::collections::BTreeMap;
 
 fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
