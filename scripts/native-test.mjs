@@ -91,25 +91,25 @@ async function freePort() {
 async function runIsolated() {
   const display = process.env.DISPLAY?.match(/^:(\d+)(?:\.\d+)?$/);
   assert.ok(display && Number(display[1]) >= 90, 'Native tests require an isolated Xvfb display numbered 90 or higher');
-  assert.notEqual(process.env.DISPLAY, process.env.DESEGNI_DESKTOP_DISPLAY, 'Refusing to interact with the original desktop display');
+  assert.notEqual(process.env.DISPLAY, process.env.DESEGNOS_DESKTOP_DISPLAY, 'Refusing to interact with the original desktop display');
   assert.equal(process.env.GDK_BACKEND, 'x11');
   assert.equal(process.env.WAYLAND_DISPLAY, undefined);
   assert.equal(process.env.WAYLAND_SOCKET, undefined);
   assert.ok(process.env.DBUS_SESSION_BUS_ADDRESS, 'An isolated session bus is required');
   const displayProbe = spawnSync('xprop', ['-root', '_NET_SUPPORTING_WM_CHECK'], { encoding: 'utf8', timeout: 5000 });
   assert.equal(displayProbe.status, 0, 'Cannot connect to the isolated Xvfb display');
-  const binary = process.env.DESEGNI_NATIVE_TEST_BINARY;
-  const evidence = process.env.DESEGNI_NATIVE_TEST_EVIDENCE;
+  const binary = process.env.DESEGNOS_NATIVE_TEST_BINARY;
+  const evidence = process.env.DESEGNOS_NATIVE_TEST_EVIDENCE;
   assert.ok(binary && evidence);
   const report = { passed: false, startedAt: new Date().toISOString(), display: process.env.DISPLAY,
     platform: process.platform, node: process.version, binary, binarySha256: await hashFile(binary),
     input: 'Embedded WebDriver controls plus trusted OS pointer/key input through system X11/XTEST on the guarded virtual display.',
     nativeCommands: 'Real Rust commands; no invoke mocks or replacement project state.', steps: [],
     limits: ['Paid AI provider behavior is not covered.', 'This run covers Linux WebKitGTK; Windows and macOS require their own native runs.'] };
-  if (process.env.DESEGNI_NATIVE_TEST_ACCESSIBILITY === '1') process.env.ATSPI_DBUS_IMPLEMENTATION = 'dbus-daemon';
+  if (process.env.DESEGNOS_NATIVE_TEST_ACCESSIBILITY === '1') process.env.ATSPI_DBUS_IMPLEMENTATION = 'dbus-daemon';
   const provider = await startProviderServer();
-  process.env.DESEGNI_NATIVE_TEST_OPENAI_ENDPOINT = provider.endpoint;
-  process.env.DESEGNI_NATIVE_TEST_WEBSITE_ORIGIN = provider.endpoint.replace(/\/v1$/, '');
+  process.env.DESEGNOS_NATIVE_TEST_OPENAI_ENDPOINT = provider.endpoint;
+  process.env.DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN = provider.endpoint.replace(/\/v1$/, '');
   report.generationProvider = 'Controlled loopback HTTP server using real native transport; synthetic credentials, no paid OpenAI calls.';
   let app;
   let driver;
@@ -159,7 +159,7 @@ async function runIsolated() {
     driver = await new WebDriver(port).start(() => child.exitCode === null && child.signalCode === null);
     assert.equal(driver.capabilities.platformName, 'linux');
     assert.equal(driver.capabilities.browserName, 'WebKitGTK');
-    if (process.env.DESEGNI_NATIVE_TEST_ACCESSIBILITY === '1') {
+    if (process.env.DESEGNOS_NATIVE_TEST_ACCESSIBILITY === '1') {
       accessibility = spawn('python', ['tests/native/accessibility-listener.py', String(child.pid)], { cwd: root, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
       let ready = false;
       accessibility.stdout.on('data', bytes => { if (String(bytes).includes('Accessibility active')) ready = true; });
@@ -171,12 +171,12 @@ async function runIsolated() {
       return typeof source === 'string' && /class="application(?:\s|")/.test(source);
     }, 'The native document did not finish mounting before interaction', 30_000);
     await driver.execute(() => {
-      window.__desegniTestErrors = [];
-      window.addEventListener('error', event => window.__desegniTestErrors.push({ kind: 'error', message: event.message }));
-      window.addEventListener('unhandledrejection', event => window.__desegniTestErrors.push({ kind: 'rejection', message: String(event.reason) }));
+      window.__desegnosTestErrors = [];
+      window.addEventListener('error', event => window.__desegnosTestErrors.push({ kind: 'error', message: event.message }));
+      window.addEventListener('unhandledrejection', event => window.__desegnosTestErrors.push({ kind: 'rejection', message: String(event.reason) }));
       const original = console.error;
       console.error = (...values) => {
-        window.__desegniTestErrors.push({ kind: 'console', message: values.map(String).join(' ') });
+        window.__desegnosTestErrors.push({ kind: 'console', message: values.map(String).join(' ') });
         original.apply(console, values);
       };
       return true;
@@ -196,10 +196,10 @@ async function runIsolated() {
     await start();
     let project;
     const physical = new PhysicalInput(driver, app.pid);
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'flash') {
+    if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'flash') {
       await flashWorkflow(driver, physical, step, evidence);
       report.passed = true; return;
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'ui-tour') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'ui-tour') {
       report.scope = 'Screenshot tour of workspace surfaces in both themes and widths.';
       report.tour = await uiTour(driver, physical, step, evidence, provider, async () => {
         await stop('SIGKILL');
@@ -208,39 +208,39 @@ async function runIsolated() {
       });
       report.passed = report.tour.failures.length === 0;
       return;
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'code-meta') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'code-meta') {
       report.scope = 'Focused mounted HTML metadata toggle with six stored pictures.';
       project = await codeMetaWorkflow(driver, physical, step, evidence);
-      const errors = await driver.execute(() => window.__desegniTestErrors);
+      const errors = await driver.execute(() => window.__desegnosTestErrors);
       await writeFile(join(evidence, 'browser-errors.json'), JSON.stringify(errors, null, 2));
       assert.deepEqual(errors, []);
       report.passed = true;
       return;
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'website-import') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'website-import') {
       report.scope = 'As-is website import, native heading editing and read-only chelib Astro import.';
       project = await websiteImportWorkflow(driver, physical, step, evidence);
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'project-folders') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'project-folders') {
       report.scope = 'Project folders, automatic saves, default/per-project locations, safe live-site sync, import, copies and legacy migration.';
       project = await projectFoldersWorkflow(driver, physical, step, evidence);
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'real-use') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'real-use') {
       report.scope = 'Real-use flows on copies of the owner\'s projects and unsaved work (scripts/usage-report.mjs).';
       project = await realUseWorkflow(driver, physical, step, evidence, provider);
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'image-resize') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'image-resize') {
       report.scope = 'Large original picture preview followed by Generate-time resizing.';
       project = await imageResizeWorkflow(driver, physical, step, evidence, provider);
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'cleanup-extras') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'cleanup-extras') {
       report.scope = 'Cleanup extra workflows: exact History, tips, page checks, real file drop, device previews and code editing.';
       project = await cleanupExtrasWorkflow(driver, physical, step, evidence, provider);
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'source-edit') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'source-edit') {
       report.scope = 'Source editing, validation diagnostics, source map, history, archive and real export.';
       project = await sourceEditWorkflow(driver, physical, step, evidence);
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'layers') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'layers') {
       report.scope = 'Focused native Layers, real system clipboard, visual stacking, local history, export and recovery.';
       project = await layersWorkflow(driver, physical, step, evidence, provider);
-    } else if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'canvas-input') {
+    } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'canvas-input') {
       report.scope = 'Focused canvas input, zoom, pan and unlimited box sizing.';
       project = await canvasInputWorkflow(driver, physical, step, evidence, provider);
-    } else if (['identity', 'logo-scope'].includes(process.env.DESEGNI_NATIVE_TEST_SCOPE)) {
+    } else if (['identity', 'logo-scope'].includes(process.env.DESEGNOS_NATIVE_TEST_SCOPE)) {
       report.scope = 'Beginner brand import: folders, Astro ranking and automatic fitting, manual limits/reset, website addresses, ZIPs, review choices and recovery.';
       await step('Create a real source website for brand import', async () => {
         await driver.button('Blank website');
@@ -262,9 +262,9 @@ async function runIsolated() {
       report.scope = 'Current UX audit core loop with real export, local edits, generation and recovery.';
       project = await uxAuditWorkflow(driver, physical, step, evidence, provider);
     }
-    if (!process.env.DESEGNI_NATIVE_TEST_SCOPE || ['identity', 'logo-scope'].includes(process.env.DESEGNI_NATIVE_TEST_SCOPE)) {
+    if (!process.env.DESEGNOS_NATIVE_TEST_SCOPE || ['identity', 'logo-scope'].includes(process.env.DESEGNOS_NATIVE_TEST_SCOPE)) {
       project = await identityWorkflow(driver, physical, step, evidence, provider);
-      if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'logo-scope') project = await logoScopeWorkflow(driver, physical, step, evidence, provider);
+      if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'logo-scope') project = await logoScopeWorkflow(driver, physical, step, evidence, provider);
     }
     // A saved-only workflow correctly has no unsaved journal to recover.
     // Make one real acknowledged edit so this runner tests crash recovery.
@@ -279,7 +279,7 @@ async function runIsolated() {
       });
     }
     await step('The native editor workflow reports no browser errors or unhandled rejections', async () => {
-      const errors = await driver.execute(() => window.__desegniTestErrors);
+      const errors = await driver.execute(() => window.__desegnosTestErrors);
       await writeFile(join(evidence, 'browser-errors.json'), JSON.stringify(errors, null, 2));
       assert.deepEqual(errors, []);
     });
@@ -290,7 +290,7 @@ async function runIsolated() {
     const submittedCount = provider.generationRequests().length;
     const identitySubmittedCount = provider.identityRequests().length;
     const restarted = await start();
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'website-import') { restarted.requestTimeout = 120000; await restarted.command('POST', '/timeouts', { script: 120000, implicit: 0, pageLoad: 120000 }); }
+    if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'website-import') { restarted.requestTimeout = 120000; await restarted.command('POST', '/timeouts', { script: 120000, implicit: 0, pageLoad: 120000 }); }
     await recoverProject(restarted, project, step);
     await step('Restart preserves project data and recent paths, drops the session key and never replays paid work', async () => {
       const ai = await driver.invoke('get_ai_settings');
@@ -305,17 +305,17 @@ async function runIsolated() {
         assert.equal(identity.source.sha256, project.importedIdentity.sourceSha256);
       }
       const recent = await driver.invoke('get_recent_projects');
-      if (process.env.DESEGNI_NATIVE_TEST_SCOPE !== 'image-resize') assert.ok(recent.projects.length > 0);
+      if (process.env.DESEGNOS_NATIVE_TEST_SCOPE !== 'image-resize') assert.ok(recent.projects.length > 0);
       assert.equal(provider.identityRequests().length, identitySubmittedCount);
       assert.equal(provider.generationRequests().length, submittedCount);
     });
-    if (process.env.DESEGNI_NATIVE_TEST_SCOPE === 'cleanup-extras') {
+    if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'cleanup-extras') {
       await step('Dismissed first-run tips stay dismissed after a fresh native process', async () => {
         assert.equal(await driver.execute(() => localStorage.getItem('desegnos.first-run-tips')), 'done');
         assert.equal(await driver.execute(() => !!document.querySelector('.first-run-tips')), false);
       });
     }
-    const recoveryErrors = await driver.execute(() => window.__desegniTestErrors);
+    const recoveryErrors = await driver.execute(() => window.__desegnosTestErrors);
     await writeFile(join(evidence, 'recovery-browser-errors.json'), JSON.stringify(recoveryErrors, null, 2));
     assert.deepEqual(recoveryErrors, []);
     await writeFile(join(evidence, 'recovered.png'), Buffer.from(await driver.screenshot(), 'base64'));
@@ -323,7 +323,7 @@ async function runIsolated() {
   } catch (error) {
     report.error = error.stack;
     if (driver) {
-      try { await writeFile(join(evidence, 'failure-input-events.json'), JSON.stringify(await driver.execute(() => ({ events: window.__desegniNativeEvents, focus: document.activeElement?.outerHTML.slice(0, 1000) })), null, 2)); } catch {}
+      try { await writeFile(join(evidence, 'failure-input-events.json'), JSON.stringify(await driver.execute(() => ({ events: window.__desegnosNativeEvents, focus: document.activeElement?.outerHTML.slice(0, 1000) })), null, 2)); } catch {}
       try { await writeFile(join(evidence, 'failure-workspace.json'), JSON.stringify(await driver.invoke('get_workspace'), null, 2)); } catch {}
       try { await writeFile(join(evidence, 'failure.png'), Buffer.from(await driver.screenshot(), 'base64')); } catch {}
       try { await writeFile(join(evidence, 'failure.html'), await driver.command('GET', '/source')); } catch {}
@@ -353,20 +353,20 @@ async function main() {
   if (binaryIndex !== -1 && !args[binaryIndex + 1]) throw new Error('--binary needs an absolute file path');
   const known = new Set(['--flash-only', '--ui-tour-only', '--code-meta-only', '--website-import-only', '--project-folders-only', '--image-resize-only', '--real-use-only', '--skip-build', '--generation-only', '--ux-audit-only', '--identity-only', '--canvas-input-only', '--layers-only', '--source-edit-only', '--cleanup-extras-only', '--logo-scope-only', '--binary', ...(binaryIndex === -1 ? [] : [args[binaryIndex + 1]])]);
   for (const argument of args) if (!known.has(argument)) throw new Error(`Unknown argument ${argument}`);
-  if (args.includes('--flash-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'flash';
-  if (args.includes('--ui-tour-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'ui-tour';
-  if (args.includes('--code-meta-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'code-meta';
-  if (args.includes('--website-import-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'website-import';
-  if (args.includes('--project-folders-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'project-folders';
-  if (args.includes('--image-resize-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'image-resize';
-  if (args.includes('--real-use-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'real-use';
-  if (args.includes('--canvas-input-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'canvas-input';
-  if (args.includes('--identity-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'identity';
-  if (args.includes('--generation-only') || args.includes('--ux-audit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'audit';
-  if (args.includes('--logo-scope-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'logo-scope';
-  if (args.includes('--layers-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'layers';
-  if (args.includes('--cleanup-extras-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'cleanup-extras';
-  if (args.includes('--source-edit-only')) process.env.DESEGNI_NATIVE_TEST_SCOPE = 'source-edit';
+  if (args.includes('--flash-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'flash';
+  if (args.includes('--ui-tour-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'ui-tour';
+  if (args.includes('--code-meta-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'code-meta';
+  if (args.includes('--website-import-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'website-import';
+  if (args.includes('--project-folders-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'project-folders';
+  if (args.includes('--image-resize-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'image-resize';
+  if (args.includes('--real-use-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'real-use';
+  if (args.includes('--canvas-input-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'canvas-input';
+  if (args.includes('--identity-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'identity';
+  if (args.includes('--generation-only') || args.includes('--ux-audit-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'audit';
+  if (args.includes('--logo-scope-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'logo-scope';
+  if (args.includes('--layers-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'layers';
+  if (args.includes('--cleanup-extras-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'cleanup-extras';
+  if (args.includes('--source-edit-only')) process.env.DESEGNOS_NATIVE_TEST_SCOPE = 'source-edit';
   process.chdir(root);
   const target = resolve('target/native-tests');
   const binary = resolve(binaryIndex === -1 ? join(target, 'debug/desegnos') : args[binaryIndex + 1]);
@@ -388,8 +388,8 @@ async function main() {
   const documents = join(scratch, 'Documents');
   await mkdir(documents, { mode: 0o700 });
   await writeFile(join(profile.config, 'user-dirs.dirs'), `XDG_DOCUMENTS_DIR="${documents}"\n`, { mode: 0o600 });
-  if (['real-use', 'flash'].includes(process.env.DESEGNI_NATIVE_TEST_SCOPE)) {
-    const seeded = await seedRealUse(profile.data, evidence, { recoveries: process.env.DESEGNI_NATIVE_TEST_SCOPE !== 'flash' });
+  if (['real-use', 'flash'].includes(process.env.DESEGNOS_NATIVE_TEST_SCOPE)) {
+    const seeded = await seedRealUse(profile.data, evidence, { recoveries: process.env.DESEGNOS_NATIVE_TEST_SCOPE !== 'flash' });
     console.log(`Real-use data: ${seeded.projects.length} projects, ${seeded.recoveries.length} recoveries from ${seeded.source}`);
   }
   const original = await desktopState();
@@ -401,8 +401,8 @@ async function main() {
       cwd: root, detached: true, stdio: 'inherit', env: xvfbEnvironment({ ...process.env,
         XDG_DATA_HOME: profile.data, XDG_CONFIG_HOME: profile.config, XDG_CACHE_HOME: profile.cache, XDG_RUNTIME_DIR: profile.runtime,
         GDK_SCALE: '1', GDK_DPI_SCALE: '1',
-        ...(process.env.DESEGNI_NATIVE_TEST_ACCESSIBILITY === '1' ? { ATSPI_DBUS_IMPLEMENTATION: 'dbus-daemon' } : {}),
-        DESEGNI_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNI_NATIVE_TEST_BINARY: binary, DESEGNI_NATIVE_TEST_EVIDENCE: evidence }),
+        ...(process.env.DESEGNOS_NATIVE_TEST_ACCESSIBILITY === '1' ? { ATSPI_DBUS_IMPLEMENTATION: 'dbus-daemon' } : {}),
+        DESEGNOS_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNOS_NATIVE_TEST_BINARY: binary, DESEGNOS_NATIVE_TEST_EVIDENCE: evidence }),
     });
     const interrupt = () => terminateGroup(isolated, 'SIGTERM');
     process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);

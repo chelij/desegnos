@@ -43,7 +43,7 @@ export function FrameOverlay({ frame, live, pageId, staticPageUrl, zoom, interac
     const receive = (event: MessageEvent) => {
       if (event.source !== frameNode.current?.contentWindow || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) return;
       const value = event.data as Record<string, unknown>;
-      if (value.type === 'desegni-preview-escape' && value.sessionId === live.sessionId && value.pageId === pageId) stopRef.current();
+      if (value.type === 'desegnos-preview-escape' && value.sessionId === live.sessionId && value.pageId === pageId) stopRef.current();
     };
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);

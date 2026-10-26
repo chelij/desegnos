@@ -330,7 +330,7 @@ async function scenario(browser, label, url) {
   assert.equal(home.imageWidth, 1);
   assert(home.background.includes('/assets/'));
   assert(home.href.endsWith('/about/team/index.html?view=full#lead'));
-  assert(!home.href.includes('desegni-preview'));
+  assert(!home.href.includes('desegnos-preview'));
   await browser.screenshot(path.join(output, `${browser.name}-${label}-home.png`));
   await browser.evaluate(`(document.getElementById('team').click(), true)`);
   await wait(

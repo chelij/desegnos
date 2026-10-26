@@ -1,8 +1,8 @@
-use desegni_core::{
+use desegnos_core::{
     Appearance, Command, DecodedProject, GenerationCandidate, Project, RequirementsSnapshot,
     Session, Viewport,
 };
-use desegni_storage::{
+use desegnos_storage::{
     FileStamp, Journal, ProjectFile, SaveFailure, SaveFailureKind, write_markdown,
 };
 use serde::{Deserialize, Serialize};
@@ -177,7 +177,7 @@ pub struct WorkspaceView {
     open_projects: Vec<OpenProjectSummary>,
     any_dirty: bool,
     site_warnings: Vec<String>,
-    outside_edits: desegni_storage::project_folder::OutsideEdits,
+    outside_edits: desegnos_storage::project_folder::OutsideEdits,
     project_folder: bool,
     /// A fingerprint of the code and framed documents, so editors can re-read them after a
     /// document change without waking on every request prompt keystroke.
@@ -366,7 +366,7 @@ impl Workspace {
     pub(super) fn apply_draft(
         &mut self,
         snapshot: &RequirementsSnapshot,
-        draft: &desegni_core::GenerationDraft,
+        draft: &desegnos_core::GenerationDraft,
     ) -> NativeResult<()> {
         let journal = self
             .journal
@@ -519,7 +519,7 @@ impl Workspace {
         let Some(saved) = pointer
             .project_path
             .as_ref()
-            .and_then(|path| desegni_storage::load_project_document(path).ok())
+            .and_then(|path| desegnos_storage::load_project_document(path).ok())
         else {
             return false;
         };
@@ -602,7 +602,7 @@ impl Workspace {
             self.acquire_ownership(project_id)
                 .is_ok_and(|ownership| ownership.is_some())
         };
-        if let Err(error) = desegni_storage::clean_journals(&self.directory, &keep, is_closed) {
+        if let Err(error) = desegnos_storage::clean_journals(&self.directory, &keep, is_closed) {
             eprintln!("Could not clean recovery journals: {error}");
         }
     }
@@ -997,11 +997,11 @@ impl Workspace {
     /// it from disk with fresh history, unless it has unsaved edits, which are kept as they are.
     fn open_file_tab(&mut self, path: &std::path::Path, discard_recovery: bool) -> OpenResult<()> {
         if path.is_dir() {
-            if let Some(file_path) = desegni_storage::project_in_folder(path).map_err(message)? {
+            if let Some(file_path) = desegnos_storage::project_in_folder(path).map_err(message)? {
                 let document =
-                    desegni_storage::load_project_document(&file_path).map_err(message)?;
+                    desegnos_storage::load_project_document(&file_path).map_err(message)?;
                 if !path.join(".desegnos-site.json").exists() {
-                    desegni_storage::manage_project_folder(
+                    desegnos_storage::manage_project_folder(
                         &file_path,
                         document.project.id,
                         Default::default(),
@@ -1010,7 +1010,7 @@ impl Workspace {
                 }
                 return self.open_file_tab(&file_path, discard_recovery);
             }
-            let file = desegni_storage::import_detected_website(path, &self.project_location()?)
+            let file = desegnos_storage::import_detected_website(path, &self.project_location()?)
                 .map_err(message)?;
             let document = file.load_document().map_err(message)?;
             return self.open_tab(|state| state.open_document(file, document, discard_recovery));
@@ -1249,7 +1249,7 @@ impl Workspace {
                 Ok(SaveDestination::Current)
             } else {
                 let project = self.project()?;
-                let path = desegni_storage::create_project_folder(
+                let path = desegnos_storage::create_project_folder(
                     &self.project_location()?,
                     &project.name,
                     project.id,
@@ -1311,7 +1311,7 @@ impl Workspace {
 
     fn create_in_folder(&mut self, project: Project, parent: Option<PathBuf>) -> NativeResult<()> {
         let parent = parent.map(Ok).unwrap_or_else(|| self.project_location())?;
-        let path = desegni_storage::create_project_folder(&parent, &project.name, project.id)
+        let path = desegnos_storage::create_project_folder(&parent, &project.name, project.id)
             .map_err(message)?;
         let file = ProjectFile::acquire(&path).map_err(message)?;
         file.save(&project).map_err(message)?;
@@ -1715,7 +1715,7 @@ pub fn edit_project(
 #[serde(rename_all = "camelCase")]
 pub struct ElementEditView {
     workspace: WorkspaceView,
-    element: Option<desegni_core::ElementTarget>,
+    element: Option<desegnos_core::ElementTarget>,
 }
 
 #[tauri::command(async)]
@@ -1727,9 +1727,9 @@ pub fn edit_page_source(
     html: Option<String>,
     css: Option<String>,
     javascript: Option<String>,
-) -> desegni_core::SourceEditResult<WorkspaceView> {
+) -> desegnos_core::SourceEditResult<WorkspaceView> {
     let mut state = state.lock().map_err(|_| {
-        desegni_core::SourceEditError::general(
+        desegnos_core::SourceEditError::general(
             "The workspace is busy. Keep your text and try again.",
         )
     })?;
@@ -1738,21 +1738,21 @@ pub fn edit_page_source(
     } = &mut *state;
     let session = session
         .as_mut()
-        .ok_or_else(|| desegni_core::SourceEditError::general("Open a project first."))?;
+        .ok_or_else(|| desegnos_core::SourceEditError::general("Open a project first."))?;
     if session.project().id != project_id {
-        return Err(desegni_core::SourceEditError::general(
+        return Err(desegnos_core::SourceEditError::general(
             "Return to the project that owns this page.",
         ));
     }
     let journal = journal.as_ref().ok_or_else(|| {
-        desegni_core::SourceEditError::general(
+        desegnos_core::SourceEditError::general(
             "Recovery is unavailable. Keep your text; nothing was changed.",
         )
     })?;
     session.edit_page_source(
         revision,
         page_id,
-        &desegni_core::PageSourceEdit {
+        &desegnos_core::PageSourceEdit {
             html,
             css,
             javascript,
@@ -1769,7 +1769,7 @@ pub fn open_found_source(
     state: WorkspaceState<'_>,
     project_id: Uuid,
     page_id: Uuid,
-    target: desegni_core::ElementTarget,
+    target: desegnos_core::ElementTarget,
 ) -> NativeResult<()> {
     if window.label() != "editor" {
         return Err("Only the editor can open found-content sources.".into());
@@ -1801,9 +1801,9 @@ pub fn open_preview_link(window: tauri::WebviewWindow, url: String) -> NativeRes
         .map_err(|_| "Couldn't open a browser. Copy the link and open it manually.".into())
 }
 
-fn preview_link(url: &str) -> NativeResult<desegni_ai::WebUrl> {
+fn preview_link(url: &str) -> NativeResult<desegnos_ai::WebUrl> {
     let parsed =
-        desegni_ai::WebUrl::parse(url).map_err(|_| "This link is not a valid web address.")?;
+        desegnos_ai::WebUrl::parse(url).map_err(|_| "This link is not a valid web address.")?;
     if url.len() > 2048
         || !matches!(parsed.scheme(), "http" | "https")
         || parsed.host_str().is_none()
@@ -1820,15 +1820,15 @@ pub fn get_page_source_map(
     state: WorkspaceState<'_>,
     project_id: Uuid,
     page_id: Uuid,
-) -> desegni_core::SourceEditResult<desegni_core::PageSourceMap> {
+) -> desegnos_core::SourceEditResult<desegnos_core::PageSourceMap> {
     let state = state
         .lock()
-        .map_err(|_| desegni_core::SourceEditError::general("The workspace is unavailable."))?;
+        .map_err(|_| desegnos_core::SourceEditError::general("The workspace is unavailable."))?;
     let project = state
         .project()
-        .map_err(desegni_core::SourceEditError::general)?;
+        .map_err(desegnos_core::SourceEditError::general)?;
     if project.id != project_id {
-        return Err(desegni_core::SourceEditError::general(
+        return Err(desegnos_core::SourceEditError::general(
             "Return to the project that owns this page.",
         ));
     }
@@ -1841,7 +1841,7 @@ pub fn get_frame_targets(
     state: WorkspaceState<'_>,
     project_id: Uuid,
     page_id: Uuid,
-) -> NativeResult<Vec<desegni_core::PageFrameTarget>> {
+) -> NativeResult<Vec<desegnos_core::PageFrameTarget>> {
     let state = state.lock().map_err(message)?;
     let project = state.project()?;
     if project.id != project_id {
@@ -1855,9 +1855,9 @@ pub fn inspect_element(
     state: WorkspaceState<'_>,
     project_id: Uuid,
     page_id: Uuid,
-    target: desegni_core::ElementTarget,
-    document: Option<desegni_core::DocumentTarget>,
-) -> NativeResult<desegni_core::ElementDetails> {
+    target: desegnos_core::ElementTarget,
+    document: Option<desegnos_core::DocumentTarget>,
+) -> NativeResult<desegnos_core::ElementDetails> {
     let state = state.lock().map_err(message)?;
     let project = state
         .session
@@ -1867,7 +1867,7 @@ pub fn inspect_element(
     if project.id != project_id {
         return Err("Return to the project that owns this element.".into());
     }
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     project
         .inspect_element_in(&document, &target)
         .map_err(message)
@@ -1880,9 +1880,9 @@ pub struct FrameDocumentView {
     src: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     path: Option<String>,
-    document: desegni_core::DocumentTarget,
+    document: desegnos_core::DocumentTarget,
     source_sha256: String,
-    content: desegni_core::SiteContent,
+    content: desegnos_core::SiteContent,
 }
 
 /// Framed documents rendered statically and edited on the canvas.
@@ -1904,7 +1904,7 @@ pub fn get_frame_documents(
             continue;
         };
         // A page that frames itself has no editable inner document.
-        if document == desegni_core::DocumentTarget::page(page_id) {
+        if document == desegnos_core::DocumentTarget::page(page_id) {
             continue;
         }
         let Ok(content) = project.document_content(&document) else {
@@ -1917,8 +1917,8 @@ pub fn get_frame_documents(
             continue;
         };
         let path = match &document {
-            desegni_core::DocumentTarget::SiteFile { path } => Some(path.clone()),
-            desegni_core::DocumentTarget::Page { page_id } => project
+            desegnos_core::DocumentTarget::SiteFile { path } => Some(path.clone()),
+            desegnos_core::DocumentTarget::Page { page_id } => project
                 .website
                 .as_ref()
                 .and_then(|site| site.page_files.get(page_id).cloned()),
@@ -1942,8 +1942,8 @@ pub fn ensure_element_id(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    target: desegni_core::ElementTarget,
-    document: Option<desegni_core::DocumentTarget>,
+    target: desegnos_core::ElementTarget,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<ElementEditView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -1954,7 +1954,7 @@ pub fn ensure_element_id(
         return Err("Return to the project that owns this element.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     let element = session
         .ensure_element_id_document(revision, &document, &target, |next| journal.append(next))
         .map_err(message)?;
@@ -1970,9 +1970,9 @@ pub fn edit_element(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    target: desegni_core::ElementTarget,
-    change: desegni_core::ElementEdit,
-    document: Option<desegni_core::DocumentTarget>,
+    target: desegnos_core::ElementTarget,
+    change: desegnos_core::ElementEdit,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<ElementEditView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -1983,7 +1983,7 @@ pub fn edit_element(
         return Err("Return to the project that owns this element.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     let element = session
         .edit_element_document(revision, &document, &target, &change, |next| {
             journal.append(next)
@@ -1999,7 +1999,7 @@ pub fn edit_element(
 #[serde(rename_all = "camelCase")]
 pub struct ElementBatchEditView {
     workspace: WorkspaceView,
-    elements: Vec<Option<desegni_core::ElementTarget>>,
+    elements: Vec<Option<desegnos_core::ElementTarget>>,
 }
 
 /// Apply several element changes to one document as one revision and one history step.
@@ -2009,8 +2009,8 @@ pub fn edit_elements(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    edits: Vec<desegni_core::ElementBatchEdit>,
-    document: Option<desegni_core::DocumentTarget>,
+    edits: Vec<desegnos_core::ElementBatchEdit>,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<ElementBatchEditView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -2021,7 +2021,7 @@ pub fn edit_elements(
         return Err("Return to the project that owns these elements.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     let elements = session
         .edit_elements_document(revision, &document, &edits, |next| journal.append(next))
         .map_err(message)?;
@@ -2035,7 +2035,7 @@ pub fn edit_elements(
 #[serde(rename_all = "camelCase")]
 pub struct AcrossPagesView {
     workspace: WorkspaceView,
-    changes: Vec<desegni_core::AcrossPagesChange>,
+    changes: Vec<desegnos_core::AcrossPagesChange>,
 }
 
 /// The other pages and framed site files that contain this element.
@@ -2044,15 +2044,15 @@ pub fn element_matches(
     state: WorkspaceState<'_>,
     project_id: Uuid,
     page_id: Uuid,
-    target: desegni_core::ElementTarget,
-    document: Option<desegni_core::DocumentTarget>,
-) -> NativeResult<Vec<desegni_core::AcrossPagesMatch>> {
+    target: desegnos_core::ElementTarget,
+    document: Option<desegnos_core::DocumentTarget>,
+) -> NativeResult<Vec<desegnos_core::AcrossPagesMatch>> {
     let state = state.lock().map_err(message)?;
     let session = state.session.as_ref().ok_or("Open a project first.")?;
     if session.project().id != project_id {
         return Err("Return to the project that owns these elements.".into());
     }
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     session
         .project()
         .element_matches(&document, &target)
@@ -2066,10 +2066,10 @@ pub fn edit_element_across_pages(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    target: desegni_core::ElementTarget,
-    change: desegni_core::ElementEdit,
-    documents: Vec<desegni_core::DocumentTarget>,
-    document: Option<desegni_core::DocumentTarget>,
+    target: desegnos_core::ElementTarget,
+    change: desegnos_core::ElementEdit,
+    documents: Vec<desegnos_core::DocumentTarget>,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<AcrossPagesView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -2080,8 +2080,8 @@ pub fn edit_element_across_pages(
         return Err("Return to the project that owns these elements.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
-    let request = desegni_core::AcrossPagesEdit {
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
+    let request = desegnos_core::AcrossPagesEdit {
         document,
         target,
         edit: change,
@@ -2103,8 +2103,8 @@ pub fn undo_element(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    target: desegni_core::ElementTarget,
-    document: Option<desegni_core::DocumentTarget>,
+    target: desegnos_core::ElementTarget,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<ElementEditView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -2115,7 +2115,7 @@ pub fn undo_element(
         return Err("Return to the project that owns this element.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     let element = session
         .undo_element_document(revision, &document, &target, |next| journal.append(next))
         .map_err(message)?;
@@ -2129,7 +2129,7 @@ pub fn undo_element(
 #[serde(rename_all = "camelCase")]
 pub struct LayerPasteView {
     workspace: WorkspaceView,
-    selection: desegni_core::LayerPasteSelection,
+    selection: desegnos_core::LayerPasteSelection,
 }
 
 #[tauri::command]
@@ -2139,11 +2139,11 @@ pub async fn copy_layer(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    target: desegni_core::LayerTarget,
-    visual_styles: Vec<desegni_core::ElementStyleEdit>,
-    document: Option<desegni_core::DocumentTarget>,
+    target: desegnos_core::LayerTarget,
+    visual_styles: Vec<desegnos_core::ElementStyleEdit>,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<()> {
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     let packet = {
         let state = state.lock().map_err(message)?;
         let project = state
@@ -2175,11 +2175,11 @@ pub async fn copy_elements(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    targets: Vec<desegni_core::ElementTarget>,
-    visual_styles: Vec<Vec<desegni_core::ElementStyleEdit>>,
-    document: Option<desegni_core::DocumentTarget>,
+    targets: Vec<desegnos_core::ElementTarget>,
+    visual_styles: Vec<Vec<desegnos_core::ElementStyleEdit>>,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<()> {
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     let packet = {
         let state = state.lock().map_err(message)?;
         let project = state
@@ -2210,9 +2210,9 @@ pub async fn cut_layer(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    target: desegni_core::LayerTarget,
-    visual_styles: Vec<desegni_core::ElementStyleEdit>,
-    document: Option<desegni_core::DocumentTarget>,
+    target: desegnos_core::LayerTarget,
+    visual_styles: Vec<desegnos_core::ElementStyleEdit>,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<WorkspaceView> {
     // Keep the original unless the OS has accepted the complete clipboard
     // packet. A concurrent edit while the transfer runs must never be cut.
@@ -2227,7 +2227,7 @@ pub async fn cut_layer(
         document.clone(),
     )
     .await?;
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     let mut state = state.lock().map_err(message)?;
     let Workspace {
         session, journal, ..
@@ -2238,20 +2238,20 @@ pub async fn cut_layer(
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
     match target {
-        desegni_core::LayerTarget::Request { region_id } => session
+        desegnos_core::LayerTarget::Request { region_id } => session
             .execute(
                 revision,
-                desegni_core::Command::RemoveRegion { page_id, region_id },
+                desegnos_core::Command::RemoveRegion { page_id, region_id },
                 |next| journal.append(next),
             )
             .map_err(message)?,
-        desegni_core::LayerTarget::Element { target } => {
+        desegnos_core::LayerTarget::Element { target } => {
             session
                 .edit_element_document(
                     revision,
                     &document,
                     &target,
-                    &desegni_core::ElementEdit::Remove,
+                    &desegnos_core::ElementEdit::Remove,
                     |next| journal.append(next),
                 )
                 .map_err(message)?;
@@ -2267,13 +2267,13 @@ pub async fn paste_layer(
     project_id: Uuid,
     page_id: Uuid,
     revision: u64,
-    after: Option<desegni_core::ElementTarget>,
-    document: Option<desegni_core::DocumentTarget>,
+    after: Option<desegnos_core::ElementTarget>,
+    document: Option<desegnos_core::DocumentTarget>,
 ) -> NativeResult<LayerPasteView> {
     let text = tauri::async_runtime::spawn_blocking(move || crate::clipboard::read(&app))
         .await
         .map_err(message)??;
-    let packet = desegni_core::LayerClipboard::from_json(&text).map_err(message)?;
+    let packet = desegnos_core::LayerClipboard::from_json(&text).map_err(message)?;
     let mut state = state.lock().map_err(message)?;
     let Workspace {
         session, journal, ..
@@ -2283,7 +2283,7 @@ pub async fn paste_layer(
         return Err("Return to the project where you want to paste this layer.".into());
     }
     let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
+    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
     let selection = session
         .paste_layer_document(revision, &document, &packet, after.as_ref(), |next| {
             journal.append(next)
@@ -2301,7 +2301,7 @@ pub fn refresh_element_bounds(
     project_id: Uuid,
     page_id: Uuid,
     viewport: Viewport,
-    bounds: Vec<desegni_core::ElementBounds>,
+    bounds: Vec<desegnos_core::ElementBounds>,
 ) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -2324,7 +2324,7 @@ pub fn refresh_element_target_bounds(
     project_id: Uuid,
     page_id: Uuid,
     viewport: Viewport,
-    bounds: Vec<desegni_core::ElementTargetBounds>,
+    bounds: Vec<desegnos_core::ElementTargetBounds>,
 ) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -2448,7 +2448,7 @@ pub async fn open_project(
                 dialog
                     .add_filter(
                         "Desegnos website",
-                        &desegni_storage::PROJECT_FILE_EXTENSIONS,
+                        &desegnos_storage::PROJECT_FILE_EXTENSIONS,
                     )
                     .blocking_pick_file()
             })
@@ -2466,7 +2466,7 @@ pub async fn open_project(
         .map_err(message)?
         .ensure_switch_allowed()?;
     if path.is_dir()
-        && desegni_storage::project_in_folder(&path)
+        && desegnos_storage::project_in_folder(&path)
             .map_err(message)?
             .is_none()
     {
@@ -2504,7 +2504,7 @@ pub async fn save_project(
                     .file()
                     .add_filter(
                         "Desegnos website",
-                        &desegni_storage::PROJECT_FILE_EXTENSIONS,
+                        &desegnos_storage::PROJECT_FILE_EXTENSIONS,
                     )
                     .set_file_name("website.desegnos")
                     .blocking_save_file(),
@@ -2536,7 +2536,7 @@ async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Opt
                 .file()
                 .add_filter(
                     "Desegnos website",
-                    &desegni_storage::PROJECT_FILE_EXTENSIONS,
+                    &desegnos_storage::PROJECT_FILE_EXTENSIONS,
                 )
                 .set_file_name(suggested)
                 .blocking_save_file(),
@@ -2564,7 +2564,7 @@ fn copy_destination(path: Option<PathBuf>, project: &Project) -> NativeResult<Op
         if path
             .extension()
             .and_then(|s| s.to_str())
-            .is_none_or(|ext| !desegni_storage::PROJECT_FILE_EXTENSIONS.contains(&ext))
+            .is_none_or(|ext| !desegnos_storage::PROJECT_FILE_EXTENSIONS.contains(&ext))
         {
             return Err("Project copies must use .desegnos or .desegni.".into());
         }
@@ -2573,7 +2573,7 @@ fn copy_destination(path: Option<PathBuf>, project: &Project) -> NativeResult<Op
             .file_stem()
             .and_then(|s| s.to_str())
             .ok_or("Choose a project name.")?;
-        desegni_storage::create_project_folder(parent, name, project.id).map_err(message)
+        desegnos_storage::create_project_folder(parent, name, project.id).map_err(message)
     })
     .transpose()
 }
@@ -2590,7 +2590,7 @@ pub fn move_into_project_folder(state: WorkspaceState<'_>) -> NativeResult<Works
     {
         return Ok(state.view());
     }
-    let path = desegni_storage::create_project_folder(
+    let path = desegnos_storage::create_project_folder(
         &state.project_location()?,
         &project.name,
         project.id,
@@ -2619,7 +2619,7 @@ pub async fn save_project_checked(
     let picked = if choose_path {
         let suggested = format!(
             "{}.desegnos",
-            desegni_storage::sanitize_project_name(&project.name)
+            desegnos_storage::sanitize_project_name(&project.name)
         );
         let Some(path) = choose_save_path(app, suggested).await? else {
             return Ok(SaveProjectOutcome::Cancelled);
@@ -2774,13 +2774,13 @@ pub fn get_project_notes(state: WorkspaceState<'_>) -> NativeResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use desegni_core::GENERATION_MIGRATION_NOTICE;
+    use desegnos_core::GENERATION_MIGRATION_NOTICE;
 
     struct Temp(PathBuf);
     impl Temp {
         fn new() -> Self {
             let path =
-                std::env::temp_dir().join(format!("desegni-workspace-{}", uuid::Uuid::new_v4()));
+                std::env::temp_dir().join(format!("desegnos-workspace-{}", uuid::Uuid::new_v4()));
             fs::create_dir(&path).unwrap();
             Self(path)
         }
@@ -2806,12 +2806,12 @@ mod tests {
     fn documents_key_ignores_request_prompts_but_tracks_page_code() {
         let mut project = project("Key");
         let page_id = project.pages[0].id;
-        project.pages[0].content = Some(desegni_core::SiteContent {
+        project.pages[0].content = Some(desegnos_core::SiteContent {
             html: "<h1>Home</h1>".into(),
             css: String::new(),
             javascript: String::new(),
         });
-        let rect = desegni_core::Rect {
+        let rect = desegnos_core::Rect {
             x: 0.0,
             y: 0.0,
             width: 100.0,
@@ -2869,7 +2869,7 @@ mod tests {
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
         let mut project = project("Site");
         let page_id = project.pages[0].id;
-        project.website = Some(desegni_core::ImportedWebsite {
+        project.website = Some(desegnos_core::ImportedWebsite {
             page_files: std::collections::BTreeMap::from([(page_id, "index.html".into())]),
             files: std::collections::BTreeMap::from([(
                 "index.html".into(),
@@ -2911,7 +2911,7 @@ mod tests {
         workspace.create_in_folder(first.clone(), None).unwrap();
         let path = temp.0.join("Projects/New_ website/New_ website.desegnos");
         assert_eq!(workspace.file.as_ref().unwrap().path(), path);
-        assert_eq!(desegni_storage::load_project(&path).unwrap(), first);
+        assert_eq!(desegnos_storage::load_project(&path).unwrap(), first);
         assert!(path.parent().unwrap().join("index.html").is_file());
         assert!(!workspace.view().dirty);
         assert!(workspace.view().project_folder);
@@ -2937,7 +2937,7 @@ mod tests {
         let mut workspace = Workspace::from_directory(temp.0.join("app-data")).unwrap();
         let mut original = project("Folder with context");
         original.brief.purpose = "Retain this brief, page content and decisions".into();
-        original.pages[0].content = Some(desegni_core::SiteContent {
+        original.pages[0].content = Some(desegnos_core::SiteContent {
             html: "<h1>Existing page</h1>".into(),
             css: String::new(),
             javascript: String::new(),
@@ -3044,7 +3044,7 @@ mod tests {
                 Command::SetDecision {
                     topic: "Brand color".into(),
                     value: "#185F48".into(),
-                    scope: desegni_core::Scope::Project,
+                    scope: desegnos_core::Scope::Project,
                     protected: true,
                 },
                 |p| journal.as_ref().unwrap().append(p),
@@ -3078,13 +3078,13 @@ mod tests {
             ),
             ("styles.css".into(), b"h1 { color: blue; }".to_vec()),
         ]);
-        desegni_core::import_website_files("Imported site", &files).unwrap()
+        desegnos_core::import_website_files("Imported site", &files).unwrap()
     }
     fn saved_site(temp: &Temp) -> (Workspace, std::path::PathBuf) {
         let mut workspace = Workspace::from_directory(temp.0.join("profile")).unwrap();
         let project = imported_site_project();
         let path =
-            desegni_storage::create_project_folder(&temp.0, &project.name, project.id).unwrap();
+            desegnos_storage::create_project_folder(&temp.0, &project.name, project.id).unwrap();
         let file = ProjectFile::acquire(&path).unwrap();
         file.save(&project).unwrap();
         workspace.start(project, Some(file), Some(0)).unwrap();
@@ -3100,7 +3100,7 @@ mod tests {
         let html = fs::read_to_string(root.join("index.html")).unwrap();
         assert!(html.contains("<script defer src=\"desegnos-regions-"));
         assert!(html.trim_end().ends_with("</body></html>"));
-        let files = desegni_storage::project_folder::read_website_files(&root)
+        let files = desegnos_storage::project_folder::read_website_files(&root)
             .unwrap()
             .files;
         let selection = workspace.prepare_site_import(files).unwrap().unwrap();
@@ -3123,7 +3123,7 @@ mod tests {
         assert_eq!(workspace.view().outside_edits.changed_paths, ["index.html"]);
         assert_eq!(fs::read_to_string(root.join("index.html")).unwrap(), edited);
         // "Import changes" reads the project's own site and adopts exactly those bytes.
-        let files = desegni_storage::project_folder::read_website_files(&root)
+        let files = desegnos_storage::project_folder::read_website_files(&root)
             .unwrap()
             .files;
         let selection = workspace.prepare_site_import(files).unwrap().unwrap();
@@ -3161,7 +3161,7 @@ mod tests {
         let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
         assert!(restarted.recoveries.is_empty());
         assert_eq!(
-            desegni_storage::load_project(&temp.0.join("site.desegni")).unwrap(),
+            desegnos_storage::load_project(&temp.0.join("site.desegni")).unwrap(),
             project
         );
     }
@@ -3451,7 +3451,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [first.id]
         );
-        assert!(desegni_storage::load_project(&path).unwrap().show_grid);
+        assert!(desegnos_storage::load_project(&path).unwrap().show_grid);
     }
 
     #[test]
@@ -3674,8 +3674,8 @@ mod tests {
         assert!(ProjectFile::acquire(&old_path).is_err());
         ProjectFile::acquire(&new_path).unwrap();
         assert_eq!(fs::read(pointer).unwrap(), before);
-        assert_eq!(desegni_storage::load_project(&old_path).unwrap(), original);
-        assert_eq!(desegni_storage::load_project(&new_path).unwrap(), candidate);
+        assert_eq!(desegnos_storage::load_project(&old_path).unwrap(), original);
+        assert_eq!(desegnos_storage::load_project(&new_path).unwrap(), candidate);
     }
 
     #[test]
@@ -4087,7 +4087,7 @@ mod tests {
             workspace.replace_save_conflict(choice.token).unwrap(),
             SaveProjectOutcome::Saved { .. }
         ));
-        assert_eq!(desegni_storage::load_project(&path).unwrap(), local);
+        assert_eq!(desegnos_storage::load_project(&path).unwrap(), local);
         assert_eq!(
             fs::read(path.with_file_name("site.desegnos.previous")).unwrap(),
             bytes
@@ -4168,7 +4168,7 @@ mod tests {
         );
         assert!(!blocked.can_replace);
         assert!(workspace.replace_save_conflict(blocked.token).is_err());
-        assert_eq!(desegni_storage::load_project(&target).unwrap(), other);
+        assert_eq!(desegnos_storage::load_project(&target).unwrap(), other);
     }
 
     #[test]
@@ -4264,7 +4264,7 @@ mod tests {
             SaveProjectOutcome::Saved { .. }
         ));
         assert_eq!(fs::read(path).unwrap(), b"Keep this original document");
-        assert_eq!(desegni_storage::load_project(&copy).unwrap(), original);
+        assert_eq!(desegnos_storage::load_project(&copy).unwrap(), original);
         assert!(!workspace.view().dirty);
         drop(workspace);
         assert!(
@@ -4276,7 +4276,7 @@ mod tests {
     }
 
     const SCHEMA_ONE: &[u8] = include_bytes!(
-        "../../crates/desegni-storage/tests/fixtures/schema1-mixed-generation.desegni"
+        "../../crates/desegnos-storage/tests/fixtures/schema1-mixed-generation.desegni"
     );
 
     #[test]
@@ -4328,7 +4328,7 @@ mod tests {
     }
 
     const SCHEMA_SEVEN: &[u8] =
-        include_bytes!("../../crates/desegni-storage/tests/fixtures/schema7-untouched.desegni");
+        include_bytes!("../../crates/desegnos-storage/tests/fixtures/schema7-untouched.desegni");
 
     #[test]
     fn an_untouched_silently_upgraded_file_is_not_offered_as_unsaved_work() {
@@ -4388,12 +4388,12 @@ mod tests {
         let temp = Temp::new();
         let fixture_path = temp.0.join("source.desegni");
         fs::write(&fixture_path, SCHEMA_ONE).unwrap();
-        let source = desegni_storage::load_project_document(&fixture_path).unwrap();
+        let source = desegnos_storage::load_project_document(&fixture_path).unwrap();
         let original_json = include_str!(
-            "../../crates/desegni-storage/tests/fixtures/schema1-mixed-generation.project.json"
+            "../../crates/desegnos-storage/tests/fixtures/schema1-mixed-generation.project.json"
         );
         assert_eq!(
-            desegni_core::digest(original_json.as_bytes()),
+            desegnos_core::digest(original_json.as_bytes()),
             source.source_sha256
         );
         let journal_name = format!("{}-legacy.journal", source.project.id);
@@ -4555,7 +4555,7 @@ struct WebsiteImportSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct WebsiteImportSelection {
     token: Uuid,
-    review: desegni_core::WebsiteImportReview,
+    review: desegnos_core::WebsiteImportReview,
 }
 
 #[tauri::command]
@@ -4575,7 +4575,7 @@ pub fn project_site_import_source(
         .ok_or("Missing project folder.")?
         .canonicalize()
         .map_err(message)?;
-    let files = desegni_storage::project_folder::read_website_files(&root)
+    let files = desegnos_storage::project_folder::read_website_files(&root)
         .map_err(message)?
         .files;
     identity

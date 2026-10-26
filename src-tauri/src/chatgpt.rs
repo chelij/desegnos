@@ -1,5 +1,5 @@
 use crate::generation::{AiSettingsView, GenerationService, settings_view};
-use desegni_ai::{AuthenticationMethod, ChatgptManager, ChatgptView, CredentialStorage};
+use desegnos_ai::{AuthenticationMethod, ChatgptManager, ChatgptView, CredentialStorage};
 use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
 use tauri::{AppHandle, State, WebviewWindow};
 use uuid::Uuid;
@@ -20,14 +20,14 @@ impl ChatgptState {
             ChatgptManager::initialize(directory).map_err(|error| error.message().to_owned());
         #[cfg(feature = "native-tests")]
         let manager = (|| {
-            let endpoint = std::env::var("DESEGNI_NATIVE_TEST_OPENAI_ENDPOINT")
+            let endpoint = std::env::var("DESEGNOS_NATIVE_TEST_OPENAI_ENDPOINT")
                 .map_err(|_| "The isolated ChatGPT test endpoint is unavailable.".to_owned())?;
             let base = endpoint
                 .strip_suffix("/v1")
                 .ok_or_else(|| "The isolated ChatGPT test endpoint is invalid.".to_owned())?;
-            let client = desegni_ai::OpenAiClient::for_loopback(&endpoint)
+            let client = desegnos_ai::OpenAiClient::for_loopback(&endpoint)
                 .map_err(|error| error.message().to_owned())?;
-            let vault = desegni_ai::ChatgptTestVault::memory_with_write_failure_flag(
+            let vault = desegnos_ai::ChatgptTestVault::memory_with_write_failure_flag(
                 directory.join("native-test-vault-write-failure"),
             );
             ChatgptManager::for_loopback(directory, base, client, vault)
@@ -232,7 +232,7 @@ pub async fn select_chatgpt_account(
         if let Ok(client) = client {
             // Discovery failures remain in the accepted account's public model status.
             let _ = manager
-                .discover_models(account_id, &client, &desegni_ai::CancellationToken::new())
+                .discover_models(account_id, &client, &desegnos_ai::CancellationToken::new())
                 .await;
         }
     }
@@ -349,7 +349,7 @@ pub fn open_chatgpt_usage(app: AppHandle, window: WebviewWindow) -> NativeResult
     #[cfg(feature = "native-tests")]
     {
         use tauri::Emitter;
-        app.emit("desegni-test-usage-opened", USAGE_URL)
+        app.emit("desegnos-test-usage-opened", USAGE_URL)
             .map_err(|_| "The isolated usage event could not be recorded.".into())
     }
 }

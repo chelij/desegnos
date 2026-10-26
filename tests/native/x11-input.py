@@ -48,7 +48,7 @@ def bind(library, name, result, arguments):
 def main():
     display_name = os.environ.get("DISPLAY", "")
     match = re.fullmatch(r":(\d+)(?:\.\d+)?", display_name)
-    if not match or int(match[1]) < 90 or display_name == os.environ.get("DESEGNI_DESKTOP_DISPLAY"):
+    if not match or int(match[1]) < 90 or display_name == os.environ.get("DESEGNOS_DESKTOP_DISPLAY"):
         raise RuntimeError("X11 input requires a separate guarded Xvfb display numbered 90 or higher")
     if os.environ.get("GDK_BACKEND") != "x11" or os.environ.get("WAYLAND_DISPLAY") or os.environ.get("WAYLAND_SOCKET"):
         raise RuntimeError("X11 input is restricted to the isolated X11 test session")

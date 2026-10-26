@@ -11,7 +11,7 @@
   }
   function report(message) {
     if (reported++ >= 20) return;
-    post({ type: 'desegni-preview-error', sessionId, pageId, message: String(message).slice(0, 4096) });
+    post({ type: 'desegnos-preview-error', sessionId, pageId, message: String(message).slice(0, 4096) });
   }
   addEventListener('error', event => report(event.message || 'A preview resource could not be loaded.'));
   addEventListener('unhandledrejection', event => report(event.reason?.message || event.reason || 'A preview operation failed.'));
@@ -19,13 +19,13 @@
   // this document, so the frame reports the one key that belongs to the editor.
   addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    post({ type: 'desegni-preview-escape', sessionId, pageId });
+    post({ type: 'desegnos-preview-escape', sessionId, pageId });
   }, true);
   // The Live bar shows where the page is. Imported sites report their real address;
   // a generated page reports the route it will have on the published site.
   function announce() {
     const path = (fileMode ? location.pathname : currentPath) + location.search + location.hash;
-    post({ type: 'desegni-preview-location', sessionId, pageId, path: path.slice(0, 2048) });
+    post({ type: 'desegnos-preview-location', sessionId, pageId, path: path.slice(0, 2048) });
   }
   addEventListener('load', announce);
   addEventListener('hashchange', announce);
@@ -37,7 +37,7 @@
     if (event.source !== parent) return;
     const value = event.data;
     if (!value || typeof value !== 'object' || Array.isArray(value)) return;
-    if (value.type !== 'desegni-preview-command' || value.sessionId !== sessionId) return;
+    if (value.type !== 'desegnos-preview-command' || value.sessionId !== sessionId) return;
     if (value.action === 'back') history.back();
     else if (value.action === 'forward') history.forward();
     else if (value.action === 'reload') location.reload();
@@ -55,7 +55,7 @@
     return target ? `../${target}/index.html` : null;
   }
   function offerLink(url) {
-    post({ type: 'desegni-preview-link', sessionId, pageId, url: String(url).slice(0, 2048) });
+    post({ type: 'desegnos-preview-link', sessionId, pageId, url: String(url).slice(0, 2048) });
   }
   // Links belong to the browser. The editor only hears about destinations this session
   // cannot reach: a new window, another site, or a scheme with no preview.

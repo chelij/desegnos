@@ -1,0 +1,416 @@
+{
+  "reviewedAt": "2026-10-18",
+  "database": "https://github.com/RustSec/advisory-db",
+  "databaseCommit": "999ec89d5d3f10f20be14750ec8c2d8b44e0ac9b",
+  "scope": "Linux desegnos-ai enabled normal/build dependency graph; optional unselected lockfile dependencies and other target graphs are excluded.",
+  "activePackageCount": 131,
+  "matchedAdvisories": [
+    {
+      "id": "RUSTSEC-2026-0044",
+      "package": "aws-lc-sys",
+      "version": "0.46.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0045",
+      "package": "aws-lc-sys",
+      "version": "0.46.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0046",
+      "package": "aws-lc-sys",
+      "version": "0.46.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0047",
+      "package": "aws-lc-sys",
+      "version": "0.46.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0048",
+      "package": "aws-lc-sys",
+      "version": "0.46.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2017-0004",
+      "package": "base64",
+      "version": "0.23.1",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0007",
+      "package": "bytes",
+      "version": "1.12.1",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2020-0060",
+      "package": "futures-task",
+      "version": "0.3.34",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2020-0061",
+      "package": "futures-task",
+      "version": "0.3.34",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2020-0059",
+      "package": "futures-util",
+      "version": "0.3.34",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2020-0062",
+      "package": "futures-util",
+      "version": "0.3.34",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2020-0146",
+      "package": "generic-array",
+      "version": "0.14.7",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2019-0033",
+      "package": "http",
+      "version": "1.5.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2019-0034",
+      "package": "http",
+      "version": "1.5.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2016-0002",
+      "package": "hyper",
+      "version": "1.12.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2017-0002",
+      "package": "hyper",
+      "version": "1.12.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2020-0008",
+      "package": "hyper",
+      "version": "1.12.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2021-0020",
+      "package": "hyper",
+      "version": "1.12.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2021-0078",
+      "package": "hyper",
+      "version": "1.12.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2021-0079",
+      "package": "hyper",
+      "version": "1.12.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2022-0022",
+      "package": "hyper",
+      "version": "1.12.0",
+      "patchedOrUnaffected": true,
+      "informational": "unsound"
+    },
+    {
+      "id": "RUSTSEC-2024-0421",
+      "package": "idna",
+      "version": "1.1.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2020-0081",
+      "package": "mio",
+      "version": "1.2.4",
+      "patchedOrUnaffected": true,
+      "informational": "unsound"
+    },
+    {
+      "id": "RUSTSEC-2024-0019",
+      "package": "mio",
+      "version": "1.2.4",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2019-0017",
+      "package": "once_cell",
+      "version": "1.21.4",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2024-0336",
+      "package": "rustls",
+      "version": "0.23.46",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2024-0399",
+      "package": "rustls",
+      "version": "0.23.46",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0285",
+      "package": "rustls",
+      "version": "0.23.46",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0346",
+      "package": "rustls",
+      "version": "0.23.46",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0347",
+      "package": "rustls",
+      "version": "0.23.46",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0348",
+      "package": "rustls",
+      "version": "0.23.46",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0349",
+      "package": "rustls",
+      "version": "0.23.46",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2023-0053",
+      "package": "rustls-webpki",
+      "version": "0.103.15",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0049",
+      "package": "rustls-webpki",
+      "version": "0.103.15",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0098",
+      "package": "rustls-webpki",
+      "version": "0.103.15",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0099",
+      "package": "rustls-webpki",
+      "version": "0.103.15",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2026-0104",
+      "package": "rustls-webpki",
+      "version": "0.103.15",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2021-0100",
+      "package": "sha2",
+      "version": "0.10.9",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2024-0006",
+      "package": "shlex",
+      "version": "2.0.1",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2025-0047",
+      "package": "slab",
+      "version": "0.4.12",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2018-0003",
+      "package": "smallvec",
+      "version": "1.16.3",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2018-0018",
+      "package": "smallvec",
+      "version": "1.16.3",
+      "patchedOrUnaffected": true,
+      "informational": "unsound"
+    },
+    {
+      "id": "RUSTSEC-2019-0009",
+      "package": "smallvec",
+      "version": "1.16.3",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2019-0012",
+      "package": "smallvec",
+      "version": "1.16.3",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2021-0003",
+      "package": "smallvec",
+      "version": "1.16.3",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2020-0079",
+      "package": "socket2",
+      "version": "0.6.5",
+      "patchedOrUnaffected": true,
+      "informational": "unsound"
+    },
+    {
+      "id": "RUSTSEC-2021-0072",
+      "package": "tokio",
+      "version": "1.53.3",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2021-0124",
+      "package": "tokio",
+      "version": "1.53.3",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2023-0001",
+      "package": "tokio",
+      "version": "1.53.3",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2023-0005",
+      "package": "tokio",
+      "version": "1.53.3",
+      "patchedOrUnaffected": true,
+      "informational": "unsound"
+    },
+    {
+      "id": "RUSTSEC-2025-0023",
+      "package": "tokio",
+      "version": "1.53.3",
+      "patchedOrUnaffected": true,
+      "informational": "unsound"
+    },
+    {
+      "id": "RUSTSEC-2020-0019",
+      "package": "tokio-rustls",
+      "version": "0.26.6",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2022-0043",
+      "package": "tower-http",
+      "version": "0.6.11",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2023-0078",
+      "package": "tracing",
+      "version": "0.1.44",
+      "patchedOrUnaffected": true,
+      "informational": "unsound"
+    },
+    {
+      "id": "RUSTSEC-2018-0001",
+      "package": "untrusted",
+      "version": "0.9.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2021-0115",
+      "package": "zeroize_derive",
+      "version": "1.5.0",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2024-0347",
+      "package": "zerovec",
+      "version": "0.11.8",
+      "patchedOrUnaffected": true,
+      "informational": null
+    },
+    {
+      "id": "RUSTSEC-2024-0346",
+      "package": "zerovec-derive",
+      "version": "0.11.6",
+      "patchedOrUnaffected": true,
+      "informational": null
+    }
+  ],
+  "affected": []
+}

@@ -1081,12 +1081,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "desegni-ai"
+name = "desegnos-ai"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
- "desegni-core",
- "desegni-storage",
+ "desegnos-core",
+ "desegnos-storage",
  "image",
  "jsonwebtoken",
  "keyring",
@@ -1101,7 +1101,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "desegni-core"
+name = "desegnos-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -1125,13 +1125,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "desegni-desktop"
+name = "desegnos-desktop"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
- "desegni-ai",
- "desegni-core",
- "desegni-storage",
+ "desegnos-ai",
+ "desegnos-core",
+ "desegnos-storage",
  "http-body-util",
  "hyper",
  "hyper-util",
@@ -1155,11 +1155,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "desegni-storage"
+name = "desegnos-storage"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "desegni-core",
+ "desegnos-core",
  "image",
  "rustix",
  "serde",

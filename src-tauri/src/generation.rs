@@ -3,14 +3,14 @@ use crate::{
     preview::{PreviewDescriptor, PreviewRegistry},
     workspace::{Workspace, WorkspaceView},
 };
-use desegni_ai::{
+use desegnos_ai::{
     ApiKey, AuthenticationMethod, CancellationToken, ChatgptView, CredentialInfo,
     CredentialManager, CredentialStorage, ErrorKind, ModelInfo, OpenAiClient, ProviderClient,
     ProviderDescriptor, ProviderError, ProviderId, ProviderResponse, ProviderSettings,
     SubmissionOutcome, TokenUsage, model_catalogue, provider_catalogue,
 };
-use desegni_core::{GenerationCandidate, GenerationMode, Project, RequirementsSnapshot, digest};
-use desegni_storage::{ProjectFile, write_markdown};
+use desegnos_core::{GenerationCandidate, GenerationMode, Project, RequirementsSnapshot, digest};
+use desegnos_storage::{ProjectFile, write_markdown};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -40,12 +40,12 @@ fn message(error: impl std::fmt::Display) -> String {
 fn resolve_current(
     view: &GenerationJobView,
     project: &Project,
-) -> NativeResult<desegni_core::ResolvedGeneration> {
+) -> NativeResult<desegnos_core::ResolvedGeneration> {
     let candidate = view
         .candidate
         .as_ref()
         .ok_or("The candidate is unavailable.")?;
-    let resolved = desegni_core::resolve_edits_during_generation(
+    let resolved = desegnos_core::resolve_edits_during_generation(
         view.request_requirements(),
         candidate,
         project,
@@ -140,14 +140,14 @@ pub struct GenerationAttempt {
 struct GenerationArea {
     page_id: Uuid,
     region_id: Uuid,
-    rect: desegni_core::Rect,
-    #[serde(default, skip_serializing_if = "desegni_core::RegionShape::is_rect")]
-    shape: desegni_core::RegionShape,
+    rect: desegnos_core::Rect,
+    #[serde(default, skip_serializing_if = "desegnos_core::RegionShape::is_rect")]
+    shape: desegnos_core::RegionShape,
     /// Set when this request edits a document shown inside one of the page's iframes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    document: Option<desegni_core::DocumentTarget>,
+    document: Option<desegnos_core::DocumentTarget>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    frame_rect: Option<desegni_core::Rect>,
+    frame_rect: Option<desegnos_core::Rect>,
 }
 
 /// One sequential part of a request whose editable documents exceed the source budget.
@@ -165,9 +165,9 @@ struct GenerationBatch {
     #[serde(default)]
     message: String,
     #[serde(default)]
-    validation_events: Vec<desegni_core::ValidationEvent>,
+    validation_events: Vec<desegnos_core::ValidationEvent>,
     #[serde(default)]
-    documents: Vec<desegni_core::DocumentTarget>,
+    documents: Vec<desegnos_core::DocumentTarget>,
     #[serde(default)]
     repair_rounds: usize,
 }
@@ -193,15 +193,15 @@ pub struct GenerationJobView {
     #[serde(default)]
     context: Option<RequirementsSnapshot>,
     #[serde(default)]
-    draft_feedback: Vec<desegni_core::ValidationEvent>,
+    draft_feedback: Vec<desegnos_core::ValidationEvent>,
     #[serde(default)]
     earlier_contexts: Vec<RequirementsSnapshot>,
     #[serde(default)]
     raw_reply: Option<String>,
     #[serde(default)]
-    validation_events: Vec<desegni_core::ValidationEvent>,
+    validation_events: Vec<desegnos_core::ValidationEvent>,
     #[serde(default)]
-    drafts: Vec<desegni_core::GenerationDraft>,
+    drafts: Vec<desegnos_core::GenerationDraft>,
     #[serde(default)]
     validation_counts_recorded: bool,
     #[serde(default)]
@@ -303,7 +303,7 @@ impl GenerationJobView {
 #[serde(rename_all = "camelCase")]
 struct ValidationExchange {
     summary: String,
-    regions: Vec<desegni_core::RegionOutcome>,
+    regions: Vec<desegnos_core::RegionOutcome>,
     usage: Option<TokenUsage>,
 }
 
@@ -340,9 +340,9 @@ struct AuthenticationPreference {
 pub struct AiSettingsView {
     image_credential: Option<String>,
     image_key: CredentialInfo,
-    main_image_access: Option<desegni_ai::ImageAccess>,
-    image_key_access: Option<desegni_ai::ImageAccess>,
-    image_access: Option<desegni_ai::ImageAccess>,
+    main_image_access: Option<desegnos_ai::ImageAccess>,
+    image_key_access: Option<desegnos_ai::ImageAccess>,
+    image_access: Option<desegnos_ai::ImageAccess>,
     image_access_checking: bool,
     provider: ProviderId,
     providers: Vec<ProviderDescriptor>,
@@ -368,7 +368,7 @@ impl AiSettingsView {
 
 pub struct GenerationService {
     image_credentials: Arc<CredentialManager>,
-    image_access: BTreeMap<String, desegni_ai::ImageAccess>,
+    image_access: BTreeMap<String, desegnos_ai::ImageAccess>,
     image_access_checking: BTreeMap<String, Uuid>,
     provider: ProviderId,
     provider_credentials: BTreeMap<ProviderId, Arc<CredentialManager>>,
@@ -501,7 +501,7 @@ impl GenerationService {
             return main;
         }
         let image = self.image_key_cache_id();
-        if desegni_ai::use_image_key(
+        if desegnos_ai::use_image_key(
             main.as_ref().and_then(|id| self.image_access.get(id)),
             image.as_ref().and_then(|id| self.image_access.get(id)),
         ) {
@@ -513,7 +513,7 @@ impl GenerationService {
     fn store_image_access(
         &mut self,
         id: String,
-        access: desegni_ai::ImageAccess,
+        access: desegnos_ai::ImageAccess,
     ) -> NativeResult<()> {
         self.image_access.insert(id, access);
         write_json(
@@ -592,13 +592,13 @@ impl GenerationService {
         let client = OpenAiClient::new().map_err(message);
         #[cfg(feature = "native-tests")]
         let (credentials, client) =
-            if let Ok(endpoint) = std::env::var("DESEGNI_NATIVE_TEST_OPENAI_ENDPOINT") {
+            if let Ok(endpoint) = std::env::var("DESEGNOS_NATIVE_TEST_OPENAI_ENDPOINT") {
                 (
                     Arc::new(CredentialManager::isolated_for_tests()),
                     OpenAiClient::for_loopback(&endpoint).map_err(message),
                 )
             } else if cfg!(debug_assertions)
-                && std::env::var("DESEGNI_GENERATION_BENCHMARK").as_deref() == Ok("1")
+                && std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1")
             {
                 (Arc::new(CredentialManager::isolated_for_tests()), client)
             } else {
@@ -763,7 +763,7 @@ impl GenerationService {
         if markdown.exists() {
             regular_file(&markdown)?;
             let file = File::open(&markdown).map_err(message)?;
-            if file.metadata().map_err(message)?.len() > desegni_core::MAX_REQUIREMENTS_BYTES as u64
+            if file.metadata().map_err(message)?.len() > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
             {
                 return Err(
                     "The frozen requirements file exceeds its limit. The original was preserved."
@@ -771,7 +771,7 @@ impl GenerationService {
                 );
             }
             let mut existing = vec![];
-            file.take(desegni_core::MAX_REQUIREMENTS_BYTES as u64 + 1)
+            file.take(desegnos_core::MAX_REQUIREMENTS_BYTES as u64 + 1)
                 .read_to_end(&mut existing)
                 .map_err(message)?;
             if existing != primary.markdown.as_bytes() {
@@ -781,7 +781,7 @@ impl GenerationService {
             write_markdown(&markdown, &primary.markdown).map_err(message)?;
         }
         if let Some(context) = &record.view.context {
-            if context.markdown.len() > desegni_core::MAX_REQUIREMENTS_BYTES
+            if context.markdown.len() > desegnos_core::MAX_REQUIREMENTS_BYTES
                 || context.sha256 != digest(context.markdown.as_bytes())
                 || context.job_id != record.view.job_id
                 || !context
@@ -794,7 +794,7 @@ impl GenerationService {
             if path.exists() {
                 regular_file(&path)?;
                 if fs::metadata(&path).map_err(message)?.len()
-                    > desegni_core::MAX_REQUIREMENTS_BYTES as u64
+                    > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
                     || fs::read(&path).map_err(message)? != context.markdown.as_bytes()
                 {
                     return Err(
@@ -814,13 +814,13 @@ impl GenerationService {
         write_json(&directory.join("job.json"), &record)?;
         let history_path = self.history_path(record.view.project_id);
         if history_path.exists() {
-            let mut entries: Vec<desegni_core::EarlierRequest> =
+            let mut entries: Vec<desegnos_core::EarlierRequest> =
                 read_json(&history_path, MAX_JOB_BYTES)?;
             entries.retain(|r| {
                 r.project_id == record.view.project_id && r.job_id != record.view.job_id
             });
             entries.extend(self.history_entries(&record.view));
-            desegni_core::compact_request_history(&mut entries);
+            desegnos_core::compact_request_history(&mut entries);
             write_json(&history_path, &entries)?;
         }
         let view = record.view.clone();
@@ -844,7 +844,7 @@ impl GenerationService {
             || view.job_id != job_id
             || view.requirements.project_id != project_id
             || view.requirements.job_id != job_id
-            || view.requirements.markdown.len() > desegni_core::MAX_REQUIREMENTS_BYTES
+            || view.requirements.markdown.len() > desegnos_core::MAX_REQUIREMENTS_BYTES
             || view.requirements.sha256 != digest(view.requirements.markdown.as_bytes())
         {
             return Err("The saved generation record is invalid.".into());
@@ -859,7 +859,7 @@ impl GenerationService {
             .join("request-history.json")
     }
 
-    fn history_entries(&self, view: &GenerationJobView) -> Vec<desegni_core::EarlierRequest> {
+    fn history_entries(&self, view: &GenerationJobView) -> Vec<desegnos_core::EarlierRequest> {
         let created = view
             .created_at
             .as_deref()
@@ -888,7 +888,7 @@ impl GenerationService {
             JobStatus::Failed | JobStatus::Unknown | JobStatus::Cancelled => "failed",
             _ => "drafted",
         };
-        let mut entries = desegni_core::earlier_requests(
+        let mut entries = desegnos_core::earlier_requests(
             view.request_requirements(),
             created,
             outcome,
@@ -911,7 +911,7 @@ impl GenerationService {
                 |c| {
                     c.regions.iter().any(|r| {
                         r.region_id == entry.region_id
-                            && r.status == desegni_core::RegionStatus::Conflict
+                            && r.status == desegnos_core::RegionStatus::Conflict
                     })
                 },
             ) && let Some(event) = view
@@ -927,7 +927,7 @@ impl GenerationService {
                     })
                 })
             {
-                desegni_core::record_validation_rejection(entry, &event.message);
+                desegnos_core::record_validation_rejection(entry, &event.message);
             }
             if let Some(base) = view.source_fingerprints.get(&entry.page_id) {
                 entry.base_source_fingerprints = Some(base.clone());
@@ -941,7 +941,7 @@ impl GenerationService {
                     .candidate
                     .as_ref()
                     .and_then(|c| c.pages.iter().find(|p| p.page_id == entry.page_id))
-                    .map(|p| desegni_core::source_fingerprints(Some(&p.content)));
+                    .map(|p| desegnos_core::source_fingerprints(Some(&p.content)));
             }
             // Every editable document this job covered, after any applied result.
             if view.status == JobStatus::Applied {
@@ -950,7 +950,7 @@ impl GenerationService {
                     for page in &candidate.pages {
                         if let Ok(hash) = page.content.sha256() {
                             applied.insert(
-                                desegni_core::DocumentTarget::page(page.page_id).key(),
+                                desegnos_core::DocumentTarget::page(page.page_id).key(),
                                 hash,
                             );
                         }
@@ -971,9 +971,9 @@ impl GenerationService {
     pub(crate) fn request_history(
         &self,
         project: &Project,
-    ) -> NativeResult<Vec<desegni_core::EarlierRequest>> {
+    ) -> NativeResult<Vec<desegnos_core::EarlierRequest>> {
         let path = self.history_path(project.id);
-        let mut entries: Vec<desegni_core::EarlierRequest> = if path.exists() {
+        let mut entries: Vec<desegnos_core::EarlierRequest> = if path.exists() {
             read_json(&path, MAX_JOB_BYTES)?
         } else {
             let directory = self.directory.join(project.id.to_string());
@@ -1007,13 +1007,13 @@ impl GenerationService {
             for (_, job_id, status) in observations {
                 for entry in entries.iter_mut().filter(|r| r.job_id == job_id) {
                     match status {
-                        desegni_core::GenerationApplicationStatus::Undone
+                        desegnos_core::GenerationApplicationStatus::Undone
                             if entry.validation_rejection.is_none() =>
                         {
                             entry.validation_rejection = None;
                             entry.outcome = "undone (do not repeat)".into()
                         }
-                        desegni_core::GenerationApplicationStatus::Applied
+                        desegnos_core::GenerationApplicationStatus::Applied
                             if entry.outcome.starts_with("undone") =>
                         {
                             entry.validation_rejection = None;
@@ -1067,13 +1067,13 @@ impl GenerationService {
                         .collect();
                 }
                 match dossier.application_status {
-                    desegni_core::GenerationApplicationStatus::Undone
+                    desegnos_core::GenerationApplicationStatus::Undone
                         if entry.validation_rejection.is_none() =>
                     {
                         entry.validation_rejection = None;
                         entry.outcome = "undone (do not repeat)".into()
                     }
-                    desegni_core::GenerationApplicationStatus::Applied
+                    desegnos_core::GenerationApplicationStatus::Applied
                         if !entry.outcome.starts_with("needs details")
                             && entry.validation_rejection.is_none() =>
                     {
@@ -1085,7 +1085,7 @@ impl GenerationService {
             }
         }
         private_directory(path.parent().ok_or("Missing history directory.")?)?;
-        desegni_core::compact_request_history(&mut entries);
+        desegnos_core::compact_request_history(&mut entries);
         write_json(&path, &entries)?;
         Ok(entries)
     }
@@ -1216,7 +1216,7 @@ impl GenerationService {
             || record.view.requirements.job_id != latest.job_id
             || record.view.requirements.sha256
                 != digest(record.view.requirements.markdown.as_bytes())
-            || record.view.areas.len() > desegni_core::MAX_GENERATION_REGIONS
+            || record.view.areas.len() > desegnos_core::MAX_GENERATION_REGIONS
             || (!record.view.areas.is_empty()
                 && record.view.areas.len() != record.view.requirements.region_count)
             || record.view.areas.iter().any(|area| {
@@ -1281,7 +1281,7 @@ impl GenerationService {
                     && error.outcome == SubmissionOutcome::Received
                     && error.usage.is_some()
                     && error.response_format.as_ref().is_some_and(|format| {
-                        format.body_kind == desegni_ai::ResponseBodyKind::EventStream
+                        format.body_kind == desegnos_ai::ResponseBodyKind::EventStream
                             && format.rejection.is_none()
                     })
             })
@@ -1295,7 +1295,7 @@ impl GenerationService {
                     && error.http_status == Some(200)
                     && error.response_id.is_none()
                     && error.response_format.as_ref().is_some_and(|format| {
-                        format.body_kind == desegni_ai::ResponseBodyKind::Unavailable
+                        format.body_kind == desegnos_ai::ResponseBodyKind::Unavailable
                             && format.body_bytes == 0
                             && format.limit_bytes.is_none()
                     })
@@ -1427,7 +1427,7 @@ impl GenerationService {
         &mut self,
         project: &Project,
         account_id: Option<Uuid>,
-        draft: Option<desegni_core::GenerationDraft>,
+        draft: Option<desegnos_core::GenerationDraft>,
     ) -> NativeResult<GenerationJobView> {
         self.prepare_requests(project, account_id, draft, None, None)
     }
@@ -1436,7 +1436,7 @@ impl GenerationService {
         &mut self,
         project: &Project,
         account_id: Option<Uuid>,
-        draft: Option<desegni_core::GenerationDraft>,
+        draft: Option<desegnos_core::GenerationDraft>,
         previous: Option<&GenerationJobView>,
         region_ids: Option<&[Uuid]>,
     ) -> NativeResult<GenerationJobView> {
@@ -1506,7 +1506,7 @@ impl GenerationService {
                     .region_ids
                     .iter()
                     .filter(|id| requirements_targets.contains(*id))
-                    .map(|id| desegni_core::ValidationEvent {
+                    .map(|id| desegnos_core::ValidationEvent {
                         kind: "draftRepair".into(),
                         disposition: "conflicted".into(),
                         region_id: Some(*id),
@@ -1551,7 +1551,7 @@ impl GenerationService {
                         authentication,
                         &packet,
                         project.generation_mode,
-                        &desegni_core::result_schema(&packet),
+                        &desegnos_core::result_schema(&packet),
                         &settings,
                     )
                     .map_err(message)?;
@@ -1588,7 +1588,7 @@ impl GenerationService {
                         authentication,
                         repair.as_ref().unwrap_or(&requirements),
                         project.generation_mode,
-                        &desegni_core::result_schema(&requirements),
+                        &desegnos_core::result_schema(&requirements),
                         &settings,
                     )
                     .map_err(message)?
@@ -1622,7 +1622,7 @@ impl GenerationService {
                     .map(|page| {
                         (
                             page.id,
-                            desegni_core::source_fingerprints(page.content.as_ref()),
+                            desegnos_core::source_fingerprints(page.content.as_ref()),
                         )
                     })
                     .collect(),
@@ -1776,7 +1776,7 @@ impl GenerationService {
                 record.view.authentication,
                 repair.as_ref().unwrap_or(&record.view.requirements),
                 record.view.generation_mode,
-                &desegni_core::result_schema(&record.view.requirements),
+                &desegnos_core::result_schema(&record.view.requirements),
                 &record.view.settings,
             )
             .map_err(message)?;
@@ -1888,7 +1888,7 @@ impl GenerationService {
                 batch.status = JobStatus::Failed;
                 batch.message =
                     "Skipped because the batches would exceed the spending limit.".into();
-                batch.validation_events.push(desegni_core::ValidationEvent {
+                batch.validation_events.push(desegnos_core::ValidationEvent {
                     kind: "spendingLimit".into(),
                     disposition: "conflicted".into(),
                     region_id: None,
@@ -2081,7 +2081,7 @@ impl GenerationService {
                 });
             unresolved.push((region_id, explanation));
         }
-        let candidate = desegni_core::merge_document_batches(
+        let candidate = desegnos_core::merge_document_batches(
             merged_requirements.job_id,
             &merged_requirements.sha256,
             &successful,
@@ -2120,7 +2120,7 @@ impl GenerationService {
         Ok(())
     }
 
-    fn progress(&mut self, job_id: Uuid, ordinal: usize, progress: desegni_ai::ProviderProgress) {
+    fn progress(&mut self, job_id: Uuid, ordinal: usize, progress: desegnos_ai::ProviderProgress) {
         if self
             .active
             .get(&job_id)
@@ -2235,19 +2235,19 @@ impl GenerationService {
                     &self.job_directory(original.id, job_id),
                     ordinal,
                     &response.text,
-                    std::env::var("DESEGNI_GENERATION_BENCHMARK").as_deref() == Ok("1"),
+                    std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                match desegni_core::recover_generation_reply(&response.text, &record.view.requirements, original).and_then(|(mut candidate, events)| {
+                match desegnos_core::recover_generation_reply(&response.text, &record.view.requirements, original).and_then(|(mut candidate, events)| {
                     record.view.validation_events.extend(events);
                     let format = record.view.requirements.format_version()?;
                     if (8..12).contains(&format) { candidate.resolve_project_assets(original)?; }
                     candidate.validate(&record.view.requirements, original)?;
                     if format >= 7
                         && !candidate.image_download_urls()?.is_empty() {
-                        return Err(desegni_core::Error("Images could not be prepared. Nothing was applied. Try generating again or remove the image request.".into()));
+                        return Err(desegnos_core::Error("Images could not be prepared. Nothing was applied. Try generating again or remove the image request.".into()));
                     }
                     if format >= 17 && !candidate.image_generation_requests()?.is_empty() {
-                        return Err(desegni_core::Error("Generated images could not be prepared.".into()));
+                        return Err(desegnos_core::Error("Generated images could not be prepared.".into()));
                     }
                     Ok(candidate)
                 }) {
@@ -2255,7 +2255,7 @@ impl GenerationService {
                         let resolved = current
                             .filter(|project| project.id == original.id)
                             .map(|project| {
-                                desegni_core::resolve_edits_during_generation(
+                                desegnos_core::resolve_edits_during_generation(
                                     &record.view.requirements,
                                     &candidate,
                                     project,
@@ -2275,7 +2275,7 @@ impl GenerationService {
                             candidate.is_ready()
                         };
                         if merged && ready && stale.is_none() {
-                            record.view.validation_events.push(desegni_core::ValidationEvent {
+                            record.view.validation_events.push(desegnos_core::ValidationEvent {
                                 kind: "mergedEdits".into(),
                                 disposition: "normalised".into(),
                                 region_id: None,
@@ -2300,13 +2300,13 @@ impl GenerationService {
                         record.view.candidate = Some(candidate);
                     }
                     Err(error) => {
-                        record.view.validation_events.push(desegni_core::ValidationEvent {
-                            kind: desegni_core::validation_failure_kind(&error.to_string()).into(),
+                        record.view.validation_events.push(desegnos_core::ValidationEvent {
+                            kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
                             disposition: "conflicted".into(),
                             region_id: None,
                             message: error.to_string(),
                         });
-                        record.view.raw_reply = Some(desegni_ai::scrub_diagnostic_reply(&response.text, None));
+                        record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(&response.text, None));
                         record.view.status = JobStatus::Blocked;
                         record.view.message = format!(
                             "Desegnos rejected the candidate: {error} Nothing was applied."
@@ -2363,7 +2363,7 @@ impl GenerationService {
                     )
                     && batch.validation_events.is_empty()
                 {
-                    batch.validation_events.push(desegni_core::ValidationEvent {
+                    batch.validation_events.push(desegnos_core::ValidationEvent {
                         kind: "batchFailure".into(),
                         disposition: "conflicted".into(),
                         region_id: None,
@@ -2380,7 +2380,7 @@ impl GenerationService {
                 record
                     .view
                     .validation_events
-                    .push(desegni_core::ValidationEvent {
+                    .push(desegnos_core::ValidationEvent {
                         kind: "batchMerge".into(),
                         disposition: "conflicted".into(),
                         region_id: None,
@@ -2423,7 +2423,7 @@ impl GenerationService {
                     record
                         .view
                         .validation_events
-                        .push(desegni_core::ValidationEvent {
+                        .push(desegnos_core::ValidationEvent {
                             kind: "telemetryStorage".into(),
                             disposition: "conflicted".into(),
                             region_id: None,
@@ -2447,7 +2447,7 @@ impl GenerationService {
             record
                 .view
                 .validation_events
-                .push(desegni_core::ValidationEvent {
+                .push(desegnos_core::ValidationEvent {
                     kind: "telemetryStorage".into(),
                     disposition: "conflicted".into(),
                     region_id: None,
@@ -2619,7 +2619,7 @@ pub(super) async fn refresh_image_access(
                 && service
                     .image_access
                     .get(&id)
-                    .is_some_and(|a| !a.expired(desegni_ai::image_access_now())))
+                    .is_some_and(|a| !a.expired(desegnos_ai::image_access_now())))
         {
             return Ok(());
         }
@@ -2658,7 +2658,7 @@ async fn refresh_main_image_access(
     force: bool,
 ) -> NativeResult<()> {
     let view = chatgpt.view().await;
-    if view.sign_in.status == desegni_ai::ChatgptSignInStatus::AwaitingBrowser {
+    if view.sign_in.status == desegnos_ai::ChatgptSignInStatus::AwaitingBrowser {
         return Ok(());
     }
     let (id, auth, settings, client, credentials, prior_access) = {
@@ -2671,7 +2671,7 @@ async fn refresh_main_image_access(
                 && service
                     .image_access
                     .get(&id)
-                    .is_some_and(|access| !access.expired(desegni_ai::image_access_now())))
+                    .is_some_and(|access| !access.expired(desegnos_ai::image_access_now())))
         {
             return Ok(());
         }
@@ -2806,8 +2806,8 @@ pub(super) async fn settings_view(
             .as_ref()
             .filter(|id| {
                 service.image_access.get(*id).is_some_and(|a| {
-                    a.available == desegni_ai::ImageAvailability::Yes
-                        && !a.expired(desegni_ai::image_access_now())
+                    a.available == desegnos_ai::ImageAvailability::Yes
+                        && !a.expired(desegnos_ai::image_access_now())
                 })
             })
             .map(|id| {
@@ -3243,7 +3243,7 @@ fn validation_repair_allowed(
     status == JobStatus::Generating
         && !stopped
         && !provider_failed
-        && rounds < desegni_core::MAX_VALIDATION_REPAIR_ROUNDS
+        && rounds < desegnos_core::MAX_VALIDATION_REPAIR_ROUNDS
         && repair_estimate.is_some_and(|estimate| {
             estimate.is_finite()
                 && estimate >= 0.0
@@ -3326,7 +3326,7 @@ async fn submit(
                 let progress_app = shared_app.clone();
                 let requirements = requirements.clone();
                 async move {
-                    let schema = desegni_core::result_schema(&requirements);
+                    let schema = desegnos_core::result_schema(&requirements);
                     client_ref
                         .generate_for_auth(
                             request_ref.authentication,
@@ -3361,7 +3361,7 @@ async fn submit(
                 && let Err(error) = &result
                 && error.outcome == SubmissionOutcome::Received
                 && error.response_format.as_ref().is_some_and(|format|
-                    matches!(format.rejection, Some(desegni_ai::ResponseRejection::CandidateJson | desegni_ai::ResponseRejection::CandidateShape)))
+                    matches!(format.rejection, Some(desegnos_ai::ResponseRejection::CandidateJson | desegnos_ai::ResponseRejection::CandidateShape)))
                 && let Some(text) = error.response_format.as_ref().and_then(|format| format.diagnostic_reply.as_ref())
             {
                 result = Ok(ProviderResponse { text: text.to_string(), response_id: error.response_id.clone().unwrap_or_default(), usage: error.usage });
@@ -3417,31 +3417,31 @@ async fn submit(
             if request.requirements.format_version().is_ok_and(|v| v >= 17)
                 && let Ok(first_response) = &mut result
             {
-                    let recovered = desegni_core::recover_generation_reply(&first_response.text, &request.requirements, &original);
+                    let recovered = desegnos_core::recover_generation_reply(&first_response.text, &request.requirements, &original);
                     let (first_candidate, mut events) = match recovered {
                         Ok((candidate, events)) => (Some(candidate), events),
-                        Err(error) => (None, vec![desegni_core::ValidationEvent {
+                        Err(error) => (None, vec![desegnos_core::ValidationEvent {
                             kind: "replyStructure".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string(),
                         }]),
                     };
-                    let retained = desegni_core::retain_generation_drafts(&first_response.text, &request.requirements, &original, first_candidate.as_ref(), &events);
+                    let retained = desegnos_core::retain_generation_drafts(&first_response.text, &request.requirements, &original, first_candidate.as_ref(), &events);
                     // Save rejected source before submitting repair: interruption must not lose it.
                     if let Ok(mut service) = shared_app.state::<Mutex<GenerationService>>().lock()
                         && let Some(mut record) = service.jobs.get(&job_id).cloned() {
                         record.view.drafts.extend(retained);
                         service.persist_retaining(record).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
                     }
-                    let initial_reply_diagnostic = first_candidate.is_none().then(|| desegni_ai::scrub_diagnostic_reply(&first_response.text, None));
+                    let initial_reply_diagnostic = first_candidate.is_none().then(|| desegnos_ai::scrub_diagnostic_reply(&first_response.text, None));
                     let follow_up = request.requirements.validation_repair(&events).ok().flatten();
                     if let Some(follow_up) = follow_up.filter(|_| !cancel_ref.is_cancelled()) {
                         // Reserve the full first-round estimate plus the complete repair estimate.
                         // Unknown pricing/estimation never authorizes additional spending.
                         let repair_estimate = client_ref.estimate(request.authentication, &follow_up, request.generation_mode,
-                            &desegni_core::result_schema(&follow_up), &request.settings).ok().map(|estimate| estimate.estimate_usd);
+                            &desegnos_core::result_schema(&follow_up), &request.settings).ok().map(|estimate| estimate.estimate_usd);
                         let previous_context = shared_app.state::<Mutex<GenerationService>>().lock().ok()
                             .and_then(|service| service.jobs.get(&job_id).and_then(|record| record.view.context.clone()));
                         let previous_estimate = previous_context.as_ref().map(|context| client_ref.estimate(request.authentication, context,
-                            request.generation_mode, &desegni_core::result_schema(context), &request.settings).ok().map(|estimate| estimate.estimate_usd));
+                            request.generation_mode, &desegnos_core::result_schema(context), &request.settings).ok().map(|estimate| estimate.estimate_usd));
                         let spent_estimate = request.estimate_usd + previous_estimate.flatten().unwrap_or(0.0);
                         let known_cost = previous_estimate.is_none() || previous_estimate.flatten().is_some();
                         let allowed = validation_repair_allowed(request.status, cancel_ref.is_cancelled(), request.repair_rounds, false,
@@ -3452,7 +3452,7 @@ async fn submit(
                                 let mut service = state.lock().map_err(message)?;
                                 let mut record = service.jobs.get(&job_id).cloned().ok_or("The active job is unavailable.")?;
                                 if record.view.status != JobStatus::Generating || cancel_ref.is_cancelled()
-                                    || record.view.repair_rounds >= desegni_core::MAX_VALIDATION_REPAIR_ROUNDS { return Ok(false); }
+                                    || record.view.repair_rounds >= desegnos_core::MAX_VALIDATION_REPAIR_ROUNDS { return Ok(false); }
                                 if let Some(previous) = record.view.context.take() {
                                     let path = service.job_directory(original.id, job_id).join("CONTEXT.md");
                                     regular_file(&path)?;
@@ -3476,7 +3476,7 @@ async fn submit(
                                 service.persist(record)?;
                                 Ok(true)
                             })().unwrap_or_else(|error| {
-                                events.push(desegni_core::ValidationEvent { kind: "repairStorage".into(), disposition: "conflicted".into(), region_id: None, message: format!("Skipped the repair because its context could not be saved: {error}") });
+                                events.push(desegnos_core::ValidationEvent { kind: "repairStorage".into(), disposition: "conflicted".into(), region_id: None, message: format!("Skipped the repair because its context could not be saved: {error}") });
                                 false
                             });
                             if persisted {
@@ -3486,12 +3486,12 @@ async fn submit(
                                         first_response.usage = total_usage(first_usage, second.usage);
                                         let adopted = request.requirements.adopt_follow_up_reply(&follow_up, &second.text);
                                         let corrected = adopted.as_ref().map_err(Clone::clone)
-                                            .and_then(|text| desegni_core::recover_generation_reply(text, &request.requirements, &original));
+                                            .and_then(|text| desegnos_core::recover_generation_reply(text, &request.requirements, &original));
                                         let (kept, notes) = match &corrected {
                                             Ok((candidate, notes)) => (Some(candidate), notes.clone()),
-                                            Err(error) => (None, vec![desegni_core::ValidationEvent { kind: "repairValidation".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() }]),
+                                            Err(error) => (None, vec![desegnos_core::ValidationEvent { kind: "repairValidation".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() }]),
                                         };
-                                        let retained = desegni_core::retain_generation_drafts(adopted.as_deref().unwrap_or(&second.text), &request.requirements, &original, kept, &notes);
+                                        let retained = desegnos_core::retain_generation_drafts(adopted.as_deref().unwrap_or(&second.text), &request.requirements, &original, kept, &notes);
                                         if let Ok(mut service) = shared_app.state::<Mutex<GenerationService>>().lock()
                                             && let Some(mut record) = service.jobs.get(&job_id).cloned() {
                                             record.view.drafts.extend(retained);
@@ -3501,42 +3501,42 @@ async fn submit(
                                             Ok((candidate, more)) => {
                                                 events.extend(more);
                                                 let merged = first_candidate.as_ref().map_or_else(|| Ok(candidate.clone()), |first|
-                                                    desegni_core::merge_validation_repair(first, &candidate, &request.requirements, &original));
+                                                    desegnos_core::merge_validation_repair(first, &candidate, &request.requirements, &original));
                                                 if let Ok(merged) = merged {
-                                                    for outcome in merged.regions.iter().filter(|r| r.status == desegni_core::RegionStatus::Conflict) {
+                                                    for outcome in merged.regions.iter().filter(|r| r.status == desegnos_core::RegionStatus::Conflict) {
                                                         if !events.iter().any(|e| e.region_id == Some(outcome.region_id) && e.message == outcome.explanation) {
-                                                            events.push(desegni_core::ValidationEvent { kind: desegni_core::validation_failure_kind(&outcome.explanation).into(), disposition: "conflicted".into(), region_id: Some(outcome.region_id), message: outcome.explanation.clone() });
+                                                            events.push(desegnos_core::ValidationEvent { kind: desegnos_core::validation_failure_kind(&outcome.explanation).into(), disposition: "conflicted".into(), region_id: Some(outcome.region_id), message: outcome.explanation.clone() });
                                                         }
                                                     }
                                                     for e in &mut events {
-                                                        if e.disposition == "conflicted" && (e.region_id.is_some_and(|id| merged.regions.iter().any(|r| r.region_id == id && r.status == desegni_core::RegionStatus::Implemented)) || e.region_id.is_none() && e.kind == "replyStructure" && merged.is_ready()) { e.disposition = "repaired".into(); }
+                                                        if e.disposition == "conflicted" && (e.region_id.is_some_and(|id| merged.regions.iter().any(|r| r.region_id == id && r.status == desegnos_core::RegionStatus::Implemented)) || e.region_id.is_none() && e.kind == "replyStructure" && merged.is_ready()) { e.disposition = "repaired".into(); }
                                                     }
                                                     first_response.text = serde_json::to_string(&merged).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
                                                 }
                                             }
-                                            Err(error) => events.push(desegni_core::ValidationEvent { kind: "repairValidation".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() }),
+                                            Err(error) => events.push(desegnos_core::ValidationEvent { kind: "repairValidation".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() }),
                                         }
                                     }
                                     Err(error) => {
                                         // The paid first result remains usable if the repair transport fails.
                                         first_response.usage = total_usage(first_usage, error.usage);
-                                        events.push(desegni_core::ValidationEvent { kind: "repairProvider".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() });
+                                        events.push(desegnos_core::ValidationEvent { kind: "repairProvider".into(), disposition: "conflicted".into(), region_id: None, message: error.to_string() });
                                     }
                                 }
                             }
                         } else {
-                            let (kind, message) = if request.repair_rounds >= desegni_core::MAX_VALIDATION_REPAIR_ROUNDS {
+                            let (kind, message) = if request.repair_rounds >= desegnos_core::MAX_VALIDATION_REPAIR_ROUNDS {
                                 ("repairRoundLimit", "This job has already used its one validation repair round.")
                             } else if repair_estimate.is_none() || !known_cost {
                                 ("repairEstimate", "Skipped the repair because its combined cost could not be estimated.")
                             } else { ("repairLimit", "Skipped the repair because it would exceed the spending limit.") };
-                            events.push(desegni_core::ValidationEvent { kind: kind.into(), disposition: "conflicted".into(), region_id: None, message: message.into() });
+                            events.push(desegnos_core::ValidationEvent { kind: kind.into(), disposition: "conflicted".into(), region_id: None, message: message.into() });
                         }
                     }
                     // Expand/normalise before the image adapters parse the candidate as well.
-                    let final_candidate = desegni_core::recover_generation_reply(&first_response.text, &request.requirements, &original)
+                    let final_candidate = desegnos_core::recover_generation_reply(&first_response.text, &request.requirements, &original)
                         .map(|(candidate, _)| candidate)
-                        .or_else(|error| desegni_core::conflicted_generation(&request.requirements, &original, &error.to_string()));
+                        .or_else(|error| desegnos_core::conflicted_generation(&request.requirements, &original, &error.to_string()));
                     if let Ok(candidate) = final_candidate {
                         first_response.text = serde_json::to_string(&candidate).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
                     }
@@ -3560,7 +3560,7 @@ async fn submit(
                         let service = service.lock().map_err(message).map_err(|_| ProviderError::new(ErrorKind::InvalidRequirements, SubmissionOutcome::Received))?;
                         let fallback = service.image_credentials.key().ok();
                         let fallback_id = fallback.as_ref().map(|key| key.image_access_cache_key());
-                        if desegni_ai::use_image_key(service.image_access.get(&main_id), fallback_id.as_ref().and_then(|id| service.image_access.get(id))) {
+                        if desegnos_ai::use_image_key(service.image_access.get(&main_id), fallback_id.as_ref().and_then(|id| service.image_access.get(id))) {
                             (fallback.unwrap(), fallback_id.unwrap())
                         } else { (key.clone(), main_id) }
                     };
@@ -3572,8 +3572,8 @@ async fn submit(
                     if unavailable {
                         let id = image_id;
                         let stored = app.state::<Mutex<GenerationService>>().lock().map_err(message)
-                            .and_then(|mut service| service.store_image_access(id, desegni_ai::ImageAccess::new(
-                                desegni_ai::ImageAvailability::No, "image_api_rejected")));
+                            .and_then(|mut service| service.store_image_access(id, desegnos_ai::ImageAccess::new(
+                                desegnos_ai::ImageAvailability::No, "image_api_rejected")));
                         image_notice = Some(if stored.is_ok() { "Image generation is not available for this account; placeholders were kept.".to_owned() }
                             else { "Image generation is not available for this account; placeholders were kept. The access status could not be saved.".to_owned() });
                     }
@@ -3725,7 +3725,7 @@ pub fn apply_generation(
     let checkpoint = service
         .job_directory(record.view.project_id, job_id)
         .join(format!(
-            "before-apply-{}.desegni",
+            "before-apply-{}.desegnos",
             workspace.project()?.revision
         ));
     let file = ProjectFile::acquire(&checkpoint).map_err(message)?;
@@ -3766,7 +3766,7 @@ pub fn apply_generation(
         .map(|page| {
             (
                 page.id,
-                desegni_core::source_fingerprints(page.content.as_ref()),
+                desegnos_core::source_fingerprints(page.content.as_ref()),
             )
         })
         .collect();
@@ -3779,7 +3779,7 @@ pub fn apply_generation(
     let applied = record.view.candidate.as_ref().map_or(0, |c| {
         c.regions
             .iter()
-            .filter(|r| r.status == desegni_core::RegionStatus::Implemented)
+            .filter(|r| r.status == desegnos_core::RegionStatus::Implemented)
             .count()
     });
     record.view.message = if applied < total {
@@ -3836,7 +3836,7 @@ pub fn create_preview(
                 requirements_sha256: view.requirements.sha256,
                 summary: "Draft preview".into(),
                 regions: vec![],
-                pages: vec![desegni_core::GeneratedPage { page_id, content }],
+                pages: vec![desegnos_core::GeneratedPage { page_id, content }],
                 component_requests: vec![],
                 decision_proposals: vec![],
                 criticism: vec![],
@@ -4068,7 +4068,7 @@ pub fn generation_draft(
                 .map_err(message)?;
             let checkpoint = service
                 .job_directory(view.project_id, job_id)
-                .join(format!("before-draft-{}-{revision}.desegni", draft.id));
+                .join(format!("before-draft-{}-{revision}.desegnos", draft.id));
             let file = ProjectFile::acquire(&checkpoint).map_err(message)?;
             if checkpoint.exists() {
                 if file.load().map_err(message)? != *workspace.project()? {
@@ -4083,13 +4083,13 @@ pub fn generation_draft(
                 let page = workspace.project()?.page(page_id).map_err(message)?;
                 view.applied_source_fingerprints.insert(
                     page_id,
-                    desegni_core::source_fingerprints(page.content.as_ref()),
+                    desegnos_core::source_fingerprints(page.content.as_ref()),
                 );
             }
             if let Some(candidate) = &mut view.candidate {
                 for outcome in &mut candidate.regions {
                     if draft.region_ids.contains(&outcome.region_id) {
-                        outcome.status = desegni_core::RegionStatus::Implemented;
+                        outcome.status = desegnos_core::RegionStatus::Implemented;
                     }
                 }
             }

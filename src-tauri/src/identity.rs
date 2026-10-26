@@ -4,15 +4,15 @@ use crate::{
     chatgpt::ChatgptState,
     generation::{GenerationService, IdentityAccess, identity_access},
 };
-use desegni_ai::{
+use desegnos_ai::{
     AuthenticationMethod, CancellationToken, ErrorKind, IdentityImage, ProviderId,
     ProviderProgress, ProviderResponse, ProviderSettings, SubmissionOutcome, TokenUsage,
 };
-use desegni_core::{
+use desegnos_core::{
     Appearance, Brief, Decision, IdentityAsset, ImportedIdentity, Project, RequirementsSnapshot,
     Scope, Viewport, digest, fenced_json,
 };
-use desegni_storage::{
+use desegnos_storage::{
     IdentitySource, IdentitySourceAsset, collect_identity_source, write_markdown,
 };
 use serde::{Deserialize, Serialize};
@@ -80,7 +80,7 @@ pub struct IdentitySourceManifest {
     files: Vec<IdentityFileManifest>,
     skipped: Vec<String>,
     photos: Vec<IdentityPhotoManifest>,
-    pages: Vec<desegni_core::SourcePage>,
+    pages: Vec<desegnos_core::SourcePage>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,7 +90,7 @@ struct IdentityPhotoManifest {
     width: u32,
     height: u32,
     thumbnail: String,
-    source_pages: Vec<desegni_core::SourcePageRef>,
+    source_pages: Vec<desegnos_core::SourcePageRef>,
 }
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,7 +98,7 @@ struct IdentityFileManifest {
     id: Uuid,
     name: String,
     text_bytes: usize,
-    source_page: Option<desegni_core::SourcePageRef>,
+    source_page: Option<desegnos_core::SourcePageRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
     asset: Option<IdentitySourceAsset>,
 }
@@ -177,7 +177,7 @@ pub struct IdentityCandidate {
     pub photos: Vec<PhotoDescription>,
     /// The user's existing work and pages found in the sources, so generation knows what to link.
     #[serde(default)]
-    pub content: Vec<desegni_core::ImportedItem>,
+    pub content: Vec<desegnos_core::ImportedItem>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -459,7 +459,7 @@ fn validate_source(source: &IdentitySource) -> NativeResult<()> {
         "The frozen identity source exceeds its storage bounds.",
     )?;
     for page in &source.pages {
-        desegni_core::validate_source_page_ref(&page.reference()).map_err(error)?;
+        desegnos_core::validate_source_page_ref(&page.reference()).map_err(error)?;
     }
     for item in &source.photos {
         item.photo.validate().map_err(error)?;
@@ -504,7 +504,7 @@ fn freeze(
         .filter(|file| requested.contains(&file.id))
     {
         let asset = file.asset.as_ref().map(|asset| {
-            let can_attach = matches!(asset.mime.as_str(), "image/png" | "image/jpeg" | "image/webp") && images.len() < desegni_ai::MAX_IDENTITY_IMAGES && asset.data_uri.len() <= desegni_ai::MAX_IDENTITY_IMAGE_URI_BYTES && image_bytes + asset.data_uri.len() <= desegni_ai::MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES;
+            let can_attach = matches!(asset.mime.as_str(), "image/png" | "image/jpeg" | "image/webp") && images.len() < desegnos_ai::MAX_IDENTITY_IMAGES && asset.data_uri.len() <= desegnos_ai::MAX_IDENTITY_IMAGE_URI_BYTES && image_bytes + asset.data_uri.len() <= desegnos_ai::MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES;
             let number = can_attach.then(|| { image_bytes += asset.data_uri.len(); images.push(IdentityImage { data_uri: asset.data_uri.clone(), photo: false }); images.len() });
             json!({"id":asset.id,"name":asset.name,"mime":asset.mime,"sha256":asset.sha256,"analysisImage":number})
         });
@@ -587,7 +587,7 @@ fn check_selection(
     settings: &ProviderSettings,
 ) -> Result<(), (String, bool)> {
     let (snapshot, images) = freeze(source, ids, source.id).map_err(|message| (message, false))?;
-    desegni_ai::estimate_identity_for_provider(
+    desegnos_ai::estimate_identity_for_provider(
         provider, authentication, &snapshot, &candidate_schema_for(source, ids), settings, &images,
     ).map(|_| ()).map_err(|error| match error.kind {
         ErrorKind::ContextLimit | ErrorKind::InputLimit => (TOO_MUCH.into(), false),
@@ -674,7 +674,7 @@ fn candidate_schema() -> Value {
             "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["topic","value","evidence","confidence"],"properties":{"topic":string,"value":string,"evidence":{"type":"array","items":string},"confidence":{"type":"string","enum":["high","medium","low"]}}}},
             "logoAssetIds":{"type":"array","items":string},"warnings":{"type":"array","items":string},
             "photos":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","description"],"properties":{"id":string,"description":string}}},
-            "content":{"type":"array","maxItems":desegni_core::MAX_IMPORTED_ITEMS,"items":{"type":"object","additionalProperties":false,"required":["kind","title","url","summary","sourcePages"],"properties":{
+            "content":{"type":"array","maxItems":desegnos_core::MAX_IMPORTED_ITEMS,"items":{"type":"object","additionalProperties":false,"required":["kind","title","url","summary","sourcePages"],"properties":{
                 "kind":{"type":"string","enum":["project","tutorial","article","page","product","other"]},"title":string,"url":string,"summary":string,"sourcePages":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","title","url"],"properties":{"path":string,"title":string,"url":{"type":["string","null"]}}}}}}}}})
 }
 /// The result format for one analysis: evidence and logos may only name the files actually sent.
@@ -757,7 +757,7 @@ fn attribute_content(candidate: &mut IdentityCandidate, record: &AnalysisRecord)
                 .source
                 .pages
                 .iter()
-                .find(|page| page.path == desegni_core::source_page_path(&item.url))
+                .find(|page| page.path == desegnos_core::source_page_path(&item.url))
                 .or_else(|| record.source.pages.iter().find(|page| page.path == "/"))
                 .or_else(|| record.source.pages.first())
         {
@@ -824,7 +824,7 @@ fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) ->
     for photo in &candidate.photos {
         text(
             &photo.description,
-            desegni_core::MAX_PHOTO_DESCRIPTION_CHARS,
+            desegnos_core::MAX_PHOTO_DESCRIPTION_CHARS,
             false,
         )?;
         require(
@@ -838,7 +838,7 @@ fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) ->
         )?;
     }
     require(
-        candidate.content.len() <= desegni_core::MAX_IMPORTED_ITEMS,
+        candidate.content.len() <= desegnos_core::MAX_IMPORTED_ITEMS,
         "The identity reply lists too much existing work.",
     )?;
     for item in &candidate.content {
@@ -991,7 +991,7 @@ impl IdentityService {
         name: &str,
         files: BTreeMap<String, Vec<u8>>,
     ) -> NativeResult<IdentitySourceManifest> {
-        let source = desegni_storage::identity_source_from_files(
+        let source = desegnos_storage::identity_source_from_files(
             name,
             files.clone().into_iter().collect(),
             vec![],
@@ -1110,7 +1110,7 @@ impl IdentityService {
     fn finish(
         &mut self,
         job_id: Uuid,
-        result: Result<ProviderResponse, desegni_ai::ProviderError>,
+        result: Result<ProviderResponse, desegnos_ai::ProviderError>,
     ) -> NativeResult<()> {
         if !self
             .active
@@ -1156,7 +1156,7 @@ impl IdentityService {
                 }
             }
             Err(failure) => {
-                record.status = if failure.kind == desegni_ai::ErrorKind::Cancelled {
+                record.status = if failure.kind == desegnos_ai::ErrorKind::Cancelled {
                     AnalysisStatus::Cancelled
                 } else if failure.outcome == SubmissionOutcome::Unknown {
                     AnalysisStatus::Unknown
@@ -1247,7 +1247,7 @@ impl IdentityService {
         job_id: Uuid,
         findings: &[usize],
         assets: &[Uuid],
-    ) -> NativeResult<desegni_core::ImportedContext> {
+    ) -> NativeResult<desegnos_core::ImportedContext> {
         self.reviewed_context_selected(job_id, findings, assets, None, None, None)
     }
 
@@ -1259,7 +1259,7 @@ impl IdentityService {
         photo_ids: Option<&[Uuid]>,
         item_indices: Option<&[usize]>,
         page_paths: Option<&[String]>,
-    ) -> NativeResult<desegni_core::ImportedContext> {
+    ) -> NativeResult<desegnos_core::ImportedContext> {
         let record = self
             .latest
             .as_ref()
@@ -1281,7 +1281,7 @@ impl IdentityService {
         let legacy_home = record.source.pages.is_empty()
             && page_paths.is_some_and(|paths| paths.iter().any(|path| path == "/"));
         let available_pages = if legacy_home {
-            vec![desegni_core::SourcePage {
+            vec![desegnos_core::SourcePage {
                 path: "/".into(),
                 title: "Home".into(),
                 url: None,
@@ -1439,7 +1439,7 @@ impl IdentityService {
                 items_selected.len()
             ));
         }
-        Ok(desegni_core::ImportedContext {
+        Ok(desegnos_core::ImportedContext {
             source_name: record.source.name,
             source_sha256: record.source.sha256,
             summary: summary.join("\n"),
@@ -1488,7 +1488,7 @@ impl IdentityService {
 
     pub(super) fn project_with_context(
         &self,
-        context: desegni_core::ImportedContext,
+        context: desegnos_core::ImportedContext,
         name: String,
         viewport: Viewport,
     ) -> NativeResult<Project> {
@@ -1572,7 +1572,7 @@ pub async fn pick_identity_source(
             )));
         }
         let files =
-            desegni_storage::website_merge::read_website_selection(&paths).map_err(error)?;
+            desegnos_storage::website_merge::read_website_selection(&paths).map_err(error)?;
         let name = paths[0].file_name().unwrap_or_default().to_string_lossy();
         let source = if paths.len() == 1
             && (paths[0].is_dir()
@@ -1583,7 +1583,7 @@ pub async fn pick_identity_source(
             normalize_source(collect_identity_source(&paths[0]).map_err(error)?)?
         } else {
             normalize_source(
-                desegni_storage::identity_source_from_files(
+                desegnos_storage::identity_source_from_files(
                     &name,
                     files.clone().into_iter().collect(),
                     vec![],
@@ -1614,15 +1614,15 @@ pub async fn fetch_identity_source(
 ) -> NativeResult<IdentitySourceManifest> {
     trusted(&window)?;
     #[cfg(feature = "native-tests")]
-    let fixture = std::env::var("DESEGNI_NATIVE_TEST_WEBSITE_ORIGIN")
+    let fixture = std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN")
         .ok()
-        .and_then(|value| desegni_ai::WebUrl::parse(&value).ok());
+        .and_then(|value| desegnos_ai::WebUrl::parse(&value).ok());
     #[cfg(not(feature = "native-tests"))]
-    let fixture: Option<desegni_ai::WebUrl> = None;
-    let site = desegni_ai::fetch_website(&url, fixture.as_ref()).await?;
+    let fixture: Option<desegnos_ai::WebUrl> = None;
+    let site = desegnos_ai::fetch_website(&url, fixture.as_ref()).await?;
     let files = site.files.clone().into_iter().collect();
     let source = tauri::async_runtime::spawn_blocking(move || {
-        desegni_storage::identity_source_from_files_attributed(
+        desegnos_storage::identity_source_from_files_attributed(
             &site.name,
             site.files,
             site.skipped,
@@ -1754,7 +1754,7 @@ pub async fn website_brand_source(
     trusted(&window)?;
     let path = imports.lock().map_err(error)?.path(folder_id)?;
     let source = tauri::async_runtime::spawn_blocking(move || {
-        let files = desegni_storage::website_merge::read_website_selection(&[path.clone()])
+        let files = desegnos_storage::website_merge::read_website_selection(&[path.clone()])
             .map_err(error)?;
         Ok::<_, String>((
             normalize_source(collect_identity_source(&path).map_err(error)?)?,

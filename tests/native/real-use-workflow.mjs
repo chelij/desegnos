@@ -138,7 +138,7 @@ export async function realUseWorkflow(driver, physical, step, evidence, provider
 
   // The window crashed twice (2026-10-21 13:53 and 15:43) in Split view: WebKitGTK 2.54 aborts in
   // AccessibilityObjectAtspi::selectionChanged when the caret moves in an editable while the
-  // desktop's accessibility client listens. Run with DESEGNI_NATIVE_TEST_ACCESSIBILITY=1.
+  // desktop's accessibility client listens. Run with DESEGNOS_NATIVE_TEST_ACCESSIBILITY=1.
   await step('Moving the caret through the real page source in Split view keeps the window alive', async () => {
     const view = label => driver.click(`//div[@aria-label="Editor view"]/button[normalize-space(.)=${JSON.stringify(label)}]`, 'xpath');
     await view('Split');
@@ -230,7 +230,7 @@ export async function realUseWorkflow(driver, physical, step, evidence, provider
     // The page frame is the parent of its "Screen · W × H" label.
     const pageFrame = await driver.execute(() => { const rect = document.querySelector('.screen-guide-label').parentElement.getBoundingClientRect(); return { left: rect.left, top: rect.top, width: rect.width, height: rect.height }; });
     const spots = [{ x: pageFrame.left + 80, y: pageFrame.top + 80 }, { x: pageFrame.left + pageFrame.width * 0.6, y: pageFrame.top + pageFrame.height * 0.65 }];
-    const requests = [['Desegni logo', 'big text saying the name', 'smaller text saying it is a page builder'], ['Github link and call to action']];
+    const requests = [['Desegnos logo', 'big text saying the name', 'smaller text saying it is a page builder'], ['Github link and call to action']];
     for (const [index, lines] of requests.entries()) {
       const free = await driver.execute(point => { const hit = document.elementFromPoint(point.x, point.y); return !!hit?.closest('[data-testid="canvas"]') && !hit.closest('.annotation'); }, spots[index]);
       assert.ok(free, `Box ${index + 1} would land on another box or off the canvas`);

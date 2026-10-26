@@ -2,7 +2,7 @@
 #[path = "../src/system_open.rs"]
 mod system_open;
 
-use desegni_storage::system_tools::ToolSearch;
+use desegnos_storage::system_tools::ToolSearch;
 use std::{
     ffi::OsStr,
     fs, io,

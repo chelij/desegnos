@@ -8,16 +8,16 @@ import { seedRealUse } from './real-use-fixtures.mjs';
 
 // Called after flashWorkflow opens the real-use COPY and calibrates trusted X11 input.
 export async function selectionJumpWorkflow(driver, physical, step, evidence) {
-  const output = resolve('test-results/selection-jump', process.env.DESEGNI_FLASH_LABEL ?? 'capture');
+  const output = resolve('test-results/selection-jump', process.env.DESEGNOS_FLASH_LABEL ?? 'capture');
   await mkdir(output, { recursive: true });
-  await copyFile(resolve('test-results/flash', process.env.DESEGNI_FLASH_LABEL ?? 'capture', 'source-integrity.json'), join(output, 'source-integrity.json'));
-  if (process.env.DESEGNI_SELECTION_RECOVERY === '1') {
+  await copyFile(resolve('test-results/flash', process.env.DESEGNOS_FLASH_LABEL ?? 'capture', 'source-integrity.json'), join(output, 'source-integrity.json'));
+  if (process.env.DESEGNOS_SELECTION_RECOVERY === '1') {
     const copies = join(evidence, 'recovery-fixtures');
     const profile = join(evidence, 'recovery-profile');
     const manifest = JSON.parse(await readFile(join(evidence, 'real-use-manifest.json'), 'utf8'));
     await seedRealUse(profile, copies, { source: manifest.source });
     const project = (await driver.invoke('get_workspace')).project;
-    const appData = join(profile, 'io.github.chelij.desegni');
+    const appData = join(profile, 'io.github.chelij.desegnos');
     const record = JSON.parse(await readFile(join(appData, `${project.id}.recovery.json`), 'utf8'));
     const journal = JSON.parse((await readFile(join(appData, record.journalFile), 'utf8')).trim().split('\n').at(-1));
     const page = journal.project.pages.find(page => page.id === project.homePageId);
@@ -44,7 +44,7 @@ export async function selectionJumpWorkflow(driver, physical, step, evidence) {
   const capture = async name => {
     const path=join(evidence,`selection-${name}.png`); await physical.captureWindow(path); await copyFile(path,join(output,`${name}.png`));
   };
-  await driver.select('Zoom',process.env.DESEGNI_SELECTION_ZOOM ?? '0.75');
+  await driver.select('Zoom',process.env.DESEGNOS_SELECTION_ZOOM ?? '0.75');
   await driver.press('[data-testid="canvas"]','\uE011');
   await delay(400);
   const names=await driver.execute(()=>{const f=[...document.querySelectorAll('.static-preview iframe')].find(f=>getComputedStyle(f).visibility!=='hidden');return [...f.contentDocument.querySelectorAll('a.book')].map(n=>n.textContent.trim().replace(/\s+/g,' '));});
@@ -61,7 +61,7 @@ export async function selectionJumpWorkflow(driver, physical, step, evidence) {
     for(const [phase,action,dx,dy] of [
       ['right-once',()=>physical.keys('Right'),1,0],['down-once',()=>physical.keys('Down'),1,1],
       ['right-several',()=>physical.keys('Right',4),5,1],['down-several',()=>physical.keys('Down',4),5,5],
-      ['drag',async()=>{const s=await sample(name),r=s.expected.rect,f=s.frame,z=s.zoom,p={x:f.x+(r.x+r.width/2)*z,y:f.y+(r.y+r.height/2)*z};await physical.drag(p,{x:p.x+24,y:p.y+18},['Alt']);},5+24/Number(process.env.DESEGNI_SELECTION_ZOOM ?? 0.75),5+18/Number(process.env.DESEGNI_SELECTION_ZOOM ?? 0.75)],
+      ['drag',async()=>{const s=await sample(name),r=s.expected.rect,f=s.frame,z=s.zoom,p={x:f.x+(r.x+r.width/2)*z,y:f.y+(r.y+r.height/2)*z};await physical.drag(p,{x:p.x+24,y:p.y+18},['Alt']);},5+24/Number(process.env.DESEGNOS_SELECTION_ZOOM ?? 0.75),5+18/Number(process.env.DESEGNOS_SELECTION_ZOOM ?? 0.75)],
     ]) {
       const revision=(await driver.invoke('get_workspace')).project.revision;
       await driver.execute(() => {
@@ -83,7 +83,7 @@ export async function selectionJumpWorkflow(driver, physical, step, evidence) {
       const s=await sample(name); reports.push({name,phase,...s,trace,delta:{x:s.expected.rect.x-initial.expected.rect.x,y:s.expected.rect.y-initial.expected.rect.y}});
       await capture(`${index}-${phase}`);
       await writeFile(join(output,'identity-and-geometry.json'),JSON.stringify({native:await physical.inspect(),reports,events:await physical.events()},null,2));
-      if(process.env.DESEGNI_SELECTION_ASSERT!=='0') {
+      if(process.env.DESEGNOS_SELECTION_ASSERT!=='0') {
         assert.ok(trace.every(frame=>frame.id===initial.selected?.id), `${phase}: selection changed during swap`);
         if (phase !== 'drag') for (const item of trace) for (const frame of item.frames.filter(frame => frame.visible !== 'hidden')) {
           assert.equal(frame.text?.trim(), name, `${phase}: visible frame target changed`);

@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
 
-const APP = 'io.github.chelij.desegni';
+const APP = 'io.github.chelij.desegnos';
 
 // One entry of a project archive, read through the zip central directory.
 async function archiveEntry(path, wanted) {
@@ -43,7 +43,7 @@ async function holdsUnsavedWork(record, projectPath, journal) {
 }
 
 export async function seedRealUse(dataHome, evidence, { recoveries = true, source: sourceOverride } = {}) {
-  const source = sourceOverride ?? process.env.DESEGNI_REAL_USE_SOURCE ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), APP);
+  const source = sourceOverride ?? process.env.DESEGNOS_REAL_USE_SOURCE ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), APP);
   const target = join(dataHome, APP), copies = join(evidence, 'real-projects');
   await mkdir(target, { recursive: true, mode: 0o700 }); await mkdir(copies, { recursive: true });
   const manifest = { source, projects: [], recoveries: [] };

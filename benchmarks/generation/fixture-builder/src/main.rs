@@ -1,8 +1,8 @@
-use desegni_core::{
+use desegnos_core::{
     Appearance, Brief, ElementTarget, GenerationMode, IdentityAsset, ImportedIdentity, Project,
     Rect, Region, SiteContent, Viewport, digest,
 };
-use desegni_storage::{ProjectFile, load_project};
+use desegnos_storage::{ProjectFile, load_project};
 use serde_json::{Value, json};
 use std::{env, fs, path::PathBuf};
 use uuid::Uuid;

@@ -1,5 +1,5 @@
 use super::*;
-use desegni_ai::{ApiKey, OpenAiClient, ProviderError};
+use desegnos_ai::{ApiKey, OpenAiClient, ProviderError};
 
 struct Temp(PathBuf);
 impl Temp {
@@ -36,8 +36,8 @@ fn access(authentication: AuthenticationMethod, account: Option<Uuid>) -> Identi
         account_id: account,
         account_epoch: account.map(|_| 0),
         settings: ProviderSettings::default(),
-        client: desegni_ai::ProviderClient::new(
-            desegni_ai::ProviderId::Openai,
+        client: desegnos_ai::ProviderClient::new(
+            desegnos_ai::ProviderId::Openai,
             OpenAiClient::new().unwrap(),
         )
         .unwrap(),
@@ -437,7 +437,7 @@ fn selected_creation_is_blank_light_and_carries_only_approved_findings_and_image
     assert!(!imported.summary.contains("Colours"));
     assert!(!imported.summary.contains("Tone:"));
     assert!(
-        !desegni_core::Session::new(project.clone())
+        !desegnos_core::Session::new(project.clone())
             .unwrap()
             .can_undo()
     );
@@ -460,7 +460,7 @@ fn selected_creation_is_blank_light_and_carries_only_approved_findings_and_image
                 .is_err()
         );
     }
-    let file = desegni_storage::ProjectFile::acquire(&temp.0.join("new.desegni")).unwrap();
+    let file = desegnos_storage::ProjectFile::acquire(&temp.0.join("new.desegni")).unwrap();
     file.save(&project).unwrap();
     assert_eq!(file.load().unwrap(), project);
 }
@@ -673,7 +673,7 @@ fn per_analysis_schema_only_allows_the_sent_file_and_logo_identifiers() {
         ]);
         bytes
     };
-    let source = desegni_storage::identity_source_from_files(
+    let source = desegnos_storage::identity_source_from_files(
         "example.com",
         vec![
             ("index.html".into(), b"<h1>Crumb</h1>".to_vec()),
@@ -728,7 +728,7 @@ fn import_selection_accepts_only_reviewed_distinct_items_and_can_keep_content_al
         .begin(view.job_id, &access(AuthenticationMethod::ApiKey, None))
         .unwrap();
     let mut value = candidate(service.latest.as_ref().unwrap());
-    value.content = vec![desegni_core::ImportedItem {
+    value.content = vec![desegnos_core::ImportedItem {
         source_pages: vec![],
         kind: "project".into(),
         title: "Actual work".into(),
@@ -830,7 +830,7 @@ fn automatic_picking_fits_the_complete_request_and_skips_large_lower_ranked_file
     assert!(selected.message.is_none());
     assert_eq!(selected.file_ids, [source.files[0].id, source.files[2].id]);
     let (snapshot, images) = freeze(&source, &selected.file_ids, Uuid::new_v4()).unwrap();
-    desegni_ai::estimate_identity_for_provider(
+    desegnos_ai::estimate_identity_for_provider(
         ProviderId::Openai,
         AuthenticationMethod::ApiKey,
         &snapshot,
@@ -946,7 +946,7 @@ fn reviewed_pages_create_only_selected_routes_with_their_own_content() {
         .iter()
         .find(|page| page.path == "/projects")
         .unwrap();
-    result.content = vec![desegni_core::ImportedItem {
+    result.content = vec![desegnos_core::ImportedItem {
         kind: "project".into(),
         title: "Robot build".into(),
         url: "/projects/robot".into(),

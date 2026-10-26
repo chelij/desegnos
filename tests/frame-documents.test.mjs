@@ -149,14 +149,14 @@ try {
   });
 
   await test('framed documents use their original site path or the page session path', () => {
-    const website = { website: true, url: 'desegni-preview://session-1.localhost/play/solopong/index.html', sessionId: 's1' };
-    const generated = { url: 'desegni-preview://localhost/session-2/host-page/index.html', sessionId: 's2' };
-    assert.equal(frameDocumentBase(website, 'play/game/index.html'), 'desegni-preview://session-1.localhost/play/game/index.html');
+    const website = { website: true, url: 'desegnos-preview://session-1.localhost/play/solopong/index.html', sessionId: 's1' };
+    const generated = { url: 'desegnos-preview://localhost/session-2/host-page/index.html', sessionId: 's2' };
+    assert.equal(frameDocumentBase(website, 'play/game/index.html'), 'desegnos-preview://session-1.localhost/play/game/index.html');
     assert.equal(frameDocumentBase(website, null), null);
     assert.equal(frameDocumentBase(generated, 'page/index.html'), null);
     assert.equal(frameDocumentBase(null, 'page/index.html'), null);
-    assert.equal(frameDocumentSource(website, null, 'play/game/index.html'), 'desegni-preview://session-1.localhost/play/game/index.html');
-    assert.equal(frameDocumentSource(generated, 'framed-page', null), 'desegni-preview://localhost/session-2/framed-page/index.html');
+    assert.equal(frameDocumentSource(website, null, 'play/game/index.html'), 'desegnos-preview://session-1.localhost/play/game/index.html');
+    assert.equal(frameDocumentSource(generated, 'framed-page', null), 'desegnos-preview://localhost/session-2/framed-page/index.html');
     assert.equal(frameDocumentSource(generated, null, null), null);
     assert.equal(frameDocumentSource(null, 'framed-page', null), null);
   });

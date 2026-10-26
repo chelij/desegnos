@@ -89,7 +89,7 @@ fn read_request_file(path: &Path) -> Result<Picture, &'static str> {
     if !file.metadata().is_ok_and(|meta| meta.is_file()) {
         return Err("Choose a file.");
     }
-    let limit = desegni_storage::request_zip::MAX_ARCHIVE_BYTES;
+    let limit = desegnos_storage::request_zip::MAX_ARCHIVE_BYTES;
     let mut bytes = Vec::new();
     file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
@@ -202,7 +202,7 @@ mod tests {
         assert!(read_picture(&path).is_err());
         File::create(&path)
             .unwrap()
-            .set_len(desegni_storage::request_zip::MAX_ARCHIVE_BYTES as u64 + 1)
+            .set_len(desegnos_storage::request_zip::MAX_ARCHIVE_BYTES as u64 + 1)
             .unwrap();
         assert!(read_request_file(&path).is_err());
         let text = root.join("notes.md");

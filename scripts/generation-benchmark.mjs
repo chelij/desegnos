@@ -140,21 +140,21 @@ async function desktopState() {
 }
 
 async function isolated() {
-  const requestPath = process.env.DESEGNI_BENCHMARK_REQUEST;
-  assert.ok(requestPath && process.env.DESEGNI_BENCHMARK_GUARD, 'Missing private benchmark launch guard');
+  const requestPath = process.env.DESEGNOS_BENCHMARK_REQUEST;
+  assert.ok(requestPath && process.env.DESEGNOS_BENCHMARK_GUARD, 'Missing private benchmark launch guard');
   const request = JSON.parse(await readFile(requestPath, 'utf8'));
-  assert.equal(request.guard, process.env.DESEGNI_BENCHMARK_GUARD); assert.equal(request.allowPaidGeneration, true);
+  assert.equal(request.guard, process.env.DESEGNOS_BENCHMARK_GUARD); assert.equal(request.allowPaidGeneration, true);
   const display = process.env.DISPLAY?.match(/^:(\d+)(?:\.\d+)?$/);
   assert.ok(display && Number(display[1]) >= 90); assert.notEqual(process.env.DISPLAY, request.originalDisplay);
   assert.equal(process.env.GDK_BACKEND, 'x11'); assert.equal(process.env.WAYLAND_DISPLAY, undefined); assert.equal(process.env.WAYLAND_SOCKET, undefined); assert.ok(process.env.DBUS_SESSION_BUS_ADDRESS);
-  assert.equal(process.env.DESEGNI_NATIVE_TEST_OPENAI_ENDPOINT, undefined);
+  assert.equal(process.env.DESEGNOS_NATIVE_TEST_OPENAI_ENDPOINT, undefined);
   const evidence = request.evidence, scenario = catalogue.scenarios.find(item => item.id === request.scenarioId);
   assert.ok(scenario); let key = await stdinKey(), app, driver, job;
   const redact = value => String(value).split(key).join('[credential redacted]');
   const result = { version: 1, status: 'notSubmitted', quality: 'UNVERIFIED', scenarioId: scenario.id, fixtureSha256: request.fixtureSha256, startedAt: new Date().toISOString(), authorizedByOwnerFlag: true, providerAttempts: 0, durationMs: null, usageCostEstimateUsd: null, rawOutput: null, limits: ['Owner-run live path has not been executed by Codex.', 'Only a validated complete candidate can apply.', 'Catalogue-based cost is not confirmed provider billing.'] };
   try {
     const port = await freePort();
-    app = spawn(request.binary, [], { cwd: root, detached: true, stdio: 'ignore', env: { ...process.env, TAURI_WEBDRIVER_PORT: String(port), DESEGNI_GENERATION_BENCHMARK: '1' } });
+    app = spawn(request.binary, [], { cwd: root, detached: true, stdio: 'ignore', env: { ...process.env, TAURI_WEBDRIVER_PORT: String(port), DESEGNOS_GENERATION_BENCHMARK: '1' } });
     await new Promise((accept, reject) => { app.once('spawn', accept); app.once('error', reject); });
     await writeFile(join(dirname(requestPath), 'app-pid.json'), JSON.stringify({pid:app.pid,binary:request.binary}), {mode:0o600});
     const environment = (await readFile(`/proc/${app.pid}/environ`, 'utf8')).split('\0'); assert.ok(environment.includes(`DISPLAY=${process.env.DISPLAY}`)); assert.ok(environment.includes('GDK_BACKEND=x11'));
@@ -257,7 +257,7 @@ async function main() {
   const xvfbRun = resolveXvfbRun();
   const dbusRunSession = resolveDbusRunSession();
   const binaryBytes = await readFile(binary);
-  assert.ok(binaryBytes.includes(Buffer.from('DESEGNI_GENERATION_BENCHMARK')) && binaryBytes.includes(Buffer.from('provider-output-')), 'Rebuild the current debug native-tests binary with benchmark capture and isolated vault support before launching.');
+  assert.ok(binaryBytes.includes(Buffer.from('DESEGNOS_GENERATION_BENCHMARK')) && binaryBytes.includes(Buffer.from('provider-output-')), 'Rebuild the current debug native-tests binary with benchmark capture and isolated vault support before launching.');
   let key = await stdinKey();
   const evidence = join(root, 'test-results/benchmark', new Date().toISOString().slice(0,10), `${scenario.id}-${randomUUID()}`);
   await mkdir(evidence, { recursive:true, mode:0o700 }); await chmod(evidence, 0o700);
@@ -271,7 +271,7 @@ async function main() {
   const original = await desktopState(); let child;
   await writeFile(join(evidence,'authorization.json'), JSON.stringify({...request,guard:undefined},null,2),{mode:0o600});
   try {
-    child = spawn(xvfbRun,['-d','-e',join(evidence,'xvfb.log'),'-f',join(scratch,'Xauthority'),'-s','-screen 0 1600x1100x24',dbusRunSession,'--',process.execPath,fileURLToPath(import.meta.url),'--isolated'],{cwd:root,detached:true,stdio:['pipe','ignore','ignore'],env:xvfbEnvironment({...environment,GDK_SCALE:'1',GDK_DPI_SCALE:'1',DESEGNI_BENCHMARK_REQUEST:requestPath,DESEGNI_BENCHMARK_GUARD:request.guard,DESEGNI_NATIVE_TEST_EVIDENCE:evidence})});
+    child = spawn(xvfbRun,['-d','-e',join(evidence,'xvfb.log'),'-f',join(scratch,'Xauthority'),'-s','-screen 0 1600x1100x24',dbusRunSession,'--',process.execPath,fileURLToPath(import.meta.url),'--isolated'],{cwd:root,detached:true,stdio:['pipe','ignore','ignore'],env:xvfbEnvironment({...environment,GDK_SCALE:'1',GDK_DPI_SCALE:'1',DESEGNOS_BENCHMARK_REQUEST:requestPath,DESEGNOS_BENCHMARK_GUARD:request.guard,DESEGNOS_NATIVE_TEST_EVIDENCE:evidence})});
     child.stdin.end(key); key = '';
     const interrupt = () => { void stop(child); }; process.once('SIGINT',interrupt); process.once('SIGTERM',interrupt);
     try { process.exitCode = await exit(child); } finally { process.removeListener('SIGINT',interrupt); process.removeListener('SIGTERM',interrupt); }

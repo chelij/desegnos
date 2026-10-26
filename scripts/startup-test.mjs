@@ -103,11 +103,11 @@ function tcpState(host, port) {
 }
 
 async function isolated() {
-  const scratch = process.env.DESEGNI_STARTUP_SCRATCH;
-  const evidence = process.env.DESEGNI_STARTUP_EVIDENCE;
-  const binary = process.env.DESEGNI_STARTUP_BINARY;
-  assert.ok(scratch && evidence && binary && process.env.DESEGNI_STARTUP_TOKEN, 'Missing private startup guard');
-  assert.match(scratch, /^\/tmp\/desegni-startup-[^/]+$/);
+  const scratch = process.env.DESEGNOS_STARTUP_SCRATCH;
+  const evidence = process.env.DESEGNOS_STARTUP_EVIDENCE;
+  const binary = process.env.DESEGNOS_STARTUP_BINARY;
+  assert.ok(scratch && evidence && binary && process.env.DESEGNOS_STARTUP_TOKEN, 'Missing private startup guard');
+  assert.match(scratch, /^\/tmp\/desegnos-startup-[^/]+$/);
   assert.equal(await realpath(scratch), scratch);
   const information = await stat(scratch);
   assert.ok(information.uid === process.getuid() && (information.mode & 0o077) === 0, 'Unsafe private startup storage');
@@ -118,10 +118,10 @@ async function isolated() {
     assert.ok(item.uid === process.getuid() && (item.mode & 0o077) === 0, 'Unsafe private XDG storage');
   }
   const display = process.env.DISPLAY?.match(/^:(\d+)(?:\.\d+)?$/);
-  assert.ok(display && Number(display[1]) >= 90 && process.env.DISPLAY !== process.env.DESEGNI_DESKTOP_DISPLAY, 'Refusing a desktop display');
+  assert.ok(display && Number(display[1]) >= 90 && process.env.DISPLAY !== process.env.DESEGNOS_DESKTOP_DISPLAY, 'Refusing a desktop display');
   assert.equal(process.env.GDK_BACKEND, 'x11');
   for (const variable of ['WAYLAND_DISPLAY', 'WAYLAND_SOCKET']) assert.equal(process.env[variable], undefined);
-  assert.ok(process.env.DBUS_SESSION_BUS_ADDRESS && process.env.DBUS_SESSION_BUS_ADDRESS !== process.env.DESEGNI_STARTUP_PREVIOUS_BUS, 'Missing isolated session bus');
+  assert.ok(process.env.DBUS_SESSION_BUS_ADDRESS && process.env.DBUS_SESSION_BUS_ADDRESS !== process.env.DESEGNOS_STARTUP_PREVIOUS_BUS, 'Missing isolated session bus');
   assert.ok((await readlink(`/proc/${process.ppid}/exe`)).endsWith('/dbus-run-session'), 'Startup must run inside its private dbus-run-session');
   const socketPath = `/tmp/.X11-unix/X${display[1]}`;
   const lockPath = `/tmp/.X${display[1]}-lock`;
@@ -186,7 +186,7 @@ async function isolated() {
     app.streamsClosed = streamsClosed;
     app.stdout.pipe(log, { end: false }); app.stderr.pipe(log, { end: false });
     await new Promise((accept, reject) => { app.once('spawn', accept); app.once('error', reject); });
-    await writeFile(join(scratch, 'app.json'), JSON.stringify({ pid: app.pid, token: process.env.DESEGNI_STARTUP_TOKEN }));
+    await writeFile(join(scratch, 'app.json'), JSON.stringify({ pid: app.pid, token: process.env.DESEGNOS_STARTUP_TOKEN }));
     const environment = (await readFile(`/proc/${app.pid}/environ`, 'utf8')).split('\0');
     assert.ok(environment.includes(`DISPLAY=${process.env.DISPLAY}`) && environment.includes('GDK_BACKEND=x11'), 'The app is not on the owned Xvfb display');
     assert.equal(await hashFile(`/proc/${app.pid}/exe`), report.binarySha256, 'The running binary differs from the requested binary');
@@ -238,7 +238,7 @@ async function isolated() {
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.length === 1 && args[0] === '--help') { console.log('node scripts/startup-test.mjs --binary /absolute/path/to/normal/desegni\nLaunches only on guarded Xvfb; saves the real startup window and rejects an enabled WebDriver port.'); return; }
+  if (args.length === 1 && args[0] === '--help') { console.log('node scripts/startup-test.mjs --binary /absolute/path/to/normal/desegnos\nLaunches only on guarded Xvfb; saves the real startup window and rejects an enabled WebDriver port.'); return; }
   assert.equal(process.platform, 'linux', 'Normal startup verification requires the guarded Linux Xvfb route');
   assert.ok(args.length === 2 && args[0] === '--binary' && isAbsolute(args[1]), 'Provide --binary with an absolute normal-build executable path');
   const binary = await realpath(args[1]);
@@ -247,14 +247,14 @@ async function main() {
   await access(binary); await access(helper);
   const evidence = resolve(root, 'test-results/startup', `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`);
   await mkdir(evidence, { recursive: true });
-  const scratch = await mkdtemp('/tmp/desegni-startup-'); await chmod(scratch, 0o700);
+  const scratch = await mkdtemp('/tmp/desegnos-startup-'); await chmod(scratch, 0o700);
   const environment = { ...process.env };
-  for (const variable of Object.keys(environment)) if (variable.startsWith('DBUS_') || variable.startsWith('GNOME_KEYRING_') || variable.startsWith('DESEGNI_NATIVE_TEST_') || variable.startsWith('DESEGNI_TEST_') || variable.startsWith('DESEGNI_STARTUP_') || variable.startsWith('TAURI_WEBDRIVER_')) delete environment[variable];
+  for (const variable of Object.keys(environment)) if (variable.startsWith('DBUS_') || variable.startsWith('GNOME_KEYRING_') || variable.startsWith('DESEGNOS_NATIVE_TEST_') || variable.startsWith('DESEGNOS_TEST_') || variable.startsWith('DESEGNOS_STARTUP_') || variable.startsWith('TAURI_WEBDRIVER_')) delete environment[variable];
   for (const variable of ['DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY', 'SSH_AUTH_SOCK', 'OPENAI_API_KEY']) delete environment[variable];
   for (const [variable, directory] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) { environment[variable] = join(scratch, directory); await mkdir(environment[variable], { mode: 0o700 }); }
   Object.assign(environment, { GDK_SCALE: '1', GDK_DPI_SCALE: '1',
-    DESEGNI_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNI_STARTUP_PREVIOUS_BUS: process.env.DBUS_SESSION_BUS_ADDRESS ?? '', DESEGNI_STARTUP_BINARY: binary,
-    DESEGNI_STARTUP_EVIDENCE: evidence, DESEGNI_STARTUP_SCRATCH: scratch, DESEGNI_STARTUP_TOKEN: randomBytes(24).toString('hex') });
+    DESEGNOS_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNOS_STARTUP_PREVIOUS_BUS: process.env.DBUS_SESSION_BUS_ADDRESS ?? '', DESEGNOS_STARTUP_BINARY: binary,
+    DESEGNOS_STARTUP_EVIDENCE: evidence, DESEGNOS_STARTUP_SCRATCH: scratch, DESEGNOS_STARTUP_TOKEN: randomBytes(24).toString('hex') });
   const desktop = await desktopState();
   let session;
   let result = 1;
@@ -273,7 +273,7 @@ async function main() {
     const cleanup = { scratchRemoved: false, virtualDisplayStopped: false, app: 'not started', appStopped: null, sessionStopped: false };
     try {
       const owned = JSON.parse(await readFile(join(scratch, 'app.json'), 'utf8'));
-      assert.equal(owned.token, environment.DESEGNI_STARTUP_TOKEN);
+      assert.equal(owned.token, environment.DESEGNOS_STARTUP_TOKEN);
       await stopGroup(owned.pid); cleanup.appStopped = !groupExists(owned.pid); cleanup.app = cleanup.appStopped ? 'stopped' : 'still running';
     } catch (error) { if (error.code !== 'ENOENT') failure ??= error.stack; }
     if (session?.pid) { try { await stopGroup(session.pid); cleanup.sessionStopped = !groupExists(session.pid); } catch (error) { failure ??= error.stack; } }

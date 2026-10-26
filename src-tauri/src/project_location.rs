@@ -122,7 +122,7 @@ pub fn set_project_location(
         default_project_location: path,
     })
     .map_err(|e| e.to_string())?;
-    desegni_storage::write_markdown(&state.directory().join("project-settings.json"), &json)
+    desegnos_storage::write_markdown(&state.directory().join("project-settings.json"), &json)
         .map_err(|e| e.to_string())?;
     view(&state)
 }

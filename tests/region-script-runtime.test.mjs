@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
-const template = readFileSync(new URL('../crates/desegni-core/src/region_script_runtime.js', import.meta.url), 'utf8');
+const template = readFileSync(new URL('../crates/desegnos-core/src/region_script_runtime.js', import.meta.url), 'utf8');
 const runtime = code => template.replace('__REGION_SELECTOR__', '"#source"')
   .replace('__REGION_CODE__', code);
 const run = code => `<script>${runtime(code)}</script>`;
-const folder = mkdtempSync(join(tmpdir(), 'desegni-region-runtime-'));
+const folder = mkdtempSync(join(tmpdir(), 'desegnos-region-runtime-'));
 try {
   writeFileSync(join(folder, 'test.html'), `<!doctype html>
     <section id="root"><img><button>Inside</button><section data-desegnos-region="nested"></section><script id="source" type="application/x-desegnos-region"></script></section>

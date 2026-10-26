@@ -18,11 +18,11 @@ function validLocation(descriptor: PreviewDescriptor, pageId: string) {
   try {
     const url = new URL(descriptor.url);
     if (descriptor.website) {
-      return ((url.protocol === 'desegni-preview:' && url.hostname === `${descriptor.sessionId}.localhost`) ||
-        (url.protocol === 'http:' && url.hostname === `${descriptor.sessionId}.desegni-preview.localhost`)) && !url.username && !url.password && !url.port && !url.search && !url.hash;
+      return ((url.protocol === 'desegnos-preview:' && url.hostname === `${descriptor.sessionId}.localhost`) ||
+        (url.protocol === 'http:' && url.hostname === `${descriptor.sessionId}.desegnos-preview.localhost`)) && !url.username && !url.password && !url.port && !url.search && !url.hash;
     }
-    const supported = (url.protocol === 'desegni-preview:' && url.hostname === 'localhost') ||
-      ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname === 'desegni-preview.localhost');
+    const supported = (url.protocol === 'desegnos-preview:' && url.hostname === 'localhost') ||
+      ((url.protocol === 'http:' || url.protocol === 'https:') && url.hostname === 'desegnos-preview.localhost');
     return supported && !url.username && !url.password && !url.port && !url.search && !url.hash &&
       decodeURIComponent(url.pathname).replace(/^\/+/, '') === `${descriptor.sessionId}/${pageId}/index.html`;
   } catch { return false; }
@@ -720,9 +720,9 @@ export const PreviewFrame = forwardRef<CanvasPreviewHandle, {
       const value = event.data as Record<string, unknown>;
       const path = liveLocation(value, source.sessionId);
       if (path) { onLiveLocation?.(path); return; }
-      if (value.type === 'desegni-preview-link' && value.sessionId === source.sessionId && value.pageId === pageId &&
+      if (value.type === 'desegnos-preview-link' && value.sessionId === source.sessionId && value.pageId === pageId &&
         typeof value.url === 'string' && /^https?:\/\//.test(value.url) && value.url.length <= 2048 && Object.keys(value).length === 4) { if (!staging) setOutsideLink(value.url); return; }
-      if (value.type !== 'desegni-preview-error' || value.sessionId !== source.sessionId || value.pageId !== pageId ||
+      if (value.type !== 'desegnos-preview-error' || value.sessionId !== source.sessionId || value.pageId !== pageId ||
         typeof value.message !== 'string' || value.message.length > 4096 || Object.keys(value).length !== 4) return;
       const message = value.message;
       const fresh = (staging ? stagedProblems.current?.errors : reported.current) ?? [];

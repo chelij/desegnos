@@ -50,9 +50,9 @@ async function stopOwned(child) {
 
 async function inside(binary, directory, evidencePath) {
   const address = process.env.DBUS_SESSION_BUS_ADDRESS;
-  if (!address || process.env.DESEGNI_TEST_VAULT_OPT_IN !== flag || directory !== process.env.DESEGNI_TEST_VAULT_ROOT) throw new Error('Private bus isolation guard missing.');
-  if (address === process.env.DESEGNI_TEST_PREVIOUS_BUS) throw new Error('The session bus was not replaced.');
-  if (!/^\/tmp\/desegni-vault-[^/]+$/.test(directory) || await realpath(directory) !== directory) throw new Error('Private vault storage path is unsafe.');
+  if (!address || process.env.DESEGNOS_TEST_VAULT_OPT_IN !== flag || directory !== process.env.DESEGNOS_TEST_VAULT_ROOT) throw new Error('Private bus isolation guard missing.');
+  if (address === process.env.DESEGNOS_TEST_PREVIOUS_BUS) throw new Error('The session bus was not replaced.');
+  if (!/^\/tmp\/desegnos-vault-[^/]+$/.test(directory) || await realpath(directory) !== directory) throw new Error('Private vault storage path is unsafe.');
   const rootInformation = await stat(directory);
   if (rootInformation.uid !== process.getuid() || (rootInformation.mode & 0o077) !== 0) throw new Error('Private vault storage owner or permissions are unsafe.');
   for (const [variable, name] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) {
@@ -104,7 +104,7 @@ async function inside(binary, directory, evidencePath) {
   }
   async function phase(name) {
     const started = Date.now();
-    const result = await run(binary, ['--ignored', '--exact', 'private_system_vault_lifecycle', '--test-threads=1'], { env: { ...process.env, DESEGNI_TEST_VAULT_TOKEN: token, DESEGNI_TEST_VAULT_PHASE: name, DESEGNI_TEST_CHATGPT_ENDPOINT: provider.endpoint.replace(/\/v1$/, '') }, timeout: 30_000 });
+    const result = await run(binary, ['--ignored', '--exact', 'private_system_vault_lifecycle', '--test-threads=1'], { env: { ...process.env, DESEGNOS_TEST_VAULT_TOKEN: token, DESEGNOS_TEST_VAULT_PHASE: name, DESEGNOS_TEST_CHATGPT_ENDPOINT: provider.endpoint.replace(/\/v1$/, '') }, timeout: 30_000 });
     evidence.phases.push({ name, passed: result.code === 0, durationMs: Date.now() - started });
     if (result.code !== 0) throw new Error(`Private vault phase ${name} failed; subprocess output was withheld to keep credentials out of diagnostics.`);
   }
@@ -137,25 +137,25 @@ async function outer() {
   const evidenceDirectory = resolve(workspace, 'test-results/system-vault', `${new Date().toISOString().replaceAll(':', '-')}-${process.pid}`);
   await mkdir(evidenceDirectory, { recursive: true });
   const evidencePath = join(evidenceDirectory, 'evidence.json');
-  const directory = await mkdtemp('/tmp/desegni-vault-');
+  const directory = await mkdtemp('/tmp/desegnos-vault-');
   await chmod(directory, 0o700);
   const environment = toolchainEnvironment();
-  for (const variable of Object.keys(environment)) if (variable.startsWith('DBUS_') || variable.startsWith('GNOME_KEYRING_') || variable.startsWith('DESEGNI_TEST_')) delete environment[variable];
+  for (const variable of Object.keys(environment)) if (variable.startsWith('DBUS_') || variable.startsWith('GNOME_KEYRING_') || variable.startsWith('DESEGNOS_TEST_')) delete environment[variable];
   for (const variable of ['DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY', 'SSH_AUTH_SOCK', 'OPENAI_API_KEY']) delete environment[variable];
   for (const [variable, name] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) {
     environment[variable] = join(directory, name); await mkdir(environment[variable], { mode: 0o700 });
   }
   environment.CARGO_TARGET_DIR = join(directory, 'target');
   try {
-    const build = await run('cargo', ['test', '--offline', '--locked', '-p', 'desegni-ai', '--test', 'system_vault', '--features', 'test-support', '--no-run', '--message-format=json'], { env: environment, timeout: 240_000 });
+    const build = await run('cargo', ['test', '--offline', '--locked', '-p', 'desegnos-ai', '--test', 'system_vault', '--features', 'test-support', '--no-run', '--message-format=json'], { env: environment, timeout: 240_000 });
     if (build.code !== 0) throw new Error('The opt-in vault integration binary did not compile.');
     const artifact = build.stdout.split('\n').filter(Boolean).map(line => { try { return JSON.parse(line); } catch { return null; } }).find(value => value?.reason === 'compiler-artifact' && value.target?.name === 'system_vault' && value.executable);
     if (!artifact) throw new Error('The opt-in vault integration binary was not produced.');
     const rejection = await run(artifact.executable, ['--ignored', '--exact', 'private_system_vault_lifecycle', '--test-threads=1'], { env: environment });
     if (rejection.code === 0 || !(rejection.stdout + rejection.stderr).includes('refusing to access any system vault')) throw new Error('The vault test did not reject an unguarded invocation.');
-    environment.DESEGNI_TEST_VAULT_OPT_IN = flag;
-    environment.DESEGNI_TEST_VAULT_ROOT = directory;
-    environment.DESEGNI_TEST_PREVIOUS_BUS = process.env.DBUS_SESSION_BUS_ADDRESS ?? '';
+    environment.DESEGNOS_TEST_VAULT_OPT_IN = flag;
+    environment.DESEGNOS_TEST_VAULT_ROOT = directory;
+    environment.DESEGNOS_TEST_PREVIOUS_BUS = process.env.DBUS_SESSION_BUS_ADDRESS ?? '';
     const result = await run('dbus-run-session', ['--', process.execPath, script, '--inside', artifact.executable, directory, evidencePath], { env: environment, timeout: 150_000, detached: true });
     if (result.code !== 0) throw new Error('The isolated Secret Service lifecycle check failed. See its credential-free evidence report.');
     console.log(`Private system vault lifecycle passed. Evidence: ${evidencePath}`);

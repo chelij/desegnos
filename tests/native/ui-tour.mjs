@@ -8,11 +8,11 @@ import { waitFor } from './webdriver.mjs';
 
 // Screenshot-only tour. All state belongs to the runner's disposable XDG profile.
 export async function uiTour(driver, physical, step, evidence, provider, restart) {
-  const output = process.env.DESEGNI_UI_TOUR_OUTPUT ?? '/tmp/claude-1000/-home-cheli-Projects-WebMaker/538ce88b-ecfe-4675-909c-75c49eb385c1/scratchpad/tour';
+  const output = process.env.DESEGNOS_UI_TOUR_OUTPUT ?? '/tmp/claude-1000/-home-cheli-Projects-WebMaker/538ce88b-ecfe-4675-909c-75c49eb385c1/scratchpad/tour';
   await mkdir(output, { recursive: true });
   const entries = [], failures = [], captures = [], layoutChecks = [];
   // A focused rerun preserves already verified captures and replaces only chosen surfaces.
-  const selected = process.env.DESEGNI_UI_TOUR_SURFACES ? new Set(process.env.DESEGNI_UI_TOUR_SURFACES.split(',').map(Number)) : null;
+  const selected = process.env.DESEGNOS_UI_TOUR_SURFACES ? new Set(process.env.DESEGNOS_UI_TOUR_SURFACES.split(',').map(Number)) : null;
   if (selected) {
     const previous = await readFile(join(output, 'index.md'), 'utf8').catch(() => '');
     entries.push(...previous.split('\n').filter(line => line.startsWith('- [') && !selected.has(Number(line.match(/^- \[(\d+)/)?.[1]))));

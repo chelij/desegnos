@@ -11,7 +11,7 @@
 //! responses, never in the export bytes.
 
 use crate::workspace::Workspace;
-use desegni_core::{PreviewFile, Project};
+use desegnos_core::{PreviewFile, Project};
 use sha2::{Digest, Sha256};
 use http_body_util::Full;
 use hyper::{
@@ -299,7 +299,7 @@ pub(crate) fn package(project: &Project) -> Result<Package, String> {
             files.insert(path, Entry { content_type, body });
         }
     } else {
-        let export = desegni_core::compile_website(project).map_err(|error| error.to_string())?;
+        let export = desegnos_core::compile_website(project).map_err(|error| error.to_string())?;
         for (path, bytes) in export.files {
             let content_type = mime(&path);
             files.insert(
@@ -851,7 +851,7 @@ fn mime(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use desegni_core::{Appearance, SiteContent, Viewport};
+    use desegnos_core::{Appearance, SiteContent, Viewport};
     use std::{
         io::{Read, Write},
         net::TcpStream,
@@ -1013,7 +1013,7 @@ mod tests {
             "../Cargo.toml",
             "%2e%2e/Cargo.toml",
             "..%2fCargo.toml",
-            "%2e%2e%2fcrates/desegni-core/Cargo.toml",
+            "%2e%2e%2fcrates/desegnos-core/Cargo.toml",
             "images/%2e%2e/%2e%2e/Cargo.toml",
             "index.html%00.css",
             "..%5cCargo.toml",
@@ -1067,7 +1067,7 @@ mod tests {
     #[test]
     fn large_media_is_served_by_reference_with_range_requests() {
         let media: Vec<u8> = (0..300 * 1024).map(|index| (index % 251) as u8).collect();
-        let project = desegni_core::import_website_files(
+        let project = desegnos_core::import_website_files(
             "Portfolio",
             &BTreeMap::from([
                 (
@@ -1110,10 +1110,10 @@ mod tests {
 
     #[test]
     fn source_signature_ignores_request_prompts_and_tracks_documents() {
-        use desegni_core::Command;
+        use desegnos_core::Command;
         let mut project = generated();
         let page_id = project.pages[0].id;
-        let rect = desegni_core::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
+        let rect = desegnos_core::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
         let added = project.apply(project.revision, Command::AddRegion { page_id, rect }).unwrap();
         let region_id = added.pages[0].regions[0].id;
         let typed = added
@@ -1128,7 +1128,7 @@ mod tests {
         edited.pages[0].content.as_mut().unwrap().html.push_str("<p>More</p>");
         assert_ne!(source_signature(&typed), source_signature(&edited));
         let mut framed = typed.clone();
-        framed.website = Some(desegni_core::ImportedWebsite {
+        framed.website = Some(desegnos_core::ImportedWebsite {
             page_files: BTreeMap::new(),
             files: BTreeMap::from([("play/game.html".to_string(), "<p>Game</p>".into())]),
             framework: None,
@@ -1216,7 +1216,7 @@ mod tests {
     #[test]
     fn reload_client_is_served_but_never_exported() {
         let project = generated();
-        let export = desegni_core::compile_website(&project).unwrap();
+        let export = desegnos_core::compile_website(&project).unwrap();
         assert!(
             export
                 .files

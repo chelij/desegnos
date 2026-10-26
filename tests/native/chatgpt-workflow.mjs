@@ -135,7 +135,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
   });
   await step('ChatGPT account settings fit both 760px themes with measured contrast and keyboard focus', async () => {
     const original = await driver.command('GET', '/window/rect');
-    const theme = await driver.execute(() => localStorage.getItem('desegni.editor-theme') ?? 'system');
+    const theme = await driver.execute(() => localStorage.getItem('desegnos.editor-theme') ?? 'system');
     await close(driver);
     await driver.command('POST', '/window/rect', { width: 760, height: 900 });
     try {
@@ -204,7 +204,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
     assert.deepEqual((await driver.invoke('get_workspace')).project, prepared.project);
     assert.equal(await driver.execute(() => !!document.querySelector('[aria-label="Provider response details"]')), false);
     const original = await driver.command('GET', '/window/rect');
-    const theme = await driver.execute(() => localStorage.getItem('desegni.editor-theme') ?? 'system');
+    const theme = await driver.execute(() => localStorage.getItem('desegnos.editor-theme') ?? 'system');
     await close(driver); await driver.command('POST', '/window/rect', { width: 760, height: 900 });
     try {
       for (const selected of ['light', 'dark']) {
@@ -257,7 +257,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
       assert.equal(await driver.execute(() => !!document.querySelector('[aria-label="Provider response details"]')), false, 'Technical diagnostics must stay hidden in the default review');
       assert.deepEqual((await driver.invoke('get_workspace')).project, prepared.project, 'A rejected response changed the website or dossier');
       const original = await driver.command('GET', '/window/rect');
-      const theme = await driver.execute(() => localStorage.getItem('desegni.editor-theme') ?? 'system');
+      const theme = await driver.execute(() => localStorage.getItem('desegnos.editor-theme') ?? 'system');
       await close(driver); await driver.command('POST', '/window/rect', { width: 760, height: 900 });
       try {
         for (const selected of ['light', 'dark']) {
@@ -314,7 +314,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
       await button(driver, 'Manage usage');
       await close(driver);
       const original = await driver.command('GET', '/window/rect');
-      const theme = await driver.execute(() => localStorage.getItem('desegni.editor-theme') ?? 'system');
+      const theme = await driver.execute(() => localStorage.getItem('desegnos.editor-theme') ?? 'system');
       await driver.command('POST', '/window/rect', { width: 760, height: 900 });
       try {
         for (const selected of ['light', 'dark']) {
@@ -375,7 +375,7 @@ export async function chatgptWorkflow(driver, physical, step, evidence, provider
     await waitFor(async () => (await settings(driver)).catalogue.some(model => model.id === 'gpt-6.1-sol'), 'Account switching did not refresh model discovery');
   });
   await step('Repair secure storage saves a retained rotation through the real UI without replaying OAuth or generation', async () => {
-    const flag = join(process.env.XDG_DATA_HOME, 'io.github.chelij.desegni/generation/chatgpt/native-test-vault-write-failure');
+    const flag = join(process.env.XDG_DATA_HOME, 'io.github.chelij.desegnos/generation/chatgpt/native-test-vault-write-failure');
     await driver.menu(['Where to keep the sign-in', 'Save securely on this device'], 'Account options');
     provider.oauth.setMode('complete', 'first', { expiresIn: 30 });
     await button(driver, 'Reconnect');

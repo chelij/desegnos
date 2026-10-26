@@ -18,11 +18,11 @@ export async function imageResizeWorkflow(driver, physical, step, output, provid
     await driver.ready('[data-testid="canvas"]');
     // Reloading the fixture also resets the runner's browser error listeners.
     await driver.execute(() => {
-      window.__desegniTestErrors = [];
-      window.addEventListener('error', event => window.__desegniTestErrors.push({ kind: 'error', message: event.message }));
-      window.addEventListener('unhandledrejection', event => window.__desegniTestErrors.push({ kind: 'rejection', message: String(event.reason) }));
+      window.__desegnosTestErrors = [];
+      window.addEventListener('error', event => window.__desegnosTestErrors.push({ kind: 'error', message: event.message }));
+      window.addEventListener('unhandledrejection', event => window.__desegnosTestErrors.push({ kind: 'rejection', message: String(event.reason) }));
       const original = console.error;
-      console.error = (...values) => { window.__desegniTestErrors.push({ kind: 'console', message: values.map(String).join(' ') }); original.apply(console, values); };
+      console.error = (...values) => { window.__desegnosTestErrors.push({ kind: 'console', message: values.map(String).join(' ') }); original.apply(console, values); };
     });
     await driver.page(pageId); await driver.ready('.image-drop-target');
     original = (await driver.invoke('get_workspace')).project.pages[0].content;

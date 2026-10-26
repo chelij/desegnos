@@ -59,7 +59,11 @@ function readRulerUnit(): 'pixels' | 'percent' { try { return localStorage.getIt
 function readCodeWidth() { try { return Math.min(0.75, Math.max(0.2, Number(localStorage.getItem('desegnos.code-width')) || 0.42)); } catch { return 0.42; } }
 function readCodeView(projectId: string): CodeView { try { const value = localStorage.getItem(`desegnos.code-view.${projectId}`); return value === 'split' || value === 'code' ? value : 'design'; } catch { return 'design'; } }
 function readTheme(): Theme {
-  try { const saved = localStorage.getItem('desegni.editor-theme'); return saved === 'light' || saved === 'dark' ? saved : 'system'; }
+  try {
+    const saved = localStorage.getItem('desegnos.editor-theme') ?? localStorage.getItem('desegni.editor-theme');
+    if (saved) { localStorage.setItem('desegnos.editor-theme', saved); localStorage.removeItem('desegni.editor-theme'); }
+    return saved === 'light' || saved === 'dark' ? saved : 'system';
+  }
   catch { return 'system'; }
 }
 
@@ -253,7 +257,7 @@ function Editor() {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const update = () => { const value = theme === 'system' ? (media.matches ? 'dark' : 'light') : theme; document.documentElement.dataset.theme = value; setResolvedTheme(value); };
     update(); media.addEventListener('change', update);
-    try { localStorage.setItem('desegni.editor-theme', theme); } catch {}
+    try { localStorage.setItem('desegnos.editor-theme', theme); } catch {}
     return () => media.removeEventListener('change', update);
   }, [theme]);
   useEffect(() => {

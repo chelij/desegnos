@@ -7,7 +7,7 @@ gi.require_version('Atspi', '2.0')
 from gi.repository import Atspi, GLib
 
 assert int(os.environ['DISPLAY'].split(':')[1].split('.')[0]) >= 90
-assert os.environ['DISPLAY'] != os.environ.get('DESEGNI_DESKTOP_DISPLAY')
+assert os.environ['DISPLAY'] != os.environ.get('DESEGNOS_DESKTOP_DISPLAY')
 target = int(sys.argv[1])
 listener = Atspi.EventListener.new(lambda event: None)
 listener.register('object:text-selection-changed')

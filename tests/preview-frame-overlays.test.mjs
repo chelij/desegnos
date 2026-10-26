@@ -15,7 +15,7 @@ try {
   const { collectFrame, frameKey, frameVisible, intersectsFrame, liveFrameSource, overlayPlacement, overlaySandbox,
     placeOverlays, resolveFrameSource } = await import(pathToFileURL(join(temporary, 'previewFrames.js')).href);
 
-  const pageUrl = 'desegni-preview://static-session.localhost/play/solopong/index.html';
+  const pageUrl = 'desegnos-preview://static-session.localhost/play/solopong/index.html';
   const candidate = (change = {}) => ({
     rect: { x: 40, y: 80, width: 320, height: 200 }, display: 'block', visibility: 'visible',
     src: '../llama-wrap-preview.html', sandbox: null, allow: null, allowFullscreen: false, ...change,
@@ -24,7 +24,7 @@ try {
   await test('a framed site file keeps its page rect and resolves against the page session', () => {
     const frame = collectFrame(candidate(), pageUrl, 0);
     assert.deepEqual(frame.rect, { x: 40, y: 80, width: 320, height: 200 });
-    assert.equal(frame.src, 'desegni-preview://static-session.localhost/play/llama-wrap-preview.html');
+    assert.equal(frame.src, 'desegnos-preview://static-session.localhost/play/llama-wrap-preview.html');
     assert.equal(frame.key, frameKey(0, frame.src));
     assert.equal(frame.sandbox, 'allow-scripts');
     assert.equal(frame.allow, null);
@@ -33,7 +33,7 @@ try {
 
   await test('query and hash on a relative frame survive resolution', () => {
     const frame = collectFrame(candidate({ src: './game.html?level=2#start' }), pageUrl, 1);
-    assert.equal(frame.src, 'desegni-preview://static-session.localhost/play/solopong/game.html?level=2#start');
+    assert.equal(frame.src, 'desegnos-preview://static-session.localhost/play/solopong/game.html?level=2#start');
     assert.equal(frame.key, frameKey(1, frame.src));
   });
 
@@ -75,15 +75,15 @@ try {
   });
 
   await test('own-site frames move to the live session and external frames do not', () => {
-    const livePage = 'desegni-preview://live-session.localhost/play/solopong/index.html';
-    const own = 'desegni-preview://static-session.localhost/play/llama-wrap-preview.html?level=2#start';
-    assert.equal(liveFrameSource(own, pageUrl, livePage), 'desegni-preview://live-session.localhost/play/llama-wrap-preview.html?level=2#start');
+    const livePage = 'desegnos-preview://live-session.localhost/play/solopong/index.html';
+    const own = 'desegnos-preview://static-session.localhost/play/llama-wrap-preview.html?level=2#start';
+    assert.equal(liveFrameSource(own, pageUrl, livePage), 'desegnos-preview://live-session.localhost/play/llama-wrap-preview.html?level=2#start');
     assert.equal(liveFrameSource('https://games.example/play', pageUrl, livePage), 'https://games.example/play');
     assert.equal(liveFrameSource(own, null, livePage), own);
-    const windowsPage = 'http://desegni-preview.localhost/static/page/index.html';
-    const windowsLive = 'http://desegni-preview.localhost/live/page/index.html';
-    assert.equal(liveFrameSource('http://desegni-preview.localhost/static/game.html', windowsPage, windowsLive),
-      'http://desegni-preview.localhost/live/game.html');
+    const windowsPage = 'http://desegnos-preview.localhost/static/page/index.html';
+    const windowsLive = 'http://desegnos-preview.localhost/live/page/index.html';
+    assert.equal(liveFrameSource('http://desegnos-preview.localhost/static/game.html', windowsPage, windowsLive),
+      'http://desegnos-preview.localhost/live/game.html');
   });
 
   await test('the overlay box is the page rect offset and scaled with the canvas', () => {

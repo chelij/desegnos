@@ -15,16 +15,16 @@ try {
   const { liveCommand, liveLocation, pathPage, sitePath } = await import(pathToFileURL(join(temporary, 'liveBar.js')).href);
 
   await test('history controls name the session that owns the live page', () => {
-    assert.deepEqual(liveCommand('session-1', 'back'), { type: 'desegni-preview-command', sessionId: 'session-1', action: 'back' });
+    assert.deepEqual(liveCommand('session-1', 'back'), { type: 'desegnos-preview-command', sessionId: 'session-1', action: 'back' });
     assert.equal(liveCommand('session-1', 'reload').action, 'reload');
     assert.equal(liveCommand('session-1', 'forward').sessionId, 'session-1');
   });
 
   await test('only a location message from this session updates the bar', () => {
-    const message = { type: 'desegni-preview-location', sessionId: 'session-1', pageId: 'page-1', path: '/projects/papan/' };
+    const message = { type: 'desegnos-preview-location', sessionId: 'session-1', pageId: 'page-1', path: '/projects/papan/' };
     assert.equal(liveLocation(message, 'session-1'), '/projects/papan/');
     assert.equal(liveLocation({ ...message, sessionId: 'session-2' }, 'session-1'), null);
-    assert.equal(liveLocation({ ...message, type: 'desegni-preview-error' }, 'session-1'), null);
+    assert.equal(liveLocation({ ...message, type: 'desegnos-preview-error' }, 'session-1'), null);
     assert.equal(liveLocation({ ...message, path: 'projects/papan/' }, 'session-1'), null);
     assert.equal(liveLocation({ ...message, path: `/${'a'.repeat(2048)}` }, 'session-1'), null);
     assert.equal(liveLocation(null, 'session-1'), null);

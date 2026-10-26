@@ -100,5 +100,5 @@ fn main() {
             "check_for_updates",
         ]),
     ))
-    .expect("Desegni's command permission manifest must be valid");
+    .expect("Desegnos's command permission manifest must be valid");
 }

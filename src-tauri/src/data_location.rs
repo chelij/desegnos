@@ -89,15 +89,54 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) -> Result<DataDirectory, Problem> {
         .path()
         .app_local_data_dir()
         .map_err(|_| Problem::plain(UNUSABLE))?;
-    let folder = choose(
+    let folder = resolve_migrating(
         &default,
         config.as_deref(),
+        app.path().app_data_dir().ok().as_deref(),
+        app.path().app_cache_dir().ok().as_deref(),
         std::env::var_os(ENVIRONMENT_VARIABLE).as_deref(),
-    );
+    )?;
     match probe(&folder) {
         Ok(()) => Ok(DataDirectory(folder)),
         Err(error) => recover(app, Problem::io(&folder, &error)),
     }
+}
+
+fn resolve_migrating(
+    default: &Path,
+    config: Option<&Path>,
+    roaming: Option<&Path>,
+    cache: Option<&Path>,
+    environment: Option<&OsStr>,
+) -> Result<PathBuf, Problem> {
+    // Read the old saved choice before moving anything. On macOS config and data
+    // share a folder, so migrating config blindly would also move overridden data.
+    let old_config = config.map(|path| path.with_file_name("io.github.chelij.desegni"));
+    let config_to_read = config
+        .filter(|path| path.exists())
+        .or(old_config.as_deref());
+    let folder = choose(default, config_to_read, environment);
+    if let Some(config) = config {
+        if config != default || folder == default {
+            crate::rename_migration::migrate_default(config)
+                .map_err(|error| Problem::io(config, &error))?;
+        }
+    }
+    if folder == default {
+        crate::rename_migration::migrate_default(default)
+            .map_err(|error| Problem::io(default, &error))?;
+        // Windows also has a separate roaming data folder; Linux/macOS deduplicate
+        // naturally because an already migrated destination is left untouched.
+        if let Some(roaming) = roaming {
+            crate::rename_migration::migrate_default(roaming)
+                .map_err(|error| Problem::io(roaming, &error))?;
+        }
+    }
+    if let Some(cache) = cache {
+        crate::rename_migration::migrate_default(cache)
+            .map_err(|error| Problem::io(cache, &error))?;
+    }
+    Ok(folder)
 }
 
 /// Asks for a usable folder after a storage failure. Returns the error if the user quits.
@@ -339,6 +378,55 @@ mod tests {
             Problem::error(folder, &io::Error::other(other)).to_string(),
             format!("{UNUSABLE}\n{}", folder.display())
         );
+    }
+
+    #[test]
+    fn startup_migrates_defaults_and_reads_a_legacy_saved_override_first() {
+        let temp = Temp::new();
+        let default = temp.0.join("data/io.github.chelij.desegnos");
+        let config = temp.0.join("config/io.github.chelij.desegnos");
+        let old_data = default.with_file_name("io.github.chelij.desegni");
+        let old_config = config.with_file_name("io.github.chelij.desegni");
+        fs::create_dir_all(&old_data).unwrap();
+        fs::write(old_data.join("work"), "preserve").unwrap();
+        let custom = temp.0.join("custom");
+        remember(Some(&old_config), &custom);
+        assert_eq!(
+            resolve_migrating(&default, Some(&config), None, None, None).unwrap(),
+            custom
+        );
+        assert!(old_data.join("work").exists());
+        assert!(!default.exists());
+        assert!(config.join(SETTINGS_FILE).exists());
+        fs::remove_file(config.join(SETTINGS_FILE)).unwrap();
+        assert_eq!(
+            resolve_migrating(&default, Some(&config), None, None, None).unwrap(),
+            default
+        );
+        assert!(default.join("work").exists());
+        assert!(!old_data.exists());
+    }
+
+    #[test]
+    fn environment_override_does_not_move_a_shared_config_data_folder() {
+        let temp = Temp::new();
+        let default = temp.0.join("io.github.chelij.desegnos");
+        let old = default.with_file_name("io.github.chelij.desegni");
+        fs::create_dir(&old).unwrap();
+        let portable = temp.0.join("portable");
+        assert_eq!(
+            resolve_migrating(
+                &default,
+                Some(&default),
+                Some(&default),
+                None,
+                Some(portable.as_os_str())
+            )
+            .unwrap(),
+            portable
+        );
+        assert!(old.exists());
+        assert!(!default.exists());
     }
 
     #[test]

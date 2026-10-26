@@ -1,4 +1,4 @@
-use desegni_core::{GenerationCandidate, PreviewFile, Project};
+use desegnos_core::{GenerationCandidate, PreviewFile, Project};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -29,7 +29,7 @@ pub fn configure_window(window: &tauri::WebviewWindow) -> tauri::Result<()> {
             .context()
             .and_then(|context| context.security_manager())
         {
-            manager.register_uri_scheme_as_cors_enabled("desegni-preview");
+            manager.register_uri_scheme_as_cors_enabled("desegnos-preview");
         }
         #[cfg(feature = "native-tests")]
         if let Some(settings) = webview.inner().settings() {
@@ -44,7 +44,7 @@ const MAX_PREVIEW_SESSIONS: usize = 8;
 /// pages that embed an external site. Both stay on the preview scheme and hosts, which only
 /// this application answers.
 const EMBED_SOURCES: &str =
-    "desegni-preview: http://*.desegni-preview.localhost http://desegni-preview.localhost https:";
+    "desegnos-preview: http://*.desegnos-preview.localhost http://desegnos-preview.localhost https:";
 /// The policy a generated page is served with before its session adds its own script and
 /// style sources. Frames and fetches reach this session's files and an https embed.
 fn preview_policy() -> String {
@@ -59,7 +59,7 @@ pub struct PreviewDescriptor {
     pub url: String,
     pub session_id: Uuid,
     pub source_sha256: Option<String>,
-    pub content: Option<desegni_core::SiteContent>,
+    pub content: Option<desegnos_core::SiteContent>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub website: bool,
 }
@@ -99,9 +99,9 @@ fn attribute(value: &str) -> String {
 
 pub fn resource_url(session_id: Uuid, page_id: Uuid) -> String {
     let prefix = if cfg!(target_os = "windows") {
-        "http://desegni-preview.localhost"
+        "http://desegnos-preview.localhost"
     } else {
-        "desegni-preview://localhost"
+        "desegnos-preview://localhost"
     };
     format!("{prefix}/{session_id}/{page_id}/index.html")
 }
@@ -179,7 +179,7 @@ impl PreviewRegistry {
                 ""
             };
             let region_javascript =
-                desegni_core::region_script_runtime(html).map_err(|error| error.to_string())?;
+                desegnos_core::region_script_runtime(html).map_err(|error| error.to_string())?;
             let region_script = if run_scripts && !region_javascript.is_empty() {
                 "<script src=\"./regions.js\" crossorigin=\"anonymous\"></script>"
             } else {
@@ -274,7 +274,7 @@ impl PreviewRegistry {
                         .find(|page| page.id == page_id)
                         .and_then(|page| page.content.as_ref())
                 })
-                .map(desegni_core::SiteContent::sha256)
+                .map(desegnos_core::SiteContent::sha256)
                 .transpose()
                 .map_err(|error| error.to_string())?,
         })
@@ -380,9 +380,9 @@ impl PreviewRegistry {
         );
         self.order.push_back(session_id);
         let prefix = if cfg!(target_os = "windows") {
-            format!("http://{session_id}.desegni-preview.localhost")
+            format!("http://{session_id}.desegnos-preview.localhost")
         } else {
-            format!("desegni-preview://{session_id}.localhost")
+            format!("desegnos-preview://{session_id}.localhost")
         };
         Ok(PreviewDescriptor {
             url: format!("{prefix}/{path}"),
@@ -391,7 +391,7 @@ impl PreviewRegistry {
             source_sha256: page
                 .content
                 .as_ref()
-                .map(desegni_core::SiteContent::sha256)
+                .map(desegnos_core::SiteContent::sha256)
                 .transpose()
                 .map_err(|e| e.to_string())?,
             content: if run_scripts {
@@ -435,7 +435,7 @@ impl PreviewRegistry {
         let host = request.uri().host().unwrap_or_default();
         if let Some(id) = host
             .strip_suffix(".localhost")
-            .and_then(|h| h.strip_suffix(".desegni-preview").or(Some(h)))
+            .and_then(|h| h.strip_suffix(".desegnos-preview").or(Some(h)))
             .and_then(|h| Uuid::parse_str(h).ok())
         {
             let Some(session) = self.sessions.get(&id) else {
@@ -618,15 +618,15 @@ fn site_response(
     status: StatusCode,
 ) -> Response<Vec<u8>> {
     let script = if session.scripts_enabled {
-        "'unsafe-inline' desegni-preview: http: https:"
+        "'unsafe-inline' desegnos-preview: http: https:"
     } else {
         "'none'"
     };
     // GET forms navigate within this session, whose pages can render the result. There
     // is no server for a POST, and scripts cannot send a form anywhere else.
-    let forms = format!("desegni-preview: http://{session_id}.desegni-preview.localhost");
+    let forms = format!("desegnos-preview: http://{session_id}.desegnos-preview.localhost");
     let policy = format!(
-        "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegni-preview: http: https: data:; img-src desegni-preview: http: https: data:; font-src desegni-preview: http: https: data:; connect-src {EMBED_SOURCES}; frame-src {EMBED_SOURCES}; child-src {EMBED_SOURCES}; object-src 'none'; base-uri desegni-preview: http: https:; form-action {forms}; media-src desegni-preview: http: https: data:; worker-src 'none'"
+        "default-src 'none'; script-src {script}; script-src-attr {script}; style-src 'unsafe-inline' desegnos-preview: http: https: data:; img-src desegnos-preview: http: https: data:; font-src desegnos-preview: http: https: data:; connect-src {EMBED_SOURCES}; frame-src {EMBED_SOURCES}; child-src {EMBED_SOURCES}; object-src 'none'; base-uri desegnos-preview: http: https:; form-action {forms}; media-src desegnos-preview: http: https: data:; worker-src 'none'"
     );
     let decorate = |mut result: Response<Vec<u8>>| {
         result.headers_mut().insert(
@@ -822,7 +822,7 @@ fn source_response(
     bytes: Vec<u8>,
 ) -> Response<Vec<u8>> {
     let origins = format!(
-        "desegni-preview://localhost/{session_id}/ http://desegni-preview.localhost/{session_id}/ https://desegni-preview.localhost/{session_id}/"
+        "desegnos-preview://localhost/{session_id}/ http://desegnos-preview.localhost/{session_id}/ https://desegnos-preview.localhost/{session_id}/"
     );
     let policy = preview_policy()
         .replace(
@@ -906,7 +906,7 @@ fn site_mime(path: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use desegni_core::{Appearance, SiteContent, Viewport};
+    use desegnos_core::{Appearance, SiteContent, Viewport};
 
     #[test]
     fn imported_preview_preserves_file_layout_queries_and_script_isolation() {
@@ -917,7 +917,7 @@ mod tests {
             ("main.js".into(), b"import './module.js';".to_vec()),
             ("module.js".into(), b"document.body.dataset.loaded='yes';".to_vec()),
         ]);
-        let project = desegni_core::import_website_files("Website", &files).unwrap();
+        let project = desegnos_core::import_website_files("Website", &files).unwrap();
         let mut registry = PreviewRegistry::default();
         let live = registry
             .register(&project, None, project.home_page_id, true)
@@ -994,7 +994,7 @@ mod tests {
                 b"<!doctype html><div class=\"llama\">Wrap</div>".to_vec(),
             ),
         ]);
-        let project = desegni_core::import_website_files("Embeds", &files).unwrap();
+        let project = desegnos_core::import_website_files("Embeds", &files).unwrap();
         // The wrap file is a fragment, so it stays a site file rather than becoming a page.
         assert_eq!(
             project.website.as_ref().unwrap().page_files.len(),
@@ -1089,7 +1089,7 @@ mod tests {
             ),
             ("css/site.css".into(), b"h1{color:red}".to_vec()),
         ]);
-        let project = desegni_core::import_website_files("Routes", &files).unwrap();
+        let project = desegnos_core::import_website_files("Routes", &files).unwrap();
         let mut registry = PreviewRegistry::default();
         let live = registry
             .register(&project, None, project.home_page_id, true)
@@ -1127,7 +1127,7 @@ mod tests {
             assert!(csp.contains("script-src 'unsafe-inline'"), "{path}");
             assert!(
                 csp.contains(&format!(
-                    "form-action desegni-preview: http://{}.desegni-preview.localhost",
+                    "form-action desegnos-preview: http://{}.desegnos-preview.localhost",
                     live.session_id
                 )),
                 "{path}: {csp}"
@@ -1243,7 +1243,7 @@ mod tests {
             .unwrap();
         assert!(!csp.contains("form-action 'none'"));
         assert!(csp.contains(&format!(
-            "form-action desegni-preview://localhost/{}/",
+            "form-action desegnos-preview://localhost/{}/",
             descriptor.session_id
         )));
         assert!(!csp.contains("unsafe-eval"));
@@ -1339,7 +1339,7 @@ mod tests {
             ),
             ("portfolio/clip.mp4".into(), media),
         ]);
-        let project = desegni_core::import_website_files("Portfolio", &files).unwrap();
+        let project = desegnos_core::import_website_files("Portfolio", &files).unwrap();
         let mut registry = PreviewRegistry::default();
         let live = registry
             .register(&project, None, project.home_page_id, true)
@@ -1424,7 +1424,7 @@ mod tests {
             ),
             ("portfolio/styles.css".into(), oversized),
         ]);
-        let project = desegni_core::import_website_files("Portfolio", &files).unwrap();
+        let project = desegnos_core::import_website_files("Portfolio", &files).unwrap();
         let mut registry = PreviewRegistry::default();
         let Err(error) = registry.register(&project, None, project.home_page_id, false) else {
             panic!("an oversized text payload must not register a preview");
@@ -1445,7 +1445,7 @@ mod tests {
             ),
             ("media/clip.mp4".into(), vec![7_u8; 2 * 1024 * 1024]),
         ]);
-        let project = desegni_core::import_website_files("Portfolio", &files).unwrap();
+        let project = desegnos_core::import_website_files("Portfolio", &files).unwrap();
         let mut registry = PreviewRegistry::default();
         let first = registry
             .register(&project, None, project.home_page_id, false)

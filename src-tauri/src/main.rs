@@ -7,6 +7,7 @@ mod chatgpt;
 mod clipboard;
 mod crash_report;
 mod data_location;
+mod rename_migration;
 mod export;
 mod file_dialogs;
 mod generation;
@@ -48,7 +49,7 @@ fn main() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
     builder
         .on_window_event(image_drop::handle)
-        .register_uri_scheme_protocol("desegni-preview", |context, request| {
+        .register_uri_scheme_protocol("desegnos-preview", |context, request| {
             if context.webview_label() != "editor" {
                 return tauri::http::Response::builder()
                     .status(403)

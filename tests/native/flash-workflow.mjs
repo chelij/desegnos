@@ -14,7 +14,7 @@ export async function flashWorkflow(driver, physical, step, evidence) {
   const original = ownerSite && await ownerFile(join(ownerSite, 'chelib-redesign/chelib-redesign.desegnos'), 'DESEGNOS_OWNER_SITE', 'Owner flash capture');
   const hash = async path => createHash('sha256').update(await readFile(path)).digest('hex');
   const originalHash = original ? await hash(original) : null;
-  const output = resolve('test-results/flash', process.env.DESEGNI_FLASH_LABEL ?? 'capture');
+  const output = resolve('test-results/flash', process.env.DESEGNOS_FLASH_LABEL ?? 'capture');
   await mkdir(output, { recursive: true });
   const manifest = JSON.parse(await readFile(join(evidence, 'real-use-manifest.json'), 'utf8'));
   const owner = original ? manifest.projects.find(p => p.name === 'chelib-redesign') : null;
@@ -24,7 +24,7 @@ export async function flashWorkflow(driver, physical, step, evidence) {
     assert.equal(await hash(owner.path), originalHash, 'The recent-project copy must match the requested owner archive');
     await writeFile(join(output,'source-integrity.json'), JSON.stringify({ original, sha256:originalHash, copiedTo:owner.path },null,2));
   }
-  const selectionOnly = process.env.DESEGNI_SELECTION_ONLY === '1';
+  const selectionOnly = process.env.DESEGNOS_SELECTION_ONLY === '1';
   if (selectionOnly && !original) return;
   await physical.initialize(evidence);
   const kinds = selectionOnly ? ['owner'] : original ? ['owner', 'simple'] : ['simple'];
@@ -46,7 +46,7 @@ export async function flashWorkflow(driver, physical, step, evidence) {
       await waitFor(() => driver.execute(() => document.querySelector('.static-preview')?.dataset.previewReady === 'true'), 'Editable preview not ready', 30000);
       if (kind === 'owner') {
         await selectionJumpWorkflow(driver, physical, step, evidence);
-        if (process.env.DESEGNI_SELECTION_ONLY === '1') return;
+        if (process.env.DESEGNOS_SELECTION_ONLY === '1') return;
       }
       await driver.select('Zoom', '0.75');
       await driver.press('[data-testid="canvas"]', '\uE011');
@@ -89,13 +89,13 @@ export async function flashWorkflow(driver, physical, step, evidence) {
       await physical.drag(point,{x:point.x+36,y:point.y+24},['Alt']);
       await delay(2200);
       capture.kill('SIGINT');assert.ok([0,255].includes(await done),captureErrors);
-      const trace=await driver.execute(()=>{window.__flashStop();return{events:window.__flashEvents,frames:window.__flashFrames,errors:window.__desegniTestErrors};});
+      const trace=await driver.execute(()=>{window.__flashStop();return{events:window.__flashEvents,frames:window.__flashFrames,errors:window.__desegnosTestErrors};});
       const final=(await driver.invoke('get_workspace')).project;
       assert.ok(final.revision>initial.revision,'Drag did not commit a real edit');
       const alignment=await driver.execute(()=>{const f=document.querySelector('.static-preview iframe'),o=document.querySelector('[data-testid="direct-element-selection"]'),z=Number(document.querySelector('[data-testid="canvas"]').dataset.zoom);if(!o)return null;const n=f.contentDocument.querySelector(o.dataset.selector);if(!n)return null;const a=o.getBoundingClientRect(),b=n.getBoundingClientRect(),r=f.getBoundingClientRect();return Math.max(Math.abs(a.x-r.x-b.x*z),Math.abs(a.y-r.y-b.y*z),Math.abs(a.width-b.width*z),Math.abs(a.height-b.height*z));});
       await writeFile(join(output,`${kind}-trace.json`),JSON.stringify({native,point,initialRevision:initial.revision,finalRevision:final.revision,alignment,...trace},null,2));
       assert.ok(alignment!==null&&alignment<1,`Selection alignment: ${alignment}`);
-      if(process.env.DESEGNI_FLASH_ASSERT!=='0') {
+      if(process.env.DESEGNOS_FLASH_ASSERT!=='0') {
         const visibleTargets = trace.frames.flatMap(s => s.frames.flatMap(p => p.iframes.filter(f => f.visibility!=='hidden' && f.target).map(f => ({t:s.t,...f.target}))));
         assert.ok(visibleTargets.length > 10);
         const end = visibleTargets.at(-1), start = visibleTargets[0];
@@ -140,7 +140,7 @@ export async function flashWorkflow(driver, physical, step, evidence) {
     const samples=await driver.execute(()=>{cancelAnimationFrame(window.__liveRaf);return window.__liveSamples;});
     await writeFile(join(output,'live-reload-samples.json'),JSON.stringify(samples,null,2));
     assert.ok(samples.length>10 && samples.every(s=>s.visible===1),'Live reload blanked its visible document');
-    assert.deepEqual(await driver.execute(()=>window.__desegniTestErrors),[]);
+    assert.deepEqual(await driver.execute(()=>window.__desegnosTestErrors),[]);
   });
   if (original) assert.equal(await hash(original), originalHash, 'The original archive changed during the native test');
 }

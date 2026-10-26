@@ -8,7 +8,7 @@ import { chooseFile, savedState, verifyArchive } from './file-dialog-workflow.mj
 import { assertCanvasOnly } from './workflow.mjs';
 import { waitFor, xpathString } from './webdriver.mjs';
 
-const fixture = fileURLToPath(new URL('../../crates/desegni-storage/tests/fixtures/schema1-mixed-generation.desegni', import.meta.url));
+const fixture = fileURLToPath(new URL('../../crates/desegnos-storage/tests/fixtures/schema1-mixed-generation.desegni', import.meta.url));
 const fixtureHash = 'f6ab68d745746f287d13f55f0835c8135f09513c73a62ccb737c17a6f914e050';
 
 export async function migrationWorkflow(driver, physical, step, evidence) {
@@ -28,7 +28,7 @@ export async function migrationWorkflow(driver, physical, step, evidence) {
   assert.equal(new Set(modes.map(item => item.mode)).size, 2, 'The migration fixture must exercise conflicting old per-request modes');
   const expected = { ...legacy, schemaVersion: 6, gridSettings: { spacing: 8, unit: 'pixels', snap: true, rulers: true }, latestGeneration: null, appliedJobIds: [], generationMode: 'fuzzy',
     pages: legacy.pages.map(page => ({ ...page, content: null, regions: page.regions.map(({ mode, ...region }) => region) })),
-    extensions: { ...legacy.extensions, 'io.desegni.legacy-generation': {
+    extensions: { ...legacy.extensions, 'io.desegnos.legacy-generation': {
       schemaVersion: 1, data: { sourceSchemaVersion: 1, perAreaModes: modes },
     } },
   };

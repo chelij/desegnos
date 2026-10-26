@@ -1,16 +1,16 @@
 use super::*;
-use desegni_core::{
+use desegnos_core::{
     Appearance, Command, DecisionProposal, GeneratedPage, Rect, RegionOutcome, RegionStatus, Scope,
     Session, SiteContent, Viewport,
 };
-use desegni_storage::Journal;
+use desegnos_storage::Journal;
 
 struct Temp(PathBuf);
 
 impl Temp {
     fn new() -> Self {
         let path =
-            std::env::temp_dir().join(format!("desegni-generation-coordinator-{}", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("desegnos-generation-coordinator-{}", Uuid::new_v4()));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -864,7 +864,7 @@ fn omitted_and_invalid_regions_recover_without_applying_unsafe_source() {
         assert!(!source.html.contains("inventedid"));
         assert_eq!(
             source.css,
-            desegni_core::format_site_content(project.pages[0].content.as_ref().unwrap()).css
+            desegnos_core::format_site_content(project.pages[0].content.as_ref().unwrap()).css
         );
         assert_eq!(
             source.javascript,
@@ -1415,7 +1415,7 @@ fn paused_preview_csp_authorizes_only_its_own_frozen_session() {
         .unwrap();
     assert!(policy.contains(&paused.session_id.to_string()));
     assert!(!policy.contains(&enabled.session_id.to_string()));
-    assert!(!policy.contains("script-src desegni-preview: "));
+    assert!(!policy.contains("script-src desegnos-preview: "));
     assert_eq!(
         registry
             .serve(&Request::get(old_script).body(vec![]).unwrap())
@@ -1505,16 +1505,16 @@ fn identity_access_rechecks_account_selection_plan_storage_and_model_after_async
     let model = ProviderSettings::default().model;
     let mut view = ChatgptView::unavailable("isolated check");
     view.active_account_id = Some(account);
-    view.accounts.push(desegni_ai::ChatgptAccount {
+    view.accounts.push(desegnos_ai::ChatgptAccount {
         id: account,
         label: "A".into(),
         email: None,
         connected: true,
         plan_enabled: true,
-        storage: desegni_ai::CredentialLocation::Session,
+        storage: desegnos_ai::CredentialLocation::Session,
         storage_repair_required: false,
     });
-    view.models.push(desegni_ai::ChatgptModel {
+    view.models.push(desegnos_ai::ChatgptModel {
         id: model.clone(),
         name: model.clone(),
     });
@@ -1579,7 +1579,7 @@ fn provider_selection_survives_restart_and_keeps_keys_and_settings_separate() {
         )
         .unwrap();
     service.select_provider(ProviderId::Openai, true).unwrap();
-    assert_eq!(service.settings.model, desegni_ai::MODEL_ID);
+    assert_eq!(service.settings.model, desegnos_ai::MODEL_ID);
     assert!(service.credentials.status().configured);
     service
         .select_provider(ProviderId::Anthropic, true)
@@ -1687,14 +1687,14 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     assert_eq!(packet, expected_requirements.markdown.as_bytes());
     let archive_path = temp.0.join("legacy.desegnos");
     fs::write(&archive_path, LEGACY_SELECTION_ARCHIVE).unwrap();
-    let document = desegni_storage::load_project_document(&archive_path).unwrap();
+    let document = desegnos_storage::load_project_document(&archive_path).unwrap();
     assert_eq!(document.source_schema_version, 6);
     assert_eq!(document.source_project_markdown, fixture.project_markdown);
     let workspace_directory = temp.0.join("workspace");
     let mut workspace =
         crate::workspace::open_archive_for_tests(workspace_directory.clone(), &archive_path);
     let before = workspace.project().unwrap().clone();
-    assert_eq!(before.schema_version, desegni_core::SCHEMA_VERSION);
+    assert_eq!(before.schema_version, desegnos_core::SCHEMA_VERSION);
     assert_eq!(before.id, project_id);
     let region = &before.pages[0].regions[0];
     assert_eq!(
@@ -1757,7 +1757,7 @@ fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_app
     assert_eq!(fresh.requirements.format_version().unwrap(), 26);
     assert_eq!(
         fresh.source_fingerprints.get(&before.pages[0].id),
-        Some(&desegni_core::source_fingerprints(
+        Some(&desegnos_core::source_fingerprints(
             before.pages[0].content.as_ref()
         ))
     );
@@ -1822,7 +1822,7 @@ fn schema_six_prepared_format_nine_job_is_preserved_while_begin_submits_current_
     assert_eq!(fresh.requirements.format_version().unwrap(), 26);
     assert_eq!(
         fresh.source_fingerprints.get(&project.pages[0].id),
-        Some(&desegni_core::source_fingerprints(
+        Some(&desegnos_core::source_fingerprints(
             project.pages[0].content.as_ref()
         ))
     );
@@ -2062,7 +2062,7 @@ fn runtime_image_rejection_is_persisted_per_account_and_credential_without_secre
     service
         .store_image_access(
             first.clone(),
-            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "image_api_rejected"),
+            desegnos_ai::ImageAccess::new(desegnos_ai::ImageAvailability::No, "image_api_rejected"),
         )
         .unwrap();
     service
@@ -2078,7 +2078,7 @@ fn runtime_image_rejection_is_persisted_per_account_and_credential_without_secre
     service
         .store_image_access(
             chatgpt.clone(),
-            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "image_api_rejected"),
+            desegnos_ai::ImageAccess::new(desegnos_ai::ImageAvailability::No, "image_api_rejected"),
         )
         .unwrap();
     let saved = fs::read_to_string(service.directory.join("image-api-access.json")).unwrap();
@@ -2086,11 +2086,11 @@ fn runtime_image_rejection_is_persisted_per_account_and_credential_without_secre
     let mut reopened = GenerationService::from_directory(service.directory.clone()).unwrap();
     assert_eq!(
         reopened.image_access[&first].available,
-        desegni_ai::ImageAvailability::No
+        desegnos_ai::ImageAvailability::No
     );
     assert_eq!(
         reopened.image_access[&chatgpt].available,
-        desegni_ai::ImageAvailability::No
+        desegnos_ai::ImageAvailability::No
     );
     reopened
         .image_access_checking
@@ -2122,20 +2122,20 @@ fn image_key_is_separate_and_selection_prefers_the_active_connection() {
     service
         .store_image_access(
             main.clone(),
-            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::No, "subscription sharing"),
+            desegnos_ai::ImageAccess::new(desegnos_ai::ImageAvailability::No, "subscription sharing"),
         )
         .unwrap();
     service
         .store_image_access(
             image.clone(),
-            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::Yes, "invalid size"),
+            desegnos_ai::ImageAccess::new(desegnos_ai::ImageAvailability::Yes, "invalid size"),
         )
         .unwrap();
     assert_eq!(service.selected_image_cache_id(None), Some(image.clone()));
     service
         .store_image_access(
             main.clone(),
-            desegni_ai::ImageAccess::new(desegni_ai::ImageAvailability::Yes, "invalid size"),
+            desegnos_ai::ImageAccess::new(desegnos_ai::ImageAvailability::Yes, "invalid size"),
         )
         .unwrap();
     assert_eq!(service.selected_image_cache_id(None), Some(main));
@@ -2258,7 +2258,7 @@ fn retained_drafts_survive_restart_past_history_and_dismissal() {
     let mut service = temp.service();
     let prepared = service.prepare(&project).unwrap();
     let mut record = service.jobs[&prepared.job_id].clone();
-    let drafts = desegni_core::retain_generation_drafts(
+    let drafts = desegnos_core::retain_generation_drafts(
         "{\"pages\":[{\"pageId\":\"bad-id\",\"content\":{\"html\":\"<p>Paid work</p>\",\"css\":\"\",\"javascript\":\"\"}}]}",
         &record.view.requirements,
         &project,
@@ -2381,7 +2381,7 @@ fn repair_draft_uses_current_source_instead_of_its_stale_base_and_retained_code(
     edited.revision += 1;
     edited.pages[0].content.as_mut().unwrap().html =
         "<main>Manual text and deleted old elements</main>".into();
-    let draft = desegni_core::GenerationDraft {
+    let draft = desegnos_core::GenerationDraft {
         id: Uuid::new_v4(),
         page_id: Some(original.home_page_id),
         region_ids: vec![original.pages[0].regions[0].id],
@@ -2478,8 +2478,8 @@ fn discarded_validator_conflicts_survive_history_index_and_reach_each_retry_area
         record
             .view
             .validation_events
-            .push(desegni_core::ValidationEvent {
-                kind: desegni_core::validation_failure_kind(reason).into(),
+            .push(desegnos_core::ValidationEvent {
+                kind: desegnos_core::validation_failure_kind(reason).into(),
                 disposition: "conflicted".into(),
                 region_id: Some(region.region_id),
                 message: reason.into(),
@@ -2560,7 +2560,7 @@ fn whole_reply_validator_rejection_is_not_a_provider_failure() {
     let project = project();
     let mut view = service.prepare(&project).unwrap();
     view.status = JobStatus::Discarded;
-    view.validation_events.push(desegni_core::ValidationEvent {
+    view.validation_events.push(desegnos_core::ValidationEvent {
         kind: "replyStructure".into(),
         disposition: "conflicted".into(),
         region_id: None,
@@ -2614,7 +2614,7 @@ fn batched_project() -> Project {
             Command::SetRegionPages {
                 page_id: home,
                 region_id,
-                pages: vec![desegni_core::PageSelection::All],
+                pages: vec![desegnos_core::PageSelection::All],
             },
         )
         .unwrap()
@@ -2633,8 +2633,8 @@ fn part_candidate(
         .iter()
         .filter_map(|included| {
             let page_id = match included.document {
-                desegni_core::DocumentTarget::Page { page_id } => page_id,
-                desegni_core::DocumentTarget::SiteFile { .. } => return None,
+                desegnos_core::DocumentTarget::Page { page_id } => page_id,
+                desegnos_core::DocumentTarget::SiteFile { .. } => return None,
             };
             let source = project.page(page_id).ok()?.content.clone()?;
             let html = if page_id == home {
@@ -2848,8 +2848,8 @@ fn mergeable_project() -> (Project, &'static str) {
     (project, SOURCE)
 }
 
-fn paragraph_target(project: &Project) -> desegni_core::ElementTarget {
-    desegni_core::ElementTarget {
+fn paragraph_target(project: &Project) -> desegnos_core::ElementTarget {
+    desegnos_core::ElementTarget {
         id: String::new(),
         selector: "body > main:nth-of-type(1) > p:nth-of-type(1)".into(),
         tag: "p".into(),
@@ -2879,7 +2879,7 @@ fn edits_to_other_elements_keep_the_result_ready_and_merge_when_applied() {
             original.revision,
             original.home_page_id,
             &paragraph_target(&original),
-            &desegni_core::ElementEdit::Update {
+            &desegnos_core::ElementEdit::Update {
                 texts: vec![],
                 attributes: Default::default(),
                 style: Some("letter-spacing:0.02em".into()),
@@ -2968,8 +2968,8 @@ fn editing_the_text_a_whole_page_generation_rewrites_stays_blocked() {
             original.revision,
             original.home_page_id,
             &paragraph_target(&original),
-            &desegni_core::ElementEdit::Update {
-                texts: vec![desegni_core::TextEdit {
+            &desegnos_core::ElementEdit::Update {
+                texts: vec![desegnos_core::TextEdit {
                     index: 0,
                     text: "My own wording".into(),
                 }],

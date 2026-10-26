@@ -50,7 +50,7 @@ export async function directEditingWorkflow(driver, physical, step, output, prov
     catch (error) {
       await writeFile(join(output,'failed-element-click.json'),JSON.stringify({point,item,events:await physical.events(),native:await physical.inspect(),view:await driver.execute(at=>{
         const f=document.querySelector('.static-preview iframe'),r=f.getBoundingClientRect(),z=Number(document.querySelector('[data-testid="canvas"]').dataset.zoom);
-        return{hit:document.elementFromPoint(at.x,at.y)?.outerHTML.slice(0,900),siteHit:f.contentDocument.elementFromPoint((at.x-r.x)/z,(at.y-r.y)/z)?.outerHTML,focus:document.activeElement?.outerHTML.slice(0,500),errors:window.__desegniTestErrors};
+        return{hit:document.elementFromPoint(at.x,at.y)?.outerHTML.slice(0,900),siteHit:f.contentDocument.elementFromPoint((at.x-r.x)/z,(at.y-r.y)/z)?.outerHTML,focus:document.activeElement?.outerHTML.slice(0,500),errors:window.__desegnosTestErrors};
       },point)},null,2));
       throw error;
     }
@@ -183,7 +183,7 @@ export async function directEditingWorkflow(driver, physical, step, output, prov
     await physical.keys('Escape');
     await physical.resetEvents(); await physical.rightClick(await link());
     await driver.executeAsync(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true)))));
-    await writeFile(join(output,'right-click-events.json'),JSON.stringify({events:await physical.events(),view:await driver.execute(()=>({selection:document.querySelector('[data-testid="direct-element-selection"]')?.dataset.selector,menus:[...document.querySelectorAll('[role="menu"]')].map(m=>m.outerHTML),errors:window.__desegniTestErrors}))},null,2));
+    await writeFile(join(output,'right-click-events.json'),JSON.stringify({events:await physical.events(),view:await driver.execute(()=>({selection:document.querySelector('[data-testid="direct-element-selection"]')?.dataset.selector,menus:[...document.querySelectorAll('[role="menu"]')].map(m=>m.outerHTML),errors:window.__desegnosTestErrors}))},null,2));
     await waitFor(()=>driver.execute(()=>!!document.querySelector('[role="menu"][aria-label="Element actions"]')),'Right-click did not open element actions');
     assert.equal(await driver.execute(()=>document.querySelector('[data-testid="direct-element-selection"]').dataset.selector.endsWith('a:nth-of-type(1)')),true);
     assert.deepEqual((await workspace()).project,before);

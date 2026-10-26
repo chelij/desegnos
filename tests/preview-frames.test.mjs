@@ -14,15 +14,15 @@ try {
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { hardenStaticFrames, staticBase, staticDocument, staticFrameDocument, staticPolicy } = await import(pathToFileURL(join(temporary, 'previewDocument.js')).href);
 
-  const website = { website: true, url: 'desegni-preview://session-1.localhost/play/solopong/index.html' };
-  const generated = { url: 'desegni-preview://localhost/session-2/page-1/index.html' };
+  const website = { website: true, url: 'desegnos-preview://session-1.localhost/play/solopong/index.html' };
+  const generated = { url: 'desegnos-preview://localhost/session-2/page-1/index.html' };
   const directive = name => staticPolicy.split(';').map(part => part.trim()).find(part => part.startsWith(`${name} `)) ?? '';
 
   await test('the static canvas policy renders frames from the session and an https embed', () => {
     const frames = directive('frame-src');
-    assert.match(frames, /desegni-preview:/);
-    assert.match(frames, /http:\/\/\*\.desegni-preview\.localhost/);
-    assert.match(frames, /http:\/\/desegni-preview\.localhost/);
+    assert.match(frames, /desegnos-preview:/);
+    assert.match(frames, /http:\/\/\*\.desegnos-preview\.localhost/);
+    assert.match(frames, /http:\/\/desegnos-preview\.localhost/);
     assert.match(frames, / https: about:$/);
     assert.equal(directive('child-src'), frames.replace('frame-src ', 'child-src '));
   });
@@ -38,7 +38,7 @@ try {
 
   await test('the base element may point at the session that serves the page', () => {
     const base = directive('base-uri');
-    assert.match(base, /desegni-preview:/);
+    assert.match(base, /desegnos-preview:/);
     assert.ok(!base.includes("'none'"), base);
   });
 
@@ -54,7 +54,7 @@ try {
     const document = staticDocument(html, staticBase(website));
     assert.ok(document.startsWith('<!doctype html><html><head>'));
     assert.ok(document.indexOf('http-equiv="Content-Security-Policy"') < document.indexOf('<base '));
-    assert.ok(document.indexOf('<base href="desegni-preview://session-1.localhost/play/solopong/index.html">') < document.indexOf('</head>'));
+    assert.ok(document.indexOf('<base href="desegnos-preview://session-1.localhost/play/solopong/index.html">') < document.indexOf('</head>'));
     assert.ok(document.endsWith(`<body>${html}</body></html>`));
   });
 
@@ -65,8 +65,8 @@ try {
   });
 
   await test('a base URL cannot break out of its attribute', () => {
-    const document = staticDocument('<p>Hello</p>', 'desegni-preview://session-1.localhost/a"b.html');
-    assert.ok(document.includes('<base href="desegni-preview://session-1.localhost/a&quot;b.html">'), document);
+    const document = staticDocument('<p>Hello</p>', 'desegnos-preview://session-1.localhost/a"b.html');
+    assert.ok(document.includes('<base href="desegnos-preview://session-1.localhost/a&quot;b.html">'), document);
   });
 
   await test('a framed page renders scriptless with its own CSS and the page policy', () => {
@@ -74,17 +74,17 @@ try {
     assert.ok(document.startsWith('<!doctype html><html><head>'));
     assert.ok(document.includes(`content="${staticPolicy}"`) || document.includes('http-equiv="Content-Security-Policy"'));
     assert.ok(document.includes('<style data-desegnos-framed-css>main { color: red; }</style>'), document);
-    assert.ok(document.includes('<base href="desegni-preview://session-1.localhost/play/solopong/index.html">'), document);
+    assert.ok(document.includes('<base href="desegnos-preview://session-1.localhost/play/solopong/index.html">'), document);
     assert.ok(document.endsWith('<body><main><h1>Framed</h1></main></body></html>'));
     assert.ok(!document.includes('<script'));
   });
 
   await test('a framed site file keeps its authored document and gains policy, base and CSS in its head', () => {
     const html = '<!doctype html>\n<html><head><title>Game</title></head><body><canvas></canvas></body></html>';
-    const document = staticFrameDocument({ html, css: '' }, 'desegni-preview://session-1.localhost/play/game/index.html');
+    const document = staticFrameDocument({ html, css: '' }, 'desegnos-preview://session-1.localhost/play/game/index.html');
     assert.ok(document.startsWith('<!doctype html>\n<html><head>'), document);
     assert.ok(document.indexOf('Content-Security-Policy') < document.indexOf('<title>Game</title>'), document);
-    assert.ok(document.indexOf('<base href="desegni-preview://session-1.localhost/play/game/index.html">') < document.indexOf('<title>Game</title>'), document);
+    assert.ok(document.indexOf('<base href="desegnos-preview://session-1.localhost/play/game/index.html">') < document.indexOf('<title>Game</title>'), document);
     assert.ok(document.includes('<body><canvas></canvas></body></html>'));
     assert.ok(!document.includes('data-desegnos-framed-css'));
     // A document without a head element still gets one, after its doctype or html tag.

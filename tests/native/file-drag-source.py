@@ -14,7 +14,7 @@ from gi.repository import Gdk, GLib, Gtk
 if not re.fullmatch(r':(?:9[0-9]|[1-9][0-9]{2,})(?:\.\d+)?', os.environ.get('DISPLAY', '')) or os.environ.get('GDK_BACKEND') != 'x11':
     raise RuntimeError('File drag sources require the guarded private X11 display')
 file = Path(sys.argv[1]).resolve(strict=True)
-evidence = Path(os.environ['DESEGNI_NATIVE_TEST_EVIDENCE']).resolve(strict=True)
+evidence = Path(os.environ['DESEGNOS_NATIVE_TEST_EVIDENCE']).resolve(strict=True)
 if not file.is_relative_to(evidence):
     raise RuntimeError('Only files in this run’s evidence folder can be dragged')
 window = Gtk.Window(title='Native test picture file')

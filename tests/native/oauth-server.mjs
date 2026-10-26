@@ -6,7 +6,7 @@ const resource = 'https://api.openai.com/v1';
 
 export function oauthFixture(base, registerSecret, errors) {
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
-  const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'desegni-native-oauth-key', alg: 'RS256', use: 'sig', key_ops: ['verify'] };
+  const jwk = { ...publicKey.export({ format: 'jwk' }), kid: 'desegnos-native-oauth-key', alg: 'RS256', use: 'sig', key_ops: ['verify'] };
   const codes = new Map(); const access = new Map(); const refresh = new Map(); const registrations = new Map();
   const records = []; const callbacks = new Set();
   let mode = { kind: 'complete', profile: 'first', expiresIn: 3600 };
@@ -29,7 +29,7 @@ export function oauthFixture(base, registerSecret, errors) {
       earliest_refresh_at: now,
       scope: registration.permission ? scopes : scopes.replace(' chatgpt.tokens.use.direct', ''),
       id_token: jwt({ iss: base(), aud: registration.clientId, sub: `fixture-user-${registration.profile}`,
-        email: 'same-email@desegni.invalid', iat: now, exp: now + 3600, nonce: registration.nonce }) };
+        email: 'same-email@desegnos.invalid', iat: now, exp: now + 3600, nonce: registration.nonce }) };
   }
   async function handle(request, response) {
     const url = new URL(request.url, base());
@@ -56,7 +56,7 @@ export function oauthFixture(base, registerSecret, errors) {
         const selected = structuredClone(mode);
         const initial = params.get('client_id') === 'dynamic_agent_client';
         if (initial) assert.equal(params.get('agent_name_hint'), 'Desegnos');
-        const clientId = initial ? `desegni-fixture-client-${randomUUID()}` : params.get('client_id');
+        const clientId = initial ? `desegnos-fixture-client-${randomUUID()}` : params.get('client_id');
         const previous = registrations.get(clientId);
         if (!initial) assert.ok(previous, 'Returning sign-in did not reuse an issued registration');
         const registration = { clientId, profile: initial ? selected.profile : previous.profile,

@@ -63,20 +63,20 @@ function assertAttachment(record, job) {
 
 async function installPreviewObserver(driver) {
   await driver.execute(selector => {
-    if (window.__desegniFixtureObserver) window.removeEventListener('message', window.__desegniFixtureObserver);
-    window.__desegniFixtureMessages = []; window.__desegniFixtureLoads = 0;
-    window.__desegniFixtureObserver = event => {
+    if (window.__desegnosFixtureObserver) window.removeEventListener('message', window.__desegnosFixtureObserver);
+    window.__desegnosFixtureMessages = []; window.__desegnosFixtureLoads = 0;
+    window.__desegnosFixtureObserver = event => {
       const frame = document.querySelector(selector);
       if (event.source !== frame?.contentWindow || typeof event.data !== 'object' || !event.data) return;
-      if (!['desegni-native-fixture', 'desegni-native-inline-script-ran'].includes(event.data.type)) return;
-      window.__desegniFixtureMessages.push({ origin: event.origin, ...event.data });
-      window.__desegniFixtureMessages = window.__desegniFixtureMessages.slice(-64);
+      if (!['desegnos-native-fixture', 'desegnos-native-inline-script-ran'].includes(event.data.type)) return;
+      window.__desegnosFixtureMessages.push({ origin: event.origin, ...event.data });
+      window.__desegnosFixtureMessages = window.__desegnosFixtureMessages.slice(-64);
     };
-    window.addEventListener('message', window.__desegniFixtureObserver);
+    window.addEventListener('message', window.__desegnosFixtureObserver);
   }, previewFrame);
 }
 
-function messages(driver) { return driver.execute(() => window.__desegniFixtureMessages ?? []); }
+function messages(driver) { return driver.execute(() => window.__desegnosFixtureMessages ?? []); }
 
 async function frameState(driver) {
   return waitFor(() => driver.execute(selector => {
@@ -144,7 +144,7 @@ export async function dialogLayout(driver, output, name) {
 async function settingsLayout(driver, physical, step, output) {
   await step('AI settings fit 760px in both themes with measured contrast and native keyboard dismissal', async () => {
     const original = await driver.command('GET', '/window/rect');
-    const theme = await driver.execute(() => localStorage.getItem('desegni.editor-theme') ?? 'system');
+    const theme = await driver.execute(() => localStorage.getItem('desegnos.editor-theme') ?? 'system');
     await driver.command('POST', '/window/rect', { width: 760, height: 900 });
     try {
       for (const selected of ['light', 'dark']) {
@@ -371,9 +371,9 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     await waitFor(async () => { try { return await driver.execute(() => !window.__beforeWorkflowReload && !!document.querySelector('[data-testid="canvas"]')); } catch { return false; } }, 'The native editor did not reload', 12000);
     await physical.initialize(output);
     await driver.execute(() => {
-      window.__desegniTestErrors = [];
-      window.addEventListener('error', event => window.__desegniTestErrors.push({ kind: 'error', message: event.message }));
-      window.addEventListener('unhandledrejection', event => window.__desegniTestErrors.push({ kind: 'rejection', message: String(event.reason) }));
+      window.__desegnosTestErrors = [];
+      window.addEventListener('error', event => window.__desegnosTestErrors.push({ kind: 'error', message: event.message }));
+      window.addEventListener('unhandledrejection', event => window.__desegnosTestErrors.push({ kind: 'rejection', message: String(event.reason) }));
     });
     assert.equal((await job()).jobId, failed.jobId); await delay(300);
     assert.equal(provider.generationRequests().length, count);
@@ -442,7 +442,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
     await driver.click('.shell-primary-actions button.primary');
     await waitFor(async () => (await job()).status === 'generating', 'Progress layout fixture did not start');
     const original = await driver.command('GET', '/window/rect');
-    const theme = await driver.execute(() => localStorage.getItem('desegni.editor-theme') ?? 'system');
+    const theme = await driver.execute(() => localStorage.getItem('desegnos.editor-theme') ?? 'system');
     try {
       await driver.command('POST', '/window/rect', { width: 760, height: 900 });
       for (const selected of ['light', 'dark']) {
@@ -455,7 +455,7 @@ export async function generationWorkflow(driver, physical, step, evidence, provi
   });
   await step('Static canvas rejects forged messages and stale element fingerprints without modifying the project', async () => {
     const before = (await workspace()).project;
-    await driver.execute(() => window.postMessage({ type: 'desegni-select', selector: 'body', pageId: 'forged', rect: { x: 0, y: 0, width: 1, height: 1 } }, '*'));
+    await driver.execute(() => window.postMessage({ type: 'desegnos-select', selector: 'body', pageId: 'forged', rect: { x: 0, y: 0, width: 1, height: 1 } }, '*'));
     await delay(150); assert.deepEqual((await workspace()).project, before);
     await assert.rejects(() => driver.invoke('edit_project', { revision: before.revision, command: { type: 'add_element_region', page_id: before.homePageId, rect: target.rect, element: target.element } }), /page changed|Select the element/);
     assert.deepEqual((await workspace()).project, before);

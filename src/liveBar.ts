@@ -4,19 +4,19 @@
 
 export type LiveHistoryAction = 'back' | 'forward' | 'reload';
 
-export type LiveBridgeCommand = { type: 'desegni-preview-command'; sessionId: string; action: LiveHistoryAction };
+export type LiveBridgeCommand = { type: 'desegnos-preview-command'; sessionId: string; action: LiveHistoryAction };
 
 /// Back, Forward and Reload carry the session they belong to; the bridge ignores a
 /// command for any other session.
 export function liveCommand(sessionId: string, action: LiveHistoryAction): LiveBridgeCommand {
-  return { type: 'desegni-preview-command', sessionId, action };
+  return { type: 'desegnos-preview-command', sessionId, action };
 }
 
 /// A path reported by a live bridge after load, a hash change or a history move.
 export function liveLocation(data: unknown, sessionId: string): string | null {
   if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
   const value = data as Record<string, unknown>;
-  if (value.type !== 'desegni-preview-location' || value.sessionId !== sessionId) return null;
+  if (value.type !== 'desegnos-preview-location' || value.sessionId !== sessionId) return null;
   if (typeof value.path !== 'string' || !value.path.startsWith('/') || value.path.length > 2048) return null;
   return value.path;
 }

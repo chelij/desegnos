@@ -7,13 +7,13 @@ pub fn open(target: impl AsRef<OsStr>) -> io::Result<()> {
 
     #[cfg(target_os = "linux")]
     {
-        use desegni_storage::system_tools::ToolSearch;
+        use desegnos_storage::system_tools::ToolSearch;
         open_with(target.as_ref(), &ToolSearch::default())
     }
 }
 
 #[cfg(target_os = "linux")]
-fn open_with(target: &OsStr, search: &desegni_storage::system_tools::ToolSearch) -> io::Result<()> {
+fn open_with(target: &OsStr, search: &desegnos_storage::system_tools::ToolSearch) -> io::Result<()> {
     use std::{
         process::{Command, Stdio},
         time::{Duration, Instant},
@@ -74,7 +74,7 @@ fn open_with(target: &OsStr, search: &desegni_storage::system_tools::ToolSearch)
 #[allow(dead_code)]
 pub fn open_with_search(
     target: &OsStr,
-    search: &desegni_storage::system_tools::ToolSearch,
+    search: &desegnos_storage::system_tools::ToolSearch,
 ) -> io::Result<()> {
     open_with(target, search)
 }

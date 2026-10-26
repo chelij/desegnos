@@ -36,7 +36,7 @@ export type CollectedFrame = {
 
 export type FramePlacement = { left: number; top: number; width: number; height: number };
 
-const ALLOWED_PROTOCOLS = new Set(['desegni-preview:', 'http:', 'https:']);
+const ALLOWED_PROTOCOLS = new Set(['desegnos-preview:', 'http:', 'https:']);
 
 /// A frame's identity is its document order plus the file it loads. Both stay the same
 /// across the two measurements of one promoted document, so React keeps one overlay.

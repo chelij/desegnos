@@ -107,7 +107,7 @@ mod tests {
             [
                 "-c",
                 "test \"$__NV_DISABLE_EXPLICIT_SYNC\" = 1 && test \"$1\" = 'argument with spaces'",
-                "desegni-startup-check",
+                "desegnos-startup-check",
                 "argument with spaces",
             ]
             .into_iter()

@@ -37,7 +37,7 @@ export class PhysicalInput {
   inspect() { return this.raw({ action: 'inspect' }); }
 
   async captureWindow(destination, fromScreen = true) {
-    const evidence = process.env.DESEGNI_NATIVE_TEST_EVIDENCE;
+    const evidence = process.env.DESEGNOS_NATIVE_TEST_EVIDENCE;
     assert.ok(evidence && resolve(destination).startsWith(resolve(evidence) + sep), 'Window captures must stay in this test evidence directory');
     const native = await this.inspect();
     await new Promise((accept, reject) => {
@@ -59,25 +59,25 @@ export class PhysicalInput {
     assert.ok(Math.abs(native.window.x - windowRect.x * viewport.scale) <= 2, 'The X11 and native driver window positions disagree');
     assert.ok(Math.abs(native.window.y - windowRect.y * viewport.scale) <= 2, 'The X11 and native driver window positions disagree');
     await this.driver.execute(() => {
-      if (window.__desegniRecordNativeEvent) {
+      if (window.__desegnosRecordNativeEvent) {
         for (const type of ['pointermove', 'pointerdown', 'pointerup', 'keydown', 'keyup', 'wheel', 'click', 'dblclick', 'contextmenu']) {
-          document.removeEventListener(type, window.__desegniRecordNativeEvent, true);
+          document.removeEventListener(type, window.__desegnosRecordNativeEvent, true);
         }
       }
-      window.__desegniNativeEvents = [];
-      window.__desegniRecordNativeEvent = event => {
-        window.__desegniNativeEvents.push({ type: event.type, trusted: event.isTrusted, key: event.key, button: event.button, target: event.target?.tagName, targetClass: event.target?.className,
+      window.__desegnosNativeEvents = [];
+      window.__desegnosRecordNativeEvent = event => {
+        window.__desegnosNativeEvents.push({ type: event.type, trusted: event.isTrusted, key: event.key, button: event.button, target: event.target?.tagName, targetClass: event.target?.className,
           clientX: event.clientX, clientY: event.clientY, screenX: event.screenX, screenY: event.screenY });
-        window.__desegniNativeEvents = window.__desegniNativeEvents.slice(-64);
+        window.__desegnosNativeEvents = window.__desegnosNativeEvents.slice(-64);
       };
       for (const type of ['pointermove', 'pointerdown', 'pointerup', 'keydown', 'keyup', 'wheel', 'click', 'dblclick', 'contextmenu']) {
-        document.addEventListener(type, window.__desegniRecordNativeEvent, true);
+        document.addEventListener(type, window.__desegnosRecordNativeEvent, true);
       }
     });
     const rootPoint = { x: native.window.x + Math.floor(native.window.width / 2), y: native.window.y + Math.floor(native.window.height / 2) };
     await this.raw({ action: 'move', point: { x: rootPoint.x - 1, y: rootPoint.y - 1 } });
     await this.raw({ action: 'move', point: rootPoint });
-    const observed = await waitFor(() => this.driver.execute(() => window.__desegniNativeEvents.filter(event => event.type === 'pointermove').at(-1)), 'The real X11 pointer did not reach the native webview');
+    const observed = await waitFor(() => this.driver.execute(() => window.__desegnosNativeEvents.filter(event => event.type === 'pointermove').at(-1)), 'The real X11 pointer did not reach the native webview');
     assert.equal(observed.trusted, true, 'The calibration event was not a trusted operating-system pointer event');
     assert.ok(Math.abs(observed.screenX * viewport.scale - rootPoint.x) <= 1);
     assert.ok(Math.abs(observed.screenY * viewport.scale - rootPoint.y) <= 1);
@@ -111,8 +111,8 @@ export class PhysicalInput {
   path(points, cancelDrag = false) { return this.raw({ action: 'drag', from: this.rootPoint(points[0]), to: this.rootPoint(points.at(-1)), path: points.map(point => this.rootPoint(point)), cancelDrag }); }
   wheel(point, direction, modifiers = [], count = 1) { return this.raw({ action: 'wheel', point: this.rootPoint(point), direction, modifiers, count }); }
   keys(key, count = 1, modifiers = []) { return this.raw({ modifiers, action: 'key', key, count }); }
-  resetEvents() { return this.driver.execute(() => { window.__desegniNativeEvents = []; }); }
-  events() { return this.driver.execute(() => window.__desegniNativeEvents); }
+  resetEvents() { return this.driver.execute(() => { window.__desegnosNativeEvents = []; }); }
+  events() { return this.driver.execute(() => window.__desegnosNativeEvents); }
 
   rect(selector) {
     return this.driver.execute(value => {
@@ -144,9 +144,9 @@ export class PhysicalInput {
   cleanup() {
     return this.driver.execute(() => {
       for (const type of ['pointermove', 'pointerdown', 'pointerup', 'keydown', 'keyup', 'wheel', 'click', 'dblclick', 'contextmenu']) {
-        document.removeEventListener(type, window.__desegniRecordNativeEvent, true);
+        document.removeEventListener(type, window.__desegnosRecordNativeEvent, true);
       }
-      delete window.__desegniRecordNativeEvent; delete window.__desegniNativeEvents;
+      delete window.__desegnosRecordNativeEvent; delete window.__desegnosNativeEvents;
     });
   }
 }

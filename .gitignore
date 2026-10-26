@@ -8,8 +8,10 @@
 /playwright-report/
 /src-tauri/gen/
 *.log
+*.desegnos
 *.desegni
-!/crates/desegni-storage/tests/fixtures/*.desegni
+!/crates/desegnos-storage/tests/fixtures/*.desegni
+*.desegnos.lock
 *.desegni.lock
 *.previous
 .env

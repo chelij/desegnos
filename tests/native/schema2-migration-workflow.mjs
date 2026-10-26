@@ -8,8 +8,8 @@ import { chooseFile, savedState, verifyArchive } from './file-dialog-workflow.mj
 import { assertCanvasOnly } from './workflow.mjs';
 import { waitFor, xpathString } from './webdriver.mjs';
 
-const fixture = fileURLToPath(new URL('../../crates/desegni-storage/tests/fixtures/schema2-global-generation.desegni', import.meta.url));
-const fixtureJson = fileURLToPath(new URL('../../crates/desegni-storage/tests/fixtures/schema2-global-generation.project.json', import.meta.url));
+const fixture = fileURLToPath(new URL('../../crates/desegnos-storage/tests/fixtures/schema2-global-generation.desegni', import.meta.url));
+const fixtureJson = fileURLToPath(new URL('../../crates/desegnos-storage/tests/fixtures/schema2-global-generation.project.json', import.meta.url));
 const fixtureHash = 'f828598377bebee41c6c8a00f884d8888cdfc3f76c49c8a95b7228b8004834b2';
 
 export async function schema2MigrationWorkflow(driver, physical, step, evidence) {

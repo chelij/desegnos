@@ -12,7 +12,7 @@ import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 const option = name => { const index = args.indexOf(name); return index === -1 ? undefined : args[index + 1]; };
-const data = option('--data') ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), 'io.github.chelij.desegni');
+const data = option('--data') ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), 'io.github.chelij.desegnos');
 const out = option('--out');
 
 async function list(path) { try { return await readdir(path); } catch { return []; } }

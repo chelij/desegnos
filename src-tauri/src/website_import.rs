@@ -1,4 +1,4 @@
-use desegni_storage::{WebsiteFolder, detect_website_folder};
+use desegnos_storage::{WebsiteFolder, detect_website_folder};
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -168,7 +168,7 @@ fn run_build(
 ) {
     let result = (|| -> Result<(), String> {
         let mut command =
-            desegni_storage::system_tools::ToolSearch::default().build_command(&path, &args)?;
+            desegnos_storage::system_tools::ToolSearch::default().build_command(&path, &args)?;
         command
             .current_dir(&path)
             .stdin(Stdio::null())
@@ -184,7 +184,7 @@ fn run_build(
         }
         let mut child = command
             .spawn()
-            .map_err(|e| desegni_storage::system_tools::spawn_message(&args[0], &e))?;
+            .map_err(|e| desegnos_storage::system_tools::spawn_message(&args[0], &e))?;
         let readers: Vec<Box<dyn Read + Send>> = vec![
             Box::new(child.stdout.take().expect("stdout")),
             Box::new(child.stderr.take().expect("stderr")),

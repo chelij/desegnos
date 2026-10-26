@@ -4,13 +4,13 @@
 
 /// Sources for the preview session's own files in every URL form the app serves, plus https
 /// for pages that embed an external site.
-const sessionSources = 'desegni-preview: http://*.desegni-preview.localhost http://desegni-preview.localhost';
+const sessionSources = 'desegnos-preview: http://*.desegnos-preview.localhost http://desegnos-preview.localhost';
 /// Nested frames of an editable document render from `srcdoc`, which has no network URL.
 const frameSources = `${sessionSources} https: about:`;
 
 /// Static canvas documents never run scripts. Frames may still render: the session's own
 /// files, an https embed, a same-origin srcdoc document, and nothing else.
-export const staticPolicy = `default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline' https: http: data: desegni-preview:; img-src data: https: http: desegni-preview:; connect-src 'none'; font-src data: https: http: desegni-preview:; frame-src ${frameSources}; child-src ${frameSources}; object-src 'none'; base-uri ${sessionSources}; form-action 'none'; media-src 'none'; worker-src 'none'`;
+export const staticPolicy = `default-src 'none'; script-src 'none'; script-src-attr 'none'; style-src 'unsafe-inline' https: http: data: desegnos-preview:; img-src data: https: http: desegnos-preview:; connect-src 'none'; font-src data: https: http: desegnos-preview:; frame-src ${frameSources}; child-src ${frameSources}; object-src 'none'; base-uri ${sessionSources}; form-action 'none'; media-src 'none'; worker-src 'none'`;
 
 /// The page's own session URL. A relative frame src in the imported page resolves against it,
 /// so `../llama-wrap-preview.html` reaches the file that sits there in the imported site.

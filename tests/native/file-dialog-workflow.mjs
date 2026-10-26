@@ -18,7 +18,7 @@ with zipfile.ZipFile(sys.argv[1]) as archive:
     files = {name: archive.read(name) for name in names}
 manifest = json.loads(files["manifest.json"])
 project = json.loads(files["project.json"])
-assert manifest["format"] == "desegni", manifest
+assert manifest["format"] == "desegnos", manifest
 assert manifest["schemaVersion"] == expected["project"]["schemaVersion"], manifest
 assert manifest["projectId"] == expected["project"]["id"], manifest
 assert manifest["revision"] == expected["project"]["revision"], manifest

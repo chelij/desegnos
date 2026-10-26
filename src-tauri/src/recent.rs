@@ -100,7 +100,7 @@ fn lock(directory: &Path) -> Result<File, String> {
 
 fn write(directory: &Path, entries: &[RecentProject]) -> Result<(), String> {
     let json = serde_json::to_string(entries).map_err(|error| error.to_string())?;
-    desegni_storage::write_markdown(&directory.join("recent-projects.json"), &json)
+    desegnos_storage::write_markdown(&directory.join("recent-projects.json"), &json)
         .map_err(|error| error.to_string())
 }
 

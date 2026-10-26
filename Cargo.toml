@@ -1,6 +1,6 @@
 [workspace]
-members = ["crates/desegni-core", "crates/desegni-storage", "crates/desegni-ai", "src-tauri"]
-default-members = ["crates/desegni-core", "crates/desegni-storage", "crates/desegni-ai"]
+members = ["crates/desegnos-core", "crates/desegnos-storage", "crates/desegnos-ai", "src-tauri"]
+default-members = ["crates/desegnos-core", "crates/desegnos-storage", "crates/desegnos-ai"]
 resolver = "3"
 
 [workspace.package]

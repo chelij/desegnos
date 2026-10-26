@@ -1,5 +1,5 @@
 [package]
-name = "desegni-desktop"
+name = "desegnos-desktop"
 default-run = "desegnos"
 version.workspace = true
 edition.workspace = true
@@ -20,12 +20,12 @@ custom-protocol = ["tauri/custom-protocol"]
 # turn defaults off and use in-process GTK dialogs: the guarded Xvfb display has no portal.
 portal-dialogs = ["tauri-plugin-dialog/xdg-portal", "dep:zbus"]
 gtk-dialogs = ["tauri-plugin-dialog/gtk3"]
-native-tests = ["dep:tauri-plugin-wdio-webdriver", "desegni-ai/test-support"]
+native-tests = ["dep:tauri-plugin-wdio-webdriver", "desegnos-ai/test-support"]
 
 [dependencies]
-desegni-core = { path = "../crates/desegni-core" }
-desegni-storage = { path = "../crates/desegni-storage" }
-desegni-ai = { path = "../crates/desegni-ai" }
+desegnos-core = { path = "../crates/desegnos-core" }
+desegnos-storage = { path = "../crates/desegnos-storage" }
+desegnos-ai = { path = "../crates/desegnos-ai" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -50,7 +50,7 @@ webkit2gtk = "=2.0.2"
 zbus = { version = "5", optional = true }
 
 [dev-dependencies]
-desegni-ai = { path = "../crates/desegni-ai", features = ["test-support"] }
+desegnos-ai = { path = "../crates/desegnos-ai", features = ["test-support"] }
 
 [lints]
 workspace = true

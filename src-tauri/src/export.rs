@@ -1,6 +1,6 @@
 //! Native export authority: frozen revision, destination picker, verified receipt.
-use desegni_core::{Project, compile_website};
-use desegni_storage::{WrittenWebsiteExport, write_website_export};
+use desegnos_core::{Project, compile_website};
+use desegnos_storage::{WrittenWebsiteExport, write_website_export};
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{AppHandle, State, WebviewWindow};

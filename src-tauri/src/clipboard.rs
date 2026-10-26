@@ -3,7 +3,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 // The core validates the typed layer packet separately. This adapter bounds
 // platform text transfers without exposing general clipboard commands to JS.
-const MAX_CLIPBOARD_BYTES: usize = 8 * desegni_core::MAX_SITE_SOURCE_BYTES;
+const MAX_CLIPBOARD_BYTES: usize = 8 * desegnos_core::MAX_SITE_SOURCE_BYTES;
 
 fn check_size(text: &str) -> Result<(), String> {
     if text.len() > MAX_CLIPBOARD_BYTES {
