@@ -740,6 +740,13 @@ function Editor() {
   const changedPageIds = new Set(resultReview ? (generation.job?.candidate?.pages ?? []).map(item => item.pageId) : []);
   generationRef.current = generation.job;
   generationOwns.current = generation.owns;
+  // Escape leaves Add request for Select; capture runs before the canvas swallows the key.
+  useEffect(() => {
+    if (tool !== 'request') return;
+    const exit = (event: KeyboardEvent) => { if (event.key === 'Escape' && !isTextField(event.target)) setTool('select'); };
+    window.addEventListener('keydown', exit, true);
+    return () => window.removeEventListener('keydown', exit, true);
+  }, [tool]);
   useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
   useEffect(() => { setLivePath(page?.path ?? '/'); }, [live, page?.id]);
   async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
