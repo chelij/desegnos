@@ -3,6 +3,7 @@ import { CrashReportNotice, EditorCrashBoundary } from './CrashReport';
 import { needsAiSettings, ProblemBanner, Notice, NoticeProvider, NoticeHost } from './ProblemBanner.js';
 import { summarizeOutsideChanges } from './noticeSummary.js';
 import { browserOpenUrl, userError } from './userErrors.js';
+import { updateSummary, type UpdateCheck, type UpdateSummary } from './updateCheck';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -76,7 +77,10 @@ function Editor() {
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [openFailure, setOpenFailure] = useState('');
+  const [openFailure, setOpenFailure] = useState<{ message: string; url: string } | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [updateResult, setUpdateResult] = useState<UpdateSummary | null>(null);
+  const [updateError, setUpdateError] = useState('');
   const [notices, setNotices] = useState<{ id: number; message: string }[]>([]);
   const noticeId = useRef(0);
   const setNotice = useCallback((message: string) => { const id = ++noticeId.current; setNotices(items => [...items, { id, message }]); }, []);
@@ -482,13 +486,24 @@ function Editor() {
   }
   async function openInBrowser() {
     await synchronize(); await settle();
-    setError(''); setOpenFailure('');
+    setError(''); setOpenFailure(null);
     try { await native<string>('open_in_browser'); setNotice('Opened in your browser.'); }
     catch (error) {
       const url = browserOpenUrl(error);
-      if (url) setOpenFailure(url);
+      if (url) setOpenFailure({ message: `The site is running at ${url}`, url });
       else setError(errorMessage(error));
     }
+  }
+  // The only update request: a manual read of the newest release, with no install step.
+  async function checkForUpdates() {
+    setCheckingUpdates(true); setUpdateError(''); setUpdateResult(null);
+    try { setUpdateResult(updateSummary(await native<UpdateCheck>('check_for_updates'))); }
+    catch (error) { setUpdateError(errorMessage(error)); }
+    finally { setCheckingUpdates(false); }
+  }
+  async function openRelease(url: string) {
+    try { await native('open_preview_link', { url }); }
+    catch { setOpenFailure({ message: url, url }); }
   }
   async function exportWebsite() {
     await synchronize(); await settle();
@@ -1157,6 +1172,7 @@ function Editor() {
     { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
     { id: 'project-location', label: 'Default project location', action: () => setShowProjectLocation(true) },
     { id: 'ask-delete', label: 'Ask before deleting', checked: askDelete, action: () => setAskBeforeDelete(!askDelete) },
+    { id: 'check-updates', label: 'Check for updates…', disabled: checkingUpdates, action: () => { void checkForUpdates(); } },
     { id: 'help', label: 'Keyboard shortcuts', shortcut: 'F1', action: () => setShowShortcuts(true) },
   ];
 
@@ -1189,7 +1205,9 @@ function Editor() {
     <SurfaceHost place="banner" />
     {!project && <NoticeHost />}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />}
-    {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={`The site is running at ${openFailure}`} action={{ label: 'Copy link', onClick: () => { void native('copy_text', { text: openFailure }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure('')} />}
+    {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={openFailure.message} action={{ label: 'Copy link', onClick: () => { const url = openFailure.url; void native('copy_text', { text: url }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure(null)} />}
+    {updateResult && <Notice variant={updateResult.variant} message={updateResult.message} action={updateResult.download ? { label: 'Download', onClick: () => { const url = updateResult.download; if (url) void openRelease(url); } } : undefined} dismiss={() => setUpdateResult(null)} />}
+    {updateError && <ProblemBanner message={userError(updateError)} dismiss={() => setUpdateError('')} />}
     {notices.map(item => <Notice key={item.id} variant="info" message={item.message} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
     <CrashReportNotice />
     {exported && <Notice className="export-notice" priority="result" variant={exported.warnings.length ? 'warning' : 'success'} title="Website exported" message={`${exported.pageCount} ${exported.pageCount === 1 ? 'page' : 'pages'}${exported.warnings.length ? ` · ${[...new Set(exported.warnings)].join(' ')}` : ''}`} action={{ label: 'Open folder', onClick: () => run(() => native('open_export_folder', { path: exported.path })) }} dismiss={() => setExported(null)} />}

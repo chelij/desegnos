@@ -24,6 +24,7 @@ mod recent;
 mod release;
 mod request_zip;
 mod system_open;
+mod updates;
 mod usage;
 mod website_import;
 mod workspace;
@@ -227,7 +228,8 @@ fn main() {
             crash_report::pending_crash_report,
             crash_report::open_crash_report,
             crash_report::dismiss_crash_report,
-            crash_report::record_frontend_crash
+            crash_report::record_frontend_crash,
+            updates::check_for_updates
         ])
         .build(tauri::generate_context!())
         .expect("Desegnos could not start its native application")

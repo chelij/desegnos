@@ -68,6 +68,9 @@ try {
       assert.ok(plain.length <= 160);
     }
   });
+  await test('update-check messages stay plain', () => {
+    for (const message of ["Couldn't reach GitHub. Check your connection and try again.", 'GitHub is limiting requests. Try again later.', "Couldn't check for updates."]) assert.equal(userError(message), message);
+  });
   await test('open-in-browser failures keep their local address for a copy action', async () => {
     const url = 'http://127.0.0.1:49152/8d4f0c2e/';
     assert.equal(browserOpenUrl({ message: `The site is running at ${url}`, url }), url);

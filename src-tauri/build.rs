@@ -97,6 +97,7 @@ fn main() {
             "open_crash_report",
             "dismiss_crash_report",
             "record_frontend_crash",
+            "check_for_updates",
         ]),
     ))
     .expect("Desegni's command permission manifest must be valid");
