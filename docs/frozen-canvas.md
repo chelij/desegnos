@@ -39,6 +39,14 @@ are aborted and their iframe removed. The old frozen canvas remains mounted unti
 its replacement is prepared. Capture has an 8 second timeout and snapshots have
 a 16 MiB document limit and 16-frame-depth limit.
 
+Nested capture requests are retried when a loading frame announces its bridge.
+All nested captures use the editor's outer 8-second capture timeout; an ancestor
+must not discard a child after a shorter timeout and silently reload its source
+without scripts. Empty iframe sources do not imply that a preview bridge exists.
+The regression fixture loads a framed page after the old two-second timeout and
+verifies that its head script's `html.embedded-project` class and hidden header
+survive freezing, with its original parent, URL and query string intact.
+
 ## Verification and limits
 
 `npm run test:preview` uses headless Chromium, a random-port loopback fixture

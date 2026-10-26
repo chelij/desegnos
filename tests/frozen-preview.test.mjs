@@ -26,12 +26,33 @@ document.querySelector('p').textContent='Changed by script';
 document.querySelector('aside').insertAdjacentHTML('beforebegin','<aside id="runtime-aside">Runtime aside</aside>');
 addEventListener('mousemove',()=>button.style.color='blue');
 </script></body></html>`;
-const inner = '<!doctype html><html><head>' + bridgeTag + '</head><body><header data-desegnos-id="header01">Header</header><a data-desegnos-id="back0001">Back to projects</a><button data-desegnos-id="inner001">Inner</button><script>if(self!==top){document.querySelector("header").style.display="none";document.querySelector("a").remove();document.querySelector("button").classList.add("active")}</script></body></html>';
+const inner = `<!doctype html><html><head>${bridgeTag}
+<script>
+  if (window.self !== window.top) document.documentElement.classList.add('embedded-project');
+  if (window.name === 'project-view') {
+    const context = { framed: self !== top, parentIsTop: parent === top, name: window.name, query: location.search, referrer: document.referrer };
+    document.documentElement.dataset.frameContext = JSON.stringify(context);
+    top.postMessage({ type: 'test-framing-context', context }, '*');
+  }
+</script>
+<style>html.embedded-project .site-nav{display:none!important}</style>
+</head><body><header class="site-nav" data-desegnos-id="header01">Header</header><a data-desegnos-id="back0001">Back to projects</a><button data-desegnos-id="inner001">Inner</button>
+<script>if(self!==top){document.querySelector('a').remove();document.querySelector('button').classList.add('active')}</script>
+</body></html>`;
 const server = createServer(async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   if (req.url === '/editor') { res.setHeader('Content-Type', 'text/html'); res.end('<div id="host" style="width:900px;height:900px"></div>'); }
   else if (req.url === '/large') { res.setHeader('Content-Type', 'text/html'); res.end(provenance('<!doctype html><html><head>'+bridgeTag+'</head><body>'+Array.from({length:10000},(_,i)=>`<p data-desegnos-id="large${String(i).padStart(5,'0')}">Element ${i}<span data-desegnos-id="span${String(i).padStart(5,'0')}"> content</span></p>`).join('')+'</body></html>')); }
   else if (req.url === '/page' || req.url === '/inner') { res.setHeader('Content-Type', 'text/html'); res.end(provenance(req.url === '/page' ? fixture : inner)); }
+  else if (req.url === '/startup-frame') {
+    res.setHeader('Content-Type', 'text/html');
+    res.end('<!doctype html><html><head>'+bridgeTag+'</head><body><iframe title="Empty frame"></iframe><script>addEventListener("load",()=>setTimeout(()=>{const frame=document.createElement("iframe");frame.src="/slow-framed-page?embed=1";frame.name="project-view";document.body.append(frame)},50))</script></body></html>');
+  }
+  else if (req.url === '/slow-framed-page?embed=1') {
+    // The request begins in an about:blank window. Its bridge and framed head
+    // script arrive after the old per-child timeout, during the outer capture.
+    setTimeout(()=>{res.setHeader('Content-Type','text/html');res.end(provenance(inner));},2200);
+  }
   else if (req.url === '/bridge.js') { res.setHeader('Content-Type', 'text/javascript'); res.end(bridge); }
   else if (['/frozenPreview.js', '/previewDocument.js'].includes(req.url)) { res.setHeader('Content-Type', 'text/javascript'); res.end(await readFile(join(temporary, req.url.slice(1)))); }
   else res.writeHead(404).end();
@@ -73,6 +94,35 @@ try {
   await test('captures load styling and framed-page behavior, then removes the script runner', () => {
     assert.equal(result.editorAccess,'blocked');assert.equal(result.runnerRemoved,true);assert.equal(result.active,'active');assert.equal(result.background,'rgb(1, 2, 3)');assert.equal(result.innerHidden,'none');assert.equal(result.backRemoved,true);assert.equal(result.innerActive,'active');
     console.log(`Capture fixture: ${Math.round(result.captureMs)} ms`);
+  });
+  await test('nested head scripts preserve framed root classes and hide navigation in the frozen canvas', async () => {
+    assert.equal(await evaluate(`innerDoc.documentElement.classList.contains('embedded-project')`),true);
+    assert.equal(await evaluate(`innerDoc.defaultView.getComputedStyle(innerDoc.querySelector('.site-nav')).display`),'none');
+    assert.equal(await evaluate(`snapshot.frames[0].snapshot.html.includes('embedded-project')`),true);
+  });
+  await test('a nested page loading during capture keeps its framed script state after freezing', async () => {
+    const value = await evaluate(`(async()=>{
+      // The Live baseline uses the same sandbox/referrer policy as PreviewFrame.
+      const live=document.createElement('iframe');live.sandbox='allow-scripts allow-forms';live.referrerPolicy='no-referrer';
+      const liveContext=new Promise(resolve=>{
+        const receive=event=>{
+          if(event.data?.type!=='test-framing-context'||event.source!==live.contentWindow.frames[1])return;
+          window.removeEventListener('message',receive);resolve(event.data.context);
+        };
+        window.addEventListener('message',receive);
+      });
+      live.src=${JSON.stringify(origin+'/startup-frame')};document.body.append(live);
+      const context=await liveContext;live.remove();
+      const snapshot=await module.capturePreview(${JSON.stringify(origin+'/startup-frame')},'session',document.querySelector('#host'));
+      if(snapshot.frames.length!==1)return {captured:snapshot.frames.length};
+      const captured=new DOMParser().parseFromString(snapshot.frames[0].snapshot.html,'text/html');
+      const node=document.createElement('iframe');node.sandbox='allow-same-origin';
+      const loaded=new Promise(resolve=>node.onload=resolve);node.srcdoc=module.freezeSnapshot(snapshot);document.body.append(node);await loaded;
+      const child=node.contentDocument.querySelector('iframe[srcdoc]').contentDocument;
+      const result={contextMatchesLive:JSON.stringify(context)===child.documentElement.dataset.frameContext,captured:1,snapshotClass:captured.documentElement.classList.contains('embedded-project'),frozenClass:child.documentElement.classList.contains('embedded-project'),display:child.defaultView.getComputedStyle(child.querySelector('.site-nav')).display,url:snapshot.frames[0].snapshot.url};
+      node.remove();return result;
+    })()`);
+    assert.deepEqual(value,{contextMatchesLive:true,captured:1,snapshotClass:true,frozenClass:true,display:'none',url:origin+'/slow-framed-page?embed=1'});
   });
   await test('frames inserted during settling are frozen but never gain source identity', async () => {
     assert.deepEqual(await evaluate(`(()=>{const frame=doc.querySelector('#late-frame');return {mapped:!!mapping.source(frame),header:frame.contentDocument.defaultView.getComputedStyle(frame.contentDocument.querySelector('header')).display}})()`),{mapped:false,header:'none'});

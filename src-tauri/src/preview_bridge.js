@@ -36,7 +36,13 @@
   addEventListener('message', async event => {
     const value = event.data;
     if (!value || typeof value !== 'object') return;
-    if (value.type === 'desegnos-capture-ready' && value.sessionId === sessionId) { bridgedChildren.add(event.source); return; }
+    if (value.type === 'desegnos-capture-ready' && value.sessionId === sessionId) {
+      bridgedChildren.add(event.source);
+      // A startup frame may still have held its initial blank document when we
+      // first asked. Capture it in place once its own bridge can receive requests.
+      for (const request of childRequests.values()) if (request.window === event.source) request.send();
+      return;
+    }
     if (value.type === 'desegnos-snapshot') {
       const request = childRequests.get(value.token);
       if (request && event.source === request.window && value.sessionId === sessionId) request.resolve(value.snapshot);
@@ -47,7 +53,7 @@
     const frameNodes = Array.from(document.querySelectorAll('iframe'));
     const frames = await Promise.all(frameNodes.map(async (frame, index) => {
       let local = false;
-      try { local = sameSite(new URL(frame.src, document.baseURI)) && !frame.hasAttribute('srcdoc') && (!frame.hasAttribute('sandbox') || frame.sandbox.contains('allow-scripts')); } catch { /* invalid frame source */ }
+      try { local = !!frame.getAttribute('src')?.trim() && sameSite(new URL(frame.src, document.baseURI)) && !frame.hasAttribute('srcdoc') && (!frame.hasAttribute('sandbox') || frame.sandbox.contains('allow-scripts')); } catch { /* invalid frame source */ }
       if (!bridgedChildren.has(frame.contentWindow) && !local) {
         // Inline srcdoc documents can share this preview's opaque origin. They
         // have no source mapping, but their settled DOM can still be frozen.
@@ -59,9 +65,12 @@
       }
       const token = `${value.token}:${index}`;
       const snapshot = await new Promise(resolve => {
-        childRequests.set(token, { window: frame.contentWindow, resolve });
-        frame.contentWindow?.postMessage({ type: 'desegnos-capture', sessionId, token }, '*');
-        setTimeout(() => resolve(null), 2000);
+        const send = () => frame.contentWindow?.postMessage({ type: 'desegnos-capture', sessionId, token }, '*');
+        // The editor's outer capture timeout bounds the whole frame tree and
+        // removes its runner on expiry. A shorter per-child timeout discarded
+        // settled DOM and reloaded unexecuted source in the frozen canvas.
+        childRequests.set(token, { window: frame.contentWindow, send, resolve });
+        send();
       });
       childRequests.delete(token);
       return snapshot ? { index, snapshot } : null;
