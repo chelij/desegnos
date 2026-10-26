@@ -1,4 +1,5 @@
 import { OutsideEditsNotice } from './OutsideEditsNotice';
+import { CrashReportNotice, EditorCrashBoundary } from './CrashReport';
 import { needsAiSettings, ProblemBanner, Notice, NoticeProvider, NoticeHost } from './ProblemBanner.js';
 import { summarizeOutsideChanges } from './noticeSummary.js';
 import { browserOpenUrl, userError } from './userErrors.js';
@@ -62,7 +63,7 @@ function readTheme(): Theme {
 }
 
 export default function App() {
-  return <NoticeProvider><WorkspaceSurfaces><Editor /></WorkspaceSurfaces></NoticeProvider>;
+  return <NoticeProvider><WorkspaceSurfaces><EditorCrashBoundary><Editor /></EditorCrashBoundary></WorkspaceSurfaces></NoticeProvider>;
 }
 
 function Editor() {
@@ -1190,6 +1191,7 @@ function Editor() {
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />}
     {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={`The site is running at ${openFailure}`} action={{ label: 'Copy link', onClick: () => { void native('copy_text', { text: openFailure }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure('')} />}
     {notices.map(item => <Notice key={item.id} variant="info" message={item.message} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
+    <CrashReportNotice />
     {exported && <Notice className="export-notice" priority="result" variant={exported.warnings.length ? 'warning' : 'success'} title="Website exported" message={`${exported.pageCount} ${exported.pageCount === 1 ? 'page' : 'pages'}${exported.warnings.length ? ` · ${[...new Set(exported.warnings)].join(' ')}` : ''}`} action={{ label: 'Open folder', onClick: () => run(() => native('open_export_folder', { path: exported.path })) }} dismiss={() => setExported(null)} />}
     {offerRestyle && project && <Notice variant="info" message={offerRestyle} action={{ label: 'Regenerate pages', disabled: pending > 0 || working, onClick: () => run(regenerateWithContext) }} dismiss={() => setOfferRestyle(false)} />}
     {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <ProblemBanner message={userError(view.recoveryError)} dismiss={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} />}

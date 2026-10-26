@@ -51,3 +51,9 @@
     max-width: min(760px, calc(100% - min(360px, 45%) - 24px));
   }
 }
+
+/* Optional disclosure under a notice: the report text stays inline and scrolls. */
+.notice:has(.notice-details) { flex-wrap: wrap; }
+.notice-details { flex-basis: 100%; order: 3; min-width: 0; }
+.notice-details summary { width: max-content; font: var(--weight-medium) var(--text-sm)/var(--leading-control) var(--font-ui); cursor: pointer; }
+.notice-details pre { max-height: 180px; overflow: auto; margin: var(--space-2) 0 0; padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface); font: 11px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }

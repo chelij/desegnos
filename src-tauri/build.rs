@@ -93,6 +93,10 @@ fn main() {
             "get_frame_targets",
             "open_in_browser",
             "unpack_request_zip",
+            "pending_crash_report",
+            "open_crash_report",
+            "dismiss_crash_report",
+            "record_frontend_crash",
         ]),
     ))
     .expect("Desegni's command permission manifest must be valid");

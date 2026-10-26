@@ -13,6 +13,8 @@ export type NoticeProps = {
   dismissKey?: string;
   className?: string;
   autoFocus?: 'primary' | 'dismiss';
+  details?: { summary: string; body: string };
+  showDismiss?: boolean;
 };
 type Entry = NoticeProps & { dismiss: () => void };
 export function noticePriority(notice: NoticeProps): number {
@@ -70,14 +72,15 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
 export function showsDismissButton(notice: NoticeKind): boolean {
   return !isToast(notice);
 }
-export function NoticeRow({ variant = 'info', title, message, action, secondaryAction, dismiss, className = '' }: NoticeProps) {
+export function NoticeRow({ variant = 'info', title, message, action, secondaryAction, dismiss, className = '', details, showDismiss = true }: NoticeProps) {
   return <div className={`notice floating-bar notice-${variant} ${className}`.trim()} role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'} onPointerDown={event => event.stopPropagation()}>
     <div className="notice-copy" title={[title, message].filter(Boolean).join(' · ')}>{title && <strong>{title}</strong>}{message && <span>{message}</span>}</div>
     <div className="notice-actions">
       {action && <button type="button" className="primary" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>}
       {secondaryAction && <button type="button" disabled={secondaryAction.disabled} onClick={secondaryAction.onClick}>{secondaryAction.label}</button>}
-      {showsDismissButton({ variant, action, secondaryAction }) && <button type="button" className="close-button notice-dismiss icon-button sm" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}><Icon name="close" /></button>}
+      {showDismiss && showsDismissButton({ variant, action, secondaryAction }) && <button type="button" className="close-button notice-dismiss icon-button sm" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}><Icon name="close" /></button>}
     </div>
+    {details && <details className="notice-details"><summary>{details.summary}</summary><pre>{details.body}</pre></details>}
   </div>;
 }
 
@@ -85,13 +88,13 @@ export function Notice(props: NoticeProps) {
   const context = useContext(Notices);
   const id = useId();
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const { variant = 'info', title, message, action, secondaryAction, dismiss, priority, dismissKey, className, autoFocus } = props;
+  const { variant = 'info', title, message, action, secondaryAction, dismiss, priority, dismissKey, className, autoFocus, details, showDismiss } = props;
   const identity = dismissKey ?? `${title ?? ''}:${message}`;
   const visible = !!(message || title) && dismissed !== identity;
   const close = useCallback(() => { setDismissed(identity); dismiss?.(); }, [identity, dismiss]);
   useLayoutEffect(() => {
-    context?.update(id, visible ? { variant, title, message, action, secondaryAction, priority, className, autoFocus, dismissKey, dismiss: close } : null);
-  }, [context, id, visible, variant, title, message, action, secondaryAction, priority, className, autoFocus, dismissKey, close]);
+    context?.update(id, visible ? { variant, title, message, action, secondaryAction, priority, className, autoFocus, dismissKey, details, showDismiss, dismiss: close } : null);
+  }, [context, id, visible, variant, title, message, action, secondaryAction, priority, className, autoFocus, dismissKey, details, showDismiss, close]);
   useLayoutEffect(() => () => context?.update(id, null), [context, id]);
   // Standalone rendering also supports previews and server-rendered component tests.
   return !context && visible ? <NoticeRow {...props} dismiss={close} /> : null;

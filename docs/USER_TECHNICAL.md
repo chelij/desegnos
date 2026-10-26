@@ -138,6 +138,12 @@ Dependencies have concrete roles: Tauri/React, Serde, UUID, SHA-256, ZIP and nat
 
 **Export** or **Menu → Project → Export website…** writes included pages into a new folder under your chosen destination. Open `index.html` in an ordinary browser. Desegnos writes relative page links, real styles/scripts and embedded image files; the output has no editor runtime. Prompts, brief, generation history and credentials are excluded. Hidden pages are omitted; included blank pages remain blank and are reported. External services, URLs, forms, remote fonts and module requirements still need their actual services. Export lists portability warnings rather than inventing a backend. React export remains later work. See [the export contract](WEBSITE_EXPORT.md).
 
+## Crash reports
+
+After a crash or an unexpected close, Desegnos shows one notice offering **Report on GitHub**. The temporary report is stored in `crash-reports/pending.json` inside Desegnos's data folder and contains the app version, operating system and architecture, time, error text, location and a short backtrace. Open **What's included** to read the exact text before anything else happens.
+
+Home folders, user names, email addresses, API keys, bearer and JWT tokens, query strings and long hex or base64 runs are removed; paths under your folders are reduced to file names. **Report on GitHub** opens a prefilled issue in your browser, where you can review it and submit; nothing is sent automatically. **Dismiss** deletes the local file. A normal close leaves no report. If the editor itself fails to render, it records only the error and component stack.
+
 ## Checks and local builds
 
 ```sh

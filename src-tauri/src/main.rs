@@ -8,6 +8,7 @@ compile_error!("Release builds must embed the frontend: enable the custom-protoc
 
 mod chatgpt;
 mod clipboard;
+mod crash_report;
 mod data_location;
 mod export;
 mod file_dialogs;
@@ -23,6 +24,7 @@ mod preview;
 mod preview_health;
 mod project_location;
 mod recent;
+mod release;
 mod request_zip;
 mod system_open;
 mod usage;
@@ -35,6 +37,7 @@ use tauri::Manager;
 use workspace::*;
 
 fn main() {
+    crash_report::install_hook();
     #[cfg(target_os = "linux")]
     if let Err(error) = linux_startup::prepare() {
         eprintln!("Desegnos could not prepare its graphics startup: {error}");
@@ -74,6 +77,7 @@ fn main() {
                 Ok(data) => data,
                 Err(problem) => quit(&problem),
             };
+            crash_report::start(data.path());
             app.manage(std::sync::Mutex::new(local_site::LocalSite::for_app(
                 app.handle(),
             )));
@@ -123,7 +127,9 @@ fn main() {
                 use tauri_plugin_dialog::DialogExt;
                 eprintln!("Editor reload failed: {error}");
                 app.dialog()
-                    .message("The editor could not reload. Restart Desegnos to recover your changes.")
+                    .message(
+                        "The editor could not reload. Restart Desegnos to recover your changes.",
+                    )
                     .title("Workspace recovery")
                     .show(|_| {});
             }
@@ -183,13 +189,13 @@ fn main() {
             paste_layer,
             undo_project,
             redo_project,
+            end_history_step,
             open_project,
             save_project,
             save_project_checked,
             resolve_save_conflict,
             prepare_requirements,
             save_requirements,
-            end_history_step,
             recover_project,
             dismiss_recovery,
             get_project_notes,
@@ -220,17 +226,23 @@ fn main() {
             create_preview,
             release_preview,
             editor_heartbeat,
-            reload_workspace
+            reload_workspace,
+            crash_report::pending_crash_report,
+            crash_report::open_crash_report,
+            crash_report::dismiss_crash_report,
+            crash_report::record_frontend_crash
         ])
         .build(tauri::generate_context!())
         .expect("Desegnos could not start its native application")
         .run(|app, event| {
-            if let tauri::RunEvent::Exit = event
-                && let Ok(mut site) = app
+            if let tauri::RunEvent::Exit = event {
+                crash_report::finish();
+                if let Ok(mut site) = app
                     .state::<std::sync::Mutex<local_site::LocalSite>>()
                     .lock()
-            {
-                site.stop();
+                {
+                    site.stop();
+                }
             }
             if let tauri::RunEvent::ExitRequested { api, .. } = event
                 && app
@@ -262,6 +274,7 @@ fn initialize(
 
 /// Reports the startup failure on stderr and stops, as the error dialog's Quit offers.
 fn quit(problem: &data_location::Problem) -> ! {
+    crash_report::finish();
     eprintln!("{problem}");
     std::process::exit(1);
 }
