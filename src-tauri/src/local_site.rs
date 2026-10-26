@@ -74,9 +74,9 @@ struct Shared {
     site: Mutex<Option<Site>>,
     versions: watch::Sender<u64>,
     observed: Mutex<Observed>,
-    /// Builds the package for a project revision, or `None` when the workspace no longer
-    /// holds that project.
-    build: Box<dyn Fn(Uuid) -> Option<Arc<Package>> + Send + Sync>,
+    /// Builds the package for a project revision under a site-root URL prefix, or `None`
+    /// when the workspace no longer holds that project.
+    build: Box<dyn Fn(Uuid, &str) -> Option<Arc<Package>> + Send + Sync>,
     /// Fingerprints the served sources; `None` always rebuilds.
     signature: Box<dyn Fn(Uuid) -> Option<String> + Send + Sync>,
 }
@@ -105,12 +105,12 @@ impl RevisionWatch {
 
 impl LocalSite {
     #[cfg(test)]
-    pub fn new(build: impl Fn(Uuid) -> Option<Arc<Package>> + Send + Sync + 'static) -> Self {
+    pub fn new(build: impl Fn(Uuid, &str) -> Option<Arc<Package>> + Send + Sync + 'static) -> Self {
         Self::with_signature(build, |_| None)
     }
 
     fn with_signature(
-        build: impl Fn(Uuid) -> Option<Arc<Package>> + Send + Sync + 'static,
+        build: impl Fn(Uuid, &str) -> Option<Arc<Package>> + Send + Sync + 'static,
         signature: impl Fn(Uuid) -> Option<String> + Send + Sync + 'static,
     ) -> Self {
         Self {
@@ -130,7 +130,7 @@ impl LocalSite {
         let app = app.clone();
         let sources = app.clone();
         Self::with_signature(
-            move |project_id| {
+            move |project_id, prefix| {
                 let project = {
                     let workspace = app.state::<Mutex<Workspace>>();
                     let workspace = workspace.lock().ok()?;
@@ -140,7 +140,7 @@ impl LocalSite {
                     }
                     project.clone()
                 };
-                package(&project).ok().map(Arc::new)
+                package(&project, prefix).ok().map(Arc::new)
             },
             move |project_id| {
                 let workspace = sources.state::<Mutex<Workspace>>();
@@ -164,15 +164,17 @@ impl LocalSite {
         revision: u64,
         package: Arc<Package>,
     ) -> Result<String, String> {
-        self.open_with_signature(project_id, revision, package, None)
+        self.open_with_signature(project_id, revision, None, |_| Ok(package))
     }
 
+    /// Build the package only after the token is known, so every site URL it emits can be
+    /// rooted under the prefix the server actually answers on.
     fn open_with_signature(
         &mut self,
         project_id: Uuid,
         revision: u64,
-        package: Arc<Package>,
         signature: Option<String>,
+        build: impl FnOnce(&str) -> Result<Arc<Package>, String>,
     ) -> Result<String, String> {
         if self.running.is_none() {
             self.running = Some(start(&self.shared)?);
@@ -182,6 +184,7 @@ impl LocalSite {
             Some(site) => site.token.clone(),
             None => token(),
         };
+        let package = build(&format!("/{token}"))?;
         let (version, served) = {
             let mut site = locked(&self.shared.site);
             let version = site.as_ref().map_or(1, |site| site.version + 1);
@@ -270,7 +273,7 @@ fn open(app: &AppHandle) -> Result<String, String> {
             .map_err(|_| "Project access is unavailable.")?;
         workspace.project()?.clone()
     };
-    let package = Arc::new(package(&project)?);
+    let signature = source_signature(&project);
     let url = app
         .state::<Mutex<LocalSite>>()
         .lock()
@@ -278,20 +281,21 @@ fn open(app: &AppHandle) -> Result<String, String> {
         .open_with_signature(
             project.id,
             project.revision,
-            package,
-            Some(source_signature(&project)),
+            Some(signature),
+            |prefix| package(&project, prefix).map(Arc::new),
         )?;
     crate::system_open::open(&url).map_err(|_| format!("{OPEN_FAILED}{url}"))?;
     Ok(url)
 }
 
 /// Collect the files the export would produce. Imported websites keep large media as
-/// references to bytes the project already holds instead of copying them.
-pub(crate) fn package(project: &Project) -> Result<Package, String> {
+/// references to bytes the project already holds instead of copying them. `prefix` roots
+/// their site URLs under the route the loopback server answers on.
+pub(crate) fn package(project: &Project, prefix: &str) -> Result<Package, String> {
     let mut files = BTreeMap::new();
     if project.website.is_some() {
         let preview = project
-            .website_preview_files(true, TEXT_LIMIT)
+            .website_preview_files(true, TEXT_LIMIT, prefix)
             .map_err(|error| error.to_string())?
             .ok_or("This project has no website files to open.")?;
         for (path, body) in preview {
@@ -425,12 +429,13 @@ fn observe(shared: &Arc<Shared>, project: Option<(Uuid, u64)>) {
     let (Some((project_id, revision)), true) = (project, serving) else {
         return;
     };
-    let served = locked(&shared.site)
+    let Some(token) = locked(&shared.site)
         .as_ref()
-        .is_some_and(|site| site.served.0 == project_id);
-    if !served {
+        .filter(|site| site.served.0 == project_id)
+        .map(|site| site.token.clone())
+    else {
         return;
-    }
+    };
     let shared = Arc::clone(shared);
     std::thread::spawn(move || {
         std::thread::sleep(RELOAD_DEBOUNCE);
@@ -449,7 +454,7 @@ fn observe(shared: &Arc<Shared>, project: Option<(Uuid, u64)>) {
                 return;
             }
         }
-        let Some(package) = (shared.build)(project_id) else {
+        let Some(package) = (shared.build)(project_id, &format!("/{token}")) else {
             return;
         };
         if locked(&shared.observed).last != Some((project_id, revision)) {
@@ -459,7 +464,9 @@ fn observe(shared: &Arc<Shared>, project: Option<(Uuid, u64)>) {
         let Some(site) = current.as_mut() else {
             return;
         };
-        if site.served.0 != project_id {
+        // A restart between the build and the store selected a different token, and with it a
+        // different asset prefix; the next observation rebuilds instead of serving stale URLs.
+        if site.served.0 != project_id || site.token != token {
             return;
         }
         site.package = package;
@@ -961,7 +968,7 @@ mod tests {
     }
 
     fn served(files: &[(&str, &str)]) -> (LocalSite, SocketAddr, String) {
-        let mut site = LocalSite::new(|_| None);
+        let mut site = LocalSite::new(|_, _| None);
         let url = site
             .open(Uuid::new_v4(), 1, Arc::new(package_from(files)))
             .unwrap();
@@ -1078,8 +1085,8 @@ mod tests {
             ]),
         )
         .unwrap();
-        let package = Arc::new(package(&project).unwrap());
-        let mut site = LocalSite::new(|_| None);
+        let package = Arc::new(package(&project, "").unwrap());
+        let mut site = LocalSite::new(|_, _| None);
         let url = site.open(project.id, project.revision, package).unwrap();
         let (address, token) = address(&url);
         let target = format!("/{token}/portfolio/clip.mp4");
@@ -1106,6 +1113,52 @@ mod tests {
             request(address, "GET", &target, &[("range", "bytes=0-999999999")]);
         assert_eq!(status, 416);
         assert_eq!(headers["content-range"], format!("bytes */{clip}"));
+    }
+
+    #[test]
+    fn imported_site_assets_stay_inside_the_token_prefix() {
+        let project = desegnos_core::import_website_files(
+            "Portfolio",
+            &BTreeMap::from([
+                (
+                    "index.html".into(),
+                    b"<!doctype html><html><body><img src=\"assets/portrait.webp\"></body></html>".to_vec(),
+                ),
+                ("assets/portrait.webp".into(), b"portrait".to_vec()),
+            ]),
+        )
+        .unwrap();
+        let mut site = LocalSite::new(|_, _| None);
+        let url = site
+            .open_with_signature(project.id, project.revision, None, |prefix| {
+                package(&project, prefix).map(Arc::new)
+            })
+            .expect("site starts");
+        let (address, token) = address(&url);
+        let (status, _, body) = request(address, "GET", &format!("/{token}/"), &[]);
+        assert_eq!(status, 200);
+        let html = String::from_utf8(body).unwrap();
+        assert!(
+            !html.contains("src=\"/assets/"),
+            "a root-relative asset URL escapes the token prefix: {html}"
+        );
+        let source = html
+            .split("src=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("the portrait image source");
+        assert!(
+            source.starts_with(&format!("/{token}/assets/")),
+            "{source} in {html}"
+        );
+        let (status, headers, body) = request(address, "GET", source, &[]);
+        assert_eq!(status, 200, "{source}");
+        assert_eq!(headers["content-type"], "image/webp");
+        assert_eq!(body, b"portrait");
+        // An export inlines the pictures it carries and never rewrites them to site paths.
+        let export = desegnos_core::compile_website(&project).unwrap();
+        let exported = String::from_utf8(export.files["index.html"].clone()).unwrap();
+        assert!(!exported.contains("/assets/"), "{exported}");
     }
 
     #[test]
@@ -1155,18 +1208,19 @@ mod tests {
         let counted = Arc::clone(&builds);
         let served = Arc::clone(&sources);
         let mut site = LocalSite::with_signature(
-            move |_| {
+            move |_, _| {
                 counted.fetch_add(1, Ordering::SeqCst);
                 Some(Arc::new(package_from(&[("index.html", "<html><body>Rebuilt</body></html>")])))
             },
             move |_| Some(locked(&served).clone()),
         );
+        let first = Arc::new(package_from(&[("index.html", "<html><body>First</body></html>")]));
         let url = site
             .open_with_signature(
                 project.id,
                 project.revision,
-                Arc::new(package_from(&[("index.html", "<html><body>First</body></html>")])),
                 Some(source_signature(&project)),
+                move |_| Ok(first),
             )
             .expect("site starts");
         let (address, token) = address(&url);
@@ -1192,7 +1246,7 @@ mod tests {
         let first = Arc::new(package_from(&[("index.html", "<html><body>First</body></html>")]));
         let second = Arc::new(package_from(&[("index.html", "<html><body>Second</body></html>")]));
         let rebuilt = Arc::clone(&second);
-        let mut site = LocalSite::new(move |_| Some(Arc::clone(&rebuilt)));
+        let mut site = LocalSite::new(move |_, _| Some(Arc::clone(&rebuilt)));
         let url = site
             .open(project.id, project.revision, first)
             .expect("site starts");
@@ -1224,7 +1278,7 @@ mod tests {
                 .all(|bytes| !String::from_utf8_lossy(bytes).contains(RELOAD)),
             "the exported site must not contain the reload client"
         );
-        let package = Arc::new(package(&project).unwrap());
+        let package = Arc::new(package(&project, "").unwrap());
         let marker_in_package = package
             .files
             .values()
@@ -1238,7 +1292,7 @@ mod tests {
             !marker_in_package,
             "the package itself must stay free of the reload client"
         );
-        let mut site = LocalSite::new(|_| None);
+        let mut site = LocalSite::new(|_, _| None);
         let url = site
             .open(project.id, project.revision, package)
             .expect("site starts");

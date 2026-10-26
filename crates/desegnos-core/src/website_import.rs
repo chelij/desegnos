@@ -7,10 +7,19 @@ use std::sync::{Arc, OnceLock};
 use url::Url;
 use uuid::Uuid;
 
+/// How a rendered document refers to the site's own files.
+enum Assets<'a> {
+    /// Embedded as data URIs, so the document stands alone.
+    Inline,
+    /// Site-root URLs under `prefix`. The preview session serves them at its origin root, so
+    /// its prefix is empty; the loopback browser server serves them under its token prefix.
+    Linked(&'a str),
+}
+
 struct Importer<'a> {
     keep_scripts: bool,
-    /// Canvas documents load site files from the preview session, so they keep their paths.
-    inline_assets: bool,
+    /// How rewritten site resources are referenced; see [`Assets`].
+    assets: Assets<'a>,
     files: &'a BTreeMap<String, Vec<u8>>,
     routes: BTreeMap<String, String>,
     pictures: BTreeMap<String, (Uuid, std::sync::Arc<str>)>,
@@ -104,8 +113,8 @@ impl Importer<'_> {
             "css" => "text/css",
             _ => return Ok(value.into()),
         };
-        if !self.inline_assets {
-            return Ok(format!("/{path}{suffix}"));
+        if let Assets::Linked(prefix) = self.assets {
+            return Ok(format!("{prefix}/{path}{suffix}"));
         }
         let transformed;
         let bytes = if extension == "css" {
@@ -458,7 +467,7 @@ pub(crate) fn import_website_pages(
         .collect();
     let importer = Importer {
         keep_scripts: false,
-        inline_assets: true,
+        assets: Assets::Inline,
         files,
         routes,
         pictures,
@@ -555,6 +564,8 @@ pub enum PreviewFile {
 /// One page of a live package, rendered against the package's shared inline sources on demand.
 pub struct LivePage {
     source: String,
+    /// Site-root URL prefix for the assets this page references.
+    prefix: Arc<str>,
     render: Arc<BTreeMap<String, Vec<u8>>>,
     text_limit: usize,
     rendered: OnceLock<std::result::Result<Arc<[u8]>, String>>,
@@ -574,7 +585,7 @@ impl LivePage {
     fn render(&self) -> Result<Arc<[u8]>> {
         let importer = Importer {
             keep_scripts: true,
-            inline_assets: false,
+            assets: Assets::Linked(&self.prefix),
             files: &self.render,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -827,7 +838,7 @@ impl Project {
         };
         let importer = Importer {
             keep_scripts: true,
-            inline_assets: true,
+            assets: Assets::Inline,
             files: &files,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -849,12 +860,16 @@ impl Project {
     }
     /// Preview resources keep text and small files as inline bytes, while larger binary files
     /// stay references to bytes the project already holds. No whole-site copy is made.
+    ///
+    /// `prefix` roots the site URLs inside the package: empty for the preview session, whose
+    /// pages live at its origin root, or `/<token>` for the loopback browser server.
     pub fn website_preview_files(
         &self,
         run_scripts: bool,
         text_limit: usize,
+        prefix: &str,
     ) -> Result<Option<BTreeMap<String, PreviewFile>>> {
-        let Some(mut files) = self.website_preview_package(run_scripts, text_limit)? else {
+        let Some(mut files) = self.website_preview_package(run_scripts, text_limit, prefix)? else {
             return Ok(None);
         };
         for file in files.values_mut() {
@@ -872,6 +887,7 @@ impl Project {
         &self,
         run_scripts: bool,
         text_limit: usize,
+        prefix: &str,
     ) -> Result<Option<BTreeMap<String, PreviewFile>>> {
         let Some(site) = &self.website else {
             return Ok(None);
@@ -908,15 +924,26 @@ impl Project {
                 .get(&page.id)
                 .cloned()
                 .unwrap_or_else(|| crate::export::output_path(&page.path));
-            let html =
-                self.preview_source(&content.html, &pictures, &paths_by_picture, &mut files)?;
-            let css =
-                self.preview_source(&content.css, &pictures, &paths_by_picture, &mut files)?;
+            let html = self.preview_source(
+                &content.html,
+                &pictures,
+                &paths_by_picture,
+                &mut files,
+                prefix,
+            )?;
+            let css = self.preview_source(
+                &content.css,
+                &pictures,
+                &paths_by_picture,
+                &mut files,
+                prefix,
+            )?;
             let javascript = self.preview_source(
                 &content.javascript,
                 &pictures,
                 &paths_by_picture,
                 &mut files,
+                prefix,
             )?;
             let mut document = html;
             if !css.is_empty() {
@@ -984,6 +1011,7 @@ impl Project {
                     source.clone(),
                     PreviewFile::Rendered(Arc::new(LivePage {
                         source: source.clone(),
+                        prefix: prefix.into(),
                         render: render.clone(),
                         text_limit,
                         rendered: OnceLock::new(),
@@ -1000,6 +1028,7 @@ impl Project {
         pictures: &BTreeMap<Uuid, Arc<str>>,
         paths_by_picture: &BTreeMap<Uuid, String>,
         files: &mut BTreeMap<String, PreviewFile>,
+        prefix: &str,
     ) -> Result<String> {
         let mut output = String::with_capacity(source.len());
         let mut rest = source;
@@ -1014,13 +1043,13 @@ impl Project {
                 Error("An image reference is not in this project. Your page is unchanged.".into())
             })?;
             let url = if let Some(path) = paths_by_picture.get(&id) {
-                format!("/{path}")
+                format!("{prefix}/{path}")
             } else {
                 let path = format!("{PREVIEW_ASSET_DIRECTORY}/{id}");
                 files
                     .entry(path.clone())
                     .or_insert_with(|| PreviewFile::Picture(uri.clone()));
-                format!("/{path}")
+                format!("{prefix}/{path}")
             };
             output.push_str(&url);
             rest = &rest[36..];
@@ -1076,7 +1105,7 @@ impl Project {
             .collect();
         let importer = Importer {
             keep_scripts: false,
-            inline_assets: false,
+            assets: Assets::Linked(""),
             files: &files,
             routes,
             pictures: BTreeMap::new(),
@@ -1181,9 +1210,12 @@ mod tests {
     #[test]
     fn live_pages_render_on_request_and_match_the_eager_package() {
         let project = site();
-        let eager = project.website_preview_files(true, LIMIT).unwrap().unwrap();
+        let eager = project
+            .website_preview_files(true, LIMIT, "")
+            .unwrap()
+            .unwrap();
         let mut lazy = project
-            .website_preview_package(true, LIMIT)
+            .website_preview_package(true, LIMIT, "")
             .unwrap()
             .unwrap();
         let pages: BTreeSet<String> = project
@@ -1215,13 +1247,13 @@ mod tests {
         }
         // The old algorithm rendered each page from the static inline sources.
         let static_files = project
-            .website_preview_package(false, LIMIT)
+            .website_preview_package(false, LIMIT, "")
             .unwrap()
             .unwrap();
         let render = inline_files(&static_files);
         let importer = Importer {
             keep_scripts: true,
-            inline_assets: false,
+            assets: Assets::Linked(""),
             files: &render,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -1273,7 +1305,7 @@ mod tests {
         let project = media_site();
         let before = project.clone();
         let package = project
-            .website_preview_package(true, LIMIT)
+            .website_preview_package(true, LIMIT, "")
             .unwrap()
             .unwrap();
         let rendered = String::from_utf8(body(&package["index.html"])).unwrap();
@@ -1303,7 +1335,7 @@ mod tests {
         let files = media_files();
         let importer = Importer {
             keep_scripts: true,
-            inline_assets: true,
+            assets: Assets::Inline,
             files: &files,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -1321,6 +1353,7 @@ mod tests {
     fn render_errors_are_cached_and_read_as_unavailable() {
         let file = PreviewFile::Rendered(Arc::new(LivePage {
             source: "broken.html".into(),
+            prefix: "".into(),
             render: Arc::new(BTreeMap::from([("broken.html".into(), vec![0xff])])),
             text_limit: LIMIT,
             rendered: OnceLock::new(),
@@ -1357,12 +1390,12 @@ mod tests {
         let mut served = [0.0; 5];
         for run in 0..5 {
             let start = std::time::Instant::now();
-            project.website_preview_files(true, LIMIT).unwrap();
+            project.website_preview_files(true, LIMIT, "").unwrap();
             eager[run] = start.elapsed().as_secs_f64() * 1000.0;
 
             let start = std::time::Instant::now();
             let package = project
-                .website_preview_package(true, LIMIT)
+                .website_preview_package(true, LIMIT, "")
                 .unwrap()
                 .unwrap();
             lazy[run] = start.elapsed().as_secs_f64() * 1000.0;
