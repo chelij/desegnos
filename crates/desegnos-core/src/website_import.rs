@@ -574,7 +574,7 @@ impl LivePage {
     fn render(&self) -> Result<Arc<[u8]>> {
         let importer = Importer {
             keep_scripts: true,
-            inline_assets: true,
+            inline_assets: false,
             files: &self.render,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -962,9 +962,16 @@ impl Project {
             let render: Arc<BTreeMap<String, Vec<u8>>> = Arc::new(
                 files
                     .iter()
-                    .filter_map(|(path, file)| match file {
-                        PreviewFile::Inline(bytes) => Some((path.clone(), bytes.to_vec())),
-                        _ => None,
+                    .map(|(path, file)| {
+                        (
+                            path.clone(),
+                            match file {
+                                PreviewFile::Inline(bytes) => bytes.to_vec(),
+                                // Path presence is enough to resolve referenced assets; their
+                                // bytes remain shared in the package and are never inlined.
+                                _ => Vec::new(),
+                            },
+                        )
                     })
                     .collect(),
             );
@@ -1159,9 +1166,14 @@ mod tests {
     fn inline_files(files: &BTreeMap<String, PreviewFile>) -> BTreeMap<String, Vec<u8>> {
         files
             .iter()
-            .filter_map(|(path, file)| match file {
-                PreviewFile::Inline(bytes) => Some((path.clone(), bytes.to_vec())),
-                _ => None,
+            .map(|(path, file)| {
+                (
+                    path.clone(),
+                    match file {
+                        PreviewFile::Inline(bytes) => bytes.to_vec(),
+                        _ => Vec::new(),
+                    },
+                )
             })
             .collect()
     }
@@ -1209,7 +1221,7 @@ mod tests {
         let render = inline_files(&static_files);
         let importer = Importer {
             keep_scripts: true,
-            inline_assets: true,
+            inline_assets: false,
             files: &render,
             routes: BTreeMap::new(),
             pictures: BTreeMap::new(),
@@ -1241,7 +1253,12 @@ mod tests {
         let page = project.page(project.home_page_id).unwrap();
         let content = project.website_canvas_content(page).unwrap().unwrap();
         // Root-relative sources (`/portrait/...`) resolve from the site root like relative ones.
-        for reference in ["/images/photo.png", "/images/bg.png", "/images/tile.png", "\"/portrait/pose.webp\""] {
+        for reference in [
+            "/images/photo.png",
+            "/images/bg.png",
+            "/images/tile.png",
+            "\"/portrait/pose.webp\"",
+        ] {
             assert!(
                 content.html.contains(reference),
                 "{reference} in {}",
@@ -1249,6 +1266,21 @@ mod tests {
             );
         }
         assert!(!content.html.contains("data:image/"), "{}", content.html);
+    }
+
+    #[test]
+    fn scripted_canvas_package_keeps_assets_referenced_and_source_unchanged() {
+        let project = media_site();
+        let before = project.clone();
+        let package = project
+            .website_preview_package(true, LIMIT)
+            .unwrap()
+            .unwrap();
+        let rendered = String::from_utf8(body(&package["index.html"])).unwrap();
+        assert!(rendered.contains("/images/photo.png"), "{rendered}");
+        assert!(rendered.contains("/images/bg.png"));
+        assert!(!rendered.contains("data:image/"));
+        assert_eq!(project, before);
     }
 
     #[test]

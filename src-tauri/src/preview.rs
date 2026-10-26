@@ -186,9 +186,15 @@ impl PreviewRegistry {
                 ""
             };
             let document = format!(
-                "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"./site.css\" crossorigin=\"anonymous\"></head><body>{html}{bridge_script}{user_script}{region_script}</body></html>",
+                "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">{bridge_script}<title>{}</title><link rel=\"stylesheet\" href=\"./site.css\" crossorigin=\"anonymous\"></head><body>{html}{user_script}{region_script}</body></html>",
                 attribute(&page.name)
             );
+            let document = if run_scripts {
+                desegnos_core::preview_source_document(&document)
+                    .map_err(|error| error.to_string())?
+            } else {
+                document
+            };
             let mut files = vec![
                 (
                     "index.html",
@@ -731,19 +737,24 @@ fn redirect(request: &Request<Vec<u8>>) -> Response<Vec<u8>> {
 
 fn is_index_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
-    ["index.html", "index.htm"].iter().any(|index| {
-        name == *index || name.ends_with(&format!("/{index}"))
-    })
+    ["index.html", "index.htm"]
+        .iter()
+        .any(|index| name == *index || name.ends_with(&format!("/{index}")))
 }
 
 /// Session-bound bridge markup is added only to the served page, never to shared bytes.
 fn with_bridge(bytes: Vec<u8>, bridge: &str) -> Vec<u8> {
     match String::from_utf8(bytes) {
-        Ok(mut html) => {
-            if let Some(position) = html.to_ascii_lowercase().rfind("</body>") {
+        Ok(html) => {
+            let mut html = desegnos_core::preview_source_document(&html).unwrap_or(html);
+            if let Some(position) = html
+                .to_ascii_lowercase()
+                .find("<head")
+                .and_then(|at| html[at..].find('>').map(|end| at + end + 1))
+            {
                 html.insert_str(position, bridge);
             } else {
-                html.push_str(bridge);
+                html.insert_str(0, bridge);
             }
             html.into_bytes()
         }
@@ -1155,6 +1166,33 @@ mod tests {
         let traversal = get("%2e%2e/Cargo.toml");
         assert_eq!(traversal.status(), StatusCode::NOT_FOUND);
         assert_eq!(traversal.body(), b"Preview resource is unavailable.");
+    }
+
+    #[test]
+    fn bridge_runs_before_author_scripts_without_changing_registered_source() {
+        let source = "<!doctype html><html><head><script>document.body?.remove()</script></head><body><button data-desegnos-id=\"button01\">Source</button></body></html>";
+        let project = desegnos_core::import_website_files(
+            "Snapshot",
+            &BTreeMap::from([("index.html".into(), source.as_bytes().to_vec())]),
+        )
+        .unwrap();
+        let before = project.clone();
+        let mut registry = PreviewRegistry::default();
+        let descriptor = registry
+            .register(&project, None, project.home_page_id, true)
+            .unwrap();
+        let served = registry.serve(&Request::get(&descriptor.url).body(vec![]).unwrap());
+        let html = String::from_utf8_lossy(served.body());
+        assert!(
+            html.find("data-session=").unwrap() < html.find("document.body?.remove()").unwrap()
+        );
+        assert_eq!(project, before);
+        let injected = String::from_utf8(with_bridge(
+            b"<html><head></head><body></body></html>".to_vec(),
+            "<script>bridge()</script>",
+        ))
+        .unwrap();
+        assert!(injected.starts_with("<html><head><script>bridge()</script>"));
     }
 
     fn project() -> Project {

@@ -5,9 +5,8 @@ import type { PreviewDescriptor } from './types';
 
 export type LiveFrameSession = { sessionId: string; url: string };
 
-/// One live preview session per page revision, shared by every overlay. The static canvas
-/// creates its own scriptless session; this one runs scripts and is released as soon as
-/// the page changes, so no extra live session is left behind while editing.
+/// An explicitly interacting frame gets a live session. The canvas removes its
+/// temporary capture runner before editing, and keeps no passive live overlays.
 export function useLiveFrameSession(pageId: string, revision: string, enabled: boolean): LiveFrameSession | null {
   const [session, setSession] = useState<LiveFrameSession | null>(null);
   useEffect(() => {
@@ -48,6 +47,9 @@ export function FrameOverlay({ frame, live, pageId, staticPageUrl, zoom, interac
     window.addEventListener('message', receive);
     return () => window.removeEventListener('message', receive);
   }, [interactive, live.sessionId, pageId]);
+  // Pointer transparency alone does not freeze scripts. An inactive overlay must
+  // have no iframe at all, even if a caller still holds a live session.
+  if (!interactive) return null;
   return <div ref={wrapper} className={`frame-overlay${interactive ? ' interactive' : ''}`} style={placement}
     tabIndex={interactive ? 0 : -1} aria-label={interactive ? 'Interactive frame. Press Escape to stop interacting.' : undefined} role={interactive ? 'group' : undefined}
     onKeyDown={event => {
