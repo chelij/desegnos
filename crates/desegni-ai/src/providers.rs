@@ -443,6 +443,7 @@ struct KeyAdapter {
     endpoint: String,
     deadline: Duration,
 }
+const PROVIDER_IDLE: Duration = Duration::from_secs(90);
 impl KeyAdapter {
     fn new(id: ProviderId) -> Result<Self> {
         let endpoint = match id {
@@ -453,7 +454,8 @@ impl KeyAdapter {
         Self::build(id, endpoint, true)
     }
     fn build(id: ProviderId, endpoint: &str, https: bool) -> Result<Self> {
-        let deadline = Duration::from_secs(300);
+        // Same limits as the OpenAI transport: silence for 90 s or 20 minutes overall.
+        let deadline = Duration::from_secs(20 * 60);
         let client = reqwest::Client::builder()
             .tls_backend_rustls()
             .https_only(https)
@@ -467,6 +469,7 @@ impl KeyAdapter {
             .no_deflate()
             .no_zstd()
             .timeout(deadline)
+            .read_timeout(PROVIDER_IDLE)
             .connect_timeout(Duration::from_secs(20))
             .build()
             .map_err(|_| ProviderError::before(ErrorKind::Transport))?;
@@ -541,7 +544,7 @@ impl KeyAdapter {
                 .body(body),
             key,
         )?;
-        let mut response = tokio::select! {biased;_ = cancel.cancelled()=>return Err(ProviderError::before(ErrorKind::Cancelled)), _=tokio::time::sleep_until(deadline)=>return Err(failure(ErrorKind::Deadline)),r=request.send()=>r.map_err(|_|failure(ErrorKind::Transport))?};
+        let mut response = tokio::select! {biased;_ = cancel.cancelled()=>return Err(ProviderError::before(ErrorKind::Cancelled)), _=tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+PROVIDER_IDLE))=>return Err(failure(ErrorKind::Deadline)),r=request.send()=>r.map_err(|_|failure(ErrorKind::Transport))?};
         if !response.status().is_success() {
             return Err(http_error(response.status().as_u16()));
         }
@@ -561,7 +564,7 @@ impl KeyAdapter {
         let mut stream = ForeignStream::new(self.id);
         let mut bytes = 0usize;
         loop {
-            let chunk = tokio::select! {biased;_=cancel.cancelled()=>return Err(stream.error(ErrorKind::Cancelled)),_=tokio::time::sleep_until(deadline)=>return Err(stream.error(ErrorKind::Deadline)),r=response.chunk()=>r.map_err(|_|stream.error(ErrorKind::Transport))?};
+            let chunk = tokio::select! {biased;_=cancel.cancelled()=>return Err(stream.error(ErrorKind::Cancelled)),_=tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+PROVIDER_IDLE))=>return Err(stream.error(ErrorKind::Deadline)),r=response.chunk()=>r.map_err(|_|stream.error(ErrorKind::Transport))?};
             let Some(chunk) = chunk else {
                 break;
             };

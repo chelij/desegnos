@@ -1974,6 +1974,32 @@ async fn a_deadline_during_a_live_request_records_uncertainty_and_never_retries(
 }
 
 #[tokio::test]
+async fn a_silent_provider_times_out_long_before_the_overall_deadline() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let mut reply = Reply::sse(stream(&frozen));
+    reply.delay = Duration::from_secs(1);
+    let server = Server::start(reply).await;
+    let started = std::time::Instant::now();
+    let error = server
+        .client()
+        .with_test_idle(Duration::from_millis(30))
+        .generate(
+            &frozen,
+            GenerationMode::Strict,
+            &schema(),
+            &ProviderSettings::default(),
+            &ApiKey::new(KEY.into()).unwrap(),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Deadline);
+    assert!(started.elapsed() < Duration::from_millis(900));
+    assert_eq!(server.count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn stream_body_and_candidate_size_limits_are_enforced_without_truncation() {
     let frozen = snapshot(GenerationMode::Strict);
     let mut reply = Reply::sse(vec![]);

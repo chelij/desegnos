@@ -19,7 +19,10 @@ use std::time::Duration;
 use tokio::{sync::watch, time::Instant};
 
 const ENDPOINT: &str = "https://api.openai.com/v1";
-const DEADLINE: Duration = Duration::from_secs(300);
+// A long, high-effort generation can stream for well over five minutes. Give up only when
+// the provider goes silent for IDLE, or after DEADLINE overall.
+const DEADLINE: Duration = Duration::from_secs(20 * 60);
+const IDLE: Duration = Duration::from_secs(90);
 const ERROR_BODY_LIMIT: usize = 65_536;
 const MODELS_BODY_LIMIT: usize = 1024 * 1024;
 const MAX_MODELS: usize = 2048;
@@ -99,6 +102,7 @@ pub struct OpenAiClient {
     pub(crate) client: Client,
     pub(crate) endpoint: String,
     deadline: Duration,
+    idle: Duration,
 }
 
 impl OpenAiClient {
@@ -121,6 +125,7 @@ impl OpenAiClient {
             .no_deflate()
             .no_zstd()
             .timeout(deadline)
+            .read_timeout(IDLE)
             .connect_timeout(Duration::from_secs(20))
             .user_agent(concat!("Desegnos/", env!("CARGO_PKG_VERSION")))
             .build()
@@ -129,6 +134,7 @@ impl OpenAiClient {
             client,
             endpoint,
             deadline,
+            idle: IDLE,
         })
     }
 
@@ -153,6 +159,12 @@ impl OpenAiClient {
     #[cfg(test)]
     pub(crate) fn with_test_deadline(mut self, deadline: Duration) -> Self {
         self.deadline = deadline;
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_test_idle(mut self, idle: Duration) -> Self {
+        self.idle = idle;
         self
     }
 
@@ -324,7 +336,7 @@ impl OpenAiClient {
         let mut response = tokio::select! {
             biased;
             _ = cancellation.cancelled() => return Err(ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::Unknown)),
-            _ = tokio::time::sleep_until(deadline) => return Err(ProviderError::new(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
+            _ = tokio::time::sleep_until(deadline.min(Instant::now() + self.idle)) => return Err(ProviderError::new(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
             result = request.send() => result.map_err(|error| ProviderError::new(
                 if error.is_timeout() { ErrorKind::Deadline } else { ErrorKind::Transport }, SubmissionOutcome::Unknown))?,
         };
@@ -370,7 +382,7 @@ impl OpenAiClient {
             let bytes = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(stream.error(ErrorKind::Cancelled, SubmissionOutcome::Unknown)),
-                _ = tokio::time::sleep_until(deadline) => return Err(stream.error(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
+                _ = tokio::time::sleep_until(deadline.min(Instant::now() + self.idle)) => return Err(stream.error(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
                 result = response.chunk() => result.map_err(|error| stream.error(
                     if error.is_timeout() { ErrorKind::Deadline } else { ErrorKind::Transport }, SubmissionOutcome::Unknown))?,
             };
