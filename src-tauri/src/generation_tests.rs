@@ -1457,7 +1457,7 @@ fn saved_context_failed_replies_and_past_jobs_survive_restart_without_changing_l
             }),
         )
         .unwrap();
-    let failed = service.saved_job(project.id, first.job_id).unwrap();
+    let failed = service.saved_job(project.id, first.job_id).unwrap().unwrap();
     assert!(failed.raw_reply.as_ref().unwrap().contains("[redacted]"));
     assert!(
         !fs::read_to_string(directory.join("REPLY.txt"))
@@ -1478,6 +1478,7 @@ fn saved_context_failed_replies_and_past_jobs_survive_restart_without_changing_l
         reopened
             .saved_job(project.id, first.job_id)
             .unwrap()
+            .unwrap()
             .raw_reply
             .is_some()
     );
@@ -1485,7 +1486,11 @@ fn saved_context_failed_replies_and_past_jobs_survive_restart_without_changing_l
         reopened.latest(&project).unwrap().unwrap().job_id,
         next.job_id
     );
-    assert!(reopened.saved_job(Uuid::new_v4(), first.job_id).is_err());
+    // Another project's folder holds no such job, and the record itself names its project.
+    assert!(reopened
+        .saved_job(Uuid::new_v4(), first.job_id)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -1796,7 +1801,7 @@ fn validation_notes_and_content_free_counters_survive_reopening() {
             Ok(response(&generated, 1)),
         )
         .unwrap();
-    let view = service.saved_job(project.id, prepared.job_id).unwrap();
+    let view = service.saved_job(project.id, prepared.job_id).unwrap().unwrap();
     assert!(
         view.validation_events
             .iter()
@@ -1842,7 +1847,7 @@ fn retained_drafts_survive_restart_past_history_and_dismissal() {
     service.persist(record).unwrap();
     drop(service);
     let mut restarted = temp.service();
-    let loaded = restarted.saved_job(project.id, prepared.job_id).unwrap();
+    let loaded = restarted.saved_job(project.id, prepared.job_id).unwrap().unwrap();
     assert_eq!(loaded.drafts[0].code, drafts[0].code);
     assert!(
         restarted
@@ -1867,6 +1872,7 @@ fn retained_drafts_survive_restart_past_history_and_dismissal() {
     let loaded = temp
         .service()
         .saved_job(project.id, prepared.job_id)
+        .unwrap()
         .unwrap();
     assert!(loaded.drafts[0].dismissed);
     assert_eq!(loaded.drafts[0].code, drafts[0].code);
@@ -1934,6 +1940,7 @@ fn start_and_retry_refresh_source_revision_and_request_regions_after_manual_edit
         assert_eq!(
             service
                 .saved_job(original.id, prepared.job_id)
+                .unwrap()
                 .unwrap()
                 .requirements,
             prepared.requirements
@@ -2513,4 +2520,148 @@ fn editing_the_text_a_whole_page_generation_rewrites_stays_blocked() {
         "{}",
         error.0
     );
+}
+
+/// Writes a job record left behind by an older requirements format, exactly as that version
+/// serialized it: the whole record is stale, including its frozen requirements heading.
+fn old_format_job(service: &GenerationService, project: &Project, job_id: Uuid) -> PathBuf {
+    let directory = service.job_directory(project.id, job_id);
+    fs::create_dir_all(&directory).unwrap();
+    let heading = format!(
+        "# Generation requirements\n\nRequirements format: {}\n\n",
+        desegnos_core::CURRENT_REQUIREMENTS_FORMAT - 1
+    );
+    fs::write(
+        directory.join("job.json"),
+        serde_json::json!({
+            "version": 1,
+            "error": null,
+            "view": {
+                "jobId": job_id,
+                "projectId": project.id,
+                "requirements": { "markdown": heading },
+            },
+        })
+        .to_string(),
+    )
+    .unwrap();
+    directory
+}
+
+#[test]
+fn a_job_saved_by_another_requirements_format_is_ignored_as_absent() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let project = project();
+    let stale = Uuid::new_v4();
+    let directory = old_format_job(&service, &project, stale);
+    write_json(
+        &service
+            .directory
+            .join(project.id.to_string())
+            .join("latest.json"),
+        &LatestJob { job_id: stale },
+    )
+    .unwrap();
+
+    // The pointer, the job list and a direct lookup all treat the stale job as absent.
+    assert!(service.latest(&project).unwrap().is_none());
+    assert!(service.saved_job(project.id, stale).unwrap().is_none());
+    let history = service.past_jobs(project.id).unwrap();
+    assert!(history.jobs.is_empty());
+    assert_eq!(
+        history.skipped, 0,
+        "another format is absent, not an unreadable saved record"
+    );
+    // Preparing a current request is unaffected and starts a current-format job.
+    let prepared = service.prepare(&project).unwrap();
+    assert_eq!(
+        prepared.requirements.format_version().unwrap(),
+        desegnos_core::CURRENT_REQUIREMENTS_FORMAT
+    );
+    assert_ne!(prepared.job_id, stale);
+    // The stale record and its file stay untouched on disk.
+    assert!(directory.join("job.json").exists());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(
+            &fs::read(directory.join("job.json")).unwrap()
+        )
+        .unwrap()["view"]["requirements"]["markdown"],
+        format!(
+            "# Generation requirements\n\nRequirements format: {}\n\n",
+            desegnos_core::CURRENT_REQUIREMENTS_FORMAT - 1
+        )
+    );
+}
+
+#[test]
+fn a_history_index_from_another_requirements_format_is_ignored_as_absent() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let project = project();
+    private_directory(&service.directory.join(project.id.to_string())).unwrap();
+    // An index from an older format: the bare entry array those versions wrote.
+    let stale = desegnos_core::EarlierRequest {
+        project_id: project.id,
+        job_id: Uuid::new_v4(),
+        page_id: project.home_page_id,
+        region_id: project.pages[0].regions[0].id,
+        rect: Rect {
+            x: 24.0,
+            y: 24.0,
+            width: 300.0,
+            height: 140.0,
+        },
+        whole_page: false,
+        requested_at: 1,
+        request: "An older request that must stay out of this one.".into(),
+        outcome: "applied".into(),
+        validation_rejection: None,
+        summary: "An older summary.".into(),
+        summary_targets: vec![],
+        source_fingerprints: None,
+        base_source_fingerprints: None,
+        document_fingerprints: std::collections::BTreeMap::new(),
+        base_document_fingerprints: std::collections::BTreeMap::new(),
+    };
+    write_json(&service.history_path(project.id), &vec![stale.clone()]).unwrap();
+
+    assert!(service.request_history(&project).unwrap().is_empty());
+    // The ignored index is replaced with a current-format one, tagged with its format.
+    let rewritten = read_json::<RequestHistoryIndex>(
+        &service.history_path(project.id),
+        MAX_JOB_BYTES,
+    )
+    .unwrap();
+    assert_eq!(
+        rewritten.format,
+        desegnos_core::CURRENT_REQUIREMENTS_FORMAT
+    );
+    assert!(rewritten.entries.is_empty());
+    let prepared = service.prepare(&project).unwrap();
+    assert!(!prepared
+        .requirements
+        .request_history
+        .contains(&stale.request));
+}
+
+#[test]
+fn a_current_format_history_index_still_round_trips_after_restart() {
+    let temp = Temp::new();
+    let mut service = temp.service();
+    let project = project();
+    let prepared = service.prepare(&project).unwrap();
+    let mut record = service.record(&project, prepared.job_id).unwrap();
+    record.view.status = JobStatus::Discarded;
+    service.persist(record).unwrap();
+    let before = service.request_history(&project).unwrap();
+    assert_eq!(before.len(), 2);
+    drop(service);
+    let after = temp.service().request_history(&project).unwrap();
+    assert_eq!(after.len(), before.len());
+    assert!(after.iter().zip(&before).all(|(new, old)| {
+        new.job_id == old.job_id
+            && new.region_id == old.region_id
+            && new.request == old.request
+    }));
 }

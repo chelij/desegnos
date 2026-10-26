@@ -7,7 +7,7 @@ export function native<T>(command: string, args?: Record<string, unknown>): Prom
   const started = performance.now();
   return invoke<T>(command, args).then(
     value => { recordCommand(command, args, started, true); return value; },
-    error => { recordCommand(command, args, started, false); throw error; });
+    error => { recordCommand(command, args, started, false, error); throw error; });
 }
 
 export function edit(revision: number, command: Command) {

@@ -1,6 +1,12 @@
 /// Requirements contract used for newly prepared requests.
 pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 27;
 
+/// The exact heading every packet of the current format starts with. A stored packet that does
+/// not start with it belongs to another format and is ignored, never upgraded.
+pub fn current_requirements_heading() -> String {
+    format!("# Generation requirements\n\nRequirements format: {CURRENT_REQUIREMENTS_FORMAT}\n\n")
+}
+
 use crate::{
     Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
     MAX_GENERATION_REGIONS, MAX_REQUIREMENTS_BYTES, Page, Project, Region, Result, Scope,
@@ -1038,9 +1044,10 @@ impl RequirementsSnapshot {
     }
 
     pub fn format_version(&self) -> Result<u8> {
-        ensure(self.markdown.starts_with(&format!(
-            "# Generation requirements\n\nRequirements format: {CURRENT_REQUIREMENTS_FORMAT}\n\n"
-        )), "The requirements format is unsupported.")?;
+        ensure(
+            self.markdown.starts_with(&current_requirements_heading()),
+            "The requirements format is unsupported.",
+        )?;
         Ok(CURRENT_REQUIREMENTS_FORMAT)
     }
 
@@ -1338,7 +1345,7 @@ fn page_source_digest(page: &Page) -> Result<String> {
 }
 
 #[cfg(test)]
-mod transparency_tests {
+mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::STANDARD};
 
@@ -1429,6 +1436,24 @@ mod transparency_tests {
         let mut attachment = project.pages[0].regions[0].attachments[0].clone();
         attachment.preview = Some(snapshot.images[0].data_uri.as_str().into());
         attachment.validate().unwrap();
+    }
+
+    #[test]
+    fn a_packet_of_another_format_is_recognised_before_it_is_parsed() {
+        let project = fixture();
+        let mut snapshot = requirements(&project, CURRENT_REQUIREMENTS_FORMAT);
+        assert_eq!(
+            snapshot.format_version().unwrap(),
+            CURRENT_REQUIREMENTS_FORMAT
+        );
+        assert!(snapshot.markdown.starts_with(&current_requirements_heading()));
+        snapshot.markdown = snapshot.markdown.replacen(
+            &format!("Requirements format: {CURRENT_REQUIREMENTS_FORMAT}"),
+            &format!("Requirements format: {}", CURRENT_REQUIREMENTS_FORMAT - 1),
+            1,
+        );
+        assert!(snapshot.format_version().is_err());
+        assert!(!snapshot.markdown.starts_with(&current_requirements_heading()));
     }
 
     #[test]

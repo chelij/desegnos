@@ -65,4 +65,4 @@ Page review groups photos and existing work by website route. Optional `sourcePa
 
 Optional `ImportedIdentity.pages` maps source pages to actual project page IDs, shared photo IDs and work items. Page assignments select requirements format 16, which nests pictures and work under the affected page's current name/path; only colours, fonts, logos, tone and any older unassigned content remain project-wide.
 
-Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 27). Different versions produce errors. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.
+Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 27). A project of another version is an error. Stored generation jobs and request history of another requirements format are ignored: they stay untouched on disk, are never shown, resubmitted or upgraded, and never make opening a project or preparing a request fail. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.

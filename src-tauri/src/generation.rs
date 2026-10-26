@@ -293,6 +293,35 @@ struct LatestJob {
     job_id: Uuid,
 }
 
+/// The project's request-history index. The format tag names the requirements format that
+/// produced the entries, so an index written by another format is ignored instead of being
+/// mixed into a current request.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RequestHistoryIndex {
+    format: u8,
+    entries: Vec<desegnos_core::EarlierRequest>,
+}
+
+/// Reads only the frozen requirements heading, before the complete record is decoded.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobFormatProbe {
+    view: Option<ViewFormatProbe>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ViewFormatProbe {
+    requirements: Option<RequirementsFormatProbe>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RequirementsFormatProbe {
+    markdown: String,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ProviderPreference {
@@ -416,7 +445,7 @@ fn regular_file(path: &Path) -> NativeResult<()> {
     Ok(())
 }
 
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeResult<T> {
+fn read_limited(path: &Path, limit: u64) -> NativeResult<Vec<u8>> {
     regular_file(path)?;
     let file = File::open(path).map_err(message)?;
     if file.metadata().map_err(message)?.len() > limit {
@@ -433,7 +462,38 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeRes
             "A generation record exceeds its size limit. The original was preserved.".into(),
         );
     }
+    Ok(bytes)
+}
+
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeResult<T> {
+    let bytes = read_limited(path, limit)?;
     serde_json::from_slice(&bytes).map_err(|_| "A generation record is damaged or uses an unsupported format. The original was preserved.".into())
+}
+
+/// A stored job is absent, not an error, when it was frozen by another requirements format or
+/// cannot be decoded as one. The current format has no compatibility path, so such records are
+/// never shown, resubmitted or upgraded; their files stay untouched on disk.
+fn read_job_record(directory: &Path) -> NativeResult<Option<JobRecord>> {
+    let path = directory.join("job.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let bytes = read_limited(&path, MAX_JOB_BYTES)?;
+    let Ok(probe) = serde_json::from_slice::<JobFormatProbe>(&bytes) else {
+        return Ok(None);
+    };
+    let markdown = probe
+        .view
+        .and_then(|view| view.requirements)
+        .map(|requirements| requirements.markdown);
+    if !markdown.is_some_and(|markdown| {
+        markdown.starts_with(&desegnos_core::current_requirements_heading())
+    }) {
+        return Ok(None);
+    }
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| {
+        "A generation record is damaged. The original was preserved; it was not submitted or applied.".into()
+    })
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> NativeResult<()> {
@@ -787,14 +847,19 @@ impl GenerationService {
         write_json(&directory.join("job.json"), &record)?;
         let history_path = self.history_path(record.view.project_id);
         if history_path.exists() {
-            let mut entries: Vec<desegnos_core::EarlierRequest> =
-                read_json(&history_path, MAX_JOB_BYTES)?;
+            let mut entries = self.saved_history(record.view.project_id)?;
             entries.retain(|r| {
                 r.project_id == record.view.project_id && r.job_id != record.view.job_id
             });
             entries.extend(self.history_entries(&record.view));
             desegnos_core::compact_request_history(&mut entries);
-            write_json(&history_path, &entries)?;
+            write_json(
+                &history_path,
+                &RequestHistoryIndex {
+                    format: desegnos_core::CURRENT_REQUIREMENTS_FORMAT,
+                    entries,
+                },
+            )?;
         }
         let view = record.view.clone();
         self.unsaved_jobs.remove(&view.job_id);
@@ -803,13 +868,15 @@ impl GenerationService {
         Ok(view)
     }
 
-    fn saved_job(&self, project_id: Uuid, job_id: Uuid) -> NativeResult<GenerationJobView> {
+    /// A stored job of another requirements format is absent rather than an error.
+    fn saved_job(&self, project_id: Uuid, job_id: Uuid) -> NativeResult<Option<GenerationJobView>> {
         let record = if let Some(record) = self.jobs.get(&job_id) {
-            record.clone()
+            Some(record.clone())
         } else {
-            let directory = self.job_directory(project_id, job_id);
-            regular_directory(&directory)?;
-            read_json::<JobRecord>(&directory.join("job.json"), MAX_JOB_BYTES)?
+            read_job_record(&self.job_directory(project_id, job_id))?
+        };
+        let Some(record) = record else {
+            return Ok(None);
         };
         let view = record.view;
         if record.version != 1
@@ -823,7 +890,7 @@ impl GenerationService {
         {
             return Err("The saved generation record is invalid.".into());
         }
-        Ok(view)
+        Ok(Some(view))
     }
 
     // Compact text-only index of current-format requests.
@@ -831,6 +898,26 @@ impl GenerationService {
         self.directory
             .join(project_id.to_string())
             .join("request-history.json")
+    }
+
+    /// The derived history index is absent when it was written by another requirements format or
+    /// cannot be decoded; the next save replaces it with a current-format index.
+    fn saved_history(
+        &self,
+        project_id: Uuid,
+    ) -> NativeResult<Vec<desegnos_core::EarlierRequest>> {
+        let path = self.history_path(project_id);
+        if !path.exists() {
+            return Ok(Vec::new());
+        }
+        let bytes = read_limited(&path, MAX_JOB_BYTES)?;
+        let Ok(index) = serde_json::from_slice::<RequestHistoryIndex>(&bytes) else {
+            return Ok(Vec::new());
+        };
+        if index.format != desegnos_core::CURRENT_REQUIREMENTS_FORMAT {
+            return Ok(Vec::new());
+        }
+        Ok(index.entries)
     }
 
     fn history_entries(&self, view: &GenerationJobView) -> Vec<desegnos_core::EarlierRequest> {
@@ -948,9 +1035,10 @@ impl GenerationService {
     ) -> NativeResult<Vec<desegnos_core::EarlierRequest>> {
         let path = self.history_path(project.id);
         // A crash can leave current job records durable before their history index.
-        // Reconstruct a missing index only from validated current-format records.
+        // Reconstruct a missing index only from validated current-format records. An index from
+        // another requirements format is absent, never read as current earlier-request context.
         let mut entries: Vec<desegnos_core::EarlierRequest> = if path.exists() {
-            read_json(&path, MAX_JOB_BYTES)?
+            self.saved_history(project.id)?
         } else {
             let directory = self.directory.join(project.id.to_string());
             let mut entries = Vec::new();
@@ -966,7 +1054,7 @@ impl GenerationService {
                     else {
                         continue;
                     };
-                    if let Ok(view) = self.saved_job(project.id, id) {
+                    if let Ok(Some(view)) = self.saved_job(project.id, id) {
                         entries.extend(self.history_entries(&view));
                         if let Some(context) = &view.requirements.dossier_context {
                             observations.push((
@@ -1035,8 +1123,12 @@ impl GenerationService {
         }
         private_directory(path.parent().ok_or("Missing history directory.")?)?;
         desegnos_core::compact_request_history(&mut entries);
-        write_json(&path, &entries)?;
-        Ok(entries)
+        let index = RequestHistoryIndex {
+            format: desegnos_core::CURRENT_REQUIREMENTS_FORMAT,
+            entries,
+        };
+        write_json(&path, &index)?;
+        Ok(index.entries)
     }
 
     fn past_jobs(&self, project_id: Uuid) -> NativeResult<GenerationHistory> {
@@ -1066,7 +1158,7 @@ impl GenerationService {
                 break;
             }
             match self.saved_job(project_id, id) {
-                Ok(view) => {
+                Ok(Some(view)) => {
                     let first_request = frozen_first_request(&view);
                     let created_at = view
                         .created_at
@@ -1093,6 +1185,8 @@ impl GenerationService {
                             .map_or(view.message, |candidate| candidate.summary),
                     });
                 }
+                // Another requirements format is absent, not a record that could not be read.
+                Ok(None) => {}
                 Err(_) => skipped += 1,
             }
         }
@@ -1148,15 +1242,13 @@ impl GenerationService {
             return Ok(None);
         }
         let latest: LatestJob = read_json(&latest, 1024)?;
-        let mut record = if let Some(record) = self.jobs.get(&latest.job_id) {
-            record.clone()
+        let stored = if let Some(record) = self.jobs.get(&latest.job_id) {
+            Some(record.clone())
         } else {
-            read_json::<JobRecord>(
-                &self
-                    .job_directory(project.id, latest.job_id)
-                    .join("job.json"),
-                MAX_JOB_BYTES,
-            )?
+            read_job_record(&self.job_directory(project.id, latest.job_id))?
+        };
+        let Some(mut record) = stored else {
+            return Ok(None);
         };
         if record.version != 1
             || record.view.requirements.format_version().is_err()
@@ -2941,7 +3033,9 @@ pub async fn prepare_generation(
     }
     let draft = match (repair_job_id, repair_draft_id) {
         (Some(job_id), Some(draft_id)) => {
-            let saved = service.saved_job(project.id, job_id)?;
+            let saved = service
+                .saved_job(project.id, job_id)?
+                .ok_or("The draft is no longer available.")?;
             let mut draft = saved
                 .drafts
                 .into_iter()
@@ -3022,7 +3116,11 @@ pub fn get_past_generation(
     if workspace.lock().map_err(message)?.project()?.id != project_id {
         return Err("The active project changed.".into());
     }
-    state.lock().map_err(message)?.saved_job(project_id, job_id)
+    state
+        .lock()
+        .map_err(message)?
+        .saved_job(project_id, job_id)?
+        .ok_or_else(|| "This saved generation record is no longer available.".into())
 }
 
 fn maintain_dossier(
@@ -3686,7 +3784,8 @@ pub fn create_preview(
         let view = state
             .lock()
             .map_err(message)?
-            .saved_job(project.id, job_id)?;
+            .saved_job(project.id, job_id)?
+            .ok_or("The saved generation record is unavailable.")?;
         if let Some(draft_id) = draft_id {
             let draft = view
                 .drafts
@@ -3907,7 +4006,9 @@ pub fn generation_draft(
     trusted(&window)?;
     let mut workspace = workspace.lock().map_err(message)?;
     let mut service = state.lock().map_err(message)?;
-    let mut view = service.saved_job(workspace.project()?.id, job_id)?;
+    let mut view = service
+        .saved_job(workspace.project()?.id, job_id)?
+        .ok_or("The saved generation record is unavailable.")?;
     let index = view
         .drafts
         .iter()

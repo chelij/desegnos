@@ -15,6 +15,12 @@ function clean(value: string | null | undefined, limit: number) {
   return text ? Array.from(text).slice(0, limit).join('') : undefined;
 }
 
+// Failure reasons stay literal: their wording and numbers are what makes them traceable.
+function message(error: unknown, limit: number) {
+  const text = (typeof error === 'string' ? error : error instanceof Error ? error.message : error == null ? '' : String(error)).replace(/\s+/g, ' ').trim();
+  return text ? Array.from(text).slice(0, limit).join('') : undefined;
+}
+
 export function recordUsage(event: Omit<UsageEvent, 't'>) {
   if (!isTauri()) return;
   queue.push({ t: Date.now(), ...event });
@@ -99,11 +105,12 @@ export function installUsageLog() {
   };
 }
 
-export function recordCommand(command: string, args: Record<string, unknown> | undefined, started: number, ok: boolean) {
+export function recordCommand(command: string, args: Record<string, unknown> | undefined, started: number, ok: boolean, error?: unknown) {
   // Quiet reads are left out unless they fail: a failed read can still raise a visible error.
   if (ok && QUIET.test(command)) return;
   const edit = (args?.command as { type?: string } | undefined)?.type;
-  const detail = typeof edit === 'string' ? edit : undefined, ms = Math.round(performance.now() - started);
+  // A failure records the native error message instead of the edit type, so it can be diagnosed later.
+  const detail = ok ? (typeof edit === 'string' ? edit : undefined) : message(error, 200), ms = Math.round(performance.now() - started);
   // Typing in a request saves on every keystroke; repeats fold into one event with a count.
   const last = queue.at(-1);
   if (last?.kind === 'command' && last.name === command && last.detail === detail && last.ok === ok && Date.now() - last.t < 10_000) {

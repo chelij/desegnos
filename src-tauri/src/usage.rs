@@ -1,7 +1,9 @@
 //! Local record of how the editor is used: control names, shortcuts and command outcomes.
-//! It never holds request text, page content, file paths or credentials, and nothing is
-//! sent anywhere. One JSON line per event in `usage/YYYY-MM-DD.jsonl` beside the recovery
-//! files, at most 2 MiB per day, kept for 30 days. `scripts/usage-report.mjs` reads it.
+//! It never holds request text, page content or credentials, and nothing is sent anywhere.
+//! A failed command keeps its native error message (first 200 characters) so the failure can
+//! be diagnosed; successful commands keep only their name. One JSON line per event in
+//! `usage/YYYY-MM-DD.jsonl` beside the recovery files, at most 2 MiB per day, kept for 30 days.
+//! `scripts/usage-report.mjs` reads it.
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
@@ -23,7 +25,8 @@ pub struct UsageEvent {
     /// click, key, typing, command or session.
     pub kind: String,
     pub name: String,
-    /// Where it happened (dialog, panel or canvas), or the edit type of a command.
+    /// Where it happened (dialog, panel or canvas), the edit type of a command, or the native
+    /// error message of a failed command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -44,7 +47,7 @@ impl UsageEvent {
             self.kind.as_str(),
             "click" | "key" | "typing" | "command" | "session"
         ) && short(&self.name, 80)
-            && self.detail.as_deref().is_none_or(|value| short(value, 120))
+            && self.detail.as_deref().is_none_or(|value| short(value, 200))
     }
 }
 
@@ -150,6 +153,17 @@ mod tests {
             ok: None,
         };
         assert!(!bad.valid());
+        let failure = UsageEvent {
+            t: 1,
+            kind: "command".into(),
+            name: "prepare_generation".into(),
+            detail: Some("x".repeat(200)),
+            count: None,
+            ms: Some(12),
+            ok: Some(false),
+        };
+        assert!(failure.valid(), "a failure reason of 200 characters is kept");
+        assert!(!UsageEvent { detail: Some("x".repeat(201)), ..failure }.valid());
         fs::remove_dir_all(directory).unwrap();
     }
 }

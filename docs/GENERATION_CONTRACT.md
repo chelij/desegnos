@@ -284,4 +284,4 @@ with corresponding security cases. `create_preview` accepts optional `draftId`,
 uses immutable retained source in the existing preview, and disables draft scripts. Security-blocked source has Copy code and Dismiss only.
 
 
-Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 27). Different versions produce errors. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.
+Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 27). A project of another version is an error. Stored generation jobs and request history of another requirements format are ignored: they stay untouched on disk, are never shown, resubmitted or upgraded, and never make opening a project or preparing a request fail. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.

@@ -385,7 +385,7 @@ Normal debug/release builds and fresh initialization pass with automation ports 
 
 ## Current formats only (26 October 2026)
 
-Desegnos is unreleased and uses only the current names and formats: `.desegnos`, the `desegnos` marker, project schema 10 and requirements format 27. Older format readers, fixtures, data/vault moves and launch aliases are removed. The owner manages app data by hand. Settings, identity and generation records retain their current version numbers; different versions are errors.
+Desegnos is unreleased and uses only the current names and formats: `.desegnos`, the `desegnos` marker, project schema 10 and requirements format 27. Older format readers, fixtures, data/vault moves and launch aliases are removed. The owner manages app data by hand. Settings and identity records keep their current version numbers; a different version is an error. Stored generation jobs and request history of another requirements format are ignored instead of read, shown or rebuilt.
 
 Current journals, crash recovery, atomic saves, integrity checks, exact `.previous` backups, credential isolation and data-loss protections remain. This change was inspected statically; no builds or tests were run at the owner's request.
 
