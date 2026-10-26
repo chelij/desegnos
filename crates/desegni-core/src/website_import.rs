@@ -1222,11 +1222,12 @@ mod tests {
 
     fn media_files() -> BTreeMap<String, Vec<u8>> {
         BTreeMap::from([
-            ("index.html".into(), b"<!doctype html><html><head><link rel='stylesheet' href='site.css'></head><body><img src='images/photo.png'><p style=\"background:url('images/tile.png')\"></p></body></html>".to_vec()),
+            ("index.html".into(), b"<!doctype html><html><head><link rel='stylesheet' href='site.css'></head><body><img src='images/photo.png'><img src='/portrait/pose.webp'><p style=\"background:url('images/tile.png')\"></p></body></html>".to_vec()),
             ("site.css".into(), b"body{background:url(images/bg.png)}".to_vec()),
             ("images/photo.png".into(), b"photo".to_vec()),
             ("images/bg.png".into(), b"bg".to_vec()),
             ("images/tile.png".into(), b"tile".to_vec()),
+            ("portrait/pose.webp".into(), b"pose".to_vec()),
         ])
     }
 
@@ -1239,7 +1240,8 @@ mod tests {
         let project = media_site();
         let page = project.page(project.home_page_id).unwrap();
         let content = project.website_canvas_content(page).unwrap().unwrap();
-        for reference in ["/images/photo.png", "/images/bg.png", "/images/tile.png"] {
+        // Root-relative sources (`/portrait/...`) resolve from the site root like relative ones.
+        for reference in ["/images/photo.png", "/images/bg.png", "/images/tile.png", "\"/portrait/pose.webp\""] {
             assert!(
                 content.html.contains(reference),
                 "{reference} in {}",
