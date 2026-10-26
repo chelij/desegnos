@@ -3,12 +3,12 @@ pub mod system_tools;
 pub mod website_detection;
 pub mod website_merge;
 use desegni_core::{
-    DecodedProject, Error, Project, Result, SCHEMA_VERSION, decode_project_with_notes,
-    decode_project_with_source_hash, digest,
+    DecodedProject, Error, Project, Result, SCHEMA_VERSION, decode_project,
+    decode_project_with_notes, decode_project_with_source_hash, digest,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -16,6 +16,8 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
+    thread,
+    time::{Duration, SystemTime},
 };
 use uuid::Uuid;
 pub use website_detection::{WebsiteFolder, detect_website_folder, import_detected_website};
@@ -34,6 +36,12 @@ pub use project_folder::{
 
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_MODEL_BYTES: u64 = 128 * 1024 * 1024;
+/// A journal written moments ago may belong to a session that has not recorded its pointer yet.
+const JOURNAL_GRACE: Duration = Duration::from_secs(10 * 60);
+/// Another instance writes site files just before the journal entry that references them.
+const BLOB_GRACE: Duration = Duration::from_secs(60 * 60);
+/// Writing site files is I/O bound, so more workers than this would only add contention.
+const BLOB_WORKERS: usize = 8;
 pub const PROJECT_FILE_EXTENSIONS: [&str; 2] = ["desegnos", "desegni"];
 
 fn project_extension(path: &Path) -> bool {
@@ -540,10 +548,19 @@ fn read_project_document(path: &Path) -> Result<(DecodedProject, FileStamp)> {
     Ok((document, stamp))
 }
 
+/// A site file's digest cache key: the `Arc`'s thin pointer and its length.
+type SiteFileKey = (usize, usize);
+/// Digests of the current project's site files, with the `Arc` that keeps each key valid.
+type SiteFileCache = HashMap<SiteFileKey, (Arc<str>, String)>;
+
 pub struct Journal {
     path: PathBuf,
     project_id: Uuid,
     last_revision: Mutex<Option<u64>>,
+    /// Imported site files are unchanged between keystroke edits, so remember each file's digest
+    /// by `Arc` identity instead of re-hashing megabytes on every append. Keeping a clone of the
+    /// `Arc` pins its address, so a freed allocation can never be mistaken for a cached file.
+    blobs: Mutex<SiteFileCache>,
 }
 
 /// The serialized entry shape the journal writes by hand in `append`; tests keep it as the
@@ -554,6 +571,7 @@ pub struct Journal {
 struct JournalEntry {
     sha256: String,
     project: Project,
+    files: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -562,6 +580,17 @@ struct StoredJournalEntry<'a> {
     sha256: String,
     #[serde(borrow)]
     project: &'a serde_json::value::RawValue,
+    /// Site files are stored once in `blobs/` and referenced here; absent in older journals,
+    /// whose project bytes already contain every file.
+    #[serde(default)]
+    files: Option<BTreeMap<String, String>>,
+}
+
+/// What `clean_journals` removed.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct JournalCleanup {
+    pub journals: usize,
+    pub blobs: usize,
 }
 
 impl Journal {
@@ -571,6 +600,7 @@ impl Journal {
             path: directory.join(format!("{project_id}-{}.journal", Uuid::new_v4())),
             project_id,
             last_revision: Mutex::new(None),
+            blobs: Mutex::new(Default::default()),
         })
     }
 
@@ -591,18 +621,56 @@ impl Journal {
                 "Recovery transactions must advance the project revision.".into(),
             ));
         }
-        // Serialize the project once: the hash covers these bytes and the entry reuses them, so
-        // a large project is not serialized twice. The framing matches JournalEntry:
-        // `{"sha256":"<hex>","project":<project>}`.
-        let project_bytes = serde_json::to_vec(project).map_err(io)?;
+        // Imported site files live once in `<journal directory>/blobs`, so a keystroke edit only
+        // writes the rest of the project. The entry is one line:
+        // `{"sha256":"<hex>","project":<stripped project>,"files":{"<site path>":"<blob>"}}`.
+        let mut stripped = project.clone();
+        let site_files = stripped
+            .website
+            .as_mut()
+            .map(|site| std::mem::take(&mut site.files))
+            .unwrap_or_default();
+        let blobs = blobs_directory(&self.path);
+        let mut cache = self.blobs.lock().map_err(io)?;
+        let mut files = BTreeMap::new();
+        let mut next_cache = HashMap::with_capacity(site_files.len());
+        let mut blob_bytes = 0_u64;
+        // Cached files stay off the workers; a miss means the first append of this site, which
+        // stores every file at once.
+        let mut missing = Vec::new();
+        for (path, content) in &site_files {
+            let key = (content.as_ptr() as usize, content.len());
+            blob_bytes = blob_bytes.saturating_add(content.len() as u64);
+            match cache.get(&key) {
+                Some((cached, hash)) if Arc::ptr_eq(cached, content) => {
+                    next_cache.insert(key, (Arc::clone(content), hash.clone()));
+                    files.insert(path.clone(), hash.clone());
+                }
+                _ => missing.push((path.clone(), Arc::clone(content))),
+            }
+        }
+        let hashes = store_site_files(&blobs, &missing)?;
+        for ((path, content), hash) in missing.into_iter().zip(hashes) {
+            let key = (content.as_ptr() as usize, content.len());
+            next_cache.insert(key, (Arc::clone(&content), hash.clone()));
+            files.insert(path, hash);
+        }
+        // Only the current project's files stay cached; a replaced file is hashed again once.
+        *cache = next_cache;
+        // Serialize the stripped project once: the hash covers these bytes and the entry reuses
+        // them, so a large project is not serialized twice.
+        let project_bytes = serde_json::to_vec(&stripped).map_err(io)?;
         let hash = digest(&project_bytes);
-        let mut bytes = Vec::with_capacity(project_bytes.len() + 96);
+        let files_bytes = serde_json::to_vec(&files).map_err(io)?;
+        let mut bytes = Vec::with_capacity(project_bytes.len() + files_bytes.len() + 96);
         bytes.extend_from_slice(b"{\"sha256\":\"");
         bytes.extend_from_slice(hash.as_bytes());
         bytes.extend_from_slice(b"\",\"project\":");
         bytes.extend_from_slice(&project_bytes);
+        bytes.extend_from_slice(b",\"files\":");
+        bytes.extend_from_slice(&files_bytes);
         bytes.push(b'}');
-        if bytes.len() as u64 > MAX_MODEL_BYTES {
+        if (bytes.len() as u64).saturating_add(blob_bytes) > MAX_MODEL_BYTES {
             return Err(Error(
                 "The recovery entry exceeds the model size limit.".into(),
             ));
@@ -619,21 +687,7 @@ impl Journal {
     }
 
     pub fn recover_document(path: &Path) -> Result<Option<DecodedProject>> {
-        let file = File::open(path).map_err(io)?;
-        if file.metadata().map_err(io)?.len() > MAX_MODEL_BYTES * 3 {
-            return Err(Error(
-                "The recovery journal exceeds the supported size.".into(),
-            ));
-        }
-        let mut bytes = Vec::new();
-        file.take(MAX_MODEL_BYTES * 3 + 1)
-            .read_to_end(&mut bytes)
-            .map_err(io)?;
-        if bytes.len() as u64 > MAX_MODEL_BYTES * 3 {
-            return Err(Error(
-                "The recovery journal exceeds the supported size.".into(),
-            ));
-        }
+        let bytes = read_journal(path)?;
         let mut previous: Option<DecodedProject> = None;
         for line in bytes.split_inclusive(|b| *b == b'\n') {
             if !line.ends_with(b"\n") {
@@ -646,8 +700,14 @@ impl Journal {
             }
             let entry: StoredJournalEntry<'_> = serde_json::from_slice(line)
                 .map_err(|e| Error(format!("A recovery entry is damaged: {e}")))?;
-            let document =
-                decode_project_with_source_hash(entry.project.get().as_bytes(), &entry.sha256)?;
+            let document = match &entry.files {
+                None => {
+                    decode_project_with_source_hash(entry.project.get().as_bytes(), &entry.sha256)?
+                }
+                Some(files) => {
+                    restore_site_files(path, entry.project.get().as_bytes(), &entry.sha256, files)?
+                }
+            };
             if let Some(old) = &previous
                 && (old.project.id != document.project.id
                     || old.project.revision >= document.project.revision)
@@ -658,6 +718,263 @@ impl Journal {
         }
         Ok(previous)
     }
+}
+
+fn read_journal(path: &Path) -> Result<Vec<u8>> {
+    let file = File::open(path).map_err(io)?;
+    if file.metadata().map_err(io)?.len() > MAX_MODEL_BYTES * 3 {
+        return Err(Error(
+            "The recovery journal exceeds the supported size.".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_MODEL_BYTES * 3 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    if bytes.len() as u64 > MAX_MODEL_BYTES * 3 {
+        return Err(Error(
+            "The recovery journal exceeds the supported size.".into(),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn blobs_directory(journal: &Path) -> PathBuf {
+    journal
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .join("blobs")
+}
+
+/// Store the site files whose blob is not cached, returning their hashes in the same order.
+/// Hashing and fsyncing ~100 files one after another made the first append of an imported site
+/// take most of a second, so workers spread the work and the directory is synced once: every
+/// blob is durable and visible before the journal entry that references it is written.
+fn store_site_files(directory: &Path, files: &[(String, Arc<str>)]) -> Result<Vec<String>> {
+    if files.is_empty() {
+        return Ok(Vec::new());
+    }
+    fs::create_dir_all(directory).map_err(io)?;
+    let workers = thread::available_parallelism()
+        .map_or(1, |parallelism| parallelism.get())
+        .min(BLOB_WORKERS)
+        .min(files.len());
+    let chunk = files.len().div_ceil(workers);
+    let mut hashes = vec![String::new(); files.len()];
+    let failure: Mutex<Option<Error>> = Mutex::new(None);
+    thread::scope(|scope| {
+        let failure = &failure;
+        for (chunk, hashes) in files.chunks(chunk).zip(hashes.chunks_mut(chunk)) {
+            scope.spawn(move || {
+                for ((_, content), hash) in chunk.iter().zip(hashes) {
+                    if failure.lock().is_ok_and(|failure| failure.is_some()) {
+                        // Another worker already failed; the caller only reports the first.
+                        return;
+                    }
+                    let value = digest(content.as_bytes());
+                    if let Err(error) = write_blob(directory, &value, content) {
+                        if let Ok(mut failure) = failure.lock()
+                            && failure.is_none()
+                        {
+                            *failure = Some(error);
+                        }
+                        return;
+                    }
+                    *hash = value;
+                }
+            });
+        }
+    });
+    if let Some(error) = failure.lock().ok().and_then(|mut failure| failure.take()) {
+        return Err(error);
+    }
+    sync_directory(directory)?;
+    Ok(hashes)
+}
+
+/// Site files are content addressed and shared by every journal in the directory, so a blob is
+/// written once and only when it does not exist yet. `atomic_write_unsynced` keeps a partial blob
+/// from ever being visible; `store_site_files` fsyncs the directory once all of them are durable.
+fn write_blob(directory: &Path, hash: &str, content: &str) -> Result<()> {
+    let path = directory.join(hash);
+    if path.exists() {
+        // Another instance's cleanup removes a blob no journal on disk references yet. A fresh
+        // modification time keeps this one inside the grace period until the entry lands.
+        if let Ok(file) = File::options().write(true).open(&path) {
+            let _ = file.set_modified(SystemTime::now());
+        }
+        return Ok(());
+    }
+    atomic_write_unsynced(
+        &path,
+        |file| file.write_all(content.as_bytes()).map_err(io),
+        false,
+    )
+}
+
+/// Rebuild a project whose imported site files were stored out of line. The entry hashes the
+/// stripped project, while `decode_project` hashes the fully restored one, exactly as a saved
+/// file does, so recovery reports the same source checksum either way.
+fn restore_site_files(
+    journal: &Path,
+    project: &[u8],
+    expected_sha256: &str,
+    files: &BTreeMap<String, String>,
+) -> Result<DecodedProject> {
+    if digest(project) != expected_sha256 {
+        return Err(Error(
+            "The project source failed its integrity check.".into(),
+        ));
+    }
+    if files.is_empty() {
+        return decode_project(project);
+    }
+    let mut total = project.len() as u64;
+    let mut contents = BTreeMap::new();
+    for (path, hash) in files {
+        contents.insert(path.clone(), read_blob(journal, hash, &mut total)?);
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(project)
+        .map_err(|error| Error(format!("A recovery entry is damaged: {error}")))?;
+    let website = value
+        .get_mut("website")
+        .filter(|website| !website.is_null())
+        .ok_or_else(|| Error("The recovery entry's site files do not match its project.".into()))?;
+    website["files"] = serde_json::to_value(contents).map_err(io)?;
+    let restored = serde_json::to_vec(&value).map_err(io)?;
+    decode_project(&restored)
+}
+
+fn read_blob(journal: &Path, hash: &str, total: &mut u64) -> Result<String> {
+    if hash.len() != 64
+        || !hash
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
+        return Err(Error(
+            "The recovery entry contains an invalid site file reference.".into(),
+        ));
+    }
+    let damaged = || Error("A recovery file is missing or damaged.".into());
+    let file = File::open(blobs_directory(journal).join(hash)).map_err(|_| damaged())?;
+    let remaining = MAX_MODEL_BYTES.saturating_sub(*total);
+    let mut bytes = Vec::new();
+    file.take(remaining + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    if bytes.len() as u64 > remaining {
+        return Err(Error(
+            "The recovery entry exceeds the model size limit.".into(),
+        ));
+    }
+    if digest(&bytes) != hash {
+        return Err(damaged());
+    }
+    let content = String::from_utf8(bytes).map_err(|_| damaged())?;
+    *total += content.len() as u64;
+    Ok(content)
+}
+
+/// Remove journals of closed sessions, and site files that no remaining journal references.
+/// `keep` holds the journal file names every recovery pointer still refers to; `is_closed`
+/// reports whether no running instance owns a project. Nothing else in the directory is touched.
+pub fn clean_journals(
+    directory: &Path,
+    keep: &BTreeSet<String>,
+    is_closed: impl Fn(Uuid) -> bool,
+) -> Result<JournalCleanup> {
+    let mut report = JournalCleanup::default();
+    let mut remaining = BTreeSet::new();
+    for entry in fs::read_dir(directory).map_err(io)? {
+        let entry = entry.map_err(io)?;
+        let file_type = entry.file_type().map_err(io)?;
+        if file_type.is_symlink() || !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !name.ends_with(".journal") {
+            continue;
+        }
+        let closed = !keep.contains(name)
+            && older_than(&entry.metadata().map_err(io)?, JOURNAL_GRACE)
+            && journal_project_id(name).is_some_and(&is_closed);
+        if closed {
+            fs::remove_file(entry.path()).map_err(io)?;
+            report.journals += 1;
+        } else {
+            remaining.insert(name.to_owned());
+        }
+    }
+    let mut referenced = BTreeSet::new();
+    for name in &remaining {
+        match journal_blob_hashes(&directory.join(name)) {
+            Ok(hashes) => referenced.extend(hashes),
+            // An unparsed journal might reference any site file, so keep them all.
+            Err(_) => return Ok(report),
+        }
+    }
+    let blobs = directory.join("blobs");
+    let entries = match fs::read_dir(&blobs) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(report),
+        Err(error) => return Err(io(error)),
+    };
+    for entry in entries {
+        let entry = entry.map_err(io)?;
+        let file_type = entry.file_type().map_err(io)?;
+        if file_type.is_symlink() || !file_type.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if referenced.contains(name) || !older_than(&entry.metadata().map_err(io)?, BLOB_GRACE) {
+            continue;
+        }
+        fs::remove_file(entry.path()).map_err(io)?;
+        report.blobs += 1;
+    }
+    Ok(report)
+}
+
+fn older_than(metadata: &fs::Metadata, grace: Duration) -> bool {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > grace)
+}
+
+/// Journal files are `<project uuid>-<session uuid>.journal`; other names are left alone.
+fn journal_project_id(name: &str) -> Option<Uuid> {
+    let stem = name.strip_suffix(".journal")?;
+    let (project, session) = stem.split_at(stem.len().checked_sub(37)?);
+    let session = session.strip_prefix('-')?;
+    let project_id = Uuid::parse_str(project).ok()?;
+    let session_id = Uuid::parse_str(session).ok()?;
+    (project_id.to_string() == project && session_id.to_string() == session).then_some(project_id)
+}
+
+fn journal_blob_hashes(path: &Path) -> Result<BTreeSet<String>> {
+    let bytes = read_journal(path)?;
+    let mut hashes = BTreeSet::new();
+    for line in bytes.split_inclusive(|b| *b == b'\n') {
+        if !line.ends_with(b"\n") {
+            // A torn tail may hide references, so treat the whole journal as unreadable.
+            return Err(Error("A recovery entry is damaged.".into()));
+        }
+        let entry: StoredJournalEntry<'_> = serde_json::from_slice(line)
+            .map_err(|e| Error(format!("A recovery entry is damaged: {e}")))?;
+        if let Some(files) = entry.files {
+            hashes.extend(files.into_values());
+        }
+    }
+    Ok(hashes)
 }
 
 pub fn write_markdown(path: &Path, markdown: &str) -> Result<()> {
@@ -736,6 +1053,17 @@ fn atomic_write(
     write: impl FnOnce(&mut File) -> Result<()>,
     backup: bool,
 ) -> Result<()> {
+    atomic_write_unsynced(path, write, backup)?;
+    sync_parent(path)
+}
+
+/// `atomic_write` without the directory fsync, so a batch of files in one directory pays for a
+/// single one. The caller must sync the directory before the files are referenced.
+fn atomic_write_unsynced(
+    path: &Path,
+    write: impl FnOnce(&mut File) -> Result<()>,
+    backup: bool,
+) -> Result<()> {
     let parent = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -756,8 +1084,7 @@ fn atomic_write(
         if backup && path.exists() {
             backup_file(path)?;
         }
-        fs::rename(&temporary, path).map_err(io)?;
-        sync_parent(path)
+        fs::rename(&temporary, path).map_err(io)
     })();
     if operation.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -783,17 +1110,18 @@ fn backup_file(path: &Path) -> Result<()> {
 }
 
 fn sync_parent(path: &Path) -> Result<()> {
-    #[cfg(unix)]
-    File::open(
+    sync_directory(
         path.parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new(".")),
     )
-    .map_err(io)?
-    .sync_all()
-    .map_err(io)?;
+}
+
+fn sync_directory(directory: &Path) -> Result<()> {
+    #[cfg(unix)]
+    File::open(directory).map_err(io)?.sync_all().map_err(io)?;
     #[cfg(not(unix))]
-    let _ = path;
+    let _ = directory;
     Ok(())
 }
 
@@ -803,31 +1131,324 @@ pub use website_export::{WrittenWebsiteExport, write_website_export};
 #[cfg(test)]
 mod journal_tests {
     use super::*;
-    use desegni_core::{Appearance, Viewport};
+    use desegni_core::{Appearance, ImportedWebsite, Viewport};
 
-    #[test]
-    fn an_appended_entry_is_the_serialized_journal_entry_and_recovers() {
+    fn directory() -> PathBuf {
         let directory = std::env::temp_dir().join(format!("desegnos-journal-{}", Uuid::new_v4()));
         fs::create_dir(&directory).unwrap();
-        let project = Project::new(
-            "Journaled".into(),
+        directory
+    }
+
+    fn project(name: &str) -> Project {
+        Project::new(
+            name.into(),
             Viewport {
                 width: 390,
                 height: 844,
             },
             Appearance::Dark,
         )
-        .unwrap();
+        .unwrap()
+    }
+
+    fn site_project(name: &str, files: &[(&str, &str)]) -> Project {
+        let mut project = project(name);
+        let page_id = project.pages[0].id;
+        project.website = Some(ImportedWebsite {
+            page_files: BTreeMap::from([(page_id, "index.html".into())]),
+            files: files
+                .iter()
+                .map(|(path, content)| ((*path).into(), Arc::from(*content)))
+                .collect(),
+            framework: None,
+            skipped: vec![],
+        });
+        project
+    }
+
+    fn journal_line(journal: &Journal) -> String {
+        let bytes = fs::read(journal.path()).unwrap();
+        String::from_utf8(bytes.strip_suffix(b"\n").unwrap().to_vec()).unwrap()
+    }
+
+    fn write_line(path: &Path, line: &str) {
+        fs::write(path, format!("{line}\n")).unwrap();
+    }
+
+    fn age(path: &Path, duration: Duration) {
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - duration)
+            .unwrap();
+    }
+
+    fn blob_modified(directory: &Path) -> BTreeMap<String, SystemTime> {
+        fs::read_dir(directory)
+            .unwrap()
+            .flatten()
+            .map(|entry| {
+                (
+                    entry.file_name().to_string_lossy().into_owned(),
+                    entry.metadata().unwrap().modified().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_appended_entry_is_the_serialized_journal_entry_and_recovers() {
+        let directory = directory();
+        let project = project("Journaled");
         let journal = Journal::new(&directory, project.id).unwrap();
         journal.append(&project).unwrap();
         let mut expected = serde_json::to_vec(&JournalEntry {
             sha256: digest(&serde_json::to_vec(&project).unwrap()),
             project: project.clone(),
+            files: BTreeMap::new(),
         })
         .unwrap();
         expected.push(b'\n');
         assert_eq!(fs::read(journal.path()).unwrap(), expected);
         assert_eq!(Journal::recover(journal.path()).unwrap(), Some(project));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn site_files_are_written_once_and_recover_with_the_saved_source_hash() {
+        let directory = directory();
+        let html = format!("<html><body>{}</body></html>", "Home ".repeat(1000));
+        let css = "body { margin: 0 }";
+        let project = site_project("Site", &[("index.html", &html), ("assets/site.css", css)]);
+        let journal = Journal::new(&directory, project.id).unwrap();
+        journal.append(&project).unwrap();
+
+        let blobs = directory.join("blobs");
+        let html_hash = digest(html.as_bytes());
+        assert_eq!(fs::read(blobs.join(&html_hash)).unwrap(), html.as_bytes());
+        assert_eq!(
+            fs::read(blobs.join(digest(css.as_bytes()))).unwrap(),
+            css.as_bytes()
+        );
+        assert_eq!(blob_modified(&blobs).len(), 2);
+        let entry: serde_json::Value = serde_json::from_str(&journal_line(&journal)).unwrap();
+        assert_eq!(
+            entry["project"]["website"]["files"],
+            serde_json::json!({}),
+            "the journal must not repeat the site files in the project"
+        );
+        assert_eq!(entry["files"]["index.html"], html_hash);
+        assert_eq!(entry["files"]["assets/site.css"], digest(css.as_bytes()));
+        assert_eq!(entry.as_object().unwrap().len(), 3);
+
+        let before = blob_modified(&blobs);
+        let mut edited = project.clone();
+        edited.revision += 1;
+        edited.name = "Site edited".into();
+        journal.append(&edited).unwrap();
+        assert_eq!(
+            blob_modified(&blobs),
+            before,
+            "unchanged site files must not be hashed or rewritten"
+        );
+        let document = Journal::recover_document(journal.path()).unwrap().unwrap();
+        assert_eq!(document.project, edited);
+        // Recovery reports the checksum of the full project, as a saved file does.
+        let saved = decode_project(&serde_json::to_vec(&edited).unwrap()).unwrap();
+        assert_eq!(document.source_sha256, saved.source_sha256);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_existing_site_file_stays_recent_when_another_journal_reuses_it() {
+        let directory = directory();
+        let project = site_project("Shared", &[("index.html", "<h1>Home</h1>")]);
+        Journal::new(&directory, project.id)
+            .unwrap()
+            .append(&project)
+            .unwrap();
+        let blob = directory.join("blobs").join(digest(b"<h1>Home</h1>"));
+        age(&blob, Duration::from_secs(2 * 60 * 60));
+        let before = fs::metadata(&blob).unwrap().modified().unwrap();
+        // A second session appends the same site, so the blob is reused instead of rewritten.
+        // Its modification time must move forward, or another instance's cleanup would be free
+        // to remove it as an orphan before the entry that references it is written.
+        Journal::new(&directory, project.id)
+            .unwrap()
+            .append(&project)
+            .unwrap();
+        let metadata = fs::metadata(&blob).unwrap();
+        assert_eq!(fs::read(&blob).unwrap(), b"<h1>Home</h1>");
+        assert!(
+            metadata.modified().unwrap() > before,
+            "reusing a site file must refresh its modification time"
+        );
+        assert!(!older_than(&metadata, BLOB_GRACE));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_old_single_file_journal_still_recovers() {
+        let directory = directory();
+        let project = site_project("Old journal", &[("index.html", "<h1>Old</h1>")]);
+        let path = directory.join(format!("{}-{}.journal", project.id, Uuid::new_v4()));
+        let project_bytes = serde_json::to_vec(&project).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"{\"sha256\":\"");
+        bytes.extend_from_slice(digest(&project_bytes).as_bytes());
+        bytes.extend_from_slice(b"\",\"project\":");
+        bytes.extend_from_slice(&project_bytes);
+        bytes.extend_from_slice(b"}\n");
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(Journal::recover(&path).unwrap(), Some(project));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_tampered_stripped_project_is_rejected() {
+        let directory = directory();
+        let project = site_project("Tampered", &[("index.html", "<h1>Home</h1>")]);
+        let journal = Journal::new(&directory, project.id).unwrap();
+        journal.append(&project).unwrap();
+        let line =
+            journal_line(&journal).replace("\"name\":\"Tampered\"", "\"name\":\"Tampered!\"");
+        write_line(journal.path(), &line);
+        let error = Journal::recover(journal.path()).unwrap_err();
+        assert!(error.to_string().contains("integrity check"), "{error}");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_tampered_site_file_is_rejected() {
+        let directory = directory();
+        let project = site_project("Damaged", &[("index.html", "<h1>Home</h1>")]);
+        let journal = Journal::new(&directory, project.id).unwrap();
+        journal.append(&project).unwrap();
+        fs::write(
+            directory.join("blobs").join(digest(b"<h1>Home</h1>")),
+            b"<h1>Fake</h1>",
+        )
+        .unwrap();
+        let error = Journal::recover(journal.path()).unwrap_err();
+        assert_eq!(error.to_string(), "A recovery file is missing or damaged.");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_missing_site_file_is_rejected() {
+        let directory = directory();
+        let project = site_project("Missing", &[("index.html", "<h1>Home</h1>")]);
+        let journal = Journal::new(&directory, project.id).unwrap();
+        journal.append(&project).unwrap();
+        fs::remove_file(directory.join("blobs").join(digest(b"<h1>Home</h1>"))).unwrap();
+        let error = Journal::recover(journal.path()).unwrap_err();
+        assert_eq!(error.to_string(), "A recovery file is missing or damaged.");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn an_invalid_site_file_reference_is_rejected() {
+        let directory = directory();
+        let project = site_project("Traversal", &[("index.html", "<h1>Home</h1>")]);
+        let journal = Journal::new(&directory, project.id).unwrap();
+        journal.append(&project).unwrap();
+        let line = journal_line(&journal);
+        let reference = format!("\"index.html\":\"{}\"", digest(b"<h1>Home</h1>"));
+        assert!(line.contains(&reference));
+        write_line(
+            journal.path(),
+            &line.replace(&reference, "\"index.html\":\"../x\""),
+        );
+        let error = Journal::recover(journal.path()).unwrap_err();
+        assert!(
+            error.to_string().contains("invalid site file reference"),
+            "{error}"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cleaning_keeps_referenced_journals_and_removes_closed_and_orphaned_files() {
+        let directory = directory();
+        let referenced = site_project("Referenced", &[("index.html", "<h1>Referenced</h1>")]);
+        let closed = project("Closed");
+        let open = project("Open");
+        let recent = project("Recent");
+        let referenced_journal = Journal::new(&directory, referenced.id).unwrap();
+        referenced_journal.append(&referenced).unwrap();
+        let closed_journal = Journal::new(&directory, closed.id).unwrap();
+        closed_journal.append(&closed).unwrap();
+        let open_journal = Journal::new(&directory, open.id).unwrap();
+        open_journal.append(&open).unwrap();
+        let recent_journal = Journal::new(&directory, recent.id).unwrap();
+        recent_journal.append(&recent).unwrap();
+        let keep = BTreeSet::from([referenced_journal
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()]);
+        let two_hours = Duration::from_secs(2 * 60 * 60);
+        for journal in [&referenced_journal, &closed_journal, &open_journal] {
+            age(journal.path(), two_hours);
+        }
+        let blobs = directory.join("blobs");
+        let referenced_blob = blobs.join(digest(b"<h1>Referenced</h1>"));
+        age(&referenced_blob, two_hours);
+        let orphan = blobs.join(digest(b"orphan"));
+        fs::write(&orphan, b"orphan").unwrap();
+        age(&orphan, two_hours);
+        let fresh = blobs.join(digest(b"fresh"));
+        fs::write(&fresh, b"fresh").unwrap();
+
+        let report = clean_journals(&directory, &keep, |id| id != open.id).unwrap();
+        assert_eq!(
+            report,
+            JournalCleanup {
+                journals: 1,
+                blobs: 1
+            }
+        );
+        assert!(referenced_journal.path().exists());
+        assert!(!closed_journal.path().exists());
+        assert!(
+            open_journal.path().exists(),
+            "an open project keeps its journal"
+        );
+        assert!(
+            recent_journal.path().exists(),
+            "a fresh journal is never removed"
+        );
+        assert!(referenced_blob.exists(), "a referenced site file stays");
+        assert!(!orphan.exists(), "an old unreferenced site file is removed");
+        assert!(
+            fresh.exists(),
+            "a fresh site file may belong to a journal being written"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn cleaning_keeps_all_site_files_when_a_remaining_journal_cannot_be_read() {
+        let directory = directory();
+        let name = format!("{}-{}.journal", Uuid::new_v4(), Uuid::new_v4());
+        let broken = directory.join(&name);
+        fs::write(&broken, b"{not a journal").unwrap();
+        age(&broken, Duration::from_secs(2 * 60 * 60));
+        let blobs = directory.join("blobs");
+        fs::create_dir(&blobs).unwrap();
+        let orphan = blobs.join(digest(b"orphan"));
+        fs::write(&orphan, b"orphan").unwrap();
+        age(&orphan, Duration::from_secs(2 * 60 * 60));
+
+        let report = clean_journals(&directory, &BTreeSet::from([name]), |_| true).unwrap();
+        assert_eq!(report, JournalCleanup::default());
+        assert!(
+            broken.exists(),
+            "a journal that cannot be parsed is left alone"
+        );
+        assert!(orphan.exists(), "it might reference any site file");
         fs::remove_dir_all(directory).unwrap();
     }
 }
