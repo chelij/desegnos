@@ -107,12 +107,7 @@ pub fn record_usage(window: WebviewWindow, events: Vec<UsageEvent>) -> Result<()
         .map_err(|error| error.to_string())?
         .as_secs() as i64
         / 86_400;
-    let directory = window
-        .app_handle()
-        .path()
-        .app_local_data_dir()
-        .map_err(|error| error.to_string())?
-        .join("usage");
+    let directory = crate::data_location::directory(window.app_handle()).join("usage");
     append(&directory, today, &events)
 }
 

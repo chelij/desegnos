@@ -354,8 +354,11 @@ impl Workspace {
             .map_err(message)
     }
 
-    pub fn initialize(app: &AppHandle) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut workspace = Self::from_directory(app.path().app_local_data_dir()?)?;
+    pub fn initialize(
+        app: &AppHandle,
+        directory: PathBuf,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut workspace = Self::from_directory(directory)?;
         workspace.site = app
             .state::<Mutex<crate::local_site::LocalSite>>()
             .lock()
@@ -2321,7 +2324,7 @@ pub async fn open_project(
     } else {
         let picked = tauri::async_runtime::spawn_blocking(move || {
             let dialog = app.dialog().file();
-            if folder.unwrap_or(false) {
+            crate::file_dialogs::picked(if folder.unwrap_or(false) {
                 dialog
                     .set_title("Open project folder")
                     .blocking_pick_folder()
@@ -2332,10 +2335,10 @@ pub async fn open_project(
                         &desegni_storage::PROJECT_FILE_EXTENSIONS,
                     )
                     .blocking_pick_file()
-            }
+            })
         })
         .await
-        .map_err(message)?;
+        .map_err(message)??;
         let Some(picked) = picked else {
             return Ok(None);
         };
@@ -2380,17 +2383,19 @@ pub async fn save_project(
     };
     let picked = if choose_path {
         let picked = tauri::async_runtime::spawn_blocking(move || {
-            app.dialog()
-                .file()
-                .add_filter(
-                    "Desegnos website",
-                    &desegni_storage::PROJECT_FILE_EXTENSIONS,
-                )
-                .set_file_name("website.desegnos")
-                .blocking_save_file()
+            crate::file_dialogs::picked(
+                app.dialog()
+                    .file()
+                    .add_filter(
+                        "Desegnos website",
+                        &desegni_storage::PROJECT_FILE_EXTENSIONS,
+                    )
+                    .set_file_name("website.desegnos")
+                    .blocking_save_file(),
+            )
         })
         .await
-        .map_err(message)?;
+        .map_err(message)??;
         let Some(picked) = picked else {
             return Ok(None);
         };
@@ -2407,17 +2412,19 @@ pub async fn save_project(
 
 async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Option<PathBuf>> {
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .add_filter(
-                "Desegnos website",
-                &desegni_storage::PROJECT_FILE_EXTENSIONS,
-            )
-            .set_file_name(suggested)
-            .blocking_save_file()
+        crate::file_dialogs::picked(
+            app.dialog()
+                .file()
+                .add_filter(
+                    "Desegnos website",
+                    &desegni_storage::PROJECT_FILE_EXTENSIONS,
+                )
+                .set_file_name(suggested)
+                .blocking_save_file(),
+        )
     })
     .await
-    .map_err(message)?;
+    .map_err(message)??;
     picked
         .map(|picked| picked.into_path().map_err(message))
         .transpose()
@@ -2586,14 +2593,16 @@ pub async fn save_requirements(
         .filter(|p| p.job_id.to_string() == job_id)
         .ok_or("Prepare the requirements again before saving them.")?;
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .add_filter("Markdown document", &["md"])
-            .set_file_name("REQUIREMENTS.md")
-            .blocking_save_file()
+        crate::file_dialogs::picked(
+            app.dialog()
+                .file()
+                .add_filter("Markdown document", &["md"])
+                .set_file_name("REQUIREMENTS.md")
+                .blocking_save_file(),
+        )
     })
     .await
-    .map_err(message)?;
+    .map_err(message)??;
     let Some(picked) = picked else {
         return Ok(false);
     };

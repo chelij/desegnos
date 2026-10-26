@@ -89,13 +89,15 @@ pub async fn pick_website_folder(
     state: State<'_, Mutex<WebsiteImports>>,
 ) -> Result<Option<FolderSelection>, String> {
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .set_title("Choose website or brand folder")
-            .blocking_pick_folder()
+        crate::file_dialogs::picked(
+            app.dialog()
+                .file()
+                .set_title("Choose website or brand folder")
+                .blocking_pick_folder(),
+        )
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())??;
     picked
         .map(|p| {
             state

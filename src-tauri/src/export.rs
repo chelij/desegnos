@@ -96,13 +96,15 @@ async fn perform(
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .set_title("Choose where to export your website")
-            .blocking_pick_folder()
+        crate::file_dialogs::picked(
+            app.dialog()
+                .file()
+                .set_title("Choose where to export your website")
+                .blocking_pick_folder(),
+        )
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())??;
     let Some(picked) = picked else {
         return Ok(None);
     };

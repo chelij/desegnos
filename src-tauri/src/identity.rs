@@ -860,13 +860,8 @@ fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) ->
 }
 
 impl IdentityService {
-    pub fn initialize(app: &AppHandle) -> NativeResult<Self> {
-        let directory = app
-            .path()
-            .app_local_data_dir()
-            .map_err(error)?
-            .join("identity");
-        Ok(Self::recover_or_report(directory))
+    pub fn initialize(data: &Path) -> Self {
+        Self::recover_or_report(data.join("identity"))
     }
     fn recover_or_report(directory: PathBuf) -> Self {
         Self::from_directory(directory.clone()).unwrap_or_else(|reason| {
@@ -1550,7 +1545,7 @@ pub async fn pick_identity_source(
     trusted(&window)?;
     let selection = tauri::async_runtime::spawn_blocking(move || {
         let dialog = app.dialog().file();
-        let picked = match kind {
+        let picked = crate::file_dialogs::picked(match kind {
             IdentitySourceKind::File => dialog
                 .add_filter(
                     "Project, ZIP or HTML files",
@@ -1558,7 +1553,7 @@ pub async fn pick_identity_source(
                 )
                 .blocking_pick_files(),
             IdentitySourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
-        };
+        })?;
         let Some(picked) = picked else {
             return Ok(None);
         };

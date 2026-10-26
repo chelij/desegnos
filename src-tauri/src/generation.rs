@@ -531,13 +531,8 @@ impl GenerationService {
             &self.image_access,
         )
     }
-    pub fn initialize(app: &AppHandle) -> NativeResult<Self> {
-        Self::from_directory(
-            app.path()
-                .app_local_data_dir()
-                .map_err(message)?
-                .join("generation"),
-        )
+    pub fn initialize(data: &Path) -> NativeResult<Self> {
+        Self::from_directory(data.join("generation"))
     }
 
     fn from_directory(directory: PathBuf) -> NativeResult<Self> {

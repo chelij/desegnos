@@ -117,6 +117,8 @@ The current format is schema 8. Schemas 1–7 migrate with their original prompt
 
 Each accepted edit first writes durable local recovery. Ownership locks prevent concurrent writers to the same project. Separate projects retain separate recoveries. Explicit recovery detaches when the original file is missing, damaged or no longer matches its identity/revision. Undo retains 200 in-memory steps and creates forward revisions. Restart restores accepted state, not the former undo stack. Consumed generation IDs survive Undo so duplicate Apply is harmless. Private generation records retain frozen requests, attempts, usage and safety checkpoints separately from project archives.
 
+Desegnos keeps its own data (recoveries, recent projects, AI settings, usage records) in the OS application-data folder. At startup it checks that folder can be written. When it cannot — a read-only disk, a full disk, or a folder without permission — Desegnos says so and offers **Choose another folder…**; the chosen folder is remembered in `data-location.json` in the app's configuration folder. Setting `DESEGNOS_DATA_DIR` overrides both the platform default and a remembered choice for one run, which suits tests and portable installs. On Linux, file dialogs also need the desktop portal (`xdg-desktop-portal` plus a backend such as `xdg-desktop-portal-gtk`).
+
 ## Code boundaries
 
 | Location | Responsibility |

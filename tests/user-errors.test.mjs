@@ -58,6 +58,8 @@ try {
     assert.equal(userError("This page's code is too large to preview (17 MB)."), "This page's code is too large to preview (17 MB).");
     assert.equal(userError('The complete preview exceeds the 64 MiB local limit.'), 'This page is too large to preview. Try a smaller page.');
     assert.equal(userError('../private/index.html is too large to preview (90 MB).'), 'This page is too large to preview. Try a smaller page.');
+    const portal = 'File dialogs need the desktop portal. Install xdg-desktop-portal and a backend such as xdg-desktop-portal-gtk, then try again.';
+    assert.equal(userError(portal), portal);
     for (const raw of ['Error: bad\n at script.js:12', 'Unknown /private/file', 'Could not match #secret', 'Could not match .secret', 'Could not read private.json', 'Unknown 561acc85-1234-1234-1234-123456789012']) {
       const plain = userError(raw);
       assert.doesNotMatch(plain, /private|secret|script\.js|561acc85|Error:|\n/);

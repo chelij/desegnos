@@ -18,7 +18,7 @@ default = ["portal-dialogs"]
 custom-protocol = ["tauri/custom-protocol"]
 # File dialogs use the desktop portal. rfd allows only one Linux backend, so native test builds
 # turn defaults off and use in-process GTK dialogs: the guarded Xvfb display has no portal.
-portal-dialogs = ["tauri-plugin-dialog/xdg-portal"]
+portal-dialogs = ["tauri-plugin-dialog/xdg-portal", "dep:zbus"]
 gtk-dialogs = ["tauri-plugin-dialog/gtk3"]
 native-tests = ["dep:tauri-plugin-wdio-webdriver", "desegni-ai/test-support"]
 
@@ -44,6 +44,8 @@ time = { version = "=0.3.55", features = ["formatting"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 webkit2gtk = "=2.0.2"
+# Asking the session bus whether the desktop portal is there. Same version as ashpd's.
+zbus = { version = "5", optional = true }
 
 [dev-dependencies]
 desegni-ai = { path = "../crates/desegni-ai", features = ["test-support"] }

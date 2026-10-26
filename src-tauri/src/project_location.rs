@@ -80,13 +80,17 @@ pub fn get_project_location(
 
 #[tauri::command]
 pub async fn pick_project_location(app: AppHandle) -> Result<Option<PathBuf>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .set_title("Choose project location")
-            .blocking_pick_folder()
-            .map(|p| p.into_path().map_err(|e| e.to_string()))
-            .transpose()
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<PathBuf>, String> {
+        let Some(picked) = crate::file_dialogs::picked(
+            app.dialog()
+                .file()
+                .set_title("Choose project location")
+                .blocking_pick_folder(),
+        )?
+        else {
+            return Ok(None);
+        };
+        picked.into_path().map(Some).map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?
