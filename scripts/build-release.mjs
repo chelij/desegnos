@@ -17,10 +17,14 @@ async function runCommand(program, args, { env, capture = false }) {
   return output;
 }
 
-export async function buildRelease({ run = runCommand, inspect = stat, env = toolchainEnvironment(), platform = process.platform } = {}) {
+// Local rebuilds skip link-time optimization and use parallel, incremental codegen: about a
+// minute instead of four after a change. --dist keeps the full release profile for publishing.
+export const localProfile = { CARGO_PROFILE_RELEASE_LTO: 'false', CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16', CARGO_PROFILE_RELEASE_INCREMENTAL: 'true' };
+
+export async function buildRelease({ run = runCommand, inspect = stat, env = toolchainEnvironment(), platform = process.platform, dist = false } = {}) {
   // Tauri runs the frontend build before embedding it. Keep default dialog features.
   await run(process.execPath, [join(root, 'scripts/tauri.mjs'), 'build', '--no-bundle', '--features', 'custom-protocol',
-    '--config', JSON.stringify({ build: { beforeBuildCommand: 'npm run build' } })], { env });
+    '--config', JSON.stringify({ build: { beforeBuildCommand: 'npm run build' } })], { env: dist ? env : { ...env, ...localProfile } });
   const metadata = JSON.parse(await run('cargo', ['metadata', '--offline', '--no-deps', '--format-version', '1'], { env, capture: true }));
   const target = env.CARGO_BUILD_TARGET;
   const windows = target ? target.includes('windows') : platform === 'win32';
@@ -35,6 +39,6 @@ export async function buildRelease({ run = runCommand, inspect = stat, env = too
 const entry = process.argv[1] && resolve(process.argv[1]);
 const script = fileURLToPath(import.meta.url);
 if (entry && (process.platform === 'win32' ? entry.toLowerCase() === script.toLowerCase() : entry === script)) {
-  try { await buildRelease(); }
+  try { await buildRelease({ dist: process.argv.includes('--dist') }); }
   catch (error) { console.error(`Desegnos release: ${error.message}`); process.exitCode = 1; }
 }

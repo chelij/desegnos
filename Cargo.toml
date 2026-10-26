@@ -20,6 +20,11 @@ unsafe_code = "forbid"
 
 # Picture decoding, scaling and previews are far too slow unoptimised; keep them fast in
 # debug builds and native tests too.
+# Backtraces keep file and line numbers; dropping full variable info makes dev and test
+# binaries several times smaller and faster to link.
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dev.package.image]
 opt-level = 3
 

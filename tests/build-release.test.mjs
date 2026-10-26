@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { join } from 'node:path';
-import { buildRelease } from '../scripts/build-release.mjs';
+import { buildRelease, localProfile } from '../scripts/build-release.mjs';
 
 // Exercise orchestration without invoking Cargo, building Rust, or launching an app.
 for (const [platform, target, executable, startup] of [
@@ -30,9 +30,17 @@ for (const [platform, target, executable, startup] of [
     assert.deepEqual(inspected, [binary]);
     assert.equal(calls.length, startup ? 3 : 2);
     if (startup) assert.deepEqual(calls[2].args.slice(1), ['--binary', binary]);
-    for (const call of calls) assert.equal(call.options.env, env);
+    assert.deepEqual(calls[0].options.env, { ...env, ...localProfile });
+    for (const call of calls.slice(1)) assert.equal(call.options.env, env);
   });
 }
+
+test('a distribution build keeps the full release profile', async () => {
+  const calls = [], env = {};
+  await buildRelease({ platform: 'darwin', env, dist: true, inspect: async () => ({ size: 1, mtime: new Date(0) }),
+    run: async (program, args, options) => { calls.push(options.env); return JSON.stringify({ target_directory: 'target' }); } });
+  for (const used of calls) assert.equal(used, env);
+});
 
 test('a failed release build stops before inspecting or launching an executable', async () => {
   let calls = 0;
