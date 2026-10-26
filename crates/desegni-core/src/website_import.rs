@@ -3,7 +3,7 @@ use crate::{Appearance, Error, Page, Project, Result, SiteContent, Viewport, ens
 use base64::{Engine, engine::general_purpose::STANDARD};
 use cssparser::{Parser, ParserInput, Token};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use url::Url;
 use uuid::Uuid;
 
@@ -536,12 +536,55 @@ pub const PREVIEW_INLINE_BYTES: usize = 1024 * 1024;
 const PREVIEW_ASSET_DIRECTORY: &str = "__desegnos_assets__";
 
 /// One preview resource. Inline bytes are copied into a session; encoded and picture values
-/// point at bytes the project already shares, so sessions never multiply a site's memory.
+/// point at bytes the project already shares, and a rendered page builds its bytes on first use.
 #[derive(Clone)]
 pub enum PreviewFile {
     Inline(Arc<[u8]>),
     Encoded(Arc<str>),
     Picture(Arc<str>),
+    /// A live page that renders the first time it is served, not when the package is built.
+    Rendered(Arc<LivePage>),
+}
+
+/// One page of a live package, rendered against the package's shared inline sources on demand.
+pub struct LivePage {
+    source: String,
+    render: Arc<BTreeMap<String, Vec<u8>>>,
+    text_limit: usize,
+    rendered: OnceLock<std::result::Result<Arc<[u8]>, String>>,
+}
+
+impl LivePage {
+    pub fn bytes(&self) -> Result<Arc<[u8]>> {
+        match self
+            .rendered
+            .get_or_init(|| self.render().map_err(|error| error.0))
+        {
+            Ok(bytes) => Ok(bytes.clone()),
+            Err(error) => Err(Error(error.clone())),
+        }
+    }
+
+    fn render(&self) -> Result<Arc<[u8]>> {
+        let importer = Importer {
+            keep_scripts: true,
+            files: &self.render,
+            routes: BTreeMap::new(),
+            pictures: BTreeMap::new(),
+        };
+        let (_, content) = importer.page(&self.source)?;
+        let bytes = content.html.into_bytes();
+        ensure(
+            bytes.len() <= self.text_limit,
+            preview_too_large(&self.source, bytes.len()),
+        )?;
+        Ok(bytes.into())
+    }
+
+    #[cfg(test)]
+    fn is_rendered(&self) -> bool {
+        self.rendered.get().is_some()
+    }
 }
 
 impl PreviewFile {
@@ -549,6 +592,7 @@ impl PreviewFile {
     pub fn inline_len(&self) -> Option<usize> {
         match self {
             Self::Inline(bytes) => Some(bytes.len()),
+            Self::Rendered(page) => page.bytes().ok().map(|bytes| bytes.len()),
             Self::Encoded(_) | Self::Picture(_) => None,
         }
     }
@@ -557,6 +601,7 @@ impl PreviewFile {
     pub fn decoded_len(&self) -> Option<usize> {
         match self {
             Self::Inline(bytes) => Some(bytes.len()),
+            Self::Rendered(page) => page.bytes().ok().map(|bytes| bytes.len()),
             Self::Encoded(encoded) => base64_decoded_len(encoded),
             Self::Picture(uri) => base64_decoded_len(base64_body(uri)),
         }
@@ -565,17 +610,23 @@ impl PreviewFile {
     /// Bytes for an inclusive range, decoding only the base64 groups that cover it.
     pub fn read_range(&self, start: usize, end: usize) -> Result<Vec<u8>> {
         let body = match self {
-            Self::Inline(bytes) => {
-                return bytes
-                    .get(start..=end)
-                    .map(<[u8]>::to_vec)
-                    .ok_or_else(|| Error("The preview resource is unavailable.".into()));
+            Self::Inline(bytes) => return inline_range(bytes, start, end),
+            Self::Rendered(page) => {
+                let bytes = page.bytes()?;
+                return inline_range(&bytes, start, end);
             }
             Self::Encoded(encoded) => encoded,
             Self::Picture(uri) => base64_body(uri),
         };
         decode_base64_range(body, start, end)
     }
+}
+
+fn inline_range(bytes: &[u8], start: usize, end: usize) -> Result<Vec<u8>> {
+    bytes
+        .get(start..=end)
+        .map(<[u8]>::to_vec)
+        .ok_or_else(|| Error("The preview resource is unavailable.".into()))
 }
 
 fn base64_body(value: &str) -> &str {
@@ -631,6 +682,25 @@ fn preview_too_large(path: &str, bytes: usize) -> String {
         "{path} is too large to preview ({} MB).",
         bytes.div_ceil(1024 * 1024)
     )
+}
+
+fn check_preview_text(files: &BTreeMap<String, PreviewFile>, text_limit: usize) -> Result<()> {
+    let mut text_bytes = 0usize;
+    let mut largest: Option<(String, usize)> = None;
+    for (path, file) in files {
+        let Some(len) = file.inline_len().filter(|_| preview_text_path(path)) else {
+            continue;
+        };
+        text_bytes = text_bytes.saturating_add(len);
+        if largest.as_ref().is_none_or(|(_, size)| *size < len) {
+            largest = Some((path.clone(), len));
+        }
+    }
+    if text_bytes > text_limit {
+        let (path, len) = largest.expect("text bytes are attributed to a file");
+        return Err(Error(preview_too_large(&path, len)));
+    }
+    Ok(())
 }
 
 /// Original file layout and bounded local resources, retained across saves and recovery.
@@ -757,6 +827,25 @@ impl Project {
         run_scripts: bool,
         text_limit: usize,
     ) -> Result<Option<BTreeMap<String, PreviewFile>>> {
+        let Some(mut files) = self.website_preview_package(run_scripts, text_limit)? else {
+            return Ok(None);
+        };
+        for file in files.values_mut() {
+            let PreviewFile::Rendered(page) = file else {
+                continue;
+            };
+            *file = PreviewFile::Inline(page.bytes()?);
+        }
+        check_preview_text(&files, text_limit)?;
+        Ok(Some(files))
+    }
+
+    /// The same package with live pages deferred: each page renders only when it is served.
+    pub fn website_preview_package(
+        &self,
+        run_scripts: bool,
+        text_limit: usize,
+    ) -> Result<Option<BTreeMap<String, PreviewFile>>> {
         let Some(site) = &self.website else {
             return Ok(None);
         };
@@ -838,52 +927,35 @@ impl Project {
             )?;
             files.insert(path, PreviewFile::Inline(document.into_bytes().into()));
         }
+        // A rendered page is measured when it renders, so live packages are sized by their
+        // static text only; the eager caller checks the forced result again.
+        check_preview_text(&files, text_limit)?;
         if run_scripts {
             // Render scripts against inline sources only; larger files stay referenceable URLs.
-            let render: BTreeMap<String, Vec<u8>> = files
-                .iter()
-                .filter_map(|(path, file)| match file {
-                    PreviewFile::Inline(bytes) => Some((path.clone(), bytes.to_vec())),
-                    _ => None,
-                })
-                .collect();
-            let importer = Importer {
-                keep_scripts: true,
-                files: &render,
-                routes: BTreeMap::new(),
-                pictures: BTreeMap::new(),
-            };
-            let mut rendered = BTreeMap::new();
+            let render: Arc<BTreeMap<String, Vec<u8>>> = Arc::new(
+                files
+                    .iter()
+                    .filter_map(|(path, file)| match file {
+                        PreviewFile::Inline(bytes) => Some((path.clone(), bytes.to_vec())),
+                        _ => None,
+                    })
+                    .collect(),
+            );
             for source in site
                 .page_files
                 .values()
                 .filter(|source| render.contains_key(*source))
             {
-                let (_, content) = importer.page(source)?;
-                rendered.insert(source.clone(), content.html.into_bytes());
+                files.insert(
+                    source.clone(),
+                    PreviewFile::Rendered(Arc::new(LivePage {
+                        source: source.clone(),
+                        render: render.clone(),
+                        text_limit,
+                        rendered: OnceLock::new(),
+                    })),
+                );
             }
-            for (path, bytes) in rendered {
-                ensure(
-                    bytes.len() <= text_limit,
-                    preview_too_large(&path, bytes.len()),
-                )?;
-                files.insert(path, PreviewFile::Inline(bytes.into()));
-            }
-        }
-        let mut text_bytes = 0usize;
-        let mut largest: Option<(String, usize)> = None;
-        for (path, file) in &files {
-            let Some(len) = file.inline_len().filter(|_| preview_text_path(path)) else {
-                continue;
-            };
-            text_bytes = text_bytes.saturating_add(len);
-            if largest.as_ref().is_none_or(|(_, size)| *size < len) {
-                largest = Some((path.clone(), len));
-            }
-        }
-        if text_bytes > text_limit {
-            let (path, len) = largest.expect("text bytes are attributed to a file");
-            return Err(Error(preview_too_large(&path, len)));
         }
         Ok(Some(files))
     }
@@ -1026,5 +1098,165 @@ impl ImportedWebsite {
             "The imported framework name is invalid.",
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Project;
+
+    const LIMIT: usize = 16 * 1024 * 1024;
+
+    fn site() -> Project {
+        let files = BTreeMap::from([
+            ("index.html".into(), b"<!doctype html><html><head><link rel='stylesheet' href='/site.css'></head><body><h1>Home</h1><a href='about.html'>About</a><script type='module' src='main.js'></script></body></html>".to_vec()),
+            ("about.html".into(), b"<!doctype html><html><body><h1>About</h1><script>document.body.dataset.ready='yes';</script></body></html>".to_vec()),
+            ("contact.html".into(), b"<!doctype html><html><body><h1>Contact</h1></body></html>".to_vec()),
+            ("site.css".into(), b"h1{color:red}".to_vec()),
+            ("main.js".into(), b"import './module.js'; document.body.dataset.home='yes';".to_vec()),
+            ("module.js".into(), b"document.body.dataset.loaded='yes';".to_vec()),
+        ]);
+        crate::import_website_files("Website", &files).unwrap()
+    }
+
+    fn body(file: &PreviewFile) -> Vec<u8> {
+        let len = file.decoded_len().expect("inline resource");
+        if len == 0 {
+            return vec![];
+        }
+        file.read_range(0, len - 1).expect("range")
+    }
+
+    fn inline_files(files: &BTreeMap<String, PreviewFile>) -> BTreeMap<String, Vec<u8>> {
+        files
+            .iter()
+            .filter_map(|(path, file)| match file {
+                PreviewFile::Inline(bytes) => Some((path.clone(), bytes.to_vec())),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn live_pages_render_on_request_and_match_the_eager_package() {
+        let project = site();
+        let eager = project.website_preview_files(true, LIMIT).unwrap().unwrap();
+        let mut lazy = project
+            .website_preview_package(true, LIMIT)
+            .unwrap()
+            .unwrap();
+        let pages: BTreeSet<String> = project
+            .website
+            .as_ref()
+            .unwrap()
+            .page_files
+            .values()
+            .cloned()
+            .collect();
+        assert!(pages.len() > 1);
+        for path in &pages {
+            match &lazy[path] {
+                PreviewFile::Rendered(page) => {
+                    assert!(!page.is_rendered(), "{path} rendered eagerly");
+                }
+                _ => panic!("{path} is not a live page"),
+            }
+        }
+        for file in lazy.values_mut() {
+            let PreviewFile::Rendered(page) = file else {
+                continue;
+            };
+            *file = PreviewFile::Inline(page.bytes().unwrap());
+        }
+        assert_eq!(eager.len(), lazy.len());
+        for (path, file) in &eager {
+            assert_eq!(body(file), body(&lazy[path]), "{path}");
+        }
+        // The old algorithm rendered each page from the static inline sources.
+        let static_files = project
+            .website_preview_package(false, LIMIT)
+            .unwrap()
+            .unwrap();
+        let render = inline_files(&static_files);
+        let importer = Importer {
+            keep_scripts: true,
+            files: &render,
+            routes: BTreeMap::new(),
+            pictures: BTreeMap::new(),
+        };
+        for source in &pages {
+            let (_, content) = importer.page(source).unwrap();
+            assert_eq!(content.html.into_bytes(), body(&eager[source]), "{source}");
+        }
+    }
+
+    #[test]
+    fn render_errors_are_cached_and_read_as_unavailable() {
+        let file = PreviewFile::Rendered(Arc::new(LivePage {
+            source: "broken.html".into(),
+            render: Arc::new(BTreeMap::from([("broken.html".into(), vec![0xff])])),
+            text_limit: LIMIT,
+            rendered: OnceLock::new(),
+        }));
+        let PreviewFile::Rendered(page) = &file else {
+            unreachable!()
+        };
+        let error = page.bytes().unwrap_err();
+        assert_eq!(page.bytes().unwrap_err(), error);
+        assert_eq!(file.inline_len(), None);
+        assert_eq!(file.decoded_len(), None);
+        assert!(file.read_range(0, 0).is_err());
+    }
+
+    fn median(mut values: [f64; 5]) -> f64 {
+        values.sort_by(f64::total_cmp);
+        values[2]
+    }
+
+    /// DESEGNOS_BENCH_JOURNAL=<journal> cargo test --release -p desegni-core live_preview_bench -- --ignored --nocapture
+    #[test]
+    #[ignore = "timing"]
+    fn live_preview_bench() {
+        let Ok(journal) = std::env::var("DESEGNOS_BENCH_JOURNAL") else {
+            eprintln!("DESEGNOS_BENCH_JOURNAL is not set");
+            return;
+        };
+        let text = std::fs::read_to_string(journal).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let project: Project = serde_json::from_value(value["project"].clone()).unwrap();
+        let pages = project.website.as_ref().unwrap().page_files.len();
+        let mut eager = [0.0; 5];
+        let mut lazy = [0.0; 5];
+        let mut served = [0.0; 5];
+        for run in 0..5 {
+            let start = std::time::Instant::now();
+            project.website_preview_files(true, LIMIT).unwrap();
+            eager[run] = start.elapsed().as_secs_f64() * 1000.0;
+
+            let start = std::time::Instant::now();
+            let package = project
+                .website_preview_package(true, LIMIT)
+                .unwrap()
+                .unwrap();
+            lazy[run] = start.elapsed().as_secs_f64() * 1000.0;
+
+            let page = package
+                .values()
+                .find_map(|file| match file {
+                    PreviewFile::Rendered(page) => Some(page),
+                    _ => None,
+                })
+                .expect("a live page");
+            let start = std::time::Instant::now();
+            page.bytes().unwrap();
+            served[run] = start.elapsed().as_secs_f64() * 1000.0;
+        }
+        println!(
+            "{pages} pages: eager {:.1} ms, lazy package {:.1} ms, lazy + 1 page {:.1} ms",
+            median(eager),
+            median(lazy),
+            median(served)
+        );
     }
 }

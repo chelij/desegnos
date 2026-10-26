@@ -69,7 +69,7 @@ pub use stale_merge::*;
 pub use text_merge::*;
 pub use website::*;
 pub use website_import::{
-    ImportedWebsite, PREVIEW_INLINE_BYTES, PreviewFile, import_website_files,
+    ImportedWebsite, LivePage, PREVIEW_INLINE_BYTES, PreviewFile, import_website_files,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
