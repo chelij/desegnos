@@ -133,7 +133,7 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn editor_heartbeat(
     window: WebviewWindow,
     health: tauri::State<'_, PreviewHealth>,

@@ -134,6 +134,10 @@ struct RecoveryCandidate {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceView {
+    /// The webview reads only the site framework and skipped files; its own type never declares
+    /// the imported files, which outweigh everything else in a large project. Cloning is cheap
+    /// because the files are `Arc`, and in-process readers still see the full project.
+    #[serde(serialize_with = "without_site_files")]
     project: Option<Project>,
     path: Option<String>,
     dirty: bool,
@@ -152,6 +156,20 @@ pub struct WorkspaceView {
     /// A fingerprint of the code and framed documents, so editors can re-read them after a
     /// document change without waking on every request prompt keystroke.
     documents_key: String,
+}
+
+fn without_site_files<S: serde::Serializer>(
+    project: &Option<Project>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut project = project.clone();
+    if let Some(site) = project
+        .as_mut()
+        .and_then(|project| project.website.as_mut())
+    {
+        site.files.clear();
+    }
+    project.serialize(serializer)
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -1434,7 +1452,7 @@ impl Workspace {
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_workspace(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     state.refresh_recoveries();
@@ -1583,7 +1601,7 @@ pub fn import_context(
     Ok(state.view())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_project(
     state: WorkspaceState<'_>,
     revision: u64,
@@ -1609,7 +1627,7 @@ pub struct ElementEditView {
     element: Option<desegni_core::ElementTarget>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_page_source(
     state: WorkspaceState<'_>,
     project_id: Uuid,
@@ -1857,7 +1875,7 @@ pub fn ensure_element_id(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_element(
     state: WorkspaceState<'_>,
     project_id: Uuid,
@@ -1896,7 +1914,7 @@ pub struct ElementBatchEditView {
 }
 
 /// Apply several element changes to one document as one revision and one history step.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_elements(
     state: WorkspaceState<'_>,
     project_id: Uuid,
@@ -1956,7 +1974,7 @@ pub fn element_matches(
 }
 
 /// Apply one element change to the same element on the chosen pages as one history step.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn edit_element_across_pages(
     state: WorkspaceState<'_>,
     project_id: Uuid,
@@ -1993,7 +2011,7 @@ pub fn edit_element_across_pages(
 }
 
 /// Steps the selected element back to its previous version; other changes stay.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn undo_element(
     state: WorkspaceState<'_>,
     project_id: Uuid,
@@ -2212,7 +2230,7 @@ pub fn refresh_element_bounds(
     Ok(state.view())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn refresh_element_target_bounds(
     state: WorkspaceState<'_>,
     project_id: Uuid,
@@ -2235,7 +2253,7 @@ pub fn refresh_element_target_bounds(
     Ok(state.view())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -2250,7 +2268,7 @@ pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     Ok(state.view())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     let Workspace {
@@ -2704,6 +2722,46 @@ mod tests {
         edited.pages[0].content.as_mut().unwrap().html.push_str("<p>More</p>");
         assert_ne!(documents_key(Some(&typed)), documents_key(Some(&edited)));
         assert_eq!(documents_key(None), "");
+    }
+
+    #[test]
+    fn a_workspace_view_serializes_without_the_imported_site_files() {
+        let temp = Temp::new();
+        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
+        let mut project = project("Site");
+        let page_id = project.pages[0].id;
+        project.website = Some(desegni_core::ImportedWebsite {
+            page_files: std::collections::BTreeMap::from([(page_id, "index.html".into())]),
+            files: std::collections::BTreeMap::from([(
+                "index.html".into(),
+                std::sync::Arc::from("<h1>Home</h1>"),
+            )]),
+            framework: Some("Vite".into()),
+            skipped: vec!["photo.psd".into()],
+        });
+        workspace.start(project, None, None).unwrap();
+        let view = serde_json::to_value(workspace.view()).unwrap();
+        let website = &view["project"]["website"];
+        assert_eq!(
+            website["files"],
+            serde_json::json!({}),
+            "the view must not ship the site files"
+        );
+        assert_eq!(website["framework"], "Vite");
+        assert_eq!(website["skipped"], serde_json::json!(["photo.psd"]));
+        assert_eq!(website["pageFiles"][page_id.to_string()], "index.html");
+        assert_eq!(
+            workspace
+                .view()
+                .project
+                .unwrap()
+                .website
+                .unwrap()
+                .files
+                .len(),
+            1,
+            "the in-process view keeps every site file"
+        );
     }
 
     #[test]

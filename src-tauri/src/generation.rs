@@ -3796,7 +3796,7 @@ pub fn apply_generation(
     Ok(workspace.view())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn create_preview(
     window: WebviewWindow,
@@ -3860,7 +3860,7 @@ pub fn create_preview(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn release_preview(
     window: WebviewWindow,
     previews: State<'_, Mutex<PreviewRegistry>>,

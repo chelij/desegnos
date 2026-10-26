@@ -546,7 +546,10 @@ pub struct Journal {
     last_revision: Mutex<Option<u64>>,
 }
 
-#[derive(Serialize, Deserialize)]
+/// The serialized entry shape the journal writes by hand in `append`; tests keep it as the
+/// reference for those bytes.
+#[cfg(test)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct JournalEntry {
     sha256: String,
@@ -588,12 +591,17 @@ impl Journal {
                 "Recovery transactions must advance the project revision.".into(),
             ));
         }
-        let hash = digest(&serde_json::to_vec(project).map_err(io)?);
-        let entry = JournalEntry {
-            sha256: hash,
-            project: project.clone(),
-        };
-        let mut bytes = serde_json::to_vec(&entry).map_err(io)?;
+        // Serialize the project once: the hash covers these bytes and the entry reuses them, so
+        // a large project is not serialized twice. The framing matches JournalEntry:
+        // `{"sha256":"<hex>","project":<project>}`.
+        let project_bytes = serde_json::to_vec(project).map_err(io)?;
+        let hash = digest(&project_bytes);
+        let mut bytes = Vec::with_capacity(project_bytes.len() + 96);
+        bytes.extend_from_slice(b"{\"sha256\":\"");
+        bytes.extend_from_slice(hash.as_bytes());
+        bytes.extend_from_slice(b"\",\"project\":");
+        bytes.extend_from_slice(&project_bytes);
+        bytes.push(b'}');
         if bytes.len() as u64 > MAX_MODEL_BYTES {
             return Err(Error(
                 "The recovery entry exceeds the model size limit.".into(),
@@ -791,6 +799,38 @@ fn sync_parent(path: &Path) -> Result<()> {
 
 pub mod website_export;
 pub use website_export::{WrittenWebsiteExport, write_website_export};
+
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+    use desegni_core::{Appearance, Viewport};
+
+    #[test]
+    fn an_appended_entry_is_the_serialized_journal_entry_and_recovers() {
+        let directory = std::env::temp_dir().join(format!("desegnos-journal-{}", Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let project = Project::new(
+            "Journaled".into(),
+            Viewport {
+                width: 390,
+                height: 844,
+            },
+            Appearance::Dark,
+        )
+        .unwrap();
+        let journal = Journal::new(&directory, project.id).unwrap();
+        journal.append(&project).unwrap();
+        let mut expected = serde_json::to_vec(&JournalEntry {
+            sha256: digest(&serde_json::to_vec(&project).unwrap()),
+            project: project.clone(),
+        })
+        .unwrap();
+        expected.push(b'\n');
+        assert_eq!(fs::read(journal.path()).unwrap(), expected);
+        assert_eq!(Journal::recover(journal.path()).unwrap(), Some(project));
+        fs::remove_dir_all(directory).unwrap();
+    }
+}
 
 #[cfg(test)]
 mod safe_write_tests {
