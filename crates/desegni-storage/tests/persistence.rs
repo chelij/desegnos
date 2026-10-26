@@ -1638,6 +1638,7 @@ fn deliberately_cleared_html_round_trips_without_fabricating_content() {
     let p = project();
     let id = p.home_page_id;
     let mut session = Session::new(p).unwrap();
+    let original = session.project().clone();
     session
         .edit_page_source(
             0,
@@ -1673,7 +1674,8 @@ fn deliberately_cleared_html_round_trips_without_fabricating_content() {
         Some(empty.clone())
     );
     session.undo(|_| Ok(())).unwrap();
-    assert_eq!(session.project().pages, before.pages);
+    // Consecutive page-source edits to one page share their history step.
+    assert_eq!(session.project().pages, original.pages);
     session.redo(|_| Ok(())).unwrap();
     assert_eq!(session.project().pages, empty.pages);
 }

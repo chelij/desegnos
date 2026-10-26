@@ -44,7 +44,14 @@ fn documents_key(project: Option<&Project>) -> String {
     }
     if let Some(site) = &project.website {
         for (path, encoded) in &site.files {
-            if !matches!(path.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str(), "html" | "htm") {
+            if !matches!(
+                path.rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "html" | "htm"
+            ) {
                 continue;
             }
             feed(&mut hash, path);
@@ -1865,9 +1872,7 @@ pub fn ensure_element_id(
     let journal = journal.as_ref().ok_or("Open a project first.")?;
     let document = document.unwrap_or(desegni_core::DocumentTarget::Page { page_id });
     let element = session
-        .ensure_element_id_document(revision, &document, &target, |next| {
-            journal.append(next)
-        })
+        .ensure_element_id_document(revision, &document, &target, |next| journal.append(next))
         .map_err(message)?;
     Ok(ElementEditView {
         workspace: state.view(),
@@ -1959,10 +1964,7 @@ pub fn element_matches(
     document: Option<desegni_core::DocumentTarget>,
 ) -> NativeResult<Vec<desegni_core::AcrossPagesMatch>> {
     let state = state.lock().map_err(message)?;
-    let session = state
-        .session
-        .as_ref()
-        .ok_or("Open a project first.")?;
+    let session = state.session.as_ref().ok_or("Open a project first.")?;
     if session.project().id != project_id {
         return Err("Return to the project that owns these elements.".into());
     }
@@ -2102,7 +2104,9 @@ pub async fn copy_elements(
             .ok_or("Open a project first.")?
             .project();
         if project.id != project_id || project.revision != revision {
-            return Err("The project changed before the elements were copied. Select them again.".into());
+            return Err(
+                "The project changed before the elements were copied. Select them again.".into(),
+            );
         }
         project
             .copy_elements_in(&document, &targets, &visual_styles)
@@ -2283,10 +2287,6 @@ pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     Ok(state.view())
 }
 
-#[derive(Serialize)]
-#[serde(untagged)]
-pub enum OpenProjectResult {
-    Workspace(Box<WorkspaceView>),
 /// End the history step in progress, so the next edit starts a new one.
 #[tauri::command(async)]
 pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
@@ -2297,6 +2297,10 @@ pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
     Ok(())
 }
 
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum OpenProjectResult {
+    Workspace(Box<WorkspaceView>),
     Website {
         website: Box<crate::website_import::FolderSelection>,
     },
@@ -2432,13 +2436,13 @@ pub async fn save_project(
         None
     };
     let mut state = state.lock().map_err(message)?;
+    if let Some(session) = state.session.as_mut() {
+        session.end_history_step();
+    }
     state.check_snapshot(&project)?;
     let picked = copy_destination(picked, &project)?;
     state.save_snapshot(&project, picked)?;
     Ok(Some(state.view()))
-    if let Some(session) = state.session.as_mut() {
-        session.end_history_step();
-    }
 }
 
 async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Option<PathBuf>> {
@@ -2541,13 +2545,13 @@ pub async fn save_project_checked(
         None
     };
     let mut state = state.lock().map_err(message)?;
+    if let Some(session) = state.session.as_mut() {
+        session.end_history_step();
+    }
     state.check_snapshot(&project)?;
     let picked = copy_destination(picked, &project)?;
     state.save_snapshot_checked(&project, picked, choose_path)
 }
-    if let Some(session) = state.session.as_mut() {
-        session.end_history_step();
-    }
 
 #[tauri::command]
 pub async fn resolve_save_conflict(
@@ -2723,19 +2727,54 @@ mod tests {
             css: String::new(),
             javascript: String::new(),
         });
-        let rect = desegni_core::Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 };
-        let added = project.apply(project.revision, Command::AddRegion { page_id, rect }).unwrap();
+        let rect = desegni_core::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        };
+        let added = project
+            .apply(project.revision, Command::AddRegion { page_id, rect })
+            .unwrap();
         let region_id = added.pages[0].regions[0].id;
         let typed = added
-            .apply(added.revision, Command::UpdateRegion { page_id, region_id, rect, prompt: "First".into() })
+            .apply(
+                added.revision,
+                Command::UpdateRegion {
+                    page_id,
+                    region_id,
+                    rect,
+                    prompt: "First".into(),
+                },
+            )
             .unwrap();
         let retyped = typed
-            .apply(typed.revision, Command::UpdateRegion { page_id, region_id, rect, prompt: "A much longer prompt typed by hand".into() })
+            .apply(
+                typed.revision,
+                Command::UpdateRegion {
+                    page_id,
+                    region_id,
+                    rect,
+                    prompt: "A much longer prompt typed by hand".into(),
+                },
+            )
             .unwrap();
-        assert_ne!(typed.revision, retyped.revision, "the save still advances the project revision");
-        assert_eq!(documents_key(Some(&typed)), documents_key(Some(&retyped)), "typing must not change framed-document revisions");
+        assert_ne!(
+            typed.revision, retyped.revision,
+            "the save still advances the project revision"
+        );
+        assert_eq!(
+            documents_key(Some(&typed)),
+            documents_key(Some(&retyped)),
+            "typing must not change framed-document revisions"
+        );
         let mut edited = retyped.clone();
-        edited.pages[0].content.as_mut().unwrap().html.push_str("<p>More</p>");
+        edited.pages[0]
+            .content
+            .as_mut()
+            .unwrap()
+            .html
+            .push_str("<p>More</p>");
         assert_ne!(documents_key(Some(&typed)), documents_key(Some(&edited)));
         assert_eq!(documents_key(None), "");
     }
@@ -3133,12 +3172,14 @@ mod tests {
             .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
             .unwrap();
         workspace.close_tab(Some(first.id), false).unwrap();
+        assert_eq!(workspace.session.as_ref().unwrap().project().id, second.id);
         assert_eq!(
-            workspace.session.as_ref().unwrap().project().id,
-            second.id
-        );
-        assert_eq!(
-            workspace.view().open_projects.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            workspace
+                .view()
+                .open_projects
+                .iter()
+                .map(|tab| tab.id)
+                .collect::<Vec<_>>(),
             [second.id]
         );
         // The closed tab released its lock, so another window could open the project.
@@ -3161,28 +3202,16 @@ mod tests {
         workspace
             .open_tab(|state| state.start(third.clone(), None, Some(third.revision)))
             .unwrap();
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project().id,
-            third.id
-        );
+        assert_eq!(workspace.session.as_ref().unwrap().project().id, third.id);
         // The third tab was last, so closing it falls back to the tab before it.
         workspace.close_tab(None, false).unwrap();
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project().id,
-            second.id
-        );
+        assert_eq!(workspace.session.as_ref().unwrap().project().id, second.id);
         // With the second project parked behind the first, closing the first activates the
         // next tab in order rather than the most recently parked one.
         workspace.switch_to(first.id).unwrap();
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project().id,
-            first.id
-        );
+        assert_eq!(workspace.session.as_ref().unwrap().project().id, first.id);
         workspace.close_tab(None, false).unwrap();
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project().id,
-            second.id
-        );
+        assert_eq!(workspace.session.as_ref().unwrap().project().id, second.id);
         workspace.close_tab(None, false).unwrap();
         assert!(workspace.view().project.is_none());
         assert!(workspace.view().open_projects.is_empty());
@@ -3204,20 +3233,27 @@ mod tests {
         assert!(workspace.view().dirty);
         workspace.switch_to(first.id).unwrap();
         assert!(!workspace.view().dirty);
-        let pointer: RecoveryPointer = serde_json::from_slice(
-            &fs::read(workspace.pointer_path(second.id)).unwrap(),
-        )
-        .unwrap();
+        let pointer: RecoveryPointer =
+            serde_json::from_slice(&fs::read(workspace.pointer_path(second.id)).unwrap()).unwrap();
         let journal = temp.0.join(pointer.journal_file);
         assert!(journal.exists());
         assert!(workspace.close_tab(Some(second.id), false).is_err());
         assert!(
-            workspace.view().open_projects.iter().any(|tab| tab.id == second.id),
+            workspace
+                .view()
+                .open_projects
+                .iter()
+                .any(|tab| tab.id == second.id),
             "a project with unsaved changes must stay open until the choice is explicit"
         );
         workspace.close_tab(Some(second.id), true).unwrap();
         assert_eq!(
-            workspace.view().open_projects.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            workspace
+                .view()
+                .open_projects
+                .iter()
+                .map(|tab| tab.id)
+                .collect::<Vec<_>>(),
             [first.id]
         );
         assert!(
@@ -3264,7 +3300,12 @@ mod tests {
         workspace.switch_to(first.id).unwrap();
         workspace.close_tab(Some(second.id), false).unwrap();
         assert_eq!(
-            workspace.view().open_projects.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+            workspace
+                .view()
+                .open_projects
+                .iter()
+                .map(|tab| tab.id)
+                .collect::<Vec<_>>(),
             [first.id]
         );
         assert!(desegni_storage::load_project(&path).unwrap().show_grid);
