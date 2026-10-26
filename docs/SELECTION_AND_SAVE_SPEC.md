@@ -1,6 +1,6 @@
 # Selection targets and safe save spec
 
-Implementation status, 20 October 2026: completed and integrated in WebMaker. Current projects use schema 7 and new requirements use format 10; the starting-state table and earlier frontend handoff notes below describe the state before this work. See [implementation and verification](SELECTION_SAVE_CODEX.md) and [the current backend contract](CLEANUP_BACKEND_CONTRACT.md).
+Implementation status, 20 October 2026: completed and integrated in WebMaker. Current projects use schema 10 and new requirements use format 10; the starting-state table and earlier frontend handoff notes below describe the state before this work. See [implementation and verification](SELECTION_SAVE_CODEX.md) and [the current backend contract](CLEANUP_BACKEND_CONTRACT.md).
 
 Date: 2026-10-20. Source: comparison with codex-openpencil (README only, not installed), checked against the current code. Two ideas carry over: selections that stay attached to their elements, and saves that never quietly overwrite other work. PRODUCT.md and CLEANUP_SPEC.md still set direction; this file covers only these two features.
 
@@ -24,8 +24,7 @@ Date: 2026-10-20. Source: comparison with codex-openpencil (README only, not ins
 
 ### Element IDs
 
-- Every element in page content gets a `data-desegnos-id` attribute holding a short random ID, such as 8 base32 characters, unique within the page.
-- IDs are assigned when content enters the project: generation apply, brand-import page creation, paste, and migration of existing pages. Elements created by local edits get IDs right away.
+Elements created by local edits get IDs right away.
 - Generated output keeps existing IDs. The requirements tell the model to keep `data-desegnos-id` on the elements it keeps, and to leave it off new elements. Desegnos assigns IDs to new elements after the scope check passes.
 - **Export removes the attribute.** Code view hides it by default, under a "Show editor attributes" option in Split/Code. Non-technical users never see it.
 
@@ -36,8 +35,7 @@ ElementTarget { id: String, tag: String, label: String, selector: String /* fall
 Region.element: Option<ElementTarget>  ->  Region.elements: Vec<ElementTarget>  (1..=8)
 ```
 
-- Resolve by `id` first. Fall back to the positional `selector` only for content from before migration that has no IDs yet.
-- Remove `sourceSha256` from the target. The job snapshot still records the page source hash for provenance, but a target no longer depends on it.
+- Resolve by `id` first. The job snapshot still records the page source hash for provenance, but a target no longer depends on it.
 - A target is stale only when its ID is gone from the page. In that case the request shows "This element was removed" and offers **Remove request** and **Pick again**.
 - `pickElement` deduplicates by ID.
 
@@ -54,12 +52,8 @@ Region.element: Option<ElementTarget>  ->  Region.elements: Vec<ElementTarget>  
 - `validate_scope` removes each targeted ID's subtree from the before and after documents, then compares the rest canonically, the same way it does now.
 - Each targeted ID must still exist in the output, unless the request asks for deletion. If one is missing, reject with "The AI removed a selected element. Your page is unchanged."
 - A new element counts as in scope only if it is inside a targeted subtree.
-- Bump `requirements` format to 9. Format 8 and older keep the current positional path.
 
-### Migration
-
-- On open, `migration.rs` assigns IDs to every page's elements and maps each open request's positional target to an ID. A target that won't resolve stays as it is and shows the stale state.
-- Adding IDs counts as a change that is not saved yet, so the file updates on the next Save. Nothing writes the file without a Save.
+A target that won't resolve stays as it is and shows the stale state.
 
 ## Part 2: safe save
 
@@ -86,7 +80,7 @@ Region.element: Option<ElementTarget>  ->  Region.elements: Vec<ElementTarget>  
 
 ## Tests
 
-- Core: an ID survives text edits, moves, and another request applying. A positional fallback still resolves on content from before migration. A multi-target request is accepted when only the targeted subtrees change and rejected when a sibling changes. A missing target ID is rejected. Export output has no `data-desegnos-id`.
+- Core: an ID survives text edits, moves, and another request applying. A multi-target request is accepted when only the targeted subtrees change and rejected when a sibling changes. A missing target ID is rejected. Export output has no `data-desegnos-id`.
 - Storage: Save refuses when the stamp differs, refuses a different `project_id`, and allows a matching stamp. Save as into another project's file needs the in-app confirm.
 - UI (`tests/`, native screenshots): Shift+click selects two elements, Ask AI creates one request over the union of their bounds, and a text edit made before Generate does not make the request stale.
 
@@ -96,7 +90,7 @@ Same split as CLEANUP_SPEC.md: Codex owns `crates/**`, `src-tauri/**`, `tests/**
 
 | Codex (backend) | Claude (frontend) |
 | --- | --- |
-| Assign `data-desegnos-id` (apply, import, paste, local edits, migration); strip on export | Hide `data-desegnos-id` in the code pane, with "Show editor attributes" in Split/Code |
+| Assign `data-desegnos-id` (apply, import, paste, local edits); strip on export | Hide `data-desegnos-id` in the code pane, with "Show editor attributes" in Split/Code |
 | `ElementTarget` by ID, `Region.elements` (1–8), positional fallback, stale detection | Multi-select: Shift/Ctrl/Cmd+click, outlines, union request box, nested-element pruning, "3 elements selected" |
 | `validate_scope` per target ID, missing-target rejection, new requirements format | Stale request state: "This element was removed" with **Remove request** / **Pick again** |
 | `FileStamp` check on Save; guarded Save as (other project / non-project file) | Conflict dialogs: **Save as copy** / **Replace it** / **Cancel**, and the in-app "different project" confirm, with details behind "Show details" |

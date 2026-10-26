@@ -34,21 +34,11 @@ Accepted source appears under the on-canvas requests. Preview site forwards real
 
 ## Work completed in this gate
 
-- [x] Exact requirements-file delivery and one global generation mode.
-- [x] Native credentials, fixed OpenAI HTTPS transport and bounded streaming.
-- [x] Durable jobs, explicit retry/cancellation, uncertain restart recovery and stale checks.
-- [x] Typed candidate review, selected identity acceptance and transactional Apply/Discard.
-- [x] Actual HTML/CSS/JavaScript preview, script isolation and native reload recovery.
-- [x] Source, grid settings and automatic dossier in schema 4 archives, recovery and undo; real schema 1/2/3 migration and format3 frozen-request compatibility.
-- [x] Integrated Linux workflow, actual isolated system vault and normal-build startup checks.
-- [ ] Live OpenAI generation and semantic evaluation with a key entered privately in Desegni.
-
 ## Core, provider and plugin boundaries
 
 | Module | Authority |
 | --- | --- |
 | `desegnos-core` | Authoritative project/source/candidate state, scoped decisions, exact requirements, hashes, coverage/bounds, transactions and undo/redo. No HTTP or credentials. |
-| `desegnos-storage` | Bounded archives, integrity, atomic writes, backups, locks, migration and durable accepted-state recovery. |
 | `desegnos-ai` | Fixed OpenAI transport, native credentials, verified capabilities/prices, estimates and bounded parsing. Receives frozen input/schema and returns text/usage; cannot mutate projects, install packages or select filesystem paths. |
 | `src-tauri` | Trusted window permissions, native dialogs/lifecycle, private job ledger/checkpoints, cancellation, preview registration and core-authorized application. |
 | React editor | Transient input, disclosure, review and display of native state. No provider HTTP, persistent keys or authority to fabricate accepted projects. |
@@ -58,9 +48,7 @@ The [provider dependency/advisory review](../crates/desegnos-ai/README.md) recor
 
 ## Persistence and recovery
 
-Schema 4 stores actual source, consumed application IDs, grid settings and the latest complete generation dossier. At that baseline, signed request rectangles and their endpoints were bounded to ±100,000 CSS pixels independently of the guide; the canvas input correction below removes that range. Requirements format 4 includes exact user text, one global mode, signed/percentage placement hints, accepted and relevant draft context, routes, current affected-page source/hashes, available native capabilities and the candidate contract. Desegni creates these documents itself. Older frozen format3 documents retain their original bytes/digest when their dependencies still match.
-
-Schema 1/2/3 archives and journals validate original hashes and PROJECT.md before migration. Schema 1 preserves former per-region choices in an extension; schema 2 preserves its global mode; schema 3 preserves actual source and consumed job IDs. Existing grid visibility survives migration. Original bytes are unchanged on open and retained as `.previous` on explicit Save. Canonical fixtures include schema 2 SHA-256 `f828598377bebee41c6c8a00f884d8888cdfc3f76c49c8a95b7228b8004834b2` and a real schema3 source archive/frozen format3 snapshot.
+Schema 4 stores actual source, consumed application IDs, grid settings and the latest complete generation dossier. At that baseline, signed request rectangles and their endpoints were bounded to ±100,000 CSS pixels independently of the guide; the canvas input correction below removes that range. Requirements format 4 includes exact user text, one global mode, signed/percentage placement hints, accepted and relevant draft context, routes, current affected-page source/hashes, available native capabilities and the candidate contract. Desegnos creates these documents itself. Older frozen format3 documents retain their original bytes/digest when their dependencies still match.
 
 Private generation records preserve frozen Markdown, attempts, usage, complete candidates and pre-apply archives separately from project archives. Intent is persisted before submission. Restart never automatically repeats a request; interrupted in-flight work becomes uncertain. Cancellation prevents late responses becoming candidates. Corrupt optional AI configuration stays visible and leaves ordinary editing available.
 
@@ -90,19 +78,19 @@ Evidence:
 
 | Local executable at verification | SHA-256 |
 | --- | --- |
-| `target/release/desegni` | `9233f14fe5db2caa35440157880de022cbad0519617c537debb1179b3c53bd16` |
-| `target/debug/desegni` | `7245d5749ccbea5df4486409badc99debb4ab967daadcb3cdcb0428e013f88da` |
-| `src-tauri/target/native-tests/debug/desegni` | `8c7f4a4038db89758524658119daaaa7a44e53e48641274e1b9d78b2b67efeb0` |
+| `target/release/desegnos` | `9233f14fe5db2caa35440157880de022cbad0519617c537debb1179b3c53bd16` |
+| `target/debug/desegnos` | `7245d5749ccbea5df4486409badc99debb4ab967daadcb3cdcb0428e013f88da` |
+| `src-tauri/target/native-tests/debug/desegnos` | `8c7f4a4038db89758524658119daaaa7a44e53e48641274e1b9d78b2b67efeb0` |
 
 These are ignored local artifacts; rebuilding can change hashes. The standard native runner uses absolute `target/native-tests`; this run explicitly selects the recorded instrumented executable above. Earlier reports remain historical evidence.
 
 ## NVIDIA/Wayland startup correction
 
-After the BYOK checks above, the user's ordinary Wayland launch exited with `Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.` No Desegni/WebKit coredump or OOM record was found. The original startup checks used isolated X11; they did not establish ordinary Wayland startup. On this machine the loaded NVIDIA driver is 615.78.08, WebKitGTK is 2.54.1, and Hyprland is 0.56.2.
+After the BYOK checks above, the user's ordinary Wayland launch exited with `Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display.` No Desegnos/WebKit coredump or OOM record was found. The original startup checks used isolated X11; they did not establish ordinary Wayland startup. On this machine the loaded NVIDIA driver is 615.78.08, WebKitGTK is 2.54.1, and Hyprland is 0.56.2.
 
 The user confirmed that launching the same executable with `__NV_DISABLE_EXPLICIT_SYNC=1` stays open and draws normally. This agrees with [WebKit bug 324551](https://bugs.webkit.org/show_bug.cgi?id=324551): GTK's first shared-memory frame conflicts with NVIDIA's explicit-sync surface setup. The matching mitigation is now part of native Linux startup, before GTK/Tauri creates a window. It is scoped to a loaded NVIDIA kernel module and an available Wayland connection/backend. X11-only launches, other drivers and explicit user values are preserved. GPU/compositing settings are otherwise unchanged, and no desktop configuration or project data is modified.
 
-Desegni re-executes its own executable once with the process-local setting and the original arguments. The child inherits the setting, preventing a loop. This avoids unsafe mutation of a potentially threaded process environment. Two focused regression tests cover backend/connection/driver/override cases and actual child arguments/environment isolation; all 104 workspace tests pass, and strict native Clippy passes.
+Desegnos re-executes its own executable once with the process-local setting and the original arguments. The child inherits the setting, preventing a loop. This avoids unsafe mutation of a potentially threaded process environment. Two focused regression tests cover backend/connection/driver/override cases and actual child arguments/environment isolation; all 104 workspace tests pass, and strict native Clippy passes.
 
 The [startup build/check record](../test-results/wayland-startup/2026-10-18T12-22-51.266Z/build-checks.json) supplements the earlier BYOK evidence. The executable hashes in the BYOK table refer to that earlier build. The workaround remains a compatibility bridge: reassess/remove it when the shipped WebKitGTK runtime includes [upstream commit 322671](https://commits.webkit.org/322671@main) and NVIDIA/Wayland startup plus rendering pass without it. The upstream main-branch fix alone does not prove that the installed runtime contains it.
 
@@ -120,8 +108,6 @@ Windows/macOS preview resource loading and credential stores need their own runn
 
 ## Earlier ChatGPT and BYOK verification
 
-The exact final instrumented binary passes [76 integrated Linux steps](../test-results/native/2026-10-18T13-08-09-048Z-900337/report.json), including the original authoring/migration/native-picker/BYOK/preview/recovery gate and ten added ChatGPT steps. The [OAuth record](../test-results/native/2026-10-18T13-08-09-048Z-900337/chatgpt/oauth-http-evidence.json) verifies real loopback dynamic registration, S256 exchange, distinct accounts, stable reconnect, signed identity and revocation. [Actual provider requests](../test-results/native/2026-10-18T13-08-09-048Z-900337/chatgpt/provider-requests.json) carry byte-exact Markdown/global mode with the frozen account after account/preference changes. Pre-stream and terminal-stream plan limits reject output; sign-out blocks late candidates and API fallback. Real UI Repair saves the retained rotation without OAuth, model or generation HTTP. Native restart forgets session credentials and keeps accepted source without resubmitting.
-
 | Final check | Result |
 | --- | --- |
 | Rust workspace | 144 passed: 53 AI/provider/authentication, 22 core, 44 native coordinator/preview/workspace/startup and 25 storage. One guarded integration test is ignored here and passes separately. [Log](../test-results/chatgpt-rust-tests.log). |
@@ -134,9 +120,9 @@ The exact final instrumented binary passes [76 integrated Linux steps](../test-r
 
 | Executable at that verification | SHA-256 |
 | --- | --- |
-| `target/release/desegni` | `819872ac7d094caccd4faf653220916c98eec35b80a12a8adf22bffdef5a8a6c` |
-| `target/debug/desegni` | `3f3ac5c466fc1a4bb803e9a2a12a4ab1c0219a591d48c74ea40d532db99029d6` |
-| `src-tauri/target/native-tests/debug/desegni` | `696f8d09435410188989a4efcab8180e9dd2d77487bf035a782de4344ec8b41b` |
+| `target/release/desegnos` | `819872ac7d094caccd4faf653220916c98eec35b80a12a8adf22bffdef5a8a6c` |
+| `target/debug/desegnos` | `3f3ac5c466fc1a4bb803e9a2a12a4ab1c0219a591d48c74ea40d532db99029d6` |
+| `src-tauri/target/native-tests/debug/desegnos` | `696f8d09435410188989a4efcab8180e9dd2d77487bf035a782de4344ec8b41b` |
 
 The [named pre-ChatGPT rollback](../test-results/baselines/pre-chatgpt-2026-10-18/manifest.json) retains the prior verified binaries and source. Earlier startup and BYOK hashes above are historical evidence, not the current executables. The NVIDIA/Wayland workaround remains in the current build with unchanged pre-GTK behavior.
 
@@ -153,20 +139,15 @@ The workspace revision delivers signed off-guide placement, screen references, p
 | Build/lint | TypeScript/Vite, normal debug/release, instrumented native, formatting and all-target/all-feature strict Clippy passed. [Clippy](../test-results/workspace-revision-clippy.log). |
 | Desktop behavior | 80 passed through real native operations and task-owned signed OAuth/HTTP fixtures; no browser errors/rejections, including fresh crash recovery. |
 | Visibility and contrast | 300 current comparisons across 12 contexts pass. Native six-zoom checks retain 14px text, 28px grips and 3px inset focus. [Four-block UI gate](UI_VERIFICATION.md). |
-| Data compatibility | Real schema1/2 native opens/saves preserve original and backup bytes. Rust checks cover a real schema3 source archive and original frozen format3 request, plus schema4 archives/journals and automatic dossier recovery. |
 | Local recovery | Two filesystem-failure regressions preserve zero-proposal results after storage recovery and protect a newer retry from an older completion's failed metadata write. No provider attempt is added by local recovery. [Focused tests](../test-results/workspace-revision-coordinator-tests.log). |
 | Credentials/desktop | 50 synthetic credentials across 181 owned files pass non-disclosure. Original desktop resource/connection checks pass after private display/profile cleanup. |
 | Dependencies | [All eight manifests/locks](../test-results/workspace-revision-dependencies.json) match the pre-revision baseline; no dependency was added. |
 
 | Rebuilt executable | SHA-256 |
 | --- | --- |
-| `target/release/desegni` | `66a9dda16548f0087a24eb5fe36b6c5d2b9dca1dc5eeae99cc3a74e04aa15aa1` |
-| `target/debug/desegni` | `48974d910953174fa8b339f5adcb39fa7c7e2ce010675f2ca73c3e9e617b2f1c` |
-| `src-tauri/target/native-tests/debug/desegni` | `cfa2a29b98efa6ceb469ec609d77bc27968cea80f583f7b22daf5b0d0ef77bd3` |
-
-The [pre-workspace source and binaries](../test-results/baselines/pre-workspace-revision-2026-10-18/manifest.json) are retained and their hashes rechecked. Legacy explicit saves retain the original archive as `.previous`. The current [delivery record](../test-results/workspace-revision-2026-10-18.json) identifies source, binaries and evidence.
-
-Core owns signed placement/grid validation, dossier/decisions, requirements, validation and transactions. Storage owns migration and durable recovery. The provider returns bounded output without project authority; only the native coordinator requests core-approved dossier/application writes. Menus, panning and presentation remain editor responsibilities. The executable plugin host remains separate release work.
+| `target/release/desegnos` | `66a9dda16548f0087a24eb5fe36b6c5d2b9dca1dc5eeae99cc3a74e04aa15aa1` |
+| `target/debug/desegnos` | `48974d910953174fa8b339f5adcb39fa7c7e2ce010675f2ca73c3e9e617b2f1c` |
+| `src-tauri/target/native-tests/debug/desegnos` | `cfa2a29b98efa6ceb469ec609d77bc27968cea80f583f7b22daf5b0d0ef77bd3` |
 
 The startup path and secure-store implementation are unchanged, so their earlier scoped startup/vault evidence is reused. Current normal builds were rebuilt; fresh initialization and recovery ran in the instrumented native app. Live OpenAI behavior, other platforms and remaining 1.0 work remain the separate gates stated above. No real credentials or paid calls were used.
 
@@ -188,9 +169,9 @@ The provider now compares streaming media types without case sensitivity and han
 
 | Rebuilt executable | SHA-256 |
 | --- | --- |
-| `target/release/desegni` | `eecc7f4595b69dc20756271948538757a080a3c448b9a88e6a9a929535f40228` |
-| `target/debug/desegni` | `e8fb375261ff6989ff5351218ab149190e91b5c77244a9068d869df5c36a41d3` |
-| `src-tauri/target/native-tests/debug/desegni` | `2e42f9f9aea562dc97551160873f73a2dc3970d2eb9e382e88f42c6efee7de8b` |
+| `target/release/desegnos` | `eecc7f4595b69dc20756271948538757a080a3c448b9a88e6a9a929535f40228` |
+| `target/debug/desegnos` | `e8fb375261ff6989ff5351218ab149190e91b5c77244a9068d869df5c36a41d3` |
+| `src-tauri/target/native-tests/debug/desegnos` | `2e42f9f9aea562dc97551160873f73a2dc3970d2eb9e382e88f42c6efee7de8b` |
 
 The [delivery record](../test-results/response-format-fix-2026-10-18/delivery.json) identifies changed sources, binaries and evidence. The [named source/binary backup](../test-results/baselines/pre-response-format-fix-2026-10-18/manifest.json) remains intact. Startup, secure-store implementation, canvas, core/storage schema and plugin interfaces are unchanged; their applicable baseline evidence is reused. No normal startup check was repeated because the launch path is unchanged.
 
@@ -214,9 +195,9 @@ The native provider now treats the response header as a routing hint and recogni
 
 | Rebuilt executable | SHA-256 |
 | --- | --- |
-| `target/release/desegni` | `29317761e9c2d3c073cfd0984f4831b226e52ba3a248fbddb0ee210424ef11cf` |
-| `target/debug/desegni` | `6e4d6a92f83e73b4b4f18e7e5ba6a4ccf2c1d3820d20b2cd13f7bc7159418978` |
-| `src-tauri/target/native-tests/debug/desegni` | `441eff74c9e97e4baf1beb2ac2994feafc5eae9e7a485683b0a2a65ec5c2cd7e` |
+| `target/release/desegnos` | `29317761e9c2d3c073cfd0984f4831b226e52ba3a248fbddb0ee210424ef11cf` |
+| `target/debug/desegnos` | `6e4d6a92f83e73b4b4f18e7e5ba6a4ccf2c1d3820d20b2cd13f7bc7159418978` |
+| `src-tauri/target/native-tests/debug/desegnos` | `441eff74c9e97e4baf1beb2ac2994feafc5eae9e7a485683b0a2a65ec5c2cd7e` |
 
 The [delivery record](../test-results/stream-routing-2026-10-19/delivery.json) identifies changed sources, binaries and evidence. The [named source/binary backup](../test-results/baselines/pre-stream-routing-2026-10-19/manifest.json) retains the previous build. The first native run already generated and applied the large headerless reply, then failed a test that assumed locale-dependent thousands punctuation. The assertion now allows either rendering while retaining exact integer checks; no product behavior changed for that test correction. Both runs remain available.
 
@@ -235,7 +216,6 @@ The user's requested Photoshop-style grey direction replaces warm editor surface
 | Check | Result |
 | --- | --- |
 | Rust | [175 passed](../test-results/completion-grey-2026-10-19/rust-tests-final.log): 64 provider, 32 core, 51 native coordinator and 28 storage. One separate guarded vault check remains intentionally ignored. Real HTTP cases cover phased/split and interleaved text, ambiguous answers, mismatched identity/parts, invalid JSON, incorrect job/digest, combined bounds and credentials split across parts, with both authentication methods where relevant. |
-| Full native workflow | [81 steps passed](../test-results/native/2026-10-18T18-05-30-171Z-1459854/report.json), including authoring, six zooms, page tabs, menus, file pickers, migrations, generation, exact source application, sandbox checks and fresh-process recovery. Its binary predates only the final joined-text credential guard. |
 | Final native generation | [38 steps passed](../test-results/native/2026-10-18T18-07-02-333Z-1467717/report.json) on the final instrumented binary. The actual ChatGPT fixture supplies a large headerless commentary/final response with two final text parts; exact source is applied using frozen requirements/account. Malformed final JSON exposes its persisted `candidateJson` check without raw output or another request. |
 | Interface | [Four-block UI gate](UI_VERIFICATION.md) passed. [500 contrast comparisons across 20 contexts and 180 neutral-grey checks](../test-results/completion-grey-2026-10-19/contrast.json) pass. [Ten guide/background combinations](../test-results/completion-grey-2026-10-19/guide-contrast.json) exceed 3:1. The primary agent inspected actual-screen captures of both editor themes and both changed diagnostic dialogs. |
 | Credentials and desktop | Final-run [50 synthetic credentials across 150 owned files](../test-results/native/2026-10-18T18-07-02-333Z-1467717/credential-nondisclosure.json) pass nondisclosure; the full run scanned 222 owned files. Both runs have empty browser/recovery errors and passing desktop-resource/connection cleanup. All windows used guarded private display `:90`. |
@@ -244,9 +224,9 @@ The user's requested Photoshop-style grey direction replaces warm editor surface
 
 | Rebuilt executable | SHA-256 |
 | --- | --- |
-| `target/release/desegni` | `c6a3ad2148b88b188030c548a00166ba9d6986024415936a5c07cc98267e9809` |
-| `target/debug/desegni` | `44693c000b05c696ddd8eed2c019975ccf9da9110c6b3968c00e80ac67f7c303` |
-| `src-tauri/target/native-tests/debug/desegni` | `831a745670ce3d35fd43ec4883a1cdf05627d8d490460723b18b3d6502867cf1` |
+| `target/release/desegnos` | `c6a3ad2148b88b188030c548a00166ba9d6986024415936a5c07cc98267e9809` |
+| `target/debug/desegnos` | `44693c000b05c696ddd8eed2c019975ccf9da9110c6b3968c00e80ac67f7c303` |
+| `src-tauri/target/native-tests/debug/desegnos` | `831a745670ce3d35fd43ec4883a1cdf05627d8d490460723b18b3d6502867cf1` |
 
 The [delivery record](../test-results/completion-grey-2026-10-19/delivery.json) indexes the patch, current sources, binaries, evidence and [named backup](../test-results/baselines/pre-completion-grey-2026-10-19/manifest.json). The first native run failed a new test that assumed six-digit CSS colors; the build validly shortened some values. The second diagnostic test incorrectly clicked Generate, preparing a new job instead of reopening the failed job. Both test mistakes were corrected and their evidence retained. Window-drawable captures could omit a native control layer; paired actual-screen captures show both request boxes and are the visual evidence. No product repaint workaround was introduced.
 
@@ -256,8 +236,6 @@ Startup, OS-vault code, core/storage formats and plugin boundaries are unchanged
 ## Item-correlation baseline verification
 
 19 October 2026. The fresh live attempt received 814,553 bytes and reported 4,532 input / 3,149 output / 7,681 total tokens, then failed `textLocation` after a successful terminal response. The raw reply was not retained. Its exact index/omission pattern is unknown. A controlled real-HTTP test reproduced that failure with sparse wire indices and a compact terminal list; the [pre-fix log](../test-results/item-correlation-2026-10-19/reproduction.log) retains the failing evidence.
-
-The provider reader now matches text by unique message ID and unchanged content index. Wire indices stay stable within the stream and may differ from terminal array positions. Added/done items bind identity and validate finalized messages. Explicitly finalized commentary may be omitted from the terminal list while still matching all observed text. Absent/null output may be reconstructed only from finalized items after successful `response.completed`; an explicit empty array cannot trigger reconstruction. Missing final answers, omitted unfinished items, duplicate/changed identities, changed text/phase, refusals and ambiguous identity-less parts remain rejected. Review found a text event could use an ID already bound to another wire index when no item-done followed; the final code checks that binding and a controlled regression covers it. Identity-less legacy fallback also requires no lifecycle bindings and preserves the old explicit terminal-position check; controlled cases verify accepted and rejected legacy positions.
 
 Failure details retain only a fixed cause enum, terminal-output presence, saturated counts and numeric positions. No message ID, raw commentary, prompt or model output is retained in the correlation object. It survives restart and explicit-retry archival. More → Technical → Request details displays it through static labels; default review remains concise. Exact requirements, the global mode, credential boundaries, provider limits and independent core validation remain mandatory. No provider or plugin gains project mutation authority.
 
@@ -272,11 +250,9 @@ Failure details retain only a fixed cause enum, terminal-output presence, satura
 
 | Rebuilt executable | SHA-256 |
 | --- | --- |
-| `target/release/desegni` | `dbf706e84dfb2b528bd2e24a3c9e55cbe9bacec0d07a713b99e0e4e8adf4185c` |
-| `target/debug/desegni` | `820aeddeed33e61b693ae29091759e8f8a14d85ca8e432eddd1397fd5cf88123` |
-| `src-tauri/target/native-tests/debug/desegni` | `9794e4f7c054905547dbbd72c3ae72f2e3ee7dfd8eb9c372d528f38b5231c494` |
-
-The [delivery record](../test-results/item-correlation-2026-10-19/delivery.json) indexes the current sources, patch, builds, evidence and [named rollback](../test-results/baselines/pre-item-correlation-2026-10-19/manifest.json). All three controlled native runs passed; the final run includes the tightened legacy fallback. Earlier runs retain the initial and wording verification evidence. No live generation or user-project repair was performed. Close and reopen the rebuilt app before a fresh private generation; account-specific behavior and the original unretained wire shape remain unverified. The remaining 1.0 release gates above stay open.
+| `target/release/desegnos` | `dbf706e84dfb2b528bd2e24a3c9e55cbe9bacec0d07a713b99e0e4e8adf4185c` |
+| `target/debug/desegnos` | `820aeddeed33e61b693ae29091759e8f8a14d85ca8e432eddd1397fd5cf88123` |
+| `src-tauri/target/native-tests/debug/desegnos` | `9794e4f7c054905547dbbd72c3ae72f2e3ee7dfd8eb9c372d528f38b5231c494` |
 
 
 ## Finalized-item output baseline verification
@@ -296,9 +272,9 @@ The earlier assumption that a finalized answer must be repeated in the terminal 
 
 | Rebuilt executable | SHA-256 |
 | --- | --- |
-| `target/release/desegni` | `fef1e347d63014383a074c59910b0c22a004bfa04da654e93011eab03fb29d5e` |
-| `target/debug/desegni` | `59b8e3be09f7c7649c7246d66468d804076fd03b94c80fea06e0aea0f557f180` |
-| `src-tauri/target/native-tests/debug/desegni` | `1c0fcdf849f6e6c64b3203c6db27c9033cc28df8c921a980e4f911cd4e3a1fd0` |
+| `target/release/desegnos` | `fef1e347d63014383a074c59910b0c22a004bfa04da654e93011eab03fb29d5e` |
+| `target/debug/desegnos` | `59b8e3be09f7c7649c7246d66468d804076fd03b94c80fea06e0aea0f557f180` |
+| `src-tauri/target/native-tests/debug/desegnos` | `1c0fcdf849f6e6c64b3203c6db27c9033cc28df8c921a980e4f911cd4e3a1fd0` |
 
 The [delivery record](../test-results/finalized-output-2026-10-19/delivery.json) indexes the patch, source, checks and [named rollback](../test-results/baselines/pre-finalized-output-2026-10-19/manifest.json). Historical records above retain the earlier behavior for audit; the current generation contract removes that overstrict rule. No user project, saved attempt or credential was repaired or rewritten. The original failed model content was not retained and cannot be recovered. No live inference was sent; close/reopen the normal build and explicitly retry once for account-specific confirmation. Remaining 1.0 release gates above stay open.
 
@@ -312,8 +288,6 @@ Clicking a rendered element creates an inline change prompt next to its outline.
 The selectable canvas is a separate same-origin srcDoc iframe with scripts permanently forbidden by its sandbox and a restrictive CSP before authored HTML. The trusted editor reads DOM geometry through its own code; no generated script, message bridge or website node gains editor command authority. Native source fingerprints must match the exact local content before selection can bind to a current project page. Navigation invalidates the mounted document identity. Interactive preview retains its separate opaque-origin package and explicit script switch. Static canvas animations are paused using the browser animation API. Extent is measured once against the reference height; viewport-relative CSS can respond to the enlarged canvas, so this is not a claim of pixel-identical device emulation.
 
 Core owns element targets, completion/history state, Markdown, validation and undo. The native coordinator owns provider lifecycle, frozen drawing metadata, preview registration and durable application. Editor code owns gestures and progress presentation. The provider adapter and plugin authority boundaries are unchanged; no dependencies were added. ChatGPT preparation now reloads model availability using the existing saved credential when the in-memory catalogue is empty, so a fresh process does not require reconnecting merely to populate that list.
-
-Project schema 5 adds optional source-bound element metadata and completion status. Schemas 1–4 remain readable; format-3/4 frozen requirements remain compatible while their original dependencies match. Version-4 completion inference requires the application revision to equal the current revision, preserving any later ungenerated edit. Opening an older archive leaves its bytes intact; explicit Save retains its exact predecessor as `.previous`. New requirements use format 5. A real storage regression verifies both v4 migration cases and exact backup preservation.
 
 | Check | Result |
 | --- | --- |
@@ -332,13 +306,9 @@ The [delivery record](../test-results/canvas-generation-2026-10-19/delivery.json
 
 ## Desegnos interactions (19 October 2026)
 
-The app/window/title and current product copy now say Desegnos. New ChatGPT registrations request that display name. Existing app identifiers, keyring services, account/client/host registrations, `.desegni` archives, preview protocol, local theme key, and canonical PROJECT.md/REQUIREMENTS.md format bytes retain their original identities. Existing `desegni` launch paths remain valid; successful desktop builds add a same-directory `desegnos` alias. No project or credential migration is required. Name availability has only had a limited web check; public trademark/domain/distribution clearance remains a release gate.
-
 Left-button drag pans; Shift+drag marks an area. A click still selects a site element or places a request. Ctrl+wheel zooms around the pointer while plain and Shift wheels keep vertical/horizontal scrolling. View changes create no project-history entry. Selecting another request or page dismisses abandoned whitespace-only boxes. Core archives their stable records so scoped decisions and Undo remain valid. Cleanup reads the accepted queued state after pending text commits, preserves filled requests, and repeated cleanup adds neither a write nor an Undo entry.
 
 Standard shortcuts cover New/Open/Save/Save as, Undo/Redo, zoom, fit, actual size, 200%, page switching, selected-request removal with confirmation, Escape and F1 help. Text input and clipboard behavior retain their normal scope. Linux text undo uses the existing document editing command because the pinned GTK stack lacks the key bindings ([upstream report](https://github.com/tauri-apps/tauri/issues/16299)); remove that focused fallback once the native stack supplies them and the trusted-key test passes. The physical Tab code disambiguates WebKitGTK's `Unidentified` Ctrl+Shift+Tab event. No dependency was added or changed, and core/plugin/provider authority remains separate.
-
-Verification: [84 native acceptance steps](../test-results/native/2026-10-19T08-23-45-572Z-314737/report.json) passed through the Desegnos alias on the guarded private display. Real input verifies pan without edits, Shift area creation, pointer-anchored Ctrl+wheel, plain/Shift scrolling, empty-box DOM removal, recent typed text, text Undo/Redo, project Undo/Redo, fit/size/help shortcuts and both page-switch families. Legacy archives, saved account selection, synthetic generation, exact source application and crash recovery pass. Browser and recovery errors are empty; the desktop connection and display resources survive cleanup. The primary agent inspected the actual [shortcut-help window](../test-results/native/2026-10-19T08-23-45-572Z-314737/desegnos-shortcuts-window.png).
 
 Rust workspace tests pass 189 cases; the separately guarded OS-vault integration test was not repeated because credential behavior and service identities are unchanged. The 28 geometry/shortcut cases, strict Clippy, Rust format, frontend compilation, normal debug and release builds pass. A fresh [normal release startup](../test-results/startup/2026-10-19T08-25-31-892Z-322306/report.json) confirms the Desegnos window, sustained liveness and disabled automation; its cleanup preserves the original desktop connection and display resources. Detailed dependency and byte-identical compatibility checks live in [the delivery evidence](../test-results/desegnos-interactions-2026-10-19/). Windows/macOS behavior and live provider acceptance were not independently tested in this revision.
 
@@ -373,11 +343,7 @@ A selected generated element moves by dragging it directly. Four corner handles 
 
 New project first offers New blank page or Import identity from project. Name, Web/Mobile and common resolution presets follow. Creation always produces one empty light page; the footer's Page appearance dropdown changes it afterward. Import accepts Desegnos archives, website folders and ZIPs. Users review files, explicitly analyze identity through their configured API key or ChatGPT account, and choose findings and real portable logos. Low-confidence suggestions start unchecked. Only approved findings and assets enter the blank project, its dossier and subsequent generation requirements. Analysis never copies the source website into the canvas.
 
-Core validates identity and assets, accepted decisions and requirements. Storage collects bounded read-only evidence without executing or extracting imported projects. The provider adapter sees frozen Markdown and supported images but cannot read paths or apply changes. The native coordinator owns authentication, immutable source snapshots, durable analysis intent, strict evidence-bound results, cancellation and recovery. The editor owns the wizard and review. These are implemented boundaries; an executable plugin host remains separate release work. The detailed [identity contract](IDENTITY_IMPORT.md) records limits, privacy, schema 6 and compatible legacy migration.
-
 Verification includes 244 Rust tests, 32 geometry/shortcut tests, strict all-target/all-feature Clippy, formatting, TypeScript/Vite and normal debug/release builds. The [focused native identity run](../test-results/native/2026-10-19T10-50-15-852Z-693764/report.json) passes 13 steps with actual native file/folder pickers, source integrity, streamed analysis, cancellation, malformed output, selected findings/logos, save/reopen, future requirements and forced-crash recovery. The [fresh normal release startup](../test-results/startup/2026-10-19T10-46-42-318Z-676675/report.json) passes on an isolated display with automation disabled; its screenshot was inspected and original desktop resources/connection survive cleanup. Tests use local synthetic provider and OAuth fixtures, with no paid inference. Live identity inference, Windows/macOS, screen-reader and broader input-method/DPI checks remain unverified. The separately guarded system-vault test is intentionally excluded from the ordinary Rust suite.
-
-The final [combined native acceptance run](../test-results/native/2026-10-19T10-54-29-820Z-715292/report.json) passes **100 steps** on the same final instrumented build. It joins actual pointer/corner/context-menu and keyboard controls, percentage and pixel grids, provider failure/cancellation/stale-source checks, script and IPC isolation, real legacy migration, signed ChatGPT/account/rotation tests, identity import through the plan adapter and forced-crash recovery. Browser/recovery errors are empty. All 450 contrast comparisons across 18 contexts pass; 49 synthetic credentials across 309 owned files pass nondisclosure. The original desktop connection and display resources survive cleanup. The [delivery record](../test-results/project-onboarding-2026-10-19/delivery.json) records source/binary hashes, evidence and preserved backups.
 
 
 ## UX audit and feature priorities (19 October 2026)
@@ -401,8 +367,6 @@ Request height previously stopped at 55% of the visible canvas. Explicit area di
 
 The browser uses a bounded scrolling window around the logical camera instead of a DOM canvas that grows across all content. Grid phase follows the logical origin; clipped area surfaces and overlays stay local to the window. Text remains mounted and anchored to its original position, preserving drafts, caret state and line wrapping. The separate static website preview retains its existing 100,000px measured-height safeguard; this change removes request-area limits, not the preview renderer's current extent limit. Screen-guide resolution validation also remains separate.
 
-The actual executable is `target/release/desegnos`; new Save/Save As dialogs use `website.desegnos`. Open and brand import also accept legacy `.desegni` projects. Existing filenames, archive protocol markers, application storage and accounts remain compatible. [Filenames and rollback](FILENAMES.md) describes the launch-link migration and preserved binaries.
-
 The focused native workflow draws a 600,000 × 350,000 area, moves it, resizes it to 680,000 × 410,000, checks both history directions, saves an actual `.desegnos` archive, switches projects, opens the saved file and verifies forced-crash recovery. It also uses trusted clicks after combined zoom/pan, checks edge-focus anchoring and repeated long pans, and records empty browser-error and credential-nondisclosure results. Provider requests use a synthetic local service with no paid inference. Linux WebKitGTK is verified; native Windows/macOS behavior still needs its own runners.
 
 
@@ -410,8 +374,6 @@ Verification: 266 offline Rust tests, 35 canvas/shortcut geometry checks, seven 
 
 
 ## Floating layers and local copy/paste — 19 October 2026
-
-Layers opens from the floating canvas tools or Menu → View. Its hierarchical website list selects covered elements and groups; pending requests have their own list. Forward/backward and front/back controls change actual stacking locally, preserve reading order and refuse changes that would alter the measured layout or unsafe shared stacking. Only the selected website element receives a style edit; unrelated negative, noninteractive backgrounds retain their source and painting order. Boxless wrappers do not hide their visible descendants from the list. Request focus no longer changes the opaque request surfaces’ stacking; selected handles and outlines use a separate overlay. No sidebar is added.
 
 Copy/Paste uses the system clipboard, with ordinary text shortcuts preserved. Pasted requests receive new IDs and a 24px offset; website copies keep current appearance, native controls, resources, before/after decorations and list markers, renew IDs and rewrite label/link/ARIA/SVG fragment references. Paste is one durable Undo step and works across pages. A realistic browser snapshot regression caught non-idempotent important CSS merging; the corrected merge is tested against repeated validation and recopy without growth. [Layers and clipboard](LAYERS.md) records exact commands, support bounds and limits: runtime JavaScript listeners are not cloned, embedded programs/styles/documents fail explicitly, and this visual snapshot does not replace the future reusable responsive-component library. Rename/group/ungroup/reparent/lock/hide retain their remaining release scope.
 
@@ -421,11 +383,10 @@ Verification: **281 offline Rust tests**, including 14 focused layer/clipboard c
 
 Normal debug/release builds and fresh initialization pass with automation ports closed. The final [release startup](../test-results/startup/2026-10-19T13-58-17-264Z-1207935/report.json) screenshot was inspected; the [debug startup](../test-results/startup/2026-10-19T13-58-58-169Z-1213239/report.json) uses the same final source. The updated release was relaunched on its previous workspace and reopened the prior saved project through Recent projects. Its existing archive hash remains unchanged, and a named pre-relaunch backup is retained in WebMaker. The [delivery record](../test-results/layers-2026-10-19/delivery.json) identifies exact binary hashes and verification reports.
 
+## Current formats only (26 October 2026)
 
-## Full rename and startup migration (26 October 2026)
+Desegnos is unreleased and uses only the current names and formats: `.desegnos`, the `desegnos` marker, project schema 10 and requirements format 26. Older format readers, fixtures, data/vault moves and launch aliases are removed. The owner manages app data by hand. Settings, identity and generation records retain their current version numbers; different versions are errors.
 
-The preview rename supersedes the earlier identity-preservation notes above. Crates/directories/packages now use `desegnos`, the app identifier is `io.github.chelij.desegnos`, the preview scheme is `desegnos-preview`, and environment variables use `DESEGNOS_*` only. Default app folders migrate before the data probe; explicit data overrides remain in place. Vault migration verifies copies before deleting old entries. OAuth account/host/client IDs and grants stay unchanged. See [FILENAMES.md](FILENAMES.md) for retry and rollback behavior.
+Current journals, crash recovery, atomic saves, integrity checks, exact `.previous` backups, credential isolation and data-loss protections remain. This change was inspected statically; no builds or tests were run at the owner's request.
 
-New archives write the `desegnos` marker and current canonical project-note branding. Both archive markers, old project notes, and `.desegni` filenames remain readable. Legacy frozen requirements preserve their exact text and digest. Old fixtures and benchmark project files remain unchanged.
-
-Directory, vault-copy and archive compatibility unit tests were added but not run at the owner's request. No build or native suite was run. Offline Cargo metadata and JavaScript syntax checks are the allowed validation for this change; native migration, vault access and the tests require owner verification after merge.
+A missing history index can be reconstructed from validated current-format job records after a crash. Old-field enrichment is removed. Selector/hash targeting for raw imported HTML, current-provider reply repair, and defaults paired with current serializer omissions remain live behavior.

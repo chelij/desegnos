@@ -16,7 +16,7 @@ Implemented 20 October 2026 in WebMaker. This completes the selection/save speci
 
 ## Contracts and boundaries
 
-Projects now use schema **7** and newly prepared generation requirements use format **10**. Formats **3–9 remain frozen**. Old archives are validated before in-memory migration; IDs and mapped pending requests are saved only on explicit Save. Original prepared/ready job packets, receipts and usage remain intact. A pre-migration job whose source is stale cannot apply or silently retry; a fresh Generate is explicit.
+Projects now use schema **7** and newly prepared generation requirements use format **10**. Original prepared/ready job packets, receipts and usage remain intact.
 
 The Rust core owns IDs, selection resolution, edit/scope validation and undo transactions. Storage owns validated file stamps, locking, atomic writes and backups. The desktop layer owns native pickers, conflict permissions, recovery coordination and trusted OS file drops. The frontend owns presentation and draft coordination; it cannot grant overwrite authority by supplying hashes or a path. No plugin boundary was moved. [The backend contract](CLEANUP_BACKEND_CONTRACT.md) records the exact commands and types.
 
@@ -40,8 +40,6 @@ Evidence: [`verified-checks.json`](../test-results/cleanup-followup-2026-10-20/v
 | Normal release executable, without test automation | Built successfully; not launched |
 
 The 97 native steps ran sequentially using disposable profiles/session buses on guarded private Xvfb displays. They used actual Rust commands, GTK file pickers, system clipboard and trusted pointer/key input. The picture drop came from a real GTK drag source. Exported pages ran in ordinary Chromium. Crash recovery used a forced test-process termination followed by fresh initialization. All five suites reported no browser errors/unhandled rejections and preserved the original desktop connection and X11 resources.
-
-Core/storage/native regressions also cover durable-write failure, stale save permissions, hidden-but-present targets, forged or missing IDs, ancestor pruning, outside-scope changes, export attribute removal and exact archived format-8/9 packet compatibility. A schema-6 saved prepared/ready job fixture verifies migration without packet rewriting, journal writes from stale application, or provider replay.
 
 ## Verification limits
 

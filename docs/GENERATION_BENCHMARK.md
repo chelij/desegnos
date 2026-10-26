@@ -6,8 +6,6 @@ This implements preparation for priority 1 in `FEATURE_PRIORITIES.md` and is blo
 
 ## Fixed scenarios
 
-The complete prompts, page sizes, placement boxes, existing source and review criteria are frozen in [scenarios.json](../benchmarks/generation/scenarios.json). Each row has a real, validated `.desegni` input in [projects](../benchmarks/generation/projects). [fixtures.json](../benchmarks/generation/fixtures.json) records archive fingerprints and project IDs. The runner verifies both the fingerprints and the current core/storage validation before execution.
-
 The 0.1.0 gate uses these 13:
 
 | ID | Scenario | Interpretation | Owner checks beyond basic usability |
@@ -71,13 +69,6 @@ The Linux runner uses the existing guarded Xvfb route with an unused display ≥
 
 Each run has a unique directory under `test-results/benchmark/<UTC-date>/`; rerunning cannot replace an earlier attempt. Evidence is private to the owner:
 
-- `input.desegni`: unchanged copy of the fixed input; `working.desegnos` and `result.desegnos`: the real result saved through the native pipeline.
-- `REQUIREMENTS.md` and `prepared.json`: exact native requirements, digest, settings and conservative pre-submission estimate.
-- `provider-output.txt`: exact successful transport output text before candidate parsing, copied from the opt-in debug capture. This is **not reconstructed candidate JSON** and **not raw HTTP headers or the SSE envelope**. Unsafe/rejected transport bodies are not retained; missing output is reported honestly.
-- `job.json`, `project.json` and `result.json`: actual outcome, source, usage, native attempts, duration and frozen catalogue prices. A provider failure remains a failure; no fabricated page is substituted.
-- `page-<id>.png` and `layout-<id>.json`: actual owned-window captures and rendered semantic-element positions for each page. Captures show the current viewport; use the saved result to inspect content below it and interactions.
-- `owner-rating.json`: deliberately unrated until the owner reviews it. Generated content cannot rate itself.
-
 The runner uses the existing native `prepare_generation`, `start_generation` and transactional `apply_generation` commands. It never creates a provider HTTP request, changes core validation, bypasses stale-source checks, or installs components/plugins. Preview scripts remain paused for captures. The debug benchmark flag selects an unavailable system vault with the fixed production HTTPS client; loopback/test endpoint environment variables are excluded. Native successful-output capture is compiled only with debug assertions plus `native-tests` and requires the opt-in flag. Production builds gain no benchmark endpoint or raw-output retention.
 
 API keys stay in the runner/native process memory and are cleared from native session storage during cleanup. JavaScript strings cannot promise memory zeroization; no key is written to the run profile, output, logs or archive. The owner should review content before sharing evidence. Native auth headers and rejected credential-echo bodies are never captured.
@@ -108,6 +99,6 @@ The owner authorized one real search/photo generation through their existing Cha
 
 Evidence: [`live-search-plan/result.json`](../test-results/cleanup-codex-2026-10-19/live-search-plan/result.json), exact frozen requirements/provider output/project alongside it, and [`browser-check-current.log`](../test-results/cleanup-codex-2026-10-19/live-search-plan/browser-check-current.log). The `website-current` folder is a new **offline** export made after found-content stripping was implemented. It rendered its real local photograph and credits in ordinary Chromium; editor origin attributes were absent. Earlier exports are retained as original evidence. No additional live generation was used for export verification.
 
-The benchmark runner now records `placeholdersPerPage` for each rendered page and carries the metric into summaries. It counts outer marked slots once, plus legacy text labels containing “placeholder” outside marked slots. Missing evidence remains `null`, never zero. This is a mechanical diagnostic; owner review still decides usability.
-
 The same eight-image capacity fixture, using actual local HTTP downloads/decoding and no model calls, measured format 8 at 4 downloads / 4 missing slots and format 9 at 8 downloads / 0 missing slots. See [`image-capacity-benchmark.log`](../test-results/cleanup-codex-2026-10-19/image-capacity-benchmark.log). It demonstrates removal of the four-image ceiling; it does not establish broader generated-site quality. Fixed scenario prompts, archive hashes and project IDs are unchanged; derived requirements byte counts reflect format 9.
+
+The checked-in input archives use current project schema 10 and the `desegnos` marker. Their filenames and SHA-256 fingerprints were refreshed with the format cleanup; they require owner validation through the fixture builder after merge. No benchmark or generation was run for this change.

@@ -71,7 +71,6 @@ Links: [core](../crates/desegnos-core/src/), [storage](../crates/desegnos-storag
 | [website_import.rs](../crates/desegnos-core/src/website_import.rs), [website_merge.rs](../crates/desegnos-core/src/website_merge.rs) | `ImportedWebsite`, original file mapping, canvas/live projections; `import_website_files`, `review_website_import`, `import_website`. |
 | [website.rs](../crates/desegnos-core/src/website.rs) | `WebsiteLinks`, `website_links`; extract links/resources from HTML. |
 | [export.rs](../crates/desegnos-core/src/export.rs) | `WebsiteExport`, `compile_website`; portable pages/assets, route rewriting, editor-metadata removal and warnings. |
-| [migration.rs](../crates/desegnos-core/src/migration.rs) | `DecodedProject`, `decode_project*`; schema upgrades and migration notices. |
 
 ### `desegnos-storage`
 
@@ -150,7 +149,7 @@ Shell configuration: [Cargo.toml](../src-tauri/Cargo.toml), [tauri.conf.json](..
 ### Scripts and documents
 
 - [build-release.mjs](../scripts/build-release.mjs) and [build-release.sh](../scripts/build-release.sh): local release orchestration and Linux shell entry point.
-- [toolchain.mjs](../scripts/toolchain.mjs), [cargo.mjs](../scripts/cargo.mjs), [tauri.mjs](../scripts/tauri.mjs), [launch-paths.mjs](../scripts/launch-paths.mjs): tool discovery, Cargo/Tauri wrappers and portable launch paths.
+- [toolchain.mjs](../scripts/toolchain.mjs), [cargo.mjs](../scripts/cargo.mjs), [tauri.mjs](../scripts/tauri.mjs): tool discovery, Cargo/Tauri wrappers and desktop launch.
 - [generation-benchmark.mjs](../scripts/generation-benchmark.mjs): generation scenario runner/reporting; [usage-report.mjs](../scripts/usage-report.mjs): local interaction/job summaries.
 - [docs/](./): focused contracts and implementation notes, including [generation](GENERATION_CONTRACT.md), [request history](REQUEST_HISTORY.md), [import](IDENTITY_IMPORT.md) and [export](WEBSITE_EXPORT.md). Check their claims against source before changing behavior.
 
@@ -191,16 +190,7 @@ Shell configuration: [Cargo.toml](../src-tauri/Cargo.toml), [tauri.conf.json](..
 
 ### Project save, open, recovery and journal
 
-1. [App.tsx](../src/App.tsx) synchronizes edits → native [workspace.rs](../src-tauri/src/workspace.rs) open/create/save commands. `Workspace` owns `Session`, `ProjectFile`, `Journal`, recovery pointer and parked projects.
-2. [ProjectFile](../crates/desegnos-storage/src/lib.rs) locks the archive, checks its stamp, saves atomically and retains `.previous`; `save_project_checked` returns conflicts to [SaveConflict.tsx](../src/SaveConflict.tsx). Loading verifies archive contents and calls [migration.rs](../crates/desegnos-core/src/migration.rs).
-3. Session mutations call `Journal::append` before publishing. Despite the method name, current writes atomically replace a full checksummed snapshot; recovery also accepts older multi-record journals.
-4. Startup/open scans recovery pointers and compares saved state → [RecoveryBanner.tsx](../src/RecoveryBanner.tsx) → `recover_project` or `dismiss_recovery`. Dismissal moves the pointer aside and preserves the journal. Interrupted AI work is reconciled from saved jobs, without automatic resubmission.
-
 ### Site sync and outside edits
-
-1. Archive save → [project_folder.rs](../crates/desegnos-storage/src/project_folder.rs) `sync_project_site` → `compile_website`; `.desegnos-site.json` records owned hashes and pending publication for safe retries.
-2. Changed/missing owned files and stale files are detected before replacement/removal; archive save remains durable even if site sync warns. [OutsideEditsNotice.tsx](../src/OutsideEditsNotice.tsx) presents the returned `OutsideEdits`.
-3. [App.tsx](../src/App.tsx) `importOutsideChanges` → `project_site_import_source` → page import review; explicit overwrite → `overwrite_project_site`/`ProjectFile::overwrite_site`, backing up outside edits first. Standalone legacy archives do not claim their parent folder automatically.
 
 ### Import…: pages and brand
 
@@ -234,7 +224,6 @@ Shell configuration: [Cargo.toml](../src-tauri/Cargo.toml), [tauri.conf.json](..
 
 | Change | Start here |
 | --- | --- |
-| Project fields, commands or schema | [model.rs](../crates/desegnos-core/src/model.rs), [migration.rs](../crates/desegnos-core/src/migration.rs), [types.ts](../src/types.ts). |
 | Generation instructions/result schema | [requirements.rs](../crates/desegnos-core/src/requirements.rs), [element_fix.rs](../crates/desegnos-core/src/element_fix.rs), [generation.rs](../crates/desegnos-core/src/generation.rs). |
 | Flexible/Precise or whole-page scope | [generation_scope.rs](../crates/desegnos-core/src/generation_scope.rs), [requirements.rs](../crates/desegnos-core/src/requirements.rs), [wholePageScope.ts](../src/wholePageScope.ts), `Region` in [model.rs](../crates/desegnos-core/src/model.rs). |
 | Recovery, automatic repair or retained drafts | [generation_recovery.rs](../crates/desegnos-core/src/generation_recovery.rs), [generation_draft.rs](../crates/desegnos-core/src/generation_draft.rs), native [generation.rs](../src-tauri/src/generation.rs). |
@@ -269,7 +258,6 @@ Shell configuration: [Cargo.toml](../src-tauri/Cargo.toml), [tauri.conf.json](..
 | `DATA/generation/chatgpt/accounts.json` | Account registration metadata/locking; [chatgpt/storage.rs](../crates/desegnos-ai/src/chatgpt/storage.rs). Tokens use secure storage or memory, never project archives. |
 | `DATA/identity/<analysis UUID>.json`, `identity/latest.json` | Persisted brand-analysis records/pointer; [IdentityService](../src-tauri/src/identity.rs). |
 | `DATA/usage/<YYYY-MM-DD>.jsonl` | Local bounded interaction/command logs; [usage.rs](../src-tauri/src/usage.rs). |
-| `<project folder>/<name>.desegnos` | Editable ZIP archive: `manifest.json`, `project.json`, `PROJECT.md`; legacy `.desegni` remains supported. [ProjectFile](../crates/desegnos-storage/src/lib.rs). |
 | `<archive>.previous`, `<archive>.lock` | Previous saved archive and file-lock sidecar. |
 | `<project folder>/.desegnos-site.json` | Project/archive identity, owned website hashes, pending writes and original-file hashes; [project_folder.rs](../crates/desegnos-storage/src/project_folder.rs). |
 | `<project folder>/index.html`, page files, `assets/` | Compiled site synchronized after archive save; only managed paths are owned. |

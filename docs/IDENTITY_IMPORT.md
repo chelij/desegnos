@@ -9,16 +9,12 @@ offered only when access or spending settings need attention.
 
 Folder and ZIP collection reads Astro, Vue, Svelte and the other supported text
 templates. Global styles/theme settings, layouts, home/about pages, header/footer
-components, brand notes and logos precede other pages in deterministic order.
-Licences, lockfiles, dependencies, vendor/minified files and unrelated asset app/game
-code are excluded. Build folders are used only if no original sources are found.
-Automatic picks use the configured provider's complete request check, including
-framing, output allowance, image sizes and spending limit. Files are not truncated.
-Photo reading samples at most eight thumbnails within 96 KiB; all collected photos
+components, brand notes and logos precede other pages in deterministic order. Licences, lockfiles, dependencies, vendor/minified files and unrelated asset app/game
+code are excluded. Build folders are used only if no original sources are found. Automatic picks use the configured provider's complete request check, including
+framing, output allowance, image sizes and spending limit. Files are not truncated. Photo reading samples at most eight thumbnails within 96 KiB; all collected photos
 remain available to keep. Unread photos keep their filenames until described later.
 
-Current import review lets the user choose findings, logos, photos and existing work.
-Photos and work start selected. `import_context` and `create_project` accept optional
+Current import review lets the user choose findings, logos, photos and existing work. Photos and work start selected. `import_context` and `create_project` accept optional
 `identityPhotoIds` and `identityItemIndices`; empty lists exclude those categories,
 while omitted fields preserve existing callers' all-selected behavior. Every choice
 is validated against the completed analysis. Any single selected category can enable
@@ -59,7 +55,7 @@ Collection supports at most 128 usable files, 256 KiB per text file, 2 MiB total
 
 Frozen analysis Markdown has a 512 KiB limit including framing. Oversized selections fail before submission without truncation. Vision accepts PNG/JPEG/WebP, at most four images, with 256 KiB per data URI and 512 KiB in total. SVG is text evidence; GIF and unattached raster images are explicitly excluded from visual inference. Conservative input/output estimates apply before connection.
 
-Projects persist as schema 6. Legacy schemas 1–5 are verified before conversion, and explicit save retains the exact original archive as `.previous`. Ordinary projects retain requirements format 5 and compatible frozen formats 3–5. Imported-identity projects use requirements format 6. Project import accepts both `.desegnos` and legacy `.desegni` files. New saves default to `.desegnos`; existing `.desegni` files keep their path on Save. Default app storage and owned keyring entries migrate to the Desegnos identifiers. Readers accept both archive markers; writers use `desegnos`. OAuth account, host and client IDs stay unchanged.
+Projects persist as schema 10. Imported-identity projects use requirements format 6. New saves default to `.desegnos`; existing `.desegnos` files keep their path on Save. Readers accept both archive markers; writers use `desegnos`. OAuth account, host and client IDs stay unchanged.
 
 Source-format adapters can later extend collection without receiving provider, file-write or project-application authority. Core identity memory and approval remain core responsibilities.
 
@@ -67,4 +63,6 @@ Page review groups photos and existing work by website route. Optional `sourcePa
 
 `identityPagePaths` selects the routes to create. Empty selections import only the chosen project-wide brand context. Existing-project import can attach to matching paths (adding missing routes), or add separate pages with numbered paths on collision. Home always uses the project's home page. Selection, page creation, brand findings and content attachments form one undoable import. Repeating an attachment merges the same route and work items. New-project import starts with Home and creates only the selected additional routes.
 
-Optional `ImportedIdentity.pages` maps source pages to actual project page IDs, shared photo IDs and work items. Page assignments select requirements format 16, which nests pictures and work under the affected page's current name/path; only colours, fonts, logos, tone and any older unassigned content remain project-wide. Formats 3–15 keep their previous rendering and hashing. Existing projects and saved analysis receipts omit these fields by default and remain readable; reviewing a legacy flat receipt as Home upgrades the resulting context without rewriting that receipt.
+Optional `ImportedIdentity.pages` maps source pages to actual project page IDs, shared photo IDs and work items. Page assignments select requirements format 16, which nests pictures and work under the affected page's current name/path; only colours, fonts, logos, tone and any older unassigned content remain project-wide.
+
+Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 26). Different versions produce errors. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.

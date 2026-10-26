@@ -202,7 +202,7 @@ The [design direction](../DESIGN.md) records the user's empty-workspace interact
 | New/Rename/Add page/Page settings/Remove | Real forms and validation commit or cancel; route conflicts preserve state; Undo restores removed records. Nested replacement dialogs restore parent/opener focus. |
 | Project dossier; Brief/Choices/Exceptions; PROJECT.md | Manual choices persist. A completed draft appears automatically in Overview, including actual proposals; Review generation opens its real nested review. Displayed Markdown matches Rust byte for byte. |
 | Technical project details and Site source | Displayed revision/schema/identity match native state. HTML/CSS/JavaScript match accepted page source; opening these views makes no edit. |
-| Save/Save as/Open/Save requirements/recovery | Real pickers write and inspect archives/Markdown, preserve cancellation and backups, migrate legacy formats, and recover the full project after SIGKILL. |
+| Save/Save as/Open/Save requirements/recovery | Real pickers write and inspect archives/Markdown, preserve cancellation and backups, recover the full project after SIGKILL. |
 | AI settings; More/Advanced; model/limits; key lifecycle | Settings persist; password fields clear; access tests use real controlled HTTP without generation; vault failure requires explicit storage choice. |
 | Generate/More/Send/View progress/Cancel | Prepare sends nothing; Send delivers byte-exact requirements/global mode; sticky actions and the workspace strip stay visible; reopening does not resend. |
 | Retry/Apply/Discard; choices/feedback/source | Explicit retries retain the frozen request. Compatible choices start selected and can be unchecked. Only selected choices and source commit together; stale/partial output cannot apply. |

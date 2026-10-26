@@ -1,6 +1,6 @@
 # Desegnos 1.0 release plan
 
-Updated 19 October 2026. Desegnos is the product name selected after Cipta and Desegni. This document specifies the complete first public release, its implementation order, estimate, and evidence required to ship it. Current implemented behavior and verification are recorded separately in [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
+Updated 19 October 2026. Desegnos is the product name selected after Cipta and Desegnos. This document specifies the complete first public release, its implementation order, estimate, and evidence required to ship it. Current implemented behavior and verification are recorded separately in [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
 
 Desegnos is a free, open-source desktop website editor with a Rust core. Users draw areas on an empty page, describe what belongs there, generate with their own OpenAI key, and continue editing visually. The complete release includes multi-page projects, reusable components, shared styles, a project brief, interaction and form states, real image generation, custom JavaScript and React components, fonts and media, search and sharing metadata, persistent version history, a pre-export site check, and both portable web and React exports.
 
@@ -20,7 +20,7 @@ Decided 25 October 2026. Before 1.0, Desegnos ships a public preview of the work
 | AI providers | Only providers that have passed a real generation appear in the app. |
 | Quality gate | All 13 kept benchmark scenarios pass ([docs/GENERATION_BENCHMARK.md](docs/GENERATION_BENCHMARK.md)). The owner's own sites, built with the app during development, are the real-use check. |
 | Name | Ships as Desegnos without trademark clearance. |
-| Rename | Full rename from Desegni: app identifier `io.github.chelij.desegnos`, crates, the `desegnos-preview` scheme and internal names. |
+| Rename | Full rename complete: app identifier `io.github.chelij.desegnos`, crates, the `desegnos-preview` scheme and internal names. |
 | Hosting | GitHub: repository, Actions CI, Releases with checksums and source. |
 | Support | GitHub Issues for bugs and features; GitHub private vulnerability reporting for security. |
 | Crash reports | Opt-in. After a crash, the app offers to open a prefilled GitHub issue with a scrubbed log. No telemetry otherwise. |
@@ -32,7 +32,7 @@ Decided 25 October 2026. Before 1.0, Desegnos ships a public preview of the work
 The preview ships only when all of these are done:
 
 1. **Quality gate.** All 13 kept benchmark scenarios have real owner-run attempts and are rated usable without manual fixes; every Precise case keeps order and grouping.
-2. **Rename and migration.** The full rename is complete. Existing app data and vault entries move to the new identifier, and `.desegni` projects still open.
+2. **Full rename complete.**
 3. **Linux packages.** Bundling produces an AppImage and a Debian package. The package declares WebKitGTK 4.1, the desktop portal and Secret Service. Done last, once the app is otherwise ready for 0.1.0.
 4. **GitHub release pipeline.** Public repository; CI runs the frontend build, Rust tests, clippy and editor tests, and builds untested Windows/macOS artifacts. The release job publishes artifacts, checksums and the exact source.
 5. **Portable test harness.** Native tests and the startup check find `xvfb-run` and other tools on PATH instead of an owner-specific path.
@@ -60,15 +60,9 @@ The earlier 54–72 engineering-week range estimates the entire 1.0 contract. It
 
 ## 1. Name and identity
 
-Use **Desegnos** as the product name selected on 19 October 2026. The previous name, Desegni, was retired after the project initiator identified an existing technology website using it. The earlier translation and search results for Desegni do not establish anything about Desegnos.
+Use **Desegnos** as the product and window name, `desegnos` as the executable and package name, `desegnos-*` for crates, `io.github.chelij.desegnos` as the application identifier, `desegnos-preview` as the preview scheme, and `DESEGNOS_*` for environment variables. Projects use `.desegnos` and the `desegnos` archive marker. Each persisted format accepts only its current version. The owner moves their app data by hand; the app has no old-name or old-format adapters. OAuth client IDs are unchanged.
 
-Cipta was also rejected because the unrelated [cipta.cloud](https://www.cipta.cloud/) is an AI app builder. A limited exact-name web search on 19 October 2026 found no obvious software or HTML-editor competitor named Desegnos. Trademark, domain and distribution-name availability remain unverified; the search is not a reservation or legal clearance.
-
-Before public branding, the publisher must search exact and confusingly similar names in Indonesia's PDKI, WIPO's Global Brand Database, and the registries of intended commercial markets, including software and software-service categories. Record the result in release evidence before signed public distribution. A custom domain is optional; GitHub Releases and Pages can host distribution and documentation.
-
-The product, window and executable name are `Desegnos` / `desegnos`. The application identifier is `io.github.chelij.desegnos`; crates and packages use `desegnos`, environment variables use `DESEGNOS_*`, and the preview protocol is `desegnos-preview`. Startup migrates default data, configuration and cache folders from the old identifier before probing storage; explicit data-location overrides stay in place. Owned vault entries move only after verified copy to the new service. New projects use `.desegnos`; `.desegni` archives and old canonical project notes remain readable, while new saves write the current name. Frozen requirements retain their original bytes. New ChatGPT registrations request the Desegnos display name; existing account, host and client IDs and grants remain unchanged.
-
-The product icon is an original monochrome D, recorded in [branding/STORIES.md](branding/STORIES.md). Its stem is a dashed outline, a request still in words. Its bowl is solid, the built page. A tall line between them marks Generate. Light and dark variants and PNGs from 16 to 1024 px are in `branding/`, and the dark-background variant is the current app icon. Before packaging, complete the operating-system icon formats and the brand review, and confirm small-size legibility on each platform. Release screenshots must show the working application.
+Name availability and public trademark/domain/distribution clearance remain release gates. The original monochrome D icon and its light/dark variants are recorded in [branding/STORIES.md](branding/STORIES.md). Complete OS icon formats and small-size legibility checks before packaging.
 
 ## 2. Release contract
 
@@ -100,7 +94,6 @@ Every capability in this section belongs in 1.0. Implementation stages are an or
 | Site check | Actionable findings for links, assets, forms, responsive layout, accessibility, metadata, image sizes, and runtime failures. |
 | Source | Read-only HTML/CSS/JavaScript and React source generated from the accepted visual document. Copy and export work. |
 | Exports | Complete portable HTML/CSS/JavaScript and buildable React sites, with all included pages, shared resources, metadata, asset and behavior parity. |
-| Reliability | Atomic saves, autosave, crash recovery, undo/redo, migration safeguards, cancellation, and recoverable failures. |
 | Distribution | Native installation tests, signed releases and updates, source, notices, documentation, and verified release artifacts. |
 
 One `.desegnos` project represents a website. A page is one responsive visual document inside that project. Project settings, the brief, assets, component definitions, design tokens, revision history, and export settings are shared; each page has its own content, path, metadata, regions, and optional viewport/theme overrides. Users can open different projects in separate editor windows. Page links and external endpoints must have real configured destinations. The editor does not invent a backend, database, authentication service, payment service, or successful form submission. Browser-side custom logic can use a real public API when the user configures it.
@@ -257,7 +250,6 @@ The first custom-code module catalogue contains React, React DOM, and the projec
 | Module | Owns | Does not own |
 | --- | --- | --- |
 | Project domain in Rust | Pages/routes, components/instances, tokens, brief/protection, form bindings, commands, revisions, invariants, undo/redo, scoped patches | Webview state and HTTP transport. |
-| Project storage in Rust | Archives, autosave journal, durable checkpoints, backups, migrations, asset bytes | AI interpretation and browser rendering. |
 | Generation service in Rust | Provider credentials, request snapshots, HTTP, cancellation, job ledger, costs | Filesystem commands supplied by models. |
 | Generation coordinator | Requirements Markdown, identity proposals, component resolution, implementation instructions, candidate critique | Unreviewed identity changes, unrestricted package discovery/installation, and bypassing project commands. |
 | Layout/export compiler | Component expansion, state/breakpoint resolution, route/anchor resolution, deterministic CSS/HTML/JSX, metadata, asset variants | Canonical project mutations and evaluation of generated code in a trusted realm. |
@@ -285,8 +277,6 @@ Enforce limits before allocation or extraction: 2 GiB archive input, 4 GiB total
 
 Writes go to a same-directory temporary file, sync its contents to disk before atomic replacement, sync the directory where supported, and keep the preceding valid save as a named backup. Preserve the original if replacement fails. Rust durably journals each accepted transaction before acknowledging it as committed, checkpoints recovery data after at most two seconds of idle time, and records the clean-save revision. On restart, offer the recovered version alongside the last explicit save, with timestamps and a discard action. Do not overwrite the original during recovery.
 
-Opening a project with a newer unsupported schema provides a clear refusal without modifying it. Supported migrations copy the original first, validate the result, and retain the backup. A per-project write lock prevents two editor windows from silently overwriting each other; a second opening is read-only or explicitly takes over after the old writer closes.
-
 Undo/redo includes page/path/navigation edits, component definitions and overrides, brief/protection changes, visual edits, regions, shared styles, form bindings, assets, and generation Apply. Cross-page operations are one project transaction. Persist enough journal information to recover committed unsaved changes after a crash. Keep 200 undo transactions per open project; reclaim unreferenced objects only after they leave the current project, retained undo history, checkpoint history, candidate/paid-asset jobs, local library, and recovery records.
 
 PROJECT.md is derived from versioned decision records and the current brief/style data. Each generation job records the exact REQUIREMENTS.md bytes, SHA-256, source revision, document-format version, target/dependency hashes, attachment manifest, and resolved catalogue entries. Requirements artifacts are private, content-addressed job data retained with the relevant job/history records and governed by project storage and pruning limits. Neither Markdown file can authorize native capabilities. A stored projection that disagrees with canonical data is regenerated and reported rather than imported as silently overriding facts.
@@ -298,8 +288,6 @@ Qualified component references record catalogue ID, package/source version, inte
 The History dialog supports create/rename a named checkpoint, browse automatic checkpoints, compare versions, and restore a complete project. A checkpoint captures pages, routes, components, tokens, brief/protection, generation preference, form configuration, export metadata, code, and exact asset hashes. It does not capture credentials, operating-system settings, transient preview state, or form responses. Reopening the project retains this history. Creating a checkpoint durably saves its data and dependency closure before reporting success.
 
 Create an automatic checkpoint immediately before every AI Apply and once per five minutes of committed manual activity while there are changes since the last checkpoint. Named checkpoints are never silently deleted. Retain the latest 100 automatic checkpoints; show storage usage and permit explicit pruning, including the consequences for retained assets. When project limits prevent another checkpoint, ask the user to prune or save a new project copy; do not silently skip the pre-Apply checkpoint.
-
-Compare lists added/deleted pages and components, text/style/state changes, brief changes, and asset differences; render before/after pages at the same viewport. Restore first creates a safety checkpoint of the current state, validates the selected snapshot and its assets, and commits a new forward revision. It never rewinds the operational job-ID ledger or replays paid generation. Cancel or invalidate in-flight jobs on restore. A failed restore leaves the current project intact. The snapshot format follows project schema migration rules, and scripts remain restricted during history previews.
 
 ## 6. AI generation and scoped changes
 
@@ -521,8 +509,6 @@ Build each platform on its native runner. Publish source for the exact release c
 
 Use the [Tauri updater](https://v2.tauri.app/plugin/updater/) with mandatory signature verification. Keep the private updater key separate from OS signing credentials, encrypted, backed up, and restricted to protected release jobs. Embed the public key in the application. Keep stable and release-candidate feeds separate. Provide manual Check for Updates; background checking is opt-in and off by default. Explain what request is made.
 
-An update checks the supported platform and migration path, downloads with progress, verifies its signature, saves pending work, asks before restarting, and retains enough prior state for recovery. Test tampered downloads, interrupted downloads, unavailable feeds, incompatible project versions, and rollback to the previous app. OS package-managed Linux installations use their package manager instead of overwriting installed binaries with the app updater.
-
 Test updater-key rotation by releasing a bridge version that trusts the replacement key before switching signed feeds. Keep a documented recovery route through newly signed installers for users who miss that bridge. Never disable verification to repair an update failure.
 
 OS signing accounts, certificates, native test machines/runners, and an actual OpenAI test key are publisher prerequisites. Their absence blocks public release; unsigned installers and simulated provider responses do not satisfy this plan.
@@ -597,8 +583,6 @@ The expanded work breakdown is 45 to 60 engineering weeks for one experienced fu
 
 The estimate includes every required 1.0 feature, documentation, real provider/integration tests, native packaging, release verification, and repairs. It excludes unapproved features in section 17. Re-estimate using observed implementation progress after the foundation and complete live-generation/export milestones; do not preserve a date by dropping required checks. Start signing-account enrollment, native-runner access, codec checks, and name clearance during the first stage because their external lead times can exceed implementation tasks.
 
-The clarified inline text-box flow replaces the earlier sidebar/per-area-mode design. The same release budget retains full visual editing through contextual tools and dialogs, agent-coordinated layout, and the necessary persisted-format migration checks. Passing an early development slice or running multiple coding agents does not establish a measured reduction in the full delivery estimate.
-
 | Stage | Work and concrete deliverable | Exit gate | Planning allowance |
 | --- | --- | --- | --- |
 | 1. Foundation | Toolchains/locks, native Tauri shell, command and resource boundaries, full project schema, CI, licensing separation, design brief, signing/name work, early native font/codec probes. | Fresh native startup and real IPC boundary checks; Rust/frontend builds; schema covers sites/components/brief/states/history; export helpers remain separate from GPL code. | 3 to 4 weeks |
@@ -640,8 +624,6 @@ Publish 1.0 only when all of the following are true:
 After publication, reproduce reported regressions against the released build, preserve recovery paths, and patch security or data-loss failures promptly. Model catalogue changes require the relevant live generation and full-site export checks before a release advertises support.
 
 ## 17. Further user needs
-
-The accepted 1.0 scope includes all seven added feature groups and the project brief. [Further feature research](FEATURE_RESEARCH.md) assesses additional needs, complete implementation requirements, primary-source evidence, and dependencies. Content collections, linked multilingual sites, visitor search, publishing/staging, project-wide find/replace, review workflows, URL migration, and visual animation remain candidates for a separate scope decision. They are not inactive controls or partial implementations in 1.0, and their work is not included in the estimate above.
 
 Prioritize content collections and linked multilingual content for a product decision if blogs/catalogues or translated sites are core target uses. Adding either changes the project model and export acceptance contract, so incorporate it before implementing those boundaries if selected. Preserve ordinary stable IDs and versioned schemas for current requirements; do not build speculative plugin systems or empty modules for unapproved features.
 

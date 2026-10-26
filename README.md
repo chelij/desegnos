@@ -32,8 +32,6 @@ Single-click selects an element and shows its outline and controls. Right-click 
 
 API keys and sign-in tokens stay in secure device storage or the current session, separate from your project. API requests use your OpenAI billing; ChatGPT requests use the selected account's eligible plan or credits. The API budget is a conservative estimate, not a guaranteed billing cap. Cancelling submitted work may still use credits or incur charges.
 
-Projects save their website source, brief, and approved choices. Existing `.desegni` projects still open and keep their path when you save them. Save keeps a previous archive for recovery. Desegnos preserves your work when a request fails, and interrupted requests do not resend automatically.
-
 ## Run and build
 
 Run `npm run release:local` to typecheck and rebuild the frontend, then build the release executable (fast local settings; add `-- --dist` for the fully optimized build used for publishing) with embedded UI and the default dialog features, skipping installer bundles. The Linux shell entry point `./scripts/build-release.sh` calls the same Node script and can find Node through mise when needed. The script prints the binary's path, size and timestamp. On Linux it also runs a five-second startup check on guarded Xvfb with private temporary app data, saving its screenshot and logs under `test-results/startup/`. Windows and macOS skip that Linux-only check and need manual startup verification.
@@ -50,3 +48,5 @@ pnpm desktop build --no-bundle
 The [generation benchmark](docs/GENERATION_BENCHMARK.md) provides 18 fixed owner-run scenarios. Its offline checks make no AI requests; live quality remains unverified until you run and rate the results.
 
 For protocol, storage, security, recovery, dependencies, and verification details, see the [technical guide](docs/USER_TECHNICAL.md). The [release plan](RELEASE_PLAN.md) tracks remaining work. The editor uses GPL-3.0-only; see [LICENSE](LICENSE).
+
+Projects use `.desegnos`. Only current formats are supported; the owner manages existing app data manually. Current-format crash recovery and previous-file backups remain enabled.

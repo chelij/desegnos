@@ -1,9 +1,7 @@
 # Desegnos technical guide
 
-New generation requests deliver ready areas even when another area needs details.
-Applying marks only ready requests complete; unresolved requests stay open with their
-explanations in the generation log and project notes. Older saved jobs retain their
-original behavior.
+Desegnos opens and saves `.desegnos` projects using project schema 10 and generation requirements format 26. Only current formats are supported. Saves preserve the preceding archive as `.previous`; current-format journals can recover work after a crash without resubmitting provider requests. The owner moves their app data manually.
+
 
 In AI settings, **Image generation** is enabled for OpenAI connections with confirmed
 Image API access. New images use GPT Image 2.5 Flare; edits use Sunburst with the supplied
@@ -50,8 +48,6 @@ Empty requests disappear when you select something else; typed requests stay. Un
 
 The editor follows the supplied Desegnos identity: local monochrome wordmarks, neutral grey light/dark chrome, functional blue, Archivo headings and system controls. The bundled Archivo font includes its SIL Open Font License under `public/licenses/Archivo-OFL.txt`.
 
-The product name is **Desegnos**. Existing `.desegni` projects still open. Default app folders and credentials migrate to the new identifiers; custom data locations and ChatGPT registration identities stay in place. New account registrations use the Desegnos display name.
-
 **Project brief** holds the brief, accepted choices, and creative exceptions. Desegnos also records each completed generated draft automatically, including its summary, proposed choices, feedback, and attempt provenance. Generated identity choices remain suggestions until you explicitly save a project choice. Accepted choices and protected rules remain authoritative. The project brief and its `PROJECT.md` persist with the project; Undo marks an applied generation as undone without erasing its record.
 
 ## Import an existing brand
@@ -61,9 +57,6 @@ include up to 20 linked pages on the same site. In the review, untick any photos
 existing work you do not want to add. WebP photos are supported alongside PNG/JPEG.
 The AI log includes the exact follow-up context, scrubbed failed replies and a
 read-only **Past generations** list. These records stay on this device.
-
-
-Choose **Use my existing brand**, then a Desegnos `.desegnos` or legacy `.desegni` project, website folder or ZIP. Desegnos reads a bounded snapshot without executing or changing the source. Review **Files to read**, connect your AI provider, then select **Analyze brand**. This sends the selected source text and supported logo images through your configured API key or ChatGPT plan. Cancellation may leave usage for submitted work; interrupted requests never resend automatically.
 
 Review the findings, their source files, uncertainty and suggested logos. Uncheck anything you do not want. **Create project** makes an empty light page with the approved identity choices and portable logo bytes in its project memory. With **Use it for my brand only**, the source website stays separate from the new canvas. Choose **Edit this website** instead to load its existing pages without AI. The project brief records the imported identity, and later generation requirements include the approved choices and actual reusable images.
 
@@ -110,10 +103,6 @@ The archive retains full project context, including pictures, source, brief, dec
 **Open project** opens an archive; **Open folder…** or **Menu → Open project folder…** opens the newest immediate archive (filename breaks timestamp ties). A website folder offers **Edit this website** (the default) or **Use it for my brand only**. Editing imports up to 100 UTF-8 HTML pages using the real-page detector, preserving their original HTML and filenames, linked/inline CSS, scripts, local pictures and fonts. Editor IDs are the only import-time HTML changes. Local scripts run in Live/Preview, with relative page links and root-relative assets served from an isolated snapshot. Saving a plain site updates its files in place and keeps a one-time `.desegnos-original/` backup. Keep that backup and the hidden manifest. Unsupported files, including video/audio, are skipped and listed briefly.
 
 Framework sites use fresh output from `dist/`, `build/`, `out/`, `_site/` or Hugo/Gatsby `public/`. Stale or missing output offers **Build site**, with progress, **Stop** and a five-minute timeout. Desegnos runs the project's build script using its declared package manager or lockfile, or the installed Hugo/Eleventy command. It never installs dependencies: missing `node_modules` shows the exact install command to run yourself. Framework projects are saved in a new folder at the configured project location, outside both the source and built output; edits do not change framework source files.
-
-Standalone `.desegnos`/`.desegni` archives keep saving in place. **Move into project folder** changes the save, recent-project and recovery destination to a new folder at the default location, retaining the former archive as a backup. Damaged or unsupported files are preserved and reported.
-
-The current format is schema 8. Schemas 1–7 migrate with their original prompts, generated source, choices, extensions and saved grid visibility preserved. The current fields include grid settings, the generated dossier, source-bound element targets and completed requests retained in history. Version-4 requests are inferred complete only when no edit followed the recorded application. Old frozen format-3/4 generation requirements remain valid after migration when their dependencies still match. Opening old files leaves their bytes unchanged and requires an explicit Save; that Save preserves the exact old archive as `.previous`.
 
 Each accepted edit first writes durable local recovery. Ownership locks prevent concurrent writers to the same project. Separate projects retain separate recoveries. Explicit recovery detaches when the original file is missing, damaged or no longer matches its identity/revision. Undo retains 200 in-memory steps and creates forward revisions. Restart restores accepted state, not the former undo stack. Consumed generation IDs survive Undo so duplicate Apply is harmless. Private generation records retain frozen requests, attempts, usage and safety checkpoints separately from project archives.
 
@@ -163,8 +152,6 @@ pnpm desktop build --no-bundle
 ```
 
 Rust/provider tests need task-owned loopback sockets. The native harness runs `xvfb-run -d` with isolated data and a private bus, resolved from `PATH` (or `XVFB_RUN`/`DBUS_RUN_SESSION`), and verifies the main desktop after cleanup. See [tests/native/README.md](../tests/native/README.md). The opt-in Linux vault runner creates a private Secret Service and verifies its process/bus/data before using synthetic credentials; ordinary tests never access a real vault.
-
-Normal Linux launch paths are the actual executables `target/debug/desegnos` and `target/release/desegnos`; managed `desegni` compatibility launch paths remain usable. Existing `.desegni` archives remain readable and save to their existing path; new saves default to `.desegnos`. These commands create no installers. Signing, updates, Windows/macOS verification, live OpenAI generation, complete export release scenarios, media/components, executable plugins and all remaining release scenarios remain required by the full plan.
 
 ## License
 
