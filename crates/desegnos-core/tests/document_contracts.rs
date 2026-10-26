@@ -155,6 +155,7 @@ fn reply(
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+        outside_changes: vec![],
     }
 }
 
@@ -388,12 +389,36 @@ fn flexible_framed_generation_may_change_the_host_page_and_the_framed_file() {
     let document = DocumentTarget::SiteFile { path: SITE.into() };
     let (project, _) = framed_request(project, IFRAME, document.clone());
     let snapshot = project.prepare_requirements().unwrap();
+    assert!(
+        snapshot
+            .markdown
+            .contains("you may also change the host page's HTML, CSS and JavaScript")
+    );
+    assert!(
+        snapshot
+            .markdown
+            .contains("In Flexible mode the framed document is the anchor")
+    );
+    assert!(
+        !snapshot.markdown.contains(
+            "In Flexible mode you may also change the host page's iframe element and CSS"
+        )
+    );
+    assert!(
+        result_schema(&snapshot)["properties"]
+            .get("outsideChanges")
+            .is_some()
+    );
     let home = project.home_page_id;
     let mut host = project.pages[0].content.clone().unwrap();
-    host.html = host.html.replace("<iframe ", "<iframe class=\"framed\" ");
+    host.html = host
+        .html
+        .replace("<iframe ", "<iframe class=\"framed\" ")
+        .replace("</body>", "<div class=\"tooltip-controller\"></div></body>");
     host.css = "iframe { border: 0; width: 100%; }".into();
+    host.javascript = "document.documentElement.dataset.framedHost = 'ready';".into();
     let changed = SITE_HTML.replace("Original framed heading", "Flexible framed heading");
-    let candidate = reply(
+    let mut candidate = reply(
         &project,
         &snapshot,
         vec![GeneratedPage {
@@ -405,19 +430,20 @@ fn flexible_framed_generation_may_change_the_host_page_and_the_framed_file() {
             content: site_content(&changed),
         }],
     );
+    candidate.outside_changes = vec![OutsideChange {
+        document: "Home".into(),
+        description: "Added the tooltip controller and its styles.".into(),
+    }];
     candidate.validate(&snapshot, &project).unwrap();
     let applied = project
         .apply_generation(&snapshot, &candidate, &[])
         .unwrap();
     let page = applied.page(home).unwrap();
-    assert!(
-        page.content
-            .as_ref()
-            .unwrap()
-            .html
-            .contains("class=\"framed\"")
-    );
-    assert!(page.content.as_ref().unwrap().css.contains("width: 100%"));
+    let host = page.content.as_ref().unwrap();
+    assert!(host.html.contains("class=\"framed\""));
+    assert!(host.html.contains("tooltip-controller"));
+    assert!(host.css.contains("width: 100%"));
+    assert!(host.javascript.contains("framedHost"));
     assert!(
         applied
             .site_document_html(SITE)
@@ -432,10 +458,19 @@ fn precise_framed_generation_rejects_host_page_changes() {
     let document = DocumentTarget::SiteFile { path: SITE.into() };
     let (project, _) = framed_request(project, IFRAME, document.clone());
     let snapshot = project.prepare_requirements().unwrap();
+    assert!(
+        snapshot
+            .markdown
+            .contains("return the host page's HTML, CSS and JavaScript exactly as they are")
+    );
     let home = project.home_page_id;
     let mut host = project.pages[0].content.clone().unwrap();
-    host.html = host.html.replace("<iframe ", "<iframe class=\"framed\" ");
+    host.html = host
+        .html
+        .replace("<iframe ", "<iframe class=\"framed\" ")
+        .replace("</body>", "<div class=\"tooltip-controller\"></div></body>");
     host.css = "iframe { border: 0; }".into();
+    host.javascript = "document.documentElement.dataset.framedHost = 'ready';".into();
     let changed = SITE_HTML.replace("Original framed heading", "Precise framed heading");
     let candidate = reply(
         &project,
@@ -458,6 +493,73 @@ fn precise_framed_generation_rejects_host_page_changes() {
             .apply_generation(&snapshot, &candidate, &[])
             .is_err(),
         "Apply must reject the same host change"
+    );
+}
+
+#[test]
+fn flexible_framed_generation_still_rejects_unlisted_pages() {
+    let mut project = project(GenerationMode::Fuzzy, &[(IFRAME, SITE)], true, true);
+    let other = project.pages[1].id;
+    project.pages[1].name = "Archive".into();
+    project.pages[1].path = "/archive".into();
+    let document = DocumentTarget::SiteFile { path: SITE.into() };
+    let (project, _) = framed_request(project, IFRAME, document.clone());
+    let snapshot = project.prepare_requirements().unwrap();
+    let candidate = reply(
+        &project,
+        &snapshot,
+        vec![GeneratedPage {
+            page_id: other,
+            content: site_content(
+                "<!doctype html>\n<html><body><main><h1>Unrequested page</h1></main></body></html>",
+            ),
+        }],
+        vec![GeneratedDocument {
+            document,
+            content: site_content(SITE_HTML),
+        }],
+    );
+    assert!(
+        candidate.validate(&snapshot, &project).is_err(),
+        "only the host page, the framed document and the listed editable documents may change"
+    );
+}
+
+#[test]
+fn flexible_framed_page_changes_are_not_reported_as_outside_changes() {
+    let project = project(
+        GenerationMode::Fuzzy,
+        &[(PAGE_IFRAME, "framed/index.html")],
+        true,
+        true,
+    );
+    let framed_page = project.pages[1].id;
+    let document = DocumentTarget::Page {
+        page_id: framed_page,
+    };
+    let (project, _) = framed_request(project, PAGE_IFRAME, document);
+    let snapshot = project.prepare_requirements().unwrap();
+    let candidate = reply(
+        &project,
+        &snapshot,
+        vec![GeneratedPage {
+            page_id: framed_page,
+            content: site_content(
+                "<!doctype html>\n<html><body><main><h1>Framed page updated</h1></main></body></html>",
+            ),
+        }],
+        vec![],
+    );
+    let (accepted, events) = recover_generation_reply(
+        &serde_json::to_string(&candidate).unwrap(),
+        &snapshot,
+        &project,
+    )
+    .unwrap();
+    accepted.validate(&snapshot, &project).unwrap();
+    assert!(
+        !events.iter().any(|event| event.kind == "outsideChanges"),
+        "the framed document is the anchor, not an outside change: {events:?}"
     );
 }
 

@@ -150,10 +150,12 @@ Generate immediately shows preparation, then Ready to send with a visible top-le
 
 Project schema 4 retains `Page.content: SiteContent | null` and `Project.appliedJobIds: UUID[]`, and adds persisted grid settings and the latest complete generation dossier. Request rectangles use signed workspace coordinates bounded to ±100,000 CSS pixels, independently of the screen guide. Requirements format 4 freezes these coordinates, placement percentages relative to the guide and relevant dossier context. SiteContent is `{html, css, javascript}`: an HTML body fragment, stylesheet, and browser JavaScript source. Generated code runs only in an opaque-origin sandbox. Core bounds all source and IDs, preserves untouched pages, and never accepts model filenames, commands or installs. Source and dossier are saved/recovered project state, not plugin extensions.
 
-GenerationCandidate is `{jobId, requirementsSha256, summary, regions, pages, componentRequests, decisionProposals, criticism}`.
+GenerationCandidate is `{jobId, requirementsSha256, summary, regions, pages, documents, outsideChanges, componentRequests, decisionProposals, criticism}`.
 
 - regions: `{regionId, status: 'implemented' | 'conflict', explanation}`; exactly one entry for every frozen target.
 - pages: `{pageId, content: SiteContent}`; exactly the affected pages when all required regions are implemented, no unrequested pages.
+- documents: framed site HTML files only; page documents belong in pages.
+- outsideChanges: `{document, description}`; Flexible only, each change outside the requested anchor, named for the user. Precise results carry none.
 - componentRequests: `{regionId, capability, resolution: 'native' | 'unavailable', reason}`. This gate supplies no qualified external components. Native HTML/DOM behavior is available; unavailable required dependencies must produce explicit conflicts. Providers cannot invent a catalogue entry or install a package.
 - decisionProposals: `{topic, value, scope, rationale}` using the existing scoped decision shape. Compatible proposals start selected and remain suggestions until the user applies that review. Users can uncheck them. Applying a candidate cannot replace a conflicting accepted/protected decision. New accepted proposals and source commit together.
 - criticism: `{regionId: UUID | null, message, suggestion}`; advisory design feedback, never measured accessibility claims.
@@ -282,4 +284,4 @@ with corresponding security cases. `create_preview` accepts optional `draftId`,
 uses immutable retained source in the existing preview, and disables draft scripts. Security-blocked source has Copy code and Dismiss only.
 
 
-Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 26). Different versions produce errors. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.
+Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 27). Different versions produce errors. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.

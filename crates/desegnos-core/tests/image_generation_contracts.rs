@@ -37,6 +37,7 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+        outside_changes: vec![],
 
         documents: vec![],
     };

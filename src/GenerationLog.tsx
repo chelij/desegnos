@@ -1,4 +1,5 @@
 import { ProblemBanner } from './ProblemBanner.js';
+import { summarizeReportedOutsideChanges } from './noticeSummary.js';
 import { userError, generationError } from './userErrors.js';
 import { areaOutcome, declaredConflict, fixLabel, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
 import { isWholePage } from './wholePageScope.js';
@@ -104,6 +105,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             <button className="primary" disabled={busy} onClick={() => { const ids = requests.filter(item => item.exists).map(item => item.key); void controller.prepare(undefined, ids.length ? ids : undefined).catch(() => {}); }}>Try again</button>
           </div>}
           {!past && !working && !resultApplied && !stale && (review.retryable.length > 0 || review.retryAll) && <button disabled={!!operation} onClick={() => { void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
+          {candidate?.outsideChanges && candidate.outsideChanges.length > 0 && <p className="log-text">{summarizeReportedOutsideChanges(candidate.outsideChanges)}</p>}
           {candidate && candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></Disclosure>}
           {!past && review.blocked.length > 0 && <section className="log-needs-input" aria-label="Needs your input">
             <p className="log-who">Needs your input</p>

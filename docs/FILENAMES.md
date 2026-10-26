@@ -4,6 +4,6 @@ Desktop builds produce `desegnos` (`desegnos.exe` on Windows). New projects use 
 
 The application identifier is `io.github.chelij.desegnos`; crates use `desegnos-*`, previews use `desegnos-preview`, and environment variables use `DESEGNOS_*`. The owner manages the location of their existing app data manually. Startup selects `DESEGNOS_DATA_DIR`, the saved data-location choice, or the platform default, in that order.
 
-Only current formats are supported: project schema 10, generation requirements format 26, and each settings/identity/job format's current version. Other versions produce an error. Archives use the `desegnos` marker and canonical Desegnos project notes. A journal requires the current `sha256`, `project`, and `files` shape, with imported site files in content-addressed blobs.
+Only current formats are supported: project schema 10, generation requirements format 27, and each settings/identity/job format's current version. Other versions produce an error. Archives use the `desegnos` marker and canonical Desegnos project notes. A journal requires the current `sha256`, `project`, and `files` shape, with imported site files in content-addressed blobs.
 
 Saving preserves the previous archive as `.previous`. Integrity checks, file ownership and writer locks, outside-change detection, atomic writes, bounded inputs, and current-format crash recovery remain enabled. Recovery never resubmits a paid request. Existing OAuth client registrations are not renamed or replaced.

@@ -17,7 +17,7 @@
     "test:canvas": "node tests/canvas-geometry.test.mjs",
     "test:vault": "node scripts/test-vault.mjs",
     "test:generation": "node tests/generation-cancellation.test.mjs",
-    "test:editor": "node tests/selection-projection.test.mjs && node tests/code-mirror-state.test.mjs && node tests/code-draft-lifecycle.test.mjs && node tests/generation-problems.test.mjs && node tests/generation-session.test.mjs && node tests/frame-adoption.test.mjs"
+    "test:editor": "node tests/selection-projection.test.mjs && node tests/code-mirror-state.test.mjs && node tests/code-draft-lifecycle.test.mjs && node tests/generation-problems.test.mjs && node tests/generation-session.test.mjs && node tests/frame-adoption.test.mjs && node tests/notice-summary.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",

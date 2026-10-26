@@ -368,6 +368,7 @@ impl GenerationCandidate {
             component_requests: reply.component_requests,
             decision_proposals: reply.decision_proposals,
             criticism: reply.criticism,
+            outside_changes: vec![],
 
             documents: vec![],
         })

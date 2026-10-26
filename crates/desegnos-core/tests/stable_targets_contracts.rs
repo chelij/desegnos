@@ -113,6 +113,7 @@ fn candidate(p: &Project, snapshot: &RequirementsSnapshot, html: String) -> Gene
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+        outside_changes: vec![],
 
         documents: vec![],
     }
@@ -182,7 +183,7 @@ fn multi_target_scope_accepts_only_selected_subtrees_and_preserves_shared_source
     let b = target(&p, "article:nth-of-type(2)");
     let p = describe(p, &[a.clone(), b]);
     let snapshot = p.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 26);
+    assert_eq!(snapshot.format_version().unwrap(), 27);
     assert!(snapshot.markdown.contains("\"elements\""));
     let original = &p.pages[0].content.as_ref().unwrap().html;
     let c = candidate(

@@ -1,6 +1,7 @@
 import { Notice, ProblemBanner, needsAiSettings, type ProblemAction } from './ProblemBanner.js';
 import { userError, outcomeReason } from './userErrors.js';
 import { fixLabel, jobOutcome, staleResult } from './generationProblems.js';
+import { summarizeReportedOutsideChanges } from './noticeSummary.js';
 import { useEffect, useRef, useState } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
 import { scopeLabel } from './Notes';
@@ -225,7 +226,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
                 </div>}</> : <span>Needs attention</span>}</li>;
             })}</ul>
             <Disclosure summary="Technical details"><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></Disclosure>
-          </section> : <><h3>Your page</h3><p>{candidate.summary}</p></>}
+          </section> : <><h3>Your page</h3><p>{candidate.summary}</p>{candidate.outsideChanges && candidate.outsideChanges.length > 0 && <p className="small">{summarizeReportedOutsideChanges(candidate.outsideChanges)}</p>}</>}
           {changedDocuments.length > 1 && <p className="small muted">Changed: {changedDocuments.join(', ')}</p>}
           {generatedImages.length > 0 && <section aria-label="Generated images"><h3>Generated images</h3>{generatedImages.map((image, index) => <figure key={index}>
             {image.src.startsWith('data:image/png;base64,') && !image.failed && <img src={image.src} alt="Generated result" width={144} height={144} style={{ objectFit: 'contain' }} />}

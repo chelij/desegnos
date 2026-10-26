@@ -13,4 +13,4 @@ Each index record retains the complete original target list for its job-wide sum
 Focused verification: `cargo test -q -p desegnos-core request_history --lib`.
 
 
-Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 26). Different versions produce errors. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.
+Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 27). Different versions produce errors. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.

@@ -606,6 +606,7 @@ fn generation_fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) 
             rationale: "The detail is optional to read.".into(),
         }],
         criticism: vec![],
+        outside_changes: vec![],
 
         documents: vec![],
     };

@@ -2,6 +2,7 @@
 //! ordinary validators before it can be applied; provider output never becomes a new baseline.
 use crate::*;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 pub const MAX_VALIDATION_REPAIR_ROUNDS: usize = 1;
@@ -618,6 +619,20 @@ fn record_outside_changes(
     events: &mut Vec<ValidationEvent>,
 ) -> Result<()> {
     let targets = snapshot.target_ids()?;
+    let framed_documents: BTreeSet<_> = targets
+        .iter()
+        .filter_map(|(page_id, region_id)| {
+            project
+                .page(*page_id)
+                .ok()?
+                .regions
+                .iter()
+                .find(|region| region.id == *region_id)?
+                .frame_target
+                .as_ref()
+                .map(|frame| frame.document.clone())
+        })
+        .collect();
     let mut labels = Vec::new();
     let mut add = |label: String| {
         if !labels.contains(&label) {
@@ -625,6 +640,12 @@ fn record_outside_changes(
         }
     };
     for generated in &candidate.pages {
+        if framed_documents.contains(&crate::DocumentTarget::Page {
+            page_id: generated.page_id,
+        }) {
+            // The framed document is the request's anchor, not an outside change.
+            continue;
+        }
         let page = project.page(generated.page_id)?;
         if candidate.implemented_whole_page(snapshot, page) {
             continue;
@@ -1358,6 +1379,7 @@ pub fn conflicted_generation(
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+        outside_changes: vec![],
 
         documents: vec![],
     };

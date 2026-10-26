@@ -1,6 +1,6 @@
 # Desegnos technical guide
 
-Desegnos opens and saves `.desegnos` projects using project schema 10 and generation requirements format 26. Only current formats are supported. Saves preserve the preceding archive as `.previous`; current-format journals can recover work after a crash without resubmitting provider requests. The owner moves their app data manually.
+Desegnos opens and saves `.desegnos` projects using project schema 10 and generation requirements format 27. Only current formats are supported. Saves preserve the preceding archive as `.previous`; current-format journals can recover work after a crash without resubmitting provider requests. The owner moves their app data manually.
 
 
 In AI settings, **Image generation** is enabled for OpenAI connections with confirmed

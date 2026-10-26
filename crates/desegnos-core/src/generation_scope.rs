@@ -1325,6 +1325,7 @@ mod wrapper_tests {
             component_requests: vec![],
             decision_proposals: vec![],
             criticism: vec![],
+            outside_changes: vec![],
 
             documents: vec![],
         };

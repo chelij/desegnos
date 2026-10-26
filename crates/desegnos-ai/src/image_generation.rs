@@ -368,7 +368,7 @@ pub(crate) mod adapter_tests {
             pages:vec![GeneratedPage{page_id:project.home_page_id,content:SiteContent {
                 html:format!("<section data-desegnos-region='{id}'><p>Keep this copy</p>{}</section>",["A","B","C"].map(|prompt|format!("<img data-desegnos-generate='{prompt}' src='#' alt='Picture {prompt}'>")).join("")),
                 css:String::new(),javascript:String::new()
-            }}],documents:vec![],component_requests:vec![],decision_proposals:vec![],criticism:vec![]
+            }}],documents:vec![],outside_changes:vec![],component_requests:vec![],decision_proposals:vec![],criticism:vec![]
         };
         candidate.validate(&snapshot, &project).unwrap();
         let response = ProviderResponse {

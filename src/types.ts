@@ -99,6 +99,7 @@ export type GenerationCandidate = {
   regions: { regionId: string; status: 'implemented' | 'conflict'; explanation: string }[];
   pages: { pageId: string; content: SiteContent }[];
   documents?: { document: DocumentTarget; content: SiteContent }[];
+  outsideChanges?: { document: string; description: string }[];
   componentRequests: { regionId: string; capability: string; resolution: 'native' | 'unavailable'; reason: string }[];
   decisionProposals: DecisionProposal[];
   criticism: DesignCriticism[];

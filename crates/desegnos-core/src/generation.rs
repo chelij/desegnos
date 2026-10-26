@@ -15,6 +15,7 @@ pub const MAX_GENERATION_REGIONS: usize = 512;
 pub const MAX_COMPONENT_REQUESTS: usize = 512;
 pub const MAX_DECISION_PROPOSALS: usize = 128;
 pub const MAX_DESIGN_CRITICISMS: usize = 512;
+pub const MAX_OUTSIDE_CHANGES: usize = 32;
 pub const MAX_APPLIED_JOBS: usize = 10_000;
 pub(crate) const MAX_EXPLANATION_CHARS: usize = 4096;
 
@@ -90,6 +91,15 @@ pub struct GeneratedDocument {
     pub content: SiteContent,
 }
 
+/// A Flexible change outside the requested anchor, reported for the user.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OutsideChange {
+    /// The page or document the change appears in.
+    pub document: String,
+    pub description: String,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ComponentResolution {
@@ -135,6 +145,9 @@ pub struct GenerationCandidate {
     /// Framed site HTML documents; page documents are returned in `pages`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub documents: Vec<GeneratedDocument>,
+    /// Format 27: Flexible changes outside the requested anchor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outside_changes: Vec<OutsideChange>,
     pub component_requests: Vec<ComponentRequest>,
     pub decision_proposals: Vec<DecisionProposal>,
     pub criticism: Vec<DesignCriticism>,
@@ -186,6 +199,19 @@ impl GenerationCandidate {
             self.criticism.len() <= MAX_DESIGN_CRITICISMS,
             "The generation result exceeds the design feedback limit.",
         )?;
+        ensure(
+            self.outside_changes.len() <= MAX_OUTSIDE_CHANGES,
+            "The generation result exceeds the outside change limit.",
+        )?;
+        for change in &self.outside_changes {
+            validate_text(&change.document, "Outside change document", 512, true)?;
+            validate_text(
+                &change.description,
+                "Outside change description",
+                MAX_EXPLANATION_CHARS,
+                true,
+            )?;
+        }
         for region in &self.regions {
             validate_text(
                 &region.explanation,
@@ -510,6 +536,7 @@ pub fn merge_document_batches(
         regions: Vec::new(),
         pages: Vec::new(),
         documents: Vec::new(),
+        outside_changes: Vec::new(),
         component_requests: Vec::new(),
         decision_proposals: Vec::new(),
         criticism: Vec::new(),
@@ -577,6 +604,13 @@ pub fn merge_document_batches(
                 existing.region_id == criticism.region_id && existing.message == criticism.message
             }) {
                 merged.criticism.push(criticism.clone());
+            }
+        }
+        for change in &candidate.outside_changes {
+            if !merged.outside_changes.iter().any(|existing| {
+                existing.document == change.document && existing.description == change.description
+            }) {
+                merged.outside_changes.push(change.clone());
             }
         }
     }
@@ -883,6 +917,10 @@ pub fn candidate_schema() -> serde_json::Value {
                 object(json!({"kind":{"type":"string","enum":["page"]},"pageId":uuid}))
             ]},
             "content":content
+        }))},
+        "outsideChanges":{"type":"array","maxItems":MAX_OUTSIDE_CHANGES,"description":"Flexible only: each change outside the requested anchor, naming its page or document. Empty in Precise.","items":object(json!({
+            "document":text(512),
+            "description":text(MAX_EXPLANATION_CHARS)
         }))},
         "componentRequests":array(object(json!({
             "regionId":uuid,

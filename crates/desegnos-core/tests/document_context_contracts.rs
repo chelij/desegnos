@@ -155,6 +155,7 @@ fn candidate(
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+        outside_changes: vec![],
     }
 }
 
@@ -179,7 +180,7 @@ fn a_request_drawn_before_framed_editing_gains_its_document_before_prepare() {
     assert_eq!(adopted.adopt_frame_targets().unwrap(), adopted);
 
     let snapshot = adopted.prepare_requirements().unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 26);
+    assert_eq!(snapshot.format_version().unwrap(), 27);
     assert!(snapshot.markdown.contains("## Framed document requests"));
     assert!(snapshot.markdown.contains("All projects"));
     assert!(
@@ -579,7 +580,7 @@ fn chosen_pages_are_editable_and_changed_in_flexible_and_precise() {
         let region = &project.pages[0].regions[0];
         assert_eq!(region.pages, vec![PageSelection::page(atlas)]);
         let snapshot = project.prepare_requirements().unwrap();
-        assert_eq!(snapshot.format_version().unwrap(), 26);
+        assert_eq!(snapshot.format_version().unwrap(), 27);
         assert_eq!(
             included(&snapshot),
             vec![DocumentTarget::page(index), DocumentTarget::page(atlas)]

@@ -110,6 +110,7 @@ fn candidate(project: &Project, view: &GenerationJobView, label: &str) -> Genera
             rationale: "A distinct primary control.".into(),
         }],
         criticism: vec![],
+        outside_changes: vec![],
 
         documents: vec![],
     }
@@ -2185,6 +2186,7 @@ fn part_candidate(
         component_requests: vec![],
         decision_proposals: vec![],
         criticism: vec![],
+        outside_changes: vec![],
     }
 }
 
