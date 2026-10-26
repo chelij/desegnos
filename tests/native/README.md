@@ -15,9 +15,9 @@ The native and startup runners require `xvfb-run` and `dbus-run-session` on `PAT
 Two owner-only fixtures are opt-in and skipped cleanly when unset or missing:
 
 - `DESEGNOS_OWNER_SITE`: the Astro source website used by `--website-import-only` (read-only import) and by `--flash-only` (its `chelib-redesign/chelib-redesign.desegnos` archive must exist).
-- `DESEGNOS_BRAND_FOLDER`: the brand folder checked by the ignored `desegni-storage` test `real_desegnos_brand_folder_keeps_tokens_and_deduplicates_logo_sizes_read_only`.
+- `DESEGNOS_BRAND_FOLDER`: the brand folder checked by the ignored `desegnos-storage` test `real_desegnos_brand_folder_keeps_tokens_and_deduplicates_logo_sizes_read_only`.
 
-The ignored `desegni-storage` test `chelib_read_only_snapshot` and the `src-tauri` test `real_astro_folder_default_selection_fits_without_sending_or_changing_files` read `DESEGNOS_OWNER_SITE` the same way and return early when it is unset.
+The ignored `desegnos-storage` test `chelib_read_only_snapshot` and the `src-tauri` test `real_astro_folder_default_selection_fits_without_sending_or_changing_files` read `DESEGNOS_OWNER_SITE` the same way and return early when it is unset.
 
 To reuse a test build:
 
@@ -64,7 +64,7 @@ The expanded suite also covers stable-ID multi-selection, a single union request
 
 ## Real use (`--real-use-only`)
 
-`node scripts/native-test.mjs --real-use-only` runs the flows the owner actually uses, on copies of their real data. Before launch, `real-use-fixtures.mjs` copies the recent projects and every unsaved-work recovery record (with its journal) from `~/.local/share/io.github.chelij.desegni` (or `DESEGNI_REAL_USE_SOURCE`) into the run's private profile and `test-results/native/<run>/real-projects/`. Originals are only read: recovery records are rewritten to point at the copies, so nothing the test app saves can reach the real files. `test-results/` is git-ignored. A journal identical to its saved file is not unsaved work, and the app rightly does not offer it.
+`node scripts/native-test.mjs --real-use-only` runs the flows the owner actually uses, on copies of their real data. Before launch, `real-use-fixtures.mjs` copies the recent projects and every unsaved-work recovery record (with its journal) from `~/.local/share/io.github.chelij.desegnos` (or `DESEGNOS_REAL_USE_SOURCE`) into the run's private profile and `test-results/native/<run>/real-projects/`. Originals are only read: recovery records are rewritten to point at the copies, so nothing the test app saves can reach the real files. `test-results/` is git-ignored. A journal identical to its saved file is not unsaved work, and the app rightly does not offer it.
 
 The steps come from `scripts/usage-report.mjs`, which summarizes the local usage log (`usage/*.jsonl`: control names, shortcuts, keystroke counts per field and command timings, never typed text) and the generation history (every request sent and its outcome):
 
@@ -84,7 +84,7 @@ freehand area through trusted XTEST input. It checks circle corner exclusion, sh
 picker shortcuts/memory, normalized lasso points through move/resize and Undo/Redo,
 Escape cancellation, shape outlines, archive reopen, and crash recovery.
 
-Set `DESEGNI_NATIVE_TEST_ACCESSIBILITY=1` to exercise the app with an AT-SPI listener
+Set `DESEGNOS_NATIVE_TEST_ACCESSIBILITY=1` to exercise the app with an AT-SPI listener
 on the private display/session bus. The runner selects the accessibility launcher's
 `dbus-daemon` mode before starting that bus, so it does not depend on a desktop
 systemd session. It checks the app PID and never queries the main desktop tree.
@@ -103,15 +103,15 @@ inline confirmations, canvas previews and start/recovery screens. Add `--skip-bu
 when the explicit native-test binary is current. Each surface runs independently;
 unreachable steps are listed in `index.md`. Captures use `PhysicalInput.captureWindow`
 on guarded Xvfb at the default 1380 × 900 window and 900 px width, in both themes.
-`DESEGNI_UI_TOUR_OUTPUT` overrides the tour's default scratchpad destination. The tour
+`DESEGNOS_UI_TOUR_OUTPUT` overrides the tour's default scratchpad destination. The tour
 uses disposable project files, the six-picture fixture and the synthetic provider;
 it never sends paid AI requests or changes application source.
-For a focused recapture, set `DESEGNI_UI_TOUR_SURFACES=2` (or comma-separated
+For a focused recapture, set `DESEGNOS_UI_TOUR_SURFACES=2` (or comma-separated
 surface numbers from the index); existing index entries for other surfaces remain.
 
 ## Canvas flash regression
 
-`DESEGNI_FLASH_LABEL=after node scripts/native-test.mjs --flash-only` captures the copied
+`DESEGNOS_FLASH_LABEL=after node scripts/native-test.mjs --flash-only` captures the copied
 owner project `chelib-redesign` and a small fixture at 60 Hz through trusted X11 drags.
 The scope uses `seedRealUse` without recovery prompts, verifies the source archive's
 SHA-256 before/after, and never opens the original. It checks a continuously visible
@@ -121,7 +121,7 @@ debug native-test binary is built; `--skip-build` reuses it.
 
 Evidence goes to `test-results/flash/<label>/`: lossless owned-window videos, DOM/size/
 notice traces, live-reload samples and source integrity. To capture an unfixed baseline,
-set `DESEGNI_FLASH_LABEL=before DESEGNI_FLASH_ASSERT=0`. Then run
+set `DESEGNOS_FLASH_LABEL=before DESEGNOS_FLASH_ASSERT=0`. Then run
 `python tests/native/analyze-flash.py test-results/flash/before test-results/flash/after`
 to retain exact anomalous frame indices and PNG strips. The analyzer uses installed
 FFmpeg, Pillow and NumPy; its fixed unchanged regions match these two fixtures and
@@ -137,15 +137,15 @@ uses trusted X11/XTEST events; captures use the owned window on guarded Xvfb.
 Run only this check with:
 
 ```sh
-DESEGNI_SELECTION_ONLY=1 DESEGNI_FLASH_LABEL=verified node scripts/native-test.mjs --flash-only
+DESEGNOS_SELECTION_ONLY=1 DESEGNOS_FLASH_LABEL=verified node scripts/native-test.mjs --flash-only
 ```
 
 Evidence is in `test-results/selection-jump/<label>/`: selected/before and after
 screenshots, identity/geometry records, swap traces and trusted-input events.
-`DESEGNI_SELECTION_ZOOM=1` tests 100% instead of the default 75%.
-`DESEGNI_SELECTION_RECOVERY=1` copies the real-use recovery fixtures into a
+`DESEGNOS_SELECTION_ZOOM=1` tests 100% instead of the default 75%.
+`DESEGNOS_SELECTION_RECOVERY=1` copies the real-use recovery fixtures into a
 separate test directory and applies the latest journal's home-page source to
 the opened project copy before testing. Originals remain read-only.
-`DESEGNI_SELECTION_ASSERT=0` captures a failing baseline without stopping at the
+`DESEGNOS_SELECTION_ASSERT=0` captures a failing baseline without stopping at the
 first identity/geometry mismatch. A passing run does not establish the cause of
 an owner-reported failure that the copied state cannot reproduce.

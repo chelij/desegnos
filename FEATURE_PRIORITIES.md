@@ -208,7 +208,7 @@ The owner requested floating Layers, local bring forward/send backward controls 
 **Why.** The product targets every major AI provider (PRODUCT.md). Paid hosted generation will later be one more adapter, so the boundary must be provider-neutral now.
 
 **Scope.**
-- **Adapters.** Add provider adapters behind the existing `desegni-ai` boundary. Start with Anthropic (Claude) and OpenRouter, then Google. A local OpenAI-compatible endpoint (Ollama, LM Studio) is optional.
+- **Adapters.** Add provider adapters behind the existing `desegnos-ai` boundary. Start with Anthropic (Claude) and OpenRouter, then Google. A local OpenAI-compatible endpoint (Ollama, LM Studio) is optional.
 - **Capabilities.** Each provider declares its capabilities (vision, image generation, streaming). Features 3, 5 and 9 ask for a capability, not a provider.
 - **Behavior.** Each adapter uses the same frozen requirements, streaming, cancellation and cost estimate. Show an estimate only where pricing is known.
 - **Settings.** AI settings gains a provider choice. The model list comes from the verified catalogue for each provider.

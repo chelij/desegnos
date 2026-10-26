@@ -50,7 +50,7 @@ Empty requests disappear when you select something else; typed requests stay. Un
 
 The editor follows the supplied Desegnos identity: local monochrome wordmarks, neutral grey light/dark chrome, functional blue, Archivo headings and system controls. The bundled Archivo font includes its SIL Open Font License under `public/licenses/Archivo-OFL.txt`.
 
-The product name is **Desegnos**. Existing `.desegni` archives, app storage, canonical Markdown projections and ChatGPT registration identities retain their original technical identifiers so your projects and sign-ins keep working. New account registrations use the Desegnos display name.
+The product name is **Desegnos**. Existing `.desegni` projects still open. Default app folders and credentials migrate to the new identifiers; custom data locations and ChatGPT registration identities stay in place. New account registrations use the Desegnos display name.
 
 **Project brief** holds the brief, accepted choices, and creative exceptions. Desegnos also records each completed generated draft automatically, including its summary, proposed choices, feedback, and attempt provenance. Generated identity choices remain suggestions until you explicitly save a project choice. Accepted choices and protected rules remain authoritative. The project brief and its `PROJECT.md` persist with the project; Undo marks an applied generation as undone without erasing its record.
 
@@ -123,16 +123,16 @@ Desegnos keeps its own data (recoveries, recent projects, AI settings, usage rec
 
 | Location | Responsibility |
 | --- | --- |
-| `crates/desegni-core` | Project/source/candidate validation, signed placement bounds, grid settings, decisions/dossier, exact requirements, scoped transactions and undo/redo |
-| `crates/desegni-storage` | Bounded archives, integrity, atomic writes, backups, locks and durable recovery |
-| `crates/desegni-ai` | Fixed OpenAI HTTPS transport, native credentials, verified catalogue, estimates and bounded stream parsing; no project mutation |
+| `crates/desegnos-core` | Project/source/candidate validation, signed placement bounds, grid settings, decisions/dossier, exact requirements, scoped transactions and undo/redo |
+| `crates/desegnos-storage` | Bounded archives, integrity, atomic writes, backups, locks and durable recovery |
+| `crates/desegnos-ai` | Fixed OpenAI HTTPS transport, native credentials, verified catalogue, estimates and bounded stream parsing; no project mutation |
 | `src-tauri` | Native lifecycle/permissions, file dialogs, durable generation coordination, preview registry and application |
 | `src` | Sidebar-free React editor, transient input, disclosure/review and display of native state |
 | `tests/native` | Actual isolated Linux WebKitGTK workflows with real Rust commands and controlled HTTP |
 
 Unknown versioned extension data survives saves and edits. That is persistence support; an executable plugin host remains a later release gate. Future plugins cannot bypass requirements assembly, permissions, core validation or transactional application. Provider adapters cannot install packages or mutate projects.
 
-Dependencies have concrete roles: Tauri/React, Serde, UUID, SHA-256, ZIP and native dialogs form the existing foundation. Linux preview setup uses the same WebKitGTK binding as Tauri to allow anonymous reads of registered preview resources while retaining an opaque frame. The AI boundary uses established reqwest, Rustls, Tokio, keyring, Base64 and zeroize, plus jsonwebtoken for verified OpenID identity. The maintained `open` browser launcher, also used by Tauri, opens trusted sign-in and usage destinations from native code. Versions, licenses, advisories and limitations are recorded in [the provider review](../crates/desegni-ai/README.md). The optional WebdriverIO Tauri driver, loopback endpoints and isolated vault adapters exist only in explicit debug tests; release compilation rejects them.
+Dependencies have concrete roles: Tauri/React, Serde, UUID, SHA-256, ZIP and native dialogs form the existing foundation. Linux preview setup uses the same WebKitGTK binding as Tauri to allow anonymous reads of registered preview resources while retaining an opaque frame. The AI boundary uses established reqwest, Rustls, Tokio, keyring, Base64 and zeroize, plus jsonwebtoken for verified OpenID identity. The maintained `open` browser launcher, also used by Tauri, opens trusted sign-in and usage destinations from native code. Versions, licenses, advisories and limitations are recorded in [the provider review](../crates/desegnos-ai/README.md). The optional WebdriverIO Tauri driver, loopback endpoints and isolated vault adapters exist only in explicit debug tests; release compilation rejects them.
 
 ## Standalone website export
 

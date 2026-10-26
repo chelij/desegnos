@@ -14,8 +14,8 @@ The core substitutes the validated raster data in the returned source, removes e
 
 ## Boundaries
 
-- `desegni-core` owns requirements format 8, pure image discovery/substitution, candidate validation and ordinary project source. Formats 3–7 retain their old rendering and validation paths.
-- `desegni-ai` owns the credential-free HTTP image adapter, URL/DNS checks and raster decoding. It returns a candidate response; it cannot write project files or apply a result.
+- `desegnos-core` owns requirements format 8, pure image discovery/substitution, candidate validation and ordinary project source. Formats 3–7 retain their old rendering and validation paths.
+- `desegnos-ai` owns the credential-free HTTP image adapter, URL/DNS checks and raster decoding. It returns a candidate response; it cannot write project files or apply a result.
 - The native coordinator runs the image stage outside project locks, shares the job's cancellation token, then uses its existing durable result/apply flow. Cancellation or a changed project cannot apply late output. No automatic paid retry or account/billing fallback was added.
 - The editor owns concise draft actions and on-canvas editing. The preview still cannot fetch arbitrary network resources. Product plugins gain no capability from this feature.
 

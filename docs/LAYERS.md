@@ -14,7 +14,7 @@ A copied website layer includes its static markup, native controls, image/resour
 
 ## Boundaries
 
-The React editor reads the trusted scriptless preview to identify current nodes and measure style/layout. Native commands verify project identity and revision. `desegni-core` validates targets, clipboard format, source hashes, markup/context, uniqueness and style bounds, then creates the complete transaction. `desegni-storage` persists through the existing archive/journal paths. No provider request, key access or executable product plugin is involved.
+The React editor reads the trusted scriptless preview to identify current nodes and measure style/layout. Native commands verify project identity and revision. `desegnos-core` validates targets, clipboard format, source hashes, markup/context, uniqueness and style bounds, then creates the complete transaction. `desegnos-storage` persists through the existing archive/journal paths. No provider request, key access or executable product plugin is involved.
 
 The system adapter uses the official [Tauri clipboard plugin](https://v2.tauri.app/plugin/clipboard/), pinned to `tauri-plugin-clipboard-manager` 2.5.0 (MIT OR Apache-2.0). Its existing platform adapters support the desktop clipboard; it adds no JavaScript dependency. The lockfile adds 35 transitive packages without upgrading existing resolutions. Image support comes from the official adapter's platform feature set, although this feature transfers typed UTF-8 layer packets only. No general clipboard permission is granted to the frontend or preview. Reads occur only on Paste, writes only on Copy or Cut, on blocking workers outside the workspace lock. There is no startup read, clipboard polling or clipboard clearing.
 

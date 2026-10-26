@@ -6,7 +6,7 @@ Create the real controlled export through the existing compiler and safe writer:
 
 ```sh
 mkdir -p test-results/export-browser-fixture
-node scripts/cargo.mjs run --offline -p desegni-storage --example export_browser_fixture -- "$PWD/test-results/export-browser-fixture"
+node scripts/cargo.mjs run --offline -p desegnos-storage --example export_browser_fixture -- "$PWD/test-results/export-browser-fixture"
 ```
 
 The example prints JSON containing the newly written website `path`. Pass that path to the browser matrix:

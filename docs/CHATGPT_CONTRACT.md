@@ -32,7 +32,7 @@ Only the intersection of the current account's discovered model catalogue and De
 
 ## Native authentication manager
 
-`ChatgptManager` lives in `desegni-ai`, owns no project authority and receives only its private authentication directory. Root integration adapts its concrete method signatures while preserving these responsibilities:
+`ChatgptManager` lives in `desegnos-ai`, owns no project authority and receives only its private authentication directory. Root integration adapts its concrete method signatures while preserving these responsibilities:
 
 - Start/cancel browser authorization, returning the URL only to native code that opens the fixed trusted destination.
 - Read public status, choose/add/reauthorize saved accounts, acknowledge first plan-use welcome and sign out.

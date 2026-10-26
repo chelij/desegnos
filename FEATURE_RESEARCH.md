@@ -1,6 +1,6 @@
-# Further feature research for Desegni
+# Further feature research for Desegnos
 
-Reviewed 18 October 2026. The [release plan](RELEASE_PLAN.md) includes multi-page sites, reusable components/shared styles, interaction/form states, search/sharing settings, fonts/media, persistent checkpoints, site checks, and the project brief. It also specifies Desegni's automatic project memory, requirements Markdown sent to the agent, verified component reuse, creative design feedback, and native ChatGPT-plan access alongside API keys. The eight capabilities below remain additional candidates; they are excluded from the current 54 to 72 week full-project delivery budget. Their possible plugin boundaries are assessed in the [plugin review](PLUGIN_REVIEW.md).
+Reviewed 18 October 2026. The [release plan](RELEASE_PLAN.md) includes multi-page sites, reusable components/shared styles, interaction/form states, search/sharing settings, fonts/media, persistent checkpoints, site checks, and the project brief. It also specifies Desegnos's automatic project memory, requirements Markdown sent to the agent, verified component reuse, creative design feedback, and native ChatGPT-plan access alongside API keys. The eight capabilities below remain additional candidates; they are excluded from the current 54 to 72 week full-project delivery budget. Their possible plugin boundaries are assessed in the [plugin review](PLUGIN_REVIEW.md).
 
 The strongest next decisions are local content collections and linked multilingual content if blogs, catalogues, or translated sites are central uses. Visitor search and publishing/staging follow naturally as sites grow. Project-wide find/replace is a smaller, broadly useful editing improvement. These priorities are product judgments informed by primary documentation, not measured customer-demand statistics.
 
@@ -19,7 +19,7 @@ The strongest next decisions are local content collections and linked multilingu
 
 Mature visual editors treat structured content and its presentation separately. [Webflow's collection documentation](https://help.webflow.com/hc/en-us/articles/33961244391059-Manage-CMS-Collections) describes schemas, entries, template pages, and references; its [CSV import/export documentation](https://help.webflow.com/hc/en-us/articles/33961290794771-How-do-I-import-content-into-the-Webflow-CMS) shows the bulk-editing workflow.
 
-A complete Desegni capability would keep typed collections inside the project: text/rich text, images/assets, dates, numbers, links, options, and item references. Users would create real items, bind component fields to them, filter/sort lists, paginate, and generate item pages from a reusable template. CSV/JSON import would show field mappings, validation failures, and update-versus-add behavior before changing data. Export would include the actual content and required asset bytes, with no dependency on a temporary vendor image URL or an app account.
+A complete Desegnos capability would keep typed collections inside the project: text/rich text, images/assets, dates, numbers, links, options, and item references. Users would create real items, bind component fields to them, filter/sort lists, paginate, and generate item pages from a reusable template. CSV/JSON import would show field mappings, validation failures, and update-versus-add behavior before changing data. Export would include the actual content and required asset bytes, with no dependency on a temporary vendor image URL or an app account.
 
 AI changes would target a collection schema, template, or selected items explicitly. A template update must report all affected pages. Deleting a referenced item must resolve its uses. Drafts and missing required fields cannot become fictional published entries. Scheduled publication would require a real scheduled deployment mechanism and should not be advertised merely because an item has a date field.
 
@@ -35,7 +35,7 @@ Exports would contain real localized pages, correct language/direction, alternat
 
 ## 3. Visitor site search
 
-[Webflow documents a visitor search workflow](https://help.webflow.com/hc/en-us/articles/33961242348179-Site-search) with results, snippets, and page/element exclusions. Its documentation also states that its search does not work in exported sites. For Desegni, export independence makes an included search index a central acceptance requirement.
+[Webflow documents a visitor search workflow](https://help.webflow.com/hc/en-us/articles/33961242348179-Site-search) with results, snippets, and page/element exclusions. Its documentation also states that its search does not work in exported sites. For Desegnos, export independence makes an included search index a central acceptance requirement.
 
 A complete capability would index the actual included site text and metadata during export, provide a keyboard-accessible search field/results view, and support useful snippets, highlights, pagination, and real empty results. Users could exclude pages or repeated navigation content separately from search-engine indexing. Never include draft content, the private brief, history, credentials, or form values. If collections or locales are selected, their published content and language relationships must be reflected in the index.
 
@@ -51,7 +51,7 @@ Interrupted requests require reconciliation with provider state rather than dupl
 
 ## 5. Project-wide find and replace
 
-[Dreamweaver's find/replace documentation](https://helpx.adobe.com/nz/dreamweaver/desktop/page-content-and-assets/find-replace-text.html) includes document, folder, and whole-site scopes. That workflow is directly relevant once Desegni owns a multi-page project.
+[Dreamweaver's find/replace documentation](https://helpx.adobe.com/nz/dreamweaver/desktop/page-content-and-assets/find-replace-text.html) includes document, folder, and whole-site scopes. That workflow is directly relevant once Desegnos owns a multi-page project.
 
 A complete capability would search editable page text, shared definitions, instance overrides, link destinations, alternative text, and metadata. Users could filter scope, navigate matches, preview proposed replacements and affected instances, and commit one atomic transaction with a safety checkpoint. Changing a definition should replace the source value once and report its instance impact, rather than accidentally replacing repeated rendered copies. Protected content needs a deliberate unlock or explicit protected-target change.
 

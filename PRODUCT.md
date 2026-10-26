@@ -32,7 +32,7 @@ What this means in practice:
 | Later | **Paid hosted generation:** a Desegnos service runs generation, so users don't need their own key. BYOK remains available. |
 
 Implications for current work:
-- **Hosted generation is a provider.** Build it as one more adapter behind the `desegni-ai` provider boundary, with the same frozen requirements, streaming, cancellation and usage reporting as the others. Nothing in the editor should assume a user-supplied key.
+- **Hosted generation is a provider.** Build it as one more adapter behind the `desegnos-ai` provider boundary, with the same frozen requirements, streaming, cancellation and usage reporting as the others. Nothing in the editor should assume a user-supplied key.
 - **Report usage in provider-neutral terms.** Usage and cost display must already cover "plan/credits" vs. "USD estimate", as the ChatGPT path does today.
 - **Accounts later.** A paid service will need sign-in, billing and a server. Don't build them now, but keep account state isolated in native code, the way ChatGPT accounts are handled.
 

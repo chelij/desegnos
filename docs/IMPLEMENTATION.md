@@ -47,14 +47,14 @@ Accepted source appears under the on-canvas requests. Preview site forwards real
 
 | Module | Authority |
 | --- | --- |
-| `desegni-core` | Authoritative project/source/candidate state, scoped decisions, exact requirements, hashes, coverage/bounds, transactions and undo/redo. No HTTP or credentials. |
-| `desegni-storage` | Bounded archives, integrity, atomic writes, backups, locks, migration and durable accepted-state recovery. |
-| `desegni-ai` | Fixed OpenAI transport, native credentials, verified capabilities/prices, estimates and bounded parsing. Receives frozen input/schema and returns text/usage; cannot mutate projects, install packages or select filesystem paths. |
+| `desegnos-core` | Authoritative project/source/candidate state, scoped decisions, exact requirements, hashes, coverage/bounds, transactions and undo/redo. No HTTP or credentials. |
+| `desegnos-storage` | Bounded archives, integrity, atomic writes, backups, locks, migration and durable accepted-state recovery. |
+| `desegnos-ai` | Fixed OpenAI transport, native credentials, verified capabilities/prices, estimates and bounded parsing. Receives frozen input/schema and returns text/usage; cannot mutate projects, install packages or select filesystem paths. |
 | `src-tauri` | Trusted window permissions, native dialogs/lifecycle, private job ledger/checkpoints, cancellation, preview registration and core-authorized application. |
 | React editor | Transient input, disclosure, review and display of native state. No provider HTTP, persistent keys or authority to fabricate accepted projects. |
 | Future plugins | Versioned extension data is preserved today. There is no executable plugin host. Future adapters/catalogues must pass the requirements, permissions, validation and transaction boundaries. |
 
-The [provider dependency/advisory review](../crates/desegni-ai/README.md) records concrete roles, pinned versions and limits. The Linux preview uses Tauri's existing WebKitGTK binding. Test-only loopback/vault/driver support requires explicit debug features and is rejected in release compilation. Product builds expose no endpoint override or WebDriver server.
+The [provider dependency/advisory review](../crates/desegnos-ai/README.md) records concrete roles, pinned versions and limits. The Linux preview uses Tauri's existing WebKitGTK binding. Test-only loopback/vault/driver support requires explicit debug features and is rejected in release compilation. Product builds expose no endpoint override or WebDriver server.
 
 ## Persistence and recovery
 
@@ -420,3 +420,12 @@ The core owns typed clipboard validation, atomic source/request transactions and
 Verification: **281 offline Rust tests**, including 14 focused layer/clipboard contracts, **37 canvas/shortcut checks**, strict all-target/all-feature Clippy, formatting and TypeScript/Vite pass. The [18-step Layers run](../test-results/native/2026-10-19T13-56-10-595Z-1199636/report.json) verifies trusted overlap picks, request and nested stacking, unchanged backgrounds/bounds/DOM reading order, boxless-wrapper selection, actual OS clipboard use, before/after/normal-content marker and SVG copying, cross-page paste, text clipboard isolation, history, Save/Open, ordinary Chromium export and forced-crash recovery. Its browser and recovery error lists are empty. The [25-step editor regression](../test-results/native/2026-10-19T13-40-23-696Z-1139883/report.json) and [11-step canvas regression](../test-results/native/2026-10-19T13-53-46-955Z-1189122/report.json) pass on the same functional implementation; the final label-only refinement does not change their tested paths. Light/dark and 760px screenshots were inspected. Private profiles/displays are removed and desktop connections/resources are preserved. Tests use a synthetic local provider; no paid inference or user credential was used. Linux WebKitGTK is verified; Windows/macOS clipboard and distribution certification still require their own runners.
 
 Normal debug/release builds and fresh initialization pass with automation ports closed. The final [release startup](../test-results/startup/2026-10-19T13-58-17-264Z-1207935/report.json) screenshot was inspected; the [debug startup](../test-results/startup/2026-10-19T13-58-58-169Z-1213239/report.json) uses the same final source. The updated release was relaunched on its previous workspace and reopened the prior saved project through Recent projects. Its existing archive hash remains unchanged, and a named pre-relaunch backup is retained in WebMaker. The [delivery record](../test-results/layers-2026-10-19/delivery.json) identifies exact binary hashes and verification reports.
+
+
+## Full rename and startup migration (26 October 2026)
+
+The preview rename supersedes the earlier identity-preservation notes above. Crates/directories/packages now use `desegnos`, the app identifier is `io.github.chelij.desegnos`, the preview scheme is `desegnos-preview`, and environment variables use `DESEGNOS_*` only. Default app folders migrate before the data probe; explicit data overrides remain in place. Vault migration verifies copies before deleting old entries. OAuth account/host/client IDs and grants stay unchanged. See [FILENAMES.md](FILENAMES.md) for retry and rollback behavior.
+
+New archives write the `desegnos` marker and current canonical project-note branding. Both archive markers, old project notes, and `.desegni` filenames remain readable. Legacy frozen requirements preserve their exact text and digest. Old fixtures and benchmark project files remain unchanged.
+
+Directory, vault-copy and archive compatibility unit tests were added but not run at the owner's request. No build or native suite was run. Offline Cargo metadata and JavaScript syntax checks are the allowed validation for this change; native migration, vault access and the tests require owner verification after merge.

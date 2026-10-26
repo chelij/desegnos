@@ -8,10 +8,10 @@ Date: 2026-10-20. Source: comparison with codex-openpencil (README only, not ins
 
 | Area | Current behavior | Where |
 | --- | --- | --- |
-| Ask AI target | One element per request, stored as `ElementTarget { selector, tag, label, sourceSha256 }`. The selector is a positional `tag:nth-of-type(n)` path. | `src/types.ts`, `crates/desegni-core/src/editing.rs` `locate` |
-| Scope check | `validate_scope` (format 8+) removes the targeted nodes and rejects the result if anything else in the body changed. | `crates/desegni-core/src/generation_scope.rs` |
+| Ask AI target | One element per request, stored as `ElementTarget { selector, tag, label, sourceSha256 }`. The selector is a positional `tag:nth-of-type(n)` path. | `src/types.ts`, `crates/desegnos-core/src/editing.rs` `locate` |
+| Scope check | `validate_scope` (format 8+) removes the targeted nodes and rejects the result if anything else in the body changed. | `crates/desegnos-core/src/generation_scope.rs` |
 | Duplicate requests | `pickElement` reuses an open request only when both the selector and `sourceSha256` match. | `src/App.tsx` `pickElement` |
-| Recovery | A per-project recovery journal of full snapshots. **Recover unsaved projects** lists them on start and in the Menu. | `crates/desegni-storage/src/lib.rs`, `src-tauri/src/workspace.rs` |
+| Recovery | A per-project recovery journal of full snapshots. **Recover unsaved projects** lists them on start and in the Menu. | `crates/desegnos-storage/src/lib.rs`, `src-tauri/src/workspace.rs` |
 | Save | Atomic write with a backup. Before overwriting, it only checks that the existing file loads. | `ProjectFile::save`, `save_project` |
 
 ## Problems

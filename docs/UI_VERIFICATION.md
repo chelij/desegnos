@@ -85,7 +85,7 @@ The following dated sections retain historical evidence for earlier builds.
 
 - Dials PASS: ENERGY 1 / RHYTHM 2 / MOTION 1 remains consistent with a quiet authoring workspace.
 - Focus and rhythm PASS: the page and on-canvas requests remain the focal point; compact chrome and temporary dialogs provide structural spacing.
-- Accent and identity PASS: a restrained blue distinguishes primary actions, selection, keyboard focus and placement guides against neutral grey surfaces. The percentage rulers and inline requests remain the repeated authoring motif. This is the user's palette direction applied to Desegni's existing layout.
+- Accent and identity PASS: a restrained blue distinguishes primary actions, selection, keyboard focus and placement guides against neutral grey surfaces. The percentage rulers and inline requests remain the repeated authoring motif. This is the user's palette direction applied to Desegnos's existing layout.
 - Design Read PASS: DESIGN.md records the grey-chrome purpose, independent page appearance, guide colors and unchanged interaction before delivery.
 
 ### Craftsmanship and Quality Locks: PASS

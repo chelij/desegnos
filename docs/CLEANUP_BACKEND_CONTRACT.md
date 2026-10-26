@@ -101,7 +101,7 @@ Local replacement retains the original root identity. Pasting a layer discards c
 ## Phone fixes and website brand import (2026-10-20)
 
 - `edit_project` command `{ type: 'set_region_mobile_only', page_id, region_id, mobile_only }` marks a request as a phone-layout fix (`Region.mobileOnly`). Format-10 requirements add `"mobileOnly": true` to that area plus phone instructions. The scope check accepts only CSS changes inside `@media` rules whose width limits are ≤ 820 px (no print or orientation queries), with HTML and JavaScript unchanged. A page whose requests mix phone fixes with other requests is refused by `prepare_requirements`.
-- `fetch_identity_source({ url })` returns the same `IdentitySourceManifest` as `pick_identity_source`. It accepts `example.com` or a full `https://` address, and errors are plain sentences ("That website couldn’t be read: it …"). Debug native-test builds read `DESEGNI_NATIVE_TEST_WEBSITE_ORIGIN` for a local fixture site.
+- `fetch_identity_source({ url })` returns the same `IdentitySourceManifest` as `pick_identity_source`. It accepts `example.com` or a full `https://` address, and errors are plain sentences ("That website couldn’t be read: it …"). Debug native-test builds read `DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN` for a local fixture site.
 
 ## Projects, context and attachments (2026-10-20)
 

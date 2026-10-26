@@ -10,4 +10,4 @@ The rendered context and relative ages are frozen in the requirements snapshot a
 
 Each index record retains the complete original target list for its job-wide summary. The section renders that summary only when the current request includes every original target; otherwise `summary` is null. Older index records without this scope information also render a null summary, while keeping their area-specific request and outcome. This scope information survives index compaction even when other areas' records are dropped.
 
-Focused verification: `cargo test -q -p desegni-core request_history --lib`.
+Focused verification: `cargo test -q -p desegnos-core request_history --lib`.
