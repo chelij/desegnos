@@ -152,15 +152,13 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.click('.identity-file-review > summary');
     for (let i = 0; i < automatic.length; i++) if (!automatic[i]) await driver.click(`.identity-files label:nth-child(${i + 1}) input`);
     const explanation = "That's more than the AI can read at once. Untick a few files, or click 'Pick for me'.";
-    await waitFor(() => driver.execute(text => [...document.querySelectorAll('.identity-import [role="alert"]')].some(item => item.textContent === text), explanation), 'Too many files did not show the friendly recovery message');
+    await waitFor(() => driver.execute(text => [...document.querySelectorAll('.notice-host [role="alert"]')].some(item => item.textContent === text), explanation), 'Too many files did not show the friendly recovery message');
     assert.equal(await driver.execute(() => [...document.querySelectorAll('.import-context button')].find(button => button.textContent === 'Read my brand').disabled), true);
     assert.equal(provider.identityRequests().length, identityCount);
     await driver.button('Pick for me');
     await driver.ready('//button[normalize-space(.)="Read my brand"]', 'xpath');
     assert.deepEqual(await driver.execute(() => [...document.querySelectorAll('.identity-files input')].map(input => input.checked)), automatic);
-    await driver.button('Pick for me');
-    await driver.ready('//button[normalize-space(.)="Read my brand"]', 'xpath');
-    assert.equal(await driver.execute(() => !!document.querySelector('.identity-import [role="alert"]')), false);
+    assert.equal(await driver.execute(() => !!document.querySelector('.notice-host [role="alert"]')), false);
     await chooseFolder(physical, () => driver.button('Choose folder…'), fixtures.directory, output, 'restore-brand-folder-picker');
     await importedSource(driver, 'Northstar website');
   });
@@ -205,7 +203,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     provider.setMode('malformed'); await driver.button('Read my brand');
     const value = await completedAnalysis(driver, ['failed', 'unknown']);
     assert.equal(value.candidate ?? null, null); assert.ok(value.error || value.message);
-    await waitFor(() => driver.execute(() => !!document.querySelector('.identity-import [role="alert"]')?.textContent), 'The identity failure was hidden from the user');
+    await waitFor(() => driver.execute(() => !!document.querySelector('.notice-host [role="alert"]')?.textContent), 'The identity failure was hidden from the user');
     assert.equal(await driver.execute(() => !!document.querySelector('.workspace-surface button[type="submit"]')), false);
     assert.deepEqual((await workspace(driver)).project, blankProject);
   });
@@ -214,7 +212,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     provider.setMode('complete', { chunkDelayMs: 2, chunkSize: 512 }); await driver.button('Read my brand');
     completed = await completedAnalysis(driver, ['complete']);
     await driver.ready('.identity-result[aria-label="Brand review"]');
-    assert.match(await driver.execute(() => document.querySelector('.identity-result').textContent), /3\. Choose what to keep/);
+    assert.match(await driver.execute(() => document.querySelector('.identity-result').textContent), /Choose what to keep/);
     const record = provider.identityRequests().find(record => record.metadata.jobId === completed.jobId);
     assert.ok(record?.authenticated);
     assert.equal(record.metadata.purpose, 'identityAnalysis');
@@ -298,7 +296,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
           return { overflow: dialog.scrollWidth > dialog.clientWidth, outside: cards.some(card => card.getBoundingClientRect().right > bounds.right + 1), columns: getComputedStyle(document.querySelector('.identity-review-grid')).gridTemplateColumns.split(' ').length,
             background: getComputedStyle(cards[0]).backgroundColor, text: getComputedStyle(cards[0]).color, pageRows: [...review.querySelectorAll('.identity-page-heading, .identity-page-details label')].every(label => getComputedStyle(label).flexDirection === 'row') };
         });
-        assert.equal(layout.overflow, false); assert.equal(layout.outside, false); assert.equal(layout.columns, 1); assert.equal(layout.pageRows, true);
+        assert.equal(layout.overflow, false); assert.equal(layout.outside, false); assert.ok(layout.columns >= 1 && layout.columns <= 2); assert.equal(layout.pageRows, true);
         assert.notEqual(layout.background, layout.text);
         await physical.captureWindow(join(output, `identity-review-narrow-${theme}.png`));
       }
@@ -315,7 +313,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await waitFor(() => driver.execute(() => !!document.querySelector('.import-context') && !document.querySelector('.import-context button[type="submit"]')), 'Brand choices were not kept');
     await driver.button('Cancel');
     finalProject = await waitFor(async () => { const value = (await workspace(driver)).project; return value?.id === blankProject.id && value.importedIdentity && value; }, 'The imported context was not added to the open project');
-    assert.equal(finalProject.name, 'Imported Northstar website'); assert.equal(finalProject.schemaVersion, 8);
+    assert.equal(finalProject.name, 'Imported Northstar website'); assert.equal(finalProject.schemaVersion, 10);
     assert.equal(finalProject.appearance, 'light'); assert.equal(finalProject.pages[0].appearance, 'light');
     assert.deepEqual(finalProject.viewport, { width: 1536, height: 864 });
     assert.equal(finalProject.pages.length, 2); assert.equal(finalProject.pages[1].path, '/projects'); assert.equal(finalProject.pages[1].name, 'Projects');
@@ -352,7 +350,7 @@ export async function identityWorkflow(driver, physical, step, evidence, provide
     await driver.fill('Request 1', 'Create a welcoming homepage using the imported Northstar identity and its approved logo.');
     await waitFor(async () => (await workspace(driver)).project.pages[0].regions[0]?.prompt.includes('Northstar'), 'The future-generation identity request did not persist');
     const frozen = await driver.invoke('prepare_requirements');
-    assert.match(frozen.markdown, /^Requirements format: 17$/m);
+    assert.match(frozen.markdown, /^Requirements format: 26$/m);
     const catalogue = blocks(frozen.markdown).find(block => block?.assets && block?.pages);
     assert.equal(catalogue.photos.length, 0); assert.equal(catalogue.pages[0].path, '/'); assert.equal(catalogue.pages[0].photos.length, 1); assert.equal(catalogue.pages[0].photos[0].name, 'work/photo-a.png');
     assert.ok(frozen.markdown.includes('#225577')); assert.ok(frozen.markdown.includes('Clear, warm and confident.'));

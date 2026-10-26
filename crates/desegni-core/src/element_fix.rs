@@ -350,7 +350,10 @@ impl GenerationCandidate {
             pages.push(GeneratedPage {
                 page_id: fix.page_id,
                 content: SiteContent {
-                    html: editing::serialized(&doc)?,
+                    // Page sources are body fragments; serializing the whole document here would
+                    // differ from the reply that was retained for review and from every other
+                    // generation path, which keeps the fragment form.
+                    html: editing::body(&doc)?.inner_html().to_string(),
                     css: if fix.css.is_empty() {
                         content.css.clone()
                     } else {

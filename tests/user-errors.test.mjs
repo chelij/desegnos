@@ -49,6 +49,8 @@ try {
   await test('native and caught errors hide internal details and keep plain instructions', () => {
     assert.equal(userError(''), '');
     assert.equal(userError('Select an item first.'), 'Select an item first.');
+    assert.equal(userError("That's more than the AI can read at once. Untick a few files, or click 'Pick for me'."), "That's more than the AI can read at once. Untick a few files, or click 'Pick for me'.");
+    assert.equal(userError('Confirm the intended audience before adding it to the brief.'), 'Confirm the intended audience before adding it to the brief.');
     assert.equal(userError(new Error('Choose an image first.')), 'Choose an image first.');
     assert.equal(userError({ code: 'unchanged', message: 'Permission denied: /home/private/site.desegni' }), "Desegnos can't save here. Choose another folder.");
     assert.equal(userError('No space left on device: /private/file'), 'Your storage is full. Free some space and try again.');

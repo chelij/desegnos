@@ -29,7 +29,7 @@ export function generationError(reason: string, request = 'this request', affect
 const technical = /[\n\r<>`{}\[\]\\/#:;]|\b[\da-f]{8}-[\da-f-]{27,}\b|\b\w*(?:Error|Exception)\b|\b(?:scopes?|dossiers?|candidates?|schemas?|salvaged|revisions?|regions?|stack|root|DOM|CSS|HTML|JavaScript|finite|MiB|identity|analysis|selector|attribute|validation|checkpoint|journal|persist|mutex|poisoned|executable|stacking|painting|packet|manifest|digest|provenance|credential|vault|keyring)\b|\b\w+\.\w+|(?:^|\s)[.#][\w-]+|\w+\(/i;
 
 function isPlain(value: string): boolean {
-  return value.length <= 160 && !technical.test(value) && /^(?:This |That |The |Your |Choose |Select |Enter |Open |Save |Add |Remove |Wait |Stop |Sign |Allow |Keep |Could|Can|We |No |Only |There |A |An |Desegnos |Please |Too )/.test(value) && (value.match(/[.!?](?:\s|$)/g)?.length ?? 0) <= 2;
+  return value.length <= 160 && !technical.test(value) && /^(?:This |That |That's |The |Your |Choose |Select |Enter |Open |Save |Add |Remove |Wait |Stop |Sign |Allow |Keep |Could|Can|We |No |Only |There |A |An |Desegnos |Please |Too |Confirm )/.test(value) && (value.match(/[.!?](?:\s|$)/g)?.length ?? 0) <= 2;
 }
 
 // Model explanations may use punctuation and questions freely but must not leak internals.

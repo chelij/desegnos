@@ -798,6 +798,9 @@ function Editor() {
       void synchronize().then(() => setNotice('Pictures resized and updated.')).catch(() => {});
       return;
     }
+    // A previous apply failure (for example a stale result that lost a race with its
+    // block) must not suppress this generation's own progress and result notices.
+    setError('');
     setShowLog(true);
     void generation.prepare().catch(() => {});
   }

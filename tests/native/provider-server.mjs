@@ -69,6 +69,7 @@ setTimeout(()=>send('ready',{...report,action:rect('fixture-action'),retained:re
 function candidateFor(record, endpoint, options) {
   const requests = jsonBlocks(record.markdown).filter(value => value && typeof value === 'object' && value.regionId && value.pageId);
   assert.ok(requests.length > 0, 'The attached requirements contain no requested areas');
+  const format = Number(record.markdown.match(/^Requirements format: (\d+)$/m)?.[1] ?? 0);
   const pageIds = [...new Set(requests.map(value => value.pageId))];
   const conflict = options.conflict === true;
   return {
@@ -94,7 +95,7 @@ function candidateFor(record, endpoint, options) {
         }
         return {pageId,content};
       }
-      if (/^Requirements format: (?:8|9|10|11|12|13|14|15|16|17|18)$/m.test(record.markdown)) {
+      if (format >= 8) {
         // placeAttachments: put each attached picture in its request, as the AI is asked to.
         const pictures = area => options.placeAttachments ? (area.attachments ?? []).filter(item => item.kind === 'image').map(item => `<img data-desegnos-attachment="${item.id}" src="#" width="320" height="200" alt="Attached picture">`).join('') : '';
         content.html = content.html.replace('<main', `<main data-desegnos-region="${areas[0].regionId}"`).replace('</main>', `${pictures(areas[0])}</main>`);
@@ -163,7 +164,8 @@ function readRequest(bytes, ordinal, mode, authentication) {
   const decoded = Buffer.from(encoded[1], 'base64');
   assert.equal(decoded.toString('base64'), encoded[1], 'Non-canonical Base64 file');
   const markdown = decoded.toString('utf8');
-  const webSearch = purpose === 'generation' && /^Requirements format: (?:8|9|10|11|12|13|14|15|16|17|18)$/m.test(markdown);
+  const format = Number(markdown.match(/^Requirements format: (\d+)$/m)?.[1] ?? 0);
+  const webSearch = purpose === 'generation' && format >= 8 && /"webSearch":\s*true/.test(markdown);
   assert.deepEqual(body.tools, webSearch ? [{type:'web_search'}] : []); assert.equal(body.tool_choice, webSearch ? 'auto' : 'none');
   assert.deepEqual(Buffer.from(markdown, 'utf8'), decoded, 'Requirements are not exact valid UTF-8');
   assert.deepEqual(body.text.format.schema.properties.jobId.enum, [metadata.jobId]);

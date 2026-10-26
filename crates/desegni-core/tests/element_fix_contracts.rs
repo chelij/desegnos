@@ -146,6 +146,9 @@ fn a_reply_rebuilds_the_whole_page_and_passes_normal_validation() {
     candidate.resolve_project_assets(&p).unwrap();
     candidate.validate(&s, &p).unwrap();
     let page = &candidate.pages[0].content;
+    // Element fixes rebuild the page as the same body fragment other generation paths store.
+    assert!(!page.html.to_ascii_lowercase().starts_with("<!doctype"));
+    assert!(!page.html.to_ascii_lowercase().starts_with("<html"));
     assert_eq!(page.css, original.css);
     assert!(page.html.contains("background:none"));
     assert_eq!(page.javascript, original.javascript);

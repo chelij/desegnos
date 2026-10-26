@@ -23,7 +23,7 @@ export async function assertCanvasOnly(driver) {
 export async function assertGenerationModes(driver) {
   await driver.menu(['AI style']);
   const choices=await driver.execute(()=>[...document.querySelectorAll('[role=menu][aria-label="AI style"] button')].map(b=>({label:b.getAttribute('aria-label'),checked:b.getAttribute('aria-checked')})));
-  assert.deepEqual(choices.map(c=>c.label),['Flexible — small adjustments only','Precise — follow placement closely']);
+  assert.deepEqual(choices.map(c=>c.label),['Flexible','Precise']);
   const mode=(await driver.invoke('get_workspace')).project.generationMode;
   assert.equal(choices[mode==='strict'?1:0].checked,'true');
   await driver.escape();

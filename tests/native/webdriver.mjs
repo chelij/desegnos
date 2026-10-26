@@ -127,7 +127,7 @@ export class WebDriver {
     }, text);
     if (text === 'Generation status') return this.button('AI log');
     if (text === 'Retry same snapshot') return this.menu(['Advanced', 'Retry original request'], 'Generation options');
-    if (text === 'Fuzzy' || text === 'Strict') return this.menu(['AI style', text === 'Strict' ? 'Precise — follow placement closely' : 'Flexible — small adjustments only']);
+    if (text === 'Fuzzy' || text === 'Strict') return this.menu(['AI style', text === 'Strict' ? 'Precise' : 'Flexible']);
     const routes = {
       'Add page': ['Add page'], 'AI settings':['AI settings'],
       'New project': ['New project'], 'Open project': ['Open project'], Save: ['Save'], 'Save as': ['Save as'],
