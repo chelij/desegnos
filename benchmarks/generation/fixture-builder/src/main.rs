@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (offset, scenario) in scenarios.iter().enumerate() {
         let case = offset + 1;
         let name = scenario["id"].as_str().ok_or("Missing scenario id")?;
-        let path = root.join("projects").join(format!("{name}.desegni"));
+        let path = root.join("projects").join(format!("{name}.desegnos"));
         {
             if mode == "--write" && path.exists() {
                 return Err(format!(
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if scenario["importedBrand"].as_bool() == Some(true) {
                 let asset: IdentityAsset =
                     serde_json::from_slice(&fs::read(root.join("brand/logo.json"))?)?;
-                let imported = ImportedIdentity { source_name: "Fixed benchmark brand".into(), source_sha256: digest(&fs::read(root.join("brand/IDENTITY.md"))?), summary: "Northstar Studio uses blue #225577, warm white #faf8f2 and ink #18232a, with the approved star logo and clear, welcoming language.".into(), assets: vec![asset] };
+                let imported = ImportedIdentity { source_name: "Fixed benchmark brand".into(), source_sha256: digest(&fs::read(root.join("brand/IDENTITY.md"))?), summary: "Northstar Studio uses blue #225577, warm white #faf8f2 and ink #18232a, with the approved star logo and clear, welcoming language.".into(), assets: vec![asset], photos: vec![], content: vec![], pages: vec![] };
                 project = project.set_initial_identity(imported)?;
             }
             project.generation_mode = if scenario["mode"] == "strict" {
@@ -94,6 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .as_ref()
                             .ok_or("Element revisions need accepted source")?;
                         Some(ElementTarget {
+                            id: String::new(),
                             selector: request["element"]["selector"]
                                 .as_str()
                                 .ok_or("Missing selector")?
@@ -111,14 +112,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         None
                     };
-                    page.regions.push(Region {
-                        id: id(case, 100 + page_offset * 100 + request_offset),
-                        rect: serde_json::from_value::<Rect>(request["rect"].clone())?,
-                        z_index: request_offset as i32,
-                        prompt: request["prompt"].as_str().ok_or("Missing prompt")?.into(),
-                        element,
-                        completed: false,
-                    });
+                    page.regions.push(serde_json::from_value::<Region>(json!({
+                        "id": id(case, 100 + page_offset * 100 + request_offset),
+                        "rect": serde_json::from_value::<Rect>(request["rect"].clone())?,
+                        "zIndex": request_offset,
+                        "prompt": request["prompt"].as_str().ok_or("Missing prompt")?,
+                        "elements": element.into_iter().collect::<Vec<_>>(),
+                    }))?);
                 }
                 pages.push(page);
             }
@@ -126,7 +126,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             project.validate()?;
             for page in &project.pages {
                 for region in &page.regions {
-                    if let Some(target) = &region.element {
+                    for target in &region.elements {
                         project.inspect_element(page.id, target)?;
                     }
                 }
@@ -146,7 +146,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if project.pending_count() == 0 || prepared.region_count == 0 {
             return Err("Every benchmark fixture needs real pending requests".into());
         }
-        reports.push(json!({ "id": name, "path": format!("projects/{name}.desegni"), "sha256": digest(&fs::read(path)?), "projectId": project.id, "pendingRequests": prepared.region_count, "affectedPages": prepared.page_count, "requirementsBytes": prepared.markdown.len() }));
+        reports.push(json!({ "id": name, "path": format!("projects/{name}.desegnos"), "sha256": digest(&fs::read(path)?), "projectId": project.id, "pendingRequests": prepared.region_count, "affectedPages": prepared.page_count }));
     }
     println!(
         "{}",

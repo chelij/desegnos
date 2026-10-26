@@ -3,164 +3,146 @@
     {
       "affectedPages": 1,
       "id": "01-hero",
-      "path": "projects/01-hero.desegni",
+      "path": "projects/01-hero.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000010000",
-      "requirementsBytes": 19753,
-      "sha256": "0d8e6eb0671c166557e88ba97217282edff6e3fd6cb6eb528074ea4ab04de0e2"
+      "sha256": "61a910a7dc8fd8243d3d0bc060783e4dad0a5b19b92437e99a4a15e7f50b7c94"
     },
     {
       "affectedPages": 1,
       "id": "02-pricing",
-      "path": "projects/02-pricing.desegni",
+      "path": "projects/02-pricing.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000020000",
-      "requirementsBytes": 19785,
-      "sha256": "05eb0f85cebae6447f3be97dc67cd40465dac36719e7754e2f5d3b605cafad7f"
+      "sha256": "04ba69f0a71f399ae8e27015138180efceb677cec61307c0058faec50fc4fa7c"
     },
     {
       "affectedPages": 1,
       "id": "03-contact",
-      "path": "projects/03-contact.desegni",
+      "path": "projects/03-contact.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000030000",
-      "requirementsBytes": 19793,
-      "sha256": "1e4409f7992488d5d3ee91c79cfca6963243eeddb35e0cf800a6a011ee0faf32"
+      "sha256": "5ad98754c148f2f9ee52e09bf2f5d863685d5cafc4f7d506c0c0a22d8b7a8f0c"
     },
     {
       "affectedPages": 1,
       "id": "04-about",
-      "path": "projects/04-about.desegni",
+      "path": "projects/04-about.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000040000",
-      "requirementsBytes": 19743,
-      "sha256": "a950f7f0ca06bea3864e1a9d09c5681f67a1c88282ead1b89ecfdfc599c70309"
+      "sha256": "9f5ada55b562103124d202649d23b09e403f2d72dfa61563e5adde12f6762f72"
     },
     {
       "affectedPages": 1,
       "id": "05-mobile-home",
-      "path": "projects/05-mobile-home.desegni",
+      "path": "projects/05-mobile-home.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000050000",
-      "requirementsBytes": 19749,
-      "sha256": "82a74bdf3128c60fd63b47c959e45318053e3069e22f2e823296ae62c2e193f3"
+      "sha256": "3a621eb6e80a8cf86811d847def9d56caa5d9345462cc8ff8e1288e601f6e47a"
     },
     {
       "affectedPages": 1,
       "id": "06-button-revision",
-      "path": "projects/06-button-revision.desegni",
+      "path": "projects/06-button-revision.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000060000",
-      "requirementsBytes": 20770,
-      "sha256": "99815ddd9caa98ef3c900af822f1b6369fafe871cfde71db515c4a1e51c73815"
+      "sha256": "0a3b5197c2c62c6598ce5b0159e93173cc35f3c649c80c107f98bcfb497c504b"
     },
     {
       "affectedPages": 1,
       "id": "07-multi-flexible",
-      "path": "projects/07-multi-flexible.desegni",
+      "path": "projects/07-multi-flexible.desegnos",
       "pendingRequests": 4,
       "projectId": "d35e6000-0000-4000-8000-000000070000",
-      "requirementsBytes": 21676,
-      "sha256": "8f71bc92dba11a85330a12d683413a662e5a2944e103e3df49ad7238b7bd78b6"
+      "sha256": "e335350f977006e22eacea6a8a47550e0d405cc31e3f9f8c3973cc79d81268d7"
     },
     {
       "affectedPages": 1,
       "id": "08-multi-precise",
-      "path": "projects/08-multi-precise.desegni",
+      "path": "projects/08-multi-precise.desegnos",
       "pendingRequests": 4,
       "projectId": "d35e6000-0000-4000-8000-000000080000",
-      "requirementsBytes": 21676,
-      "sha256": "a7a11462ff73c56d12f041b87b63eb68cce46ccc9430aba2947d4ed420c0a9b7"
+      "sha256": "bcf039eba6cd0bd7b5eff636a7d0886dec4447162380522fc42a2e1369e1763f"
     },
     {
       "affectedPages": 1,
       "id": "09-imported-brand",
-      "path": "projects/09-imported-brand.desegni",
+      "path": "projects/09-imported-brand.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000090000",
-      "requirementsBytes": 21003,
-      "sha256": "16c1a04fdaa22d6e029e15b93f699201afc06a4c04ad00c12a1bff00d118f041"
+      "sha256": "455d09a9d4d93872f9f0bc4f2505bd7699b6f1dd8346b8c4f350fa021761b364"
     },
     {
       "affectedPages": 1,
       "id": "10-faq",
-      "path": "projects/10-faq.desegni",
+      "path": "projects/10-faq.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-0000000a0000",
-      "requirementsBytes": 19716,
-      "sha256": "b739326d3a9973c23fbd0106cb32184d3cef89ca6f08be8d114cb30899f33269"
+      "sha256": "6ffc6b26f734b778025223d456bb94bf448b6af878029eb2b707687983f21b5b"
     },
     {
       "affectedPages": 1,
       "id": "11-testimonials",
-      "path": "projects/11-testimonials.desegni",
+      "path": "projects/11-testimonials.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-0000000b0000",
-      "requirementsBytes": 19707,
-      "sha256": "d46a99afc2abbb66a8f6aa2ed5049e7d5f7df00af08cf60e57568786397f772c"
+      "sha256": "d2b0fb2569a35817c100e381fcfb74c3b417f487206ad2f6812e38ae8d11c7cc"
     },
     {
       "affectedPages": 1,
       "id": "12-navigation-footer",
-      "path": "projects/12-navigation-footer.desegni",
+      "path": "projects/12-navigation-footer.desegnos",
       "pendingRequests": 2,
       "projectId": "d35e6000-0000-4000-8000-0000000c0000",
-      "requirementsBytes": 20443,
-      "sha256": "d4595dde71bbdee26ec81fbf225c3c946ba434fe21690f064891a0d8694aed31"
+      "sha256": "6931ae62d1ab3a7620641554be97eb1800de6ffe691b91ffa134193b809f37b0"
     },
     {
       "affectedPages": 1,
       "id": "13-mobile-contact",
-      "path": "projects/13-mobile-contact.desegni",
+      "path": "projects/13-mobile-contact.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-0000000d0000",
-      "requirementsBytes": 19763,
-      "sha256": "80d53d2d6b9e47f45d464e1045649a99e23430f6e837fc8a9083a56ec6627b42"
+      "sha256": "78b9fe628bd2eb98cadc0b014956c1b7279aba32f4ce8041a5e972827bddcf3b"
     },
     {
       "affectedPages": 1,
       "id": "14-dashboard",
-      "path": "projects/14-dashboard.desegni",
+      "path": "projects/14-dashboard.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-0000000e0000",
-      "requirementsBytes": 19747,
-      "sha256": "0b997576b694638a8c868951082c43779007bb70a6d1ec430cbeb6eb5df984de"
+      "sha256": "03c9f9575993e840bf7292d576e25849ef5825252af6a30c74ffabf9ab10b84b"
     },
     {
       "affectedPages": 1,
       "id": "15-long-copy",
-      "path": "projects/15-long-copy.desegni",
+      "path": "projects/15-long-copy.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-0000000f0000",
-      "requirementsBytes": 19816,
-      "sha256": "99ec55999a39d8fca7c8495e9d2312c8a3854a79cf7c3a8e43158cecb10c75aa"
+      "sha256": "bcc2f88117d02d4216b3bd9ab78a7724c0376c9b5d989aaf1cd5215532fb098b"
     },
     {
       "affectedPages": 2,
       "id": "16-two-pages",
-      "path": "projects/16-two-pages.desegni",
+      "path": "projects/16-two-pages.desegnos",
       "pendingRequests": 2,
       "projectId": "d35e6000-0000-4000-8000-000000100000",
-      "requirementsBytes": 20696,
-      "sha256": "48e49d6f81ade1ac37d9f74a3cb1b7415a741493a80b5a0201eb0e613f73134a"
+      "sha256": "81af15dc3aea4c9f8ef9ddabdd4902630d297f4f0a09bbde8b649d0606d05352"
     },
     {
       "affectedPages": 1,
       "id": "17-responsive-layout",
-      "path": "projects/17-responsive-layout.desegni",
+      "path": "projects/17-responsive-layout.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000110000",
-      "requirementsBytes": 19795,
-      "sha256": "f562625732a5333e691b16f79208f922970467750b8dc9932d132bd2810a4d5e"
+      "sha256": "ad363535ead799a31578f3970fa6f46392b3b52b4b1e43dcaa776f8a52dd4a04"
     },
     {
       "affectedPages": 1,
       "id": "18-preserve-revision",
-      "path": "projects/18-preserve-revision.desegni",
+      "path": "projects/18-preserve-revision.desegnos",
       "pendingRequests": 1,
       "projectId": "d35e6000-0000-4000-8000-000000120000",
-      "requirementsBytes": 20802,
-      "sha256": "bb6d20a2f4ea61947c526ebfb972e666e11cbd25d27f3c7e8c2f019d350cc0ec"
+      "sha256": "4f54b5202ec8240760e6e77af65d4213c45e373b99cc2df94467ac9f03f6971d"
     }
   ],
   "schemaVersion": 1
