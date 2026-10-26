@@ -19,6 +19,7 @@ mod images;
 mod layers;
 mod model;
 mod picture_scaling;
+mod preview_source;
 mod project_assets;
 mod project_format;
 mod provenance;
@@ -56,6 +57,7 @@ pub use model::*;
 pub use picture_scaling::{
     AI_PREVIEW_BYTES, AI_PREVIEW_EDGE, AI_PREVIEW_TOKEN_RESERVE, ai_preview, scaled_for_display,
 };
+pub use preview_source::preview_source_document;
 pub use project_assets::*;
 pub use project_format::*;
 pub use provenance::*;
