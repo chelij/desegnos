@@ -159,22 +159,22 @@ export async function projectFoldersWorkflow(driver, physical, step, evidence) {
     }
   });
 
-  await step('Standalone legacy archives save in place and Move changes only their active destination', async () => {
+  await step('Standalone standalone archives save in place and Move changes only their active destination', async () => {
     await driver.menu(['Close project']);
     // Close the other open groups so the copied identity is opened as a separate saved session.
     while ((await workspace()).project) await driver.menu(['Close project']);
-    const legacy = join(output, 'Legacy.desegni');
-    await writeFile(legacy, await readFile(path), { mode: 0o600 });
-    await chooseFile(physical, () => driver.menu(['Open project']), legacy, output, 'open-legacy');
+    const standalone = join(output, 'Standalone.desegnos');
+    await writeFile(standalone, await readFile(path), { mode: 0o600 });
+    await chooseFile(physical, () => driver.menu(['Open project']), standalone, output, 'open-standalone');
     const opened = await workspace(); project = opened.project;
     assert.equal(opened.projectFolder, false);
-    await driver.button('Save'); await savedState(driver, legacy);
-    const prior = await readFile(legacy);
+    await driver.button('Save'); await savedState(driver, standalone);
+    const prior = await readFile(standalone);
     await driver.menu(['Move into project folder']);
-    const moved = await waitFor(async () => { const value = await workspace(); return value.projectFolder && value.path !== legacy && value; }, 'The legacy destination was not moved');
+    const moved = await waitFor(async () => { const value = await workspace(); return value.projectFolder && value.path !== standalone && value; }, 'The standalone destination was not moved');
     assert.equal(dirname(dirname(moved.path)), preference);
-    assert.deepEqual(await readFile(legacy), prior);
-    assert.ok(!(await driver.invoke('get_recent_projects')).projects.some(item => item.path === legacy));
+    assert.deepEqual(await readFile(standalone), prior);
+    assert.ok(!(await driver.invoke('get_recent_projects')).projects.some(item => item.path === standalone));
     await verifyArchive(moved.path, project, await driver.invoke('get_project_notes'));
   });
 

@@ -1,9 +1,0 @@
-{
-  "source": "Actual GTK Save from the native test run 2026-10-18T10-44-22-435Z-462466",
-  "sourceFile": "picker-files/saved site 9d8f6b7b-2fbc-4cc1-bd49-25785c3ecbe8.desegni",
-  "sha256": "f6ab68d745746f287d13f55f0835c8135f09513c73a62ccb737c17a6f914e050",
-  "schemaVersion": 1,
-  "revision": 51,
-  "regionModes": ["strict", "fuzzy"],
-  "purpose": "Verify migration of a real pre-redesign archive without silently dropping per-area choices, prompt text, identity decisions, or creative exceptions."
-}

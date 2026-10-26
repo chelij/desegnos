@@ -9,8 +9,10 @@ struct Temp(PathBuf);
 
 impl Temp {
     fn new() -> Self {
-        let path =
-            std::env::temp_dir().join(format!("desegnos-generation-coordinator-{}", Uuid::new_v4()));
+        let path = std::env::temp_dir().join(format!(
+            "desegnos-generation-coordinator-{}",
+            Uuid::new_v4()
+        ));
         fs::create_dir(&path).unwrap();
         Self(path)
     }
@@ -363,38 +365,6 @@ fn chatgpt_job_keeps_account_and_method_after_preference_change_and_restart() {
     assert_eq!(submitted.requirements, prepared.requirements);
     assert_eq!(submitted.generation_mode, prepared.generation_mode);
     assert!(!restarted.credentials.status().configured);
-}
-
-#[test]
-fn old_records_default_to_api_key_and_invalid_account_bindings_are_preserved() {
-    let temp = Temp::new();
-    let project = project();
-    let mut service = temp.service();
-    let prepared = service.prepare(&project).unwrap();
-    let path = service
-        .job_directory(project.id, prepared.job_id)
-        .join("job.json");
-    let mut legacy =
-        serde_json::to_value(disk_record(&service, &project, prepared.job_id)).unwrap();
-    let view = legacy["view"].as_object_mut().unwrap();
-    for field in ["authentication", "chatgptAccountId", "failureKind"] {
-        view.remove(field);
-    }
-    write_json(&path, &legacy).unwrap();
-    drop(service);
-    let mut restarted = temp.service();
-    let restored = restarted.latest(&project).unwrap().unwrap();
-    assert_eq!(restored.authentication, AuthenticationMethod::ApiKey);
-    assert!(restored.chatgpt_account_id.is_none());
-    assert!(restored.failure_kind.is_none());
-    legacy["view"]["authentication"] = serde_json::json!("chatgpt");
-    write_json(&path, &legacy).unwrap();
-    let original = fs::read(&path).unwrap();
-    drop(restarted);
-    let mut restarted = temp.service();
-    assert!(restarted.latest(&project).is_err());
-    assert_eq!(fs::read(path).unwrap(), original);
-    assert!(restarted.active.is_empty());
 }
 
 #[test]
@@ -975,78 +945,6 @@ fn provider_details_survive_restart_and_are_archived_before_explicit_retry() {
 }
 
 #[test]
-fn older_error_reply_limits_do_not_claim_the_site_was_too_large_or_rewrite_history() {
-    let temp = Temp::new();
-    let mut service = temp.service();
-    let project = project();
-    let prepared = service.prepare(&project).unwrap();
-    service.begin(&project, prepared.job_id, false).unwrap();
-    let error: ProviderError = serde_json::from_value(serde_json::json!({
-        "kind":"outputLimit","outcome":"unknown","responseId":null,"usage":null,"httpStatus":200,
-        "responseFormat":{"contentType":null,"bodyKind":"unavailable","bodyBytes":0}
-    }))
-    .unwrap();
-    service
-        .finish(&project, Some(&project), prepared.job_id, 1, Err(error))
-        .unwrap();
-    let path = service
-        .job_directory(project.id, prepared.job_id)
-        .join("job.json");
-    let mut legacy: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    let format = legacy["error"]["responseFormat"].as_object_mut().unwrap();
-    format.remove("bodyTruncated");
-    format.remove("limitBytes");
-    let bytes = serde_json::to_vec(&legacy).unwrap();
-    fs::write(&path, &bytes).unwrap();
-    drop(service);
-    let mut restarted = temp.service();
-    for _ in 0..2 {
-        let view = restarted.latest(&project).unwrap().unwrap();
-        assert!(view.message.contains("error-reply reader's 64 KB limit"));
-        assert!(view.message.contains("site size and usage are unknown"));
-        status(&view, JobStatus::Unknown);
-        assert!(view.candidate.is_none());
-        assert_eq!(view.requirements, prepared.requirements);
-        assert_eq!(view.attempts.len(), 1);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-    }
-}
-
-#[test]
-fn older_completed_rejections_keep_their_unknown_check_and_original_history() {
-    let temp = Temp::new();
-    let mut service = temp.service();
-    let project = project();
-    let prepared = service.prepare(&project).unwrap();
-    service.begin(&project, prepared.job_id, false).unwrap();
-    let error: ProviderError = serde_json::from_value(serde_json::json!({
-        "kind":"malformed","outcome":"received","responseId":"resp_older_completed",
-        "usage":{"inputTokens":4452,"outputTokens":3073,"totalTokens":7525},"httpStatus":200,
-        "responseFormat":{"contentType":null,"bodyKind":"eventStream","bodyBytes":789659}
-    }))
-    .unwrap();
-    service
-        .finish(&project, Some(&project), prepared.job_id, 1, Err(error))
-        .unwrap();
-    let path = service
-        .job_directory(project.id, prepared.job_id)
-        .join("job.json");
-    let bytes = fs::read(&path).unwrap();
-    drop(service);
-    let mut restarted = temp.service();
-    for _ in 0..2 {
-        let view = restarted.latest(&project).unwrap().unwrap();
-        assert!(view.message.contains("exact failed check was not recorded"));
-        status(&view, JobStatus::Failed);
-        assert!(view.candidate.is_none());
-        assert_eq!(view.usage.unwrap().total_tokens, 7525);
-        assert_eq!(view.requirements, prepared.requirements);
-        assert_eq!(view.attempts.len(), 1);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-    }
-}
-
-#[test]
 fn correlation_details_survive_restart_and_are_archived_before_explicit_retry() {
     let temp = Temp::new();
     let mut service = temp.service();
@@ -1089,52 +987,6 @@ fn correlation_details_survive_restart_and_are_archived_before_explicit_retry() 
         restarted.latest(&project).unwrap().unwrap().requirements,
         prepared.requirements
     );
-}
-
-#[test]
-fn older_non_stream_failures_get_an_honest_message_without_rewriting_the_record() {
-    let temp = Temp::new();
-    let mut service = temp.service();
-    let project = project();
-    let prepared = service.prepare(&project).unwrap();
-    service.begin(&project, prepared.job_id, false).unwrap();
-    service
-        .finish(
-            &project,
-            Some(&project),
-            prepared.job_id,
-            1,
-            Err(ProviderError::new(
-                ErrorKind::Malformed,
-                SubmissionOutcome::Unknown,
-            )),
-        )
-        .unwrap();
-    let path = service
-        .job_directory(project.id, prepared.job_id)
-        .join("job.json");
-    let mut legacy: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    legacy["view"]
-        .as_object_mut()
-        .unwrap()
-        .remove("providerError");
-    legacy["error"]
-        .as_object_mut()
-        .unwrap()
-        .remove("responseFormat");
-    let bytes = serde_json::to_vec(&legacy).unwrap();
-    fs::write(&path, &bytes).unwrap();
-    drop(service);
-    let mut restarted = temp.service();
-    for _ in 0..2 {
-        let view = restarted.latest(&project).unwrap().unwrap();
-        status(&view, JobStatus::Unknown);
-        assert!(view.message.contains("non-stream response"));
-        assert!(view.message.contains("did not save response details"));
-        assert_eq!(view.attempts.len(), 1);
-        assert!(view.candidate.is_none());
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-    }
 }
 
 #[test]
@@ -1468,38 +1320,6 @@ fn undoing_a_stale_dependency_restores_review_without_another_paid_attempt() {
 }
 
 #[test]
-fn frozen_drawing_areas_reject_invalid_geometry_and_rebuild_legacy_metadata_only_when_current() {
-    let temp = Temp::new();
-    let project = project();
-    let mut service = temp.service();
-    let prepared = service.prepare(&project).unwrap();
-    assert_eq!(prepared.areas.len(), prepared.requirements.region_count);
-    let original = service.jobs[&prepared.job_id].clone();
-    for corrupt in [0, 1, 2] {
-        let mut record = original.clone();
-        match corrupt {
-            0 => record.view.areas[0].rect.width = -1.0,
-            1 => record.view.areas[0].region_id = Uuid::new_v4(),
-            _ => record.view.areas.push(record.view.areas[0].clone()),
-        }
-        service.jobs.insert(prepared.job_id, record);
-        assert!(service.latest(&project).is_err());
-    }
-    let mut legacy = original.clone();
-    legacy.view.areas.clear();
-    service.jobs.insert(prepared.job_id, legacy.clone());
-    assert_eq!(
-        service.latest(&project).unwrap().unwrap().areas.len(),
-        original.view.areas.len()
-    );
-    let mut changed = project.clone();
-    changed.pages[0].regions[0].prompt.push_str(" Changed.");
-    changed.revision += 1;
-    service.jobs.insert(prepared.job_id, legacy);
-    assert!(service.latest(&changed).unwrap().unwrap().areas.is_empty());
-}
-
-#[test]
 fn identity_access_rechecks_account_selection_plan_storage_and_model_after_async_access() {
     let account = Uuid::new_v4();
     let model = ProviderSettings::default().model;
@@ -1603,45 +1423,6 @@ fn provider_selection_survives_restart_and_keeps_keys_and_settings_separate() {
     assert!(restarted.select_provider(ProviderId::Local, true).is_err());
 }
 
-const LEGACY_SELECTION_ARCHIVE: &[u8] =
-    include_bytes!("../tests/fixtures/schema6-format9-selection.desegnos");
-const LEGACY_SELECTION_JOB: &[u8] =
-    include_bytes!("../tests/fixtures/schema6-format9-selection.json");
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct LegacySelectionFixture {
-    provenance: String,
-    project: serde_json::Value,
-    project_markdown: String,
-    prepared_record: JobRecord,
-    ready_record: JobRecord,
-}
-
-fn legacy_selection_fixture() -> LegacySelectionFixture {
-    assert_eq!(
-        digest(LEGACY_SELECTION_ARCHIVE),
-        "f82d969576c6e96e9a82f2e641a707609998e5723cf58d9e4a50b7b5891e1956"
-    );
-    assert_eq!(
-        digest(LEGACY_SELECTION_JOB),
-        "d2fe25c4e17dc4a1bdbbb1306d03dda9178f028f33caa069fd102820a1b76b0e"
-    );
-    let fixture: LegacySelectionFixture = serde_json::from_slice(LEGACY_SELECTION_JOB).unwrap();
-    assert!(fixture.provenance.contains("06613a1"));
-    assert_eq!(fixture.project["schemaVersion"], 6);
-    assert_eq!(
-        fixture
-            .ready_record
-            .view
-            .requirements
-            .format_version()
-            .unwrap(),
-        9
-    );
-    fixture
-}
-
 fn install_frozen_job(temp: &Temp, record: JobRecord) -> (Uuid, Uuid, PathBuf) {
     let mut service = temp.service();
     let project_id = record.view.project_id;
@@ -1670,188 +1451,6 @@ fn workspace_journal(directory: &Path) -> (PathBuf, Vec<u8>) {
         .unwrap();
     let bytes = fs::read(&path).unwrap();
     (path, bytes)
-}
-
-#[test]
-fn schema_six_ready_format_nine_job_survives_migration_without_relabeling_or_applying_stale_source()
-{
-    let temp = Temp::new();
-    let fixture = legacy_selection_fixture();
-    let expected_requirements = fixture.ready_record.view.requirements.clone();
-    let expected_candidate = fixture.ready_record.view.candidate.clone().unwrap();
-    let expected_attempts = serde_json::to_value(&fixture.ready_record.view.attempts).unwrap();
-    let expected_usage = fixture.ready_record.view.usage;
-    let (project_id, job_id, job_directory) = install_frozen_job(&temp, fixture.ready_record);
-    let markdown_path = job_directory.join("REQUIREMENTS.md");
-    let packet = fs::read(&markdown_path).unwrap();
-    assert_eq!(packet, expected_requirements.markdown.as_bytes());
-    let archive_path = temp.0.join("legacy.desegnos");
-    fs::write(&archive_path, LEGACY_SELECTION_ARCHIVE).unwrap();
-    let document = desegnos_storage::load_project_document(&archive_path).unwrap();
-    assert_eq!(document.source_schema_version, 6);
-    assert_eq!(document.source_project_markdown, fixture.project_markdown);
-    let workspace_directory = temp.0.join("workspace");
-    let mut workspace =
-        crate::workspace::open_archive_for_tests(workspace_directory.clone(), &archive_path);
-    let before = workspace.project().unwrap().clone();
-    assert_eq!(before.schema_version, desegnos_core::SCHEMA_VERSION);
-    assert_eq!(before.id, project_id);
-    let region = &before.pages[0].regions[0];
-    assert_eq!(
-        region.prompt,
-        fixture.project["pages"][0]["regions"][0]["prompt"]
-            .as_str()
-            .unwrap()
-    );
-    assert!(!region.completed);
-    assert_eq!(region.elements.len(), 1);
-    assert!(!region.elements[0].id.is_empty());
-    assert_eq!(
-        region.elements[0].selector,
-        fixture.project["pages"][0]["regions"][0]["element"]["selector"]
-            .as_str()
-            .unwrap()
-    );
-    before
-        .inspect_element(before.home_page_id, &region.elements[0])
-        .unwrap();
-    let (journal_path, journal_bytes) = workspace_journal(&workspace_directory);
-    let mut service = temp.service();
-    // This is the same read/maintenance sequence used by get_generation, without a GUI window.
-    let view = service
-        .latest(workspace.project().unwrap())
-        .unwrap()
-        .unwrap();
-    let view = maintain_dossier(&mut workspace, &mut service, view).unwrap();
-    status(&view, JobStatus::Blocked);
-    assert!(view.message.contains("stale"));
-    assert_eq!(view.requirements, expected_requirements);
-    assert_eq!(view.candidate, Some(expected_candidate.clone()));
-    assert_eq!(view.usage, expected_usage);
-    assert_eq!(
-        serde_json::to_value(&view.attempts).unwrap(),
-        expected_attempts
-    );
-    assert!(service.active.is_empty());
-    assert_eq!(workspace.project().unwrap(), &before);
-    assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
-    let error = workspace
-        .apply_generated(&view.requirements, &expected_candidate, &[])
-        .unwrap_err();
-    assert!(
-        error.contains("changed") || error.contains("stale"),
-        "{error}"
-    );
-    assert_eq!(workspace.project().unwrap(), &before);
-    assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
-    assert_eq!(fs::read(&archive_path).unwrap(), LEGACY_SELECTION_ARCHIVE);
-    assert_eq!(fs::read(&markdown_path).unwrap(), packet);
-    // Retrying the migrated job submits a fresh packet and preserves the blocked record.
-    let job_path = job_directory.join("job.json");
-    let job_bytes = fs::read(&job_path).unwrap();
-    let (fresh, _) = service.begin(&before, job_id, true).unwrap();
-    assert_ne!(fresh.job_id, job_id);
-    status(&fresh, JobStatus::Generating);
-    assert_eq!(fresh.base_revision, before.revision);
-    fresh.requirements.validate_current(&before).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 26);
-    assert_eq!(
-        fresh.source_fingerprints.get(&before.pages[0].id),
-        Some(&desegnos_core::source_fingerprints(
-            before.pages[0].content.as_ref()
-        ))
-    );
-    let source_key = format!("source:{}", before.pages[0].id);
-    assert_ne!(
-        fresh.requirements.dependencies[&source_key],
-        expected_requirements.dependencies[&source_key]
-    );
-    assert!(fresh.requirements.markdown.contains(&region.elements[0].id));
-    assert_eq!(fresh.attempts.len(), 1);
-    assert_eq!(service.active.len(), 1);
-    assert!(service.active.contains_key(&fresh.job_id));
-    assert_eq!(fs::read(&job_path).unwrap(), job_bytes);
-    let persisted = disk_record(&service, &before, job_id);
-    assert_eq!(persisted.view.requirements, expected_requirements);
-    assert_eq!(persisted.view.attempts.len(), 1);
-    drop(service);
-    let mut restarted = temp.service();
-    assert_eq!(
-        restarted.latest(&before).unwrap().unwrap().job_id,
-        fresh.job_id
-    );
-    let restored = restarted.saved_job(project_id, job_id).unwrap();
-    status(&restored, JobStatus::Blocked);
-    assert_eq!(restored.requirements, expected_requirements);
-    assert_eq!(restored.candidate, Some(expected_candidate));
-    assert_eq!(
-        serde_json::to_value(&restored.attempts).unwrap(),
-        expected_attempts
-    );
-    assert_eq!(fs::read(markdown_path).unwrap(), packet);
-    assert_eq!(fs::read(job_path).unwrap(), job_bytes);
-    assert!(restarted.active.is_empty());
-}
-
-#[test]
-fn schema_six_prepared_format_nine_job_is_preserved_while_begin_submits_current_source() {
-    let temp = Temp::new();
-    let fixture = legacy_selection_fixture();
-    let frozen = fixture.prepared_record.view.requirements.clone();
-    let (project_id, job_id, job_directory) = install_frozen_job(&temp, fixture.prepared_record);
-    let job_path = job_directory.join("job.json");
-    let job_bytes = fs::read(&job_path).unwrap();
-    let packet = fs::read(job_directory.join("REQUIREMENTS.md")).unwrap();
-    let archive_path = temp.0.join("legacy.desegnos");
-    fs::write(&archive_path, LEGACY_SELECTION_ARCHIVE).unwrap();
-    let mut workspace =
-        crate::workspace::open_archive_for_tests(temp.0.join("workspace"), &archive_path);
-    let project = workspace.project().unwrap().clone();
-    assert_eq!(project.id, project_id);
-    let mut service = temp.service();
-    let view = service.latest(&project).unwrap().unwrap();
-    let view = maintain_dossier(&mut workspace, &mut service, view).unwrap();
-    status(&view, JobStatus::Prepared);
-    assert_eq!(view.requirements, frozen);
-    assert!(view.attempts.is_empty());
-    let (fresh, _) = service.begin(&project, job_id, false).unwrap();
-    assert_ne!(fresh.job_id, job_id);
-    status(&fresh, JobStatus::Generating);
-    assert_eq!(fresh.base_revision, project.revision);
-    fresh.requirements.validate_current(&project).unwrap();
-    assert_eq!(fresh.requirements.format_version().unwrap(), 26);
-    assert_eq!(
-        fresh.source_fingerprints.get(&project.pages[0].id),
-        Some(&desegnos_core::source_fingerprints(
-            project.pages[0].content.as_ref()
-        ))
-    );
-    let source_key = format!("source:{}", project.pages[0].id);
-    assert_ne!(
-        fresh.requirements.dependencies[&source_key],
-        frozen.dependencies[&source_key]
-    );
-    assert!(
-        fresh
-            .requirements
-            .markdown
-            .contains(&project.pages[0].regions[0].elements[0].id)
-    );
-    assert_eq!(fresh.attempts.len(), 1);
-    assert_eq!(service.active.len(), 1);
-    assert!(service.active.contains_key(&fresh.job_id));
-    let old = disk_record(&service, &project, job_id);
-    status(&old.view, JobStatus::Prepared);
-    assert_eq!(old.view.requirements, frozen);
-    assert!(old.view.attempts.is_empty());
-    assert!(old.view.candidate.is_none());
-    assert_eq!(fs::read(&job_path).unwrap(), job_bytes);
-    assert_eq!(
-        fs::read(job_directory.join("REQUIREMENTS.md")).unwrap(),
-        packet
-    );
-    assert_eq!(workspace.project().unwrap(), &project);
-    assert_eq!(fs::read(&archive_path).unwrap(), LEGACY_SELECTION_ARCHIVE);
 }
 
 #[test]
@@ -2122,7 +1721,10 @@ fn image_key_is_separate_and_selection_prefers_the_active_connection() {
     service
         .store_image_access(
             main.clone(),
-            desegnos_ai::ImageAccess::new(desegnos_ai::ImageAvailability::No, "subscription sharing"),
+            desegnos_ai::ImageAccess::new(
+                desegnos_ai::ImageAvailability::No,
+                "subscription sharing",
+            ),
         )
         .unwrap();
     service
@@ -2457,75 +2059,6 @@ fn runtime_repairs_prepare_only_the_repair_and_rebind_to_current_source() {
     assert_eq!(fresh.areas[0].region_id, region_id);
     assert!(fresh.requirements.markdown.contains("const pause = null;"));
     fresh.requirements.validate_current(&project).unwrap();
-}
-
-#[test]
-fn discarded_validator_conflicts_survive_history_index_and_reach_each_retry_area() {
-    let temp = Temp::new();
-    let mut service = temp.service();
-    let project = project();
-    let prepared = service.prepare(&project).unwrap();
-    let mut result = candidate(&project, &prepared, "Rejected");
-    // Exact technical messages from the two-area cf37f66e saved job.
-    let reasons = [
-        "Region script needs one uniquely owned root per request.",
-        "Editor element IDs must be valid and unique within the page.",
-    ];
-    let mut record = service.record(&project, prepared.job_id).unwrap();
-    for (region, reason) in result.regions.iter_mut().zip(reasons) {
-        region.status = RegionStatus::Conflict;
-        region.explanation = reason.into();
-        record
-            .view
-            .validation_events
-            .push(desegnos_core::ValidationEvent {
-                kind: desegnos_core::validation_failure_kind(reason).into(),
-                disposition: "conflicted".into(),
-                region_id: Some(region.region_id),
-                message: reason.into(),
-            });
-    }
-    result.pages.clear();
-    record.view.candidate = Some(result);
-    record.view.status = JobStatus::Discarded;
-    let view = service.persist(record).unwrap();
-    // Simulate an index written by the old version after discarding a blocked job.
-    let mut legacy = service.history_entries(&view);
-    for entry in &mut legacy {
-        entry.outcome = "rejected by user".into();
-        entry.validation_rejection = None;
-    }
-    write_json(&service.history_path(project.id), &legacy).unwrap();
-    drop(service);
-    let mut service = temp.service();
-    let retry = service.prepare(&project).unwrap();
-    for reason in reasons {
-        assert!(retry.requirements.request_history.contains(&format!(
-            "Your previous attempt for this area was rejected because: {reason}"
-        )));
-    }
-    assert!(
-        retry
-            .requirements
-            .request_history
-            .contains("Avoid this by:")
-    );
-    assert!(
-        !retry
-            .requirements
-            .request_history
-            .contains("rejected by user")
-    );
-    retry.requirements.validate_current(&project).unwrap();
-    let entries = service.request_history(&project).unwrap();
-    assert!(
-        entries
-            .iter()
-            .filter(|e| e.job_id == prepared.job_id)
-            .all(
-                |e| e.outcome == "rejected by the app's checks" && e.validation_rejection.is_some()
-            )
-    );
 }
 
 #[test]
@@ -2873,7 +2406,9 @@ fn edits_to_other_elements_keep_the_result_ready_and_merge_when_applied() {
     service.begin(&original, prepared.job_id, false).unwrap();
     let mut generated = candidate(&original, &prepared, "Merged label");
     with_roots_inside_main(&mut generated, source, "Existing accepted content");
-    generated.validate(&prepared.requirements, &original).unwrap();
+    generated
+        .validate(&prepared.requirements, &original)
+        .unwrap();
     let (edited, _) = original
         .edit_element(
             original.revision,
@@ -2926,7 +2461,9 @@ fn a_changed_request_keeps_the_completed_result_blocked() {
     with_roots_inside_main(&mut generated, source, "Existing accepted content");
     let mut changed = original.clone();
     changed.revision += 1;
-    changed.pages[0].regions[0].prompt.push_str(" Use a round button.");
+    changed.pages[0].regions[0]
+        .prompt
+        .push_str(" Use a round button.");
     service
         .finish(
             &original,
@@ -2962,7 +2499,9 @@ fn editing_the_text_a_whole_page_generation_rewrites_stays_blocked() {
     service.begin(&original, prepared.job_id, false).unwrap();
     let mut generated = candidate(&original, &prepared, "Generated wording");
     with_roots_inside_main(&mut generated, source, "Generated explanation");
-    generated.validate(&prepared.requirements, &original).unwrap();
+    generated
+        .validate(&prepared.requirements, &original)
+        .unwrap();
     let (edited, _) = original
         .edit_element(
             original.revision,

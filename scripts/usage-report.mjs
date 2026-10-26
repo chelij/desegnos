@@ -55,7 +55,7 @@ for (const project of await list(join(data, 'generation'))) {
     const folder = join(data, 'generation', project, job);
     let record, markdown = '';
     try { record = JSON.parse(await readFile(join(folder, 'job.json'), 'utf8')); } catch { continue; }
-    try { markdown = await readFile(join(folder, 'REQUIREMENTS.md'), 'utf8'); } catch { /* older job */ }
+    try { markdown = await readFile(join(folder, 'REQUIREMENTS.md'), 'utf8'); } catch { /* A failed write may leave the report unavailable. */ }
     const view = record.view ?? record;
     const prompts = [...markdown.matchAll(/"prompt": "((?:[^"\\]|\\.)*)"/g)].map(match => JSON.parse(`"${match[1]}"`));
     const kinds = [];

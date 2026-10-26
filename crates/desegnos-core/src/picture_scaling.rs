@@ -126,28 +126,6 @@ fn preview(picture: DynamicImage) -> Option<String> {
     }
 }
 
-// Frozen formats 13–16 must reconstruct the exact JPEG bytes originally sent.
-/// The JPEG the AI sees: shrunk by a quarter at a time until it is at most
-/// `AI_PREVIEW_EDGE` pixels on its longest side and `AI_PREVIEW_BYTES` in size.
-/// None for pictures that cannot be decoded here (GIF); those travel by name only.
-pub(crate) fn legacy_ai_preview(data_uri: &str) -> Option<String> {
-    let mut picture = flattened(&decode(data_uri)?);
-    loop {
-        let edge = picture.width().max(picture.height());
-        if edge > AI_PREVIEW_EDGE {
-            let next = (edge * 3 / 4).max(AI_PREVIEW_EDGE);
-            picture = picture.resize(next, next, FilterType::Triangle);
-            continue;
-        }
-        let (bytes, _) = encode(&picture, 75)?;
-        if bytes.len() <= AI_PREVIEW_BYTES || edge <= MIN_PREVIEW_EDGE {
-            return Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes)));
-        }
-        let next = (edge * 3 / 4).max(MIN_PREVIEW_EDGE);
-        picture = picture.resize(next, next, FilterType::Triangle);
-    }
-}
-
 /// A copy no wider than `DISPLAY_DENSITY` times the CSS width it is shown at. None when the
 /// original is already that small, cannot be decoded, or the copy would not be smaller.
 pub fn scaled_for_display(data_uri: &str, display_width: u32) -> Option<String> {
@@ -263,28 +241,6 @@ mod tests {
             preview(DynamicImage::ImageRgba8(pixels))
                 .unwrap()
                 .starts_with("data:image/png;base64,")
-        );
-    }
-
-    #[test]
-    fn opaque_rgba_keeps_the_legacy_jpeg_bytes() {
-        let picture = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-            32,
-            16,
-            image::Rgba([10, 20, 30, 255]),
-        ));
-        let mut bytes = Vec::new();
-        picture
-            .write_to(
-                &mut std::io::Cursor::new(&mut bytes),
-                image::ImageFormat::Png,
-            )
-            .unwrap();
-        let uri = format!("data:image/png;base64,{}", STANDARD.encode(bytes));
-        assert_eq!(ai_preview(&uri), legacy_ai_preview(&uri));
-        assert_eq!(
-            image_metadata(&uri),
-            serde_json::json!({"storedFormat":"image/png"})
         );
     }
 

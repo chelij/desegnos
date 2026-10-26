@@ -269,37 +269,36 @@ pub(super) trait Vault: Send + Sync {
     fn remove(&self, account: Uuid) -> ChatgptResult<()>;
 }
 pub(super) struct SystemVault;
-struct ServiceVault(&'static str);
-
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-impl ServiceVault {
-    fn entry(&self, account: Uuid) -> ChatgptResult<keyring::Entry> {
-        keyring::Entry::new(self.0, &account.to_string()).map_err(|_| Kind::VaultUnavailable.into())
+impl SystemVault {
+    fn entry(account: Uuid) -> ChatgptResult<keyring::Entry> {
+        keyring::Entry::new("io.github.chelij.desegnos.chatgpt", &account.to_string())
+            .map_err(|_| Kind::VaultUnavailable.into())
     }
 }
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-impl Vault for ServiceVault {
+impl Vault for SystemVault {
     fn get(&self, account: Uuid) -> ChatgptResult<Option<Zeroizing<String>>> {
-        match self.entry(account)?.get_password() {
+        match Self::entry(account)?.get_password() {
             Ok(value) => Ok(Some(Zeroizing::new(value))),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(_) => Err(Kind::VaultUnavailable.into()),
         }
     }
     fn set(&self, account: Uuid, value: &str) -> ChatgptResult<()> {
-        self.entry(account)?
+        Self::entry(account)?
             .set_password(value)
             .map_err(|_| Kind::VaultUnavailable.into())
     }
     fn remove(&self, account: Uuid) -> ChatgptResult<()> {
-        match self.entry(account)?.delete_credential() {
+        match Self::entry(account)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
             Err(_) => Err(Kind::VaultUnavailable.into()),
         }
     }
 }
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-impl Vault for ServiceVault {
+impl Vault for SystemVault {
     fn get(&self, _: Uuid) -> ChatgptResult<Option<Zeroizing<String>>> {
         Err(Kind::VaultUnavailable.into())
     }
@@ -309,40 +308,6 @@ impl Vault for ServiceVault {
     fn remove(&self, _: Uuid) -> ChatgptResult<()> {
         Err(Kind::VaultUnavailable.into())
     }
-}
-
-impl Vault for SystemVault {
-    fn get(&self, account: Uuid) -> ChatgptResult<Option<Zeroizing<String>>> {
-        ServiceVault("io.github.chelij.desegnos.chatgpt").get(account)
-    }
-    fn set(&self, account: Uuid, value: &str) -> ChatgptResult<()> {
-        ServiceVault("io.github.chelij.desegnos.chatgpt").set(account, value)
-    }
-    fn remove(&self, account: Uuid) -> ChatgptResult<()> {
-        ServiceVault("io.github.chelij.desegnos.chatgpt").remove(account)
-    }
-}
-
-pub(super) fn migrate_accounts(directory: &Path) -> ChatgptResult<()> {
-    let store = Store::initialize(directory)?;
-    let _lock = store.lock()?;
-    let metadata = store.read()?;
-    for registration in metadata.registrations {
-        // Keep UUIDs, host IDs and client registrations exactly as they were.
-        let account = registration.id;
-        let old = ServiceVault("io.github.chelij.desegni.chatgpt");
-        if crate::credentials::migrate_entry(
-            || old.get(account),
-            || SystemVault.get(account),
-            |value| SystemVault.set(account, value),
-            || old.remove(account),
-        )
-        .is_err()
-        {
-            crate::credentials::migration_failed(format!("ChatGPT account {account}"));
-        }
-    }
-    Ok(())
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -427,35 +392,5 @@ impl Vault for ChatgptTestVault {
             .map_err(|_| Kind::VaultUnavailable)?
             .remove(&account);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod migration_tests {
-    use super::*;
-
-    #[test]
-    fn account_bundle_moves_verbatim_without_changing_registration_or_other_accounts() {
-        let old = ChatgptTestVault::memory();
-        let new = ChatgptTestVault::memory();
-        let account = Uuid::new_v4();
-        let other = Uuid::new_v4();
-        let bundle =
-            r#"{"clientId":"existing-grant","refreshToken":"private","hostId":"unchanged"}"#;
-        old.set(account, bundle).unwrap();
-        old.set(other, "other account").unwrap();
-        let migrate = || {
-            crate::credentials::migrate_entry(
-                || old.get(account),
-                || new.get(account),
-                |value| new.set(account, value),
-                || old.remove(account),
-            )
-        };
-        migrate().unwrap();
-        migrate().unwrap();
-        assert!(old.get(account).unwrap().is_none());
-        assert_eq!(new.get(account).unwrap().unwrap().as_str(), bundle);
-        assert_eq!(old.get(other).unwrap().unwrap().as_str(), "other account");
     }
 }

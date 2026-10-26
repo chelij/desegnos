@@ -156,19 +156,12 @@ struct GenerationArea {
 struct GenerationBatch {
     part: usize,
     requirements: RequirementsSnapshot,
-    #[serde(default)]
     estimate_usd: f64,
-    #[serde(default)]
     candidate: Option<GenerationCandidate>,
-    #[serde(default)]
     status: JobStatus,
-    #[serde(default)]
     message: String,
-    #[serde(default)]
     validation_events: Vec<desegnos_core::ValidationEvent>,
-    #[serde(default)]
     documents: Vec<desegnos_core::DocumentTarget>,
-    #[serde(default)]
     repair_rounds: usize,
 }
 
@@ -186,45 +179,26 @@ pub struct GenerationJobView {
     /// merged result of all parts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     merged_requirements: Option<RequirementsSnapshot>,
-    #[serde(default)]
     source_fingerprints: BTreeMap<Uuid, BTreeMap<String, String>>,
-    #[serde(default)]
     applied_source_fingerprints: BTreeMap<Uuid, BTreeMap<String, String>>,
-    #[serde(default)]
     context: Option<RequirementsSnapshot>,
-    #[serde(default)]
     draft_feedback: Vec<desegnos_core::ValidationEvent>,
-    #[serde(default)]
     earlier_contexts: Vec<RequirementsSnapshot>,
-    #[serde(default)]
     raw_reply: Option<String>,
-    #[serde(default)]
     validation_events: Vec<desegnos_core::ValidationEvent>,
-    #[serde(default)]
     drafts: Vec<desegnos_core::GenerationDraft>,
-    #[serde(default)]
     validation_counts_recorded: bool,
-    #[serde(default)]
     repair_rounds: usize,
-    #[serde(default)]
     first_exchange: Option<ValidationExchange>,
-    #[serde(default)]
     repair_area_count: usize,
-    #[serde(default)]
     created_at: Option<String>,
-    #[serde(default)]
     areas: Vec<GenerationArea>,
     generation_mode: GenerationMode,
-    #[serde(default)]
     provider: ProviderId,
     settings: ProviderSettings,
-    #[serde(default)]
     authentication: AuthenticationMethod,
-    #[serde(default)]
     chatgpt_account_id: Option<Uuid>,
-    #[serde(default)]
     failure_kind: Option<ErrorKind>,
-    #[serde(default)]
     provider_error: Option<ProviderError>,
     status: JobStatus,
     estimate_usd: f64,
@@ -234,9 +208,7 @@ pub struct GenerationJobView {
     usage: Option<TokenUsage>,
     attempts: Vec<GenerationAttempt>,
     accepted_decision_indices: Vec<usize>,
-    #[serde(default)]
     recommended_decision_indices: Vec<usize>,
-    #[serde(default)]
     dossier_error: Option<String>,
 }
 
@@ -763,7 +735,8 @@ impl GenerationService {
         if markdown.exists() {
             regular_file(&markdown)?;
             let file = File::open(&markdown).map_err(message)?;
-            if file.metadata().map_err(message)?.len() > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
+            if file.metadata().map_err(message)?.len()
+                > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
             {
                 return Err(
                     "The frozen requirements file exceeds its limit. The original was preserved."
@@ -840,6 +813,7 @@ impl GenerationService {
         };
         let view = record.view;
         if record.version != 1
+            || view.requirements.format_version().is_err()
             || view.project_id != project_id
             || view.job_id != job_id
             || view.requirements.project_id != project_id
@@ -852,7 +826,7 @@ impl GenerationService {
         Ok(view)
     }
 
-    // Compact text-only index. Full historical packets are read only for one-time backfill.
+    // Compact text-only index of current-format requests.
     fn history_path(&self, project_id: Uuid) -> PathBuf {
         self.directory
             .join(project_id.to_string())
@@ -973,6 +947,8 @@ impl GenerationService {
         project: &Project,
     ) -> NativeResult<Vec<desegnos_core::EarlierRequest>> {
         let path = self.history_path(project.id);
+        // A crash can leave current job records durable before their history index.
+        // Reconstruct a missing index only from validated current-format records.
         let mut entries: Vec<desegnos_core::EarlierRequest> = if path.exists() {
             read_json(&path, MAX_JOB_BYTES)?
         } else {
@@ -1025,34 +1001,7 @@ impl GenerationService {
             }
             entries
         };
-        entries.retain(|r| r.project_id == project.id);
-        let missing: BTreeSet<_> = entries
-            .iter()
-            .filter(|r| {
-                r.source_fingerprints.is_none()
-                    || (r.validation_rejection.is_none()
-                        && (r.outcome == "rejected by user"
-                            || r.outcome.starts_with("needs details")))
-            })
-            .map(|r| r.job_id)
-            .collect();
-        for id in missing {
-            if let Ok(view) = self.saved_job(project.id, id) {
-                let enriched = self.history_entries(&view);
-                for entry in entries.iter_mut().filter(|r| r.job_id == id) {
-                    if let Some(source) = enriched.iter().find(|r| r.region_id == entry.region_id) {
-                        if source.validation_rejection.is_some()
-                            || entry.outcome == "rejected by user"
-                        {
-                            entry.outcome = source.outcome.clone();
-                            entry.validation_rejection = source.validation_rejection.clone();
-                        }
-                        entry.source_fingerprints = source.source_fingerprints.clone();
-                        entry.base_source_fingerprints = source.base_source_fingerprints.clone();
-                    }
-                }
-            }
-        }
+        entries.retain(|entry| entry.project_id == project.id);
         // Undo/redo lives in the durable project dossier. Capture it before a newer job replaces it.
         if let Some(dossier) = &project.latest_generation {
             for entry in entries.iter_mut().filter(|r| r.job_id == dossier.job_id) {
@@ -1210,6 +1159,7 @@ impl GenerationService {
             )?
         };
         if record.version != 1
+            || record.view.requirements.format_version().is_err()
             || record.view.project_id != project.id
             || record.view.job_id != latest.job_id
             || record.view.requirements.project_id != project.id
@@ -1217,8 +1167,7 @@ impl GenerationService {
             || record.view.requirements.sha256
                 != digest(record.view.requirements.markdown.as_bytes())
             || record.view.areas.len() > desegnos_core::MAX_GENERATION_REGIONS
-            || (!record.view.areas.is_empty()
-                && record.view.areas.len() != record.view.requirements.region_count)
+            || record.view.areas.len() != record.view.requirements.region_count
             || record.view.areas.iter().any(|area| {
                 area.rect.validate(project.viewport).is_err()
                     || area.shape.validate().is_err()
@@ -1242,79 +1191,7 @@ impl GenerationService {
         {
             return Err("The generation record is invalid. The original was preserved; it was not submitted or applied.".into());
         }
-        // Older saved jobs have no drawing metadata. Rebuild it only when their
-        // frozen requirements still exactly match the current project.
-        if record.view.areas.is_empty()
-            && record.view.requirements.validate_current(project).is_ok()
-        {
-            record.view.areas = project
-                .pages
-                .iter()
-                .flat_map(|page| {
-                    page.regions
-                        .iter()
-                        .filter(|region| {
-                            record
-                                .view
-                                .requirements
-                                .dependencies
-                                .contains_key(&format!("region:{}:{}", page.id, region.id))
-                        })
-                        .map(move |region| GenerationArea {
-                            page_id: page.id,
-                            region_id: region.id,
-                            rect: region.rect,
-                            shape: region.shape.clone(),
-                            document: region
-                                .frame_target
-                                .as_ref()
-                                .map(|frame| frame.document.clone()),
-                            frame_rect: region.frame_target.as_ref().map(|frame| frame.rect),
-                        })
-                })
-                .collect();
-        }
         record.view.provider_error = record.error.clone();
-        if record.view.status == JobStatus::Failed
-            && record.error.as_ref().is_some_and(|error| {
-                error.kind == ErrorKind::Malformed
-                    && error.outcome == SubmissionOutcome::Received
-                    && error.usage.is_some()
-                    && error.response_format.as_ref().is_some_and(|format| {
-                        format.body_kind == desegnos_ai::ResponseBodyKind::EventStream
-                            && format.rejection.is_none()
-                    })
-            })
-        {
-            record.view.message = "The completed reply was rejected by an older reader. The exact failed check was not recorded. Nothing was applied or retried.".into();
-        }
-        if record.view.status == JobStatus::Unknown
-            && record.error.as_ref().is_some_and(|error| {
-                error.kind == ErrorKind::OutputLimit
-                    && error.outcome == SubmissionOutcome::Unknown
-                    && error.http_status == Some(200)
-                    && error.response_id.is_none()
-                    && error.response_format.as_ref().is_some_and(|format| {
-                        format.body_kind == desegnos_ai::ResponseBodyKind::Unavailable
-                            && format.body_bytes == 0
-                            && format.limit_bytes.is_none()
-                    })
-            })
-        {
-            record.view.message = "This attempt reached an older error-reply reader's 64 KB limit before Desegnos could identify the reply. Its site size and usage are unknown. Nothing was applied or retried.".into();
-        }
-        if record.view.status == JobStatus::Unknown
-            && record.view.received_bytes == 0
-            && record.error.as_ref().is_some_and(|error| {
-                error.kind == ErrorKind::Malformed
-                    && error.outcome == SubmissionOutcome::Unknown
-                    && error.http_status.is_none()
-                    && error.response_id.is_none()
-                    && error.usage.is_none()
-            })
-        {
-            record.view.message = "OpenAI returned a non-stream response. This older attempt did not save response details, so its exact cause and usage are unknown. Nothing was applied or retried.".into();
-        }
         record
             .view
             .provider
@@ -2239,14 +2116,13 @@ impl GenerationService {
                 )?;
                 match desegnos_core::recover_generation_reply(&response.text, &record.view.requirements, original).and_then(|(mut candidate, events)| {
                     record.view.validation_events.extend(events);
-                    let format = record.view.requirements.format_version()?;
-                    if (8..12).contains(&format) { candidate.resolve_project_assets(original)?; }
+                    record.view.requirements.format_version()?;
+
                     candidate.validate(&record.view.requirements, original)?;
-                    if format >= 7
-                        && !candidate.image_download_urls()?.is_empty() {
+                    if !candidate.image_download_urls()?.is_empty() {
                         return Err(desegnos_core::Error("Images could not be prepared. Nothing was applied. Try generating again or remove the image request.".into()));
                     }
-                    if format >= 17 && !candidate.image_generation_requests()?.is_empty() {
+                    if !candidate.image_generation_requests()?.is_empty() {
                         return Err(desegnos_core::Error("Generated images could not be prepared.".into()));
                     }
                     Ok(candidate)
@@ -2363,12 +2239,14 @@ impl GenerationService {
                     )
                     && batch.validation_events.is_empty()
                 {
-                    batch.validation_events.push(desegnos_core::ValidationEvent {
-                        kind: "batchFailure".into(),
-                        disposition: "conflicted".into(),
-                        region_id: None,
-                        message: batch.message.clone(),
-                    });
+                    batch
+                        .validation_events
+                        .push(desegnos_core::ValidationEvent {
+                            kind: "batchFailure".into(),
+                            disposition: "conflicted".into(),
+                            region_id: None,
+                            message: batch.message.clone(),
+                        });
                 }
             }
             record.view.validation_events = record.view.batches[index].validation_events.clone();
@@ -3357,13 +3235,8 @@ async fn submit(
             }
             // A completed, unambiguous final answer with malformed JSON/schema is a
             // validation failure, not a transport retry. All other provider failures stop here.
-            if request.requirements.format_version().is_ok_and(|v| v >= 17)
-                && let Err(error) = &result
-                && error.outcome == SubmissionOutcome::Received
-                && error.response_format.as_ref().is_some_and(|format|
-                    matches!(format.rejection, Some(desegnos_ai::ResponseRejection::CandidateJson | desegnos_ai::ResponseRejection::CandidateShape)))
-                && let Some(text) = error.response_format.as_ref().and_then(|format| format.diagnostic_reply.as_ref())
-            {
+            if let Err(error) = &result && error.outcome == SubmissionOutcome::Received && error.response_format.as_ref().is_some_and(|format|
+                    matches!(format.rejection, Some(desegnos_ai::ResponseRejection::CandidateJson | desegnos_ai::ResponseRejection::CandidateShape))) && let Some(text) = error.response_format.as_ref().and_then(|format| format.diagnostic_reply.as_ref()) {
                 result = Ok(ProviderResponse { text: text.to_string(), response_id: error.response_id.clone().unwrap_or_default(), usage: error.usage });
             }
             // An element fix may ask once for other elements' HTML; reply automatically and keep
@@ -3414,9 +3287,7 @@ async fn submit(
             }
             // One validation repair is distinct from a user retry. It uses the same frozen
             // provider/model, cancellation token, accounting and persisted context exchange.
-            if request.requirements.format_version().is_ok_and(|v| v >= 17)
-                && let Ok(first_response) = &mut result
-            {
+            if let Ok(first_response) = &mut result {
                     let recovered = desegnos_core::recover_generation_reply(&first_response.text, &request.requirements, &original);
                     let (first_candidate, mut events) = match recovered {
                         Ok((candidate, events)) => (Some(candidate), events),

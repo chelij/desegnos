@@ -32,9 +32,7 @@ pub struct SourcePage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     pub kind: String,
-    #[serde(default)]
     pub photo_count: usize,
-    #[serde(default)]
     pub item_count: usize,
 }
 impl SourcePage {

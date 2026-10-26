@@ -43,7 +43,7 @@ pub struct EarlierRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub validation_rejection: Option<String>,
     pub summary: String,
-    /// The complete original scope of the job-wide summary. Empty for older indexes.
+    /// The complete original scope of the job-wide summary.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub summary_targets: Vec<(Uuid, Uuid)>,
     /// Exact stored source after application, or base source for unapplied results.
@@ -112,17 +112,7 @@ pub fn earlier_requests(
                             page_id,
                             region_id,
                             rect,
-                            whole_page: value.get("scope").map_or_else(
-                                || {
-                                    value["viewport"]["width"]
-                                        .as_f64()
-                                        .is_some_and(|w| rect.x <= 0. && rect.width >= w)
-                                        && value["viewport"]["height"]
-                                            .as_f64()
-                                            .is_some_and(|h| rect.y <= 0. && rect.height >= h)
-                                },
-                                |scope| scope == "page",
-                            ),
+                            whole_page: value.get("scope")?.as_str()? == "page",
                             requested_at,
                             request: clip(request, 300),
                             outcome,
@@ -262,9 +252,7 @@ impl RequirementsSnapshot {
             self.project_id == project.id,
             "History belongs to another project.",
         )?;
-        if self.format_version()? < 19 {
-            return Ok(self);
-        }
+
         let ids = self.target_ids()?;
         let targets: Vec<_> = project
             .pages
@@ -404,7 +392,7 @@ impl RequirementsSnapshot {
             }
             // JSON quoting keeps exact user text as data, including line breaks and fences.
             // A per-area record still carries a job-wide summary. Never expose it to a
-            // narrower request, or when an older index cannot establish its scope.
+            // narrower request or one whose summary scope is not established.
             let summary = (!r.summary_targets.is_empty()
                 && r.summary_targets.iter().all(|target| ids.contains(target)))
             .then(|| clip(&r.summary, 200));
@@ -437,10 +425,9 @@ impl RequirementsSnapshot {
     pub(crate) fn set_request_history(&mut self, section: String) -> Result<()> {
         ensure(
             section.is_empty()
-                || (self.format_version()? >= 19
-                    && (section.starts_with(HEADING)
-                        || section.starts_with(CHANGES_HEADING)
-                        || section.starts_with(RETRY_HEADING))
+                || ((section.starts_with(HEADING)
+                    || section.starts_with(CHANGES_HEADING)
+                    || section.starts_with(RETRY_HEADING))
                     && section.chars().count() <= REQUEST_HISTORY_CHARS + RETRY_HISTORY_CHARS),
             "The request history is invalid.",
         )?;
@@ -700,22 +687,6 @@ mod tests {
             .unwrap()
             .validate_current(&p)
             .unwrap();
-    }
-    #[test]
-    fn request_history_older_index_omits_summary_with_unknown_scope() {
-        let p = project();
-        let mut value = serde_json::to_value(record(&p, 1)).unwrap();
-        value.as_object_mut().unwrap().remove("summaryTargets");
-        let entry: EarlierRequest = serde_json::from_value(value).unwrap();
-        let snapshot = p
-            .prepare_requirements()
-            .unwrap()
-            .with_earlier_requests(&p, &[entry], 7200)
-            .unwrap();
-        assert!(snapshot.request_history.contains("Exact request 1"));
-        assert!(snapshot.request_history.contains("\"summary\":null"));
-        assert!(!snapshot.request_history.contains("Changed the photo"));
-        snapshot.validate_current(&p).unwrap();
     }
 
     #[test]

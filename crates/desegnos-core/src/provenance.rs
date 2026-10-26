@@ -88,11 +88,11 @@ impl SiteContent {
         Ok(sources)
     }
     /// Count marked replacement slots, excluding nested duplicates. A second
-    /// metric records old unmarked labels so historical pages remain measurable.
+    /// metric counts unmarked labels in generated or imported HTML.
     pub fn placeholder_metrics(&self) -> Result<PlaceholderMetrics> {
         let doc = editing::parse(&self.html)?;
         let mut marked = 0;
-        let mut legacy = 0;
+        let mut unmarked = 0;
         for node in doc.select("*").nodes() {
             let ancestor_marked = node
                 .ancestors_it(None)
@@ -106,13 +106,13 @@ impl SiteContent {
                     child.is_text() && child.text().to_ascii_lowercase().contains("placeholder")
                 })
             {
-                legacy += 1;
+                unmarked += 1;
             }
         }
         Ok(PlaceholderMetrics {
             marked_slots: marked,
-            legacy_labels: legacy,
-            total: marked + legacy,
+            unmarked_labels: unmarked,
+            total: marked + unmarked,
         })
     }
 }
@@ -120,7 +120,7 @@ impl SiteContent {
 #[serde(rename_all = "camelCase")]
 pub struct PlaceholderMetrics {
     pub marked_slots: usize,
-    pub legacy_labels: usize,
+    pub unmarked_labels: usize,
     pub total: usize,
 }
 impl Project {

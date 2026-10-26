@@ -329,9 +329,9 @@ pub(crate) fn apply_element_edit<'a>(
                     indexes.insert(text.index),
                     "A text block was supplied twice.",
                 )?;
-                let text_node = nodes.get(text.index).ok_or_else(|| {
-                    Error("The text changed. Reopen the element editor.".into())
-                })?;
+                let text_node = nodes
+                    .get(text.index)
+                    .ok_or_else(|| Error("The text changed. Reopen the element editor.".into()))?;
                 if text_node.text().as_ref() != text.text {
                     clear_found_ancestry(*text_node);
                     text_node.set_text(text.text.as_str());
@@ -450,9 +450,8 @@ pub(crate) fn apply_element_edit<'a>(
                 selected.selector != "body",
                 "The page itself cannot be reordered.",
             )?;
-            let adjacent = sibling(node, direction).ok_or_else(|| {
-                Error("This item is already at that end of its layout.".into())
-            })?;
+            let adjacent = sibling(node, direction)
+                .ok_or_else(|| Error("This item is already at that end of its layout.".into()))?;
             node.remove_from_parent();
             match direction {
                 ElementOrder::Before => adjacent.insert_before(&node),
@@ -515,9 +514,7 @@ pub(crate) fn apply_element_edit<'a>(
                 "This element cannot be duplicated in its layout.",
             )?;
             let copy = children[0];
-            let copied: Vec<_> = std::iter::once(copy)
-                .chain(copy.descendants_it())
-                .collect();
+            let copied: Vec<_> = std::iter::once(copy).chain(copy.descendants_it()).collect();
             for node in copied {
                 node.remove_attr(crate::ELEMENT_ID_ATTRIBUTE);
             }
@@ -673,7 +670,7 @@ impl Project {
         )?;
         ensure(
             !edits.is_empty() && edits.len() <= crate::MAX_BATCH_ELEMENT_EDITS,
-            "Select between one and 500 elements for one change."
+            "Select between one and 500 elements for one change.",
         )?;
         let content = self.document_content(document)?;
         let hash = self.document_hash(document)?;
@@ -681,9 +678,7 @@ impl Project {
         let before = serialized(&doc)?;
         let before_ids = ids(&doc);
         let tracked = match document {
-            crate::DocumentTarget::Page { page_id } => {
-                tracked(&doc, self.page(*page_id)?, &hash)?
-            }
+            crate::DocumentTarget::Page { page_id } => tracked(&doc, self.page(*page_id)?, &hash)?,
             crate::DocumentTarget::SiteFile { .. } => vec![],
         };
         let mut retained = Vec::with_capacity(edits.len());
@@ -691,12 +686,12 @@ impl Project {
         for edit in edits {
             ensure(
                 !edit.target.id.is_empty() || hash == edit.target.source_sha256,
-                "The document changed. Select these elements again."
+                "The document changed. Select these elements again.",
             )?;
             let node = locate(&doc, &edit.target)?;
             ensure(
                 seen.insert(node.id),
-                "An element was supplied twice in one change."
+                "An element was supplied twice in one change.",
             )?;
             retained.push(apply_element_edit(&doc, node, &edit.target, &edit.edit)?);
         }
@@ -771,7 +766,8 @@ impl Project {
         next.revision = revision
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
-        let selected = self.store_document_edit(document, doc, retained, tracked, css, &mut next)?;
+        let selected =
+            self.store_document_edit(document, doc, retained, tracked, css, &mut next)?;
         next.store_inline_images()?;
         next.validate()?;
         Ok((next, selected))
@@ -859,7 +855,6 @@ impl Project {
                     {
                         region.completed = true;
                     }
-                    region.element = None;
                 }
                 retained.and_then(|node| target(node, body, &hash))
             }

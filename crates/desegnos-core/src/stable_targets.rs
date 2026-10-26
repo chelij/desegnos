@@ -236,57 +236,6 @@ impl Project {
         result.validate(viewport)?;
         Ok(result)
     }
-    /// Upgrade only in memory. Storage writes the migrated copy only after Save.
-    pub(crate) fn assign_stable_targets(&mut self) -> Result<()> {
-        for page in &mut self.pages {
-            let Some(content) = &mut page.content else {
-                continue;
-            };
-            let old = crate::editing::parse(&content.html)?;
-            let before_hash = content.sha256()?;
-            let positions: Vec<_> = page
-                .regions
-                .iter()
-                .map(|r| {
-                    r.targets()
-                        .into_iter()
-                        .map(|t| {
-                            if t.id.is_empty() && t.source_sha256 != before_hash {
-                                None
-                            } else {
-                                crate::editing::locate(&old, t).ok().and_then(|n| {
-                                    crate::editing::selector(n, crate::editing::body(&old).ok()?)
-                                })
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect();
-            content.html = crate::source::assign_editor_ids(&content.html)?;
-            let doc = crate::editing::parse(&content.html)?;
-            let body = crate::editing::body(&doc)?;
-            let hash = content.sha256()?;
-            for (region, positions) in page.regions.iter_mut().zip(positions) {
-                let old_targets: Vec<_> = region.targets().into_iter().cloned().collect();
-                region.elements = old_targets
-                    .into_iter()
-                    .zip(positions)
-                    .map(|(target, path)| {
-                        path.and_then(|selector| {
-                            let mut lookup = target.clone();
-                            lookup.selector = selector;
-                            crate::editing::locate(&doc, &lookup)
-                                .ok()
-                                .and_then(|node| crate::editing::target(node, body, &hash))
-                        })
-                        .unwrap_or(target)
-                    })
-                    .collect();
-                region.element = None;
-            }
-        }
-        Ok(())
-    }
     pub fn refresh_element_target_bounds(
         &self,
         page_id: Uuid,

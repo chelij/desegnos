@@ -257,7 +257,7 @@ impl Project {
                             })
                             .collect();
                         request.elements = targets;
-                        request.element = None;
+
                         request.area_bounds.clear();
                     }
                 }
@@ -486,7 +486,7 @@ mod tests {
             .find(|p| p.id == page)
             .unwrap()
             .regions[0];
-        request.element = Some(target.clone());
+        request.elements = vec![target.clone()];
         request.prompt = "Change this heading".into();
         for text in ["Home today", "Unrelated replacement"] {
             let next = project

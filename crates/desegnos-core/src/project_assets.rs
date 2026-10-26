@@ -62,7 +62,7 @@ impl Project {
                     &mut resolved.css,
                     &mut resolved.javascript,
                 ] {
-                    // A broken picture (e.g. truncated Base64 in older pages) stays inline as
+                    // A broken picture (e.g. truncated Base64 from an incomplete import) stays inline as
                     // it was; it must not make the whole project unloadable.
                     let uris: Vec<_> = inline_images(source)
                         .filter(|uri| valid_picture(uri))
@@ -294,24 +294,9 @@ impl Project {
 }
 
 impl GenerationCandidate {
-    pub(crate) fn validate_project_images(
-        &self,
-        project: &Project,
-        references: bool,
-    ) -> Result<()> {
+    pub(crate) fn validate_project_images(&self, project: &Project) -> Result<()> {
         use base64::{Engine, engine::general_purpose::STANDARD};
         for page in &self.pages {
-            ensure(
-                references
-                    || ![
-                        &page.content.html,
-                        &page.content.css,
-                        &page.content.javascript,
-                    ]
-                    .iter()
-                    .any(|source| source.contains(PROJECT_ASSET_SCHEME)),
-                "A project image was not resolved. Your page is unchanged.",
-            )?;
             let content = project.resolve_site_content(&page.content)?;
             let document = crate::editing::parse(&content.html)?;
             for node in document.select("img[src]").nodes() {

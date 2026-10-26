@@ -4,7 +4,7 @@ pub mod website_detection;
 pub mod website_merge;
 use desegnos_core::{
     DecodedProject, Error, Project, Result, SCHEMA_VERSION, decode_project,
-    decode_project_with_notes, decode_project_with_source_hash, digest,
+    decode_project_with_notes, digest,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -42,7 +42,7 @@ const JOURNAL_GRACE: Duration = Duration::from_secs(10 * 60);
 const BLOB_GRACE: Duration = Duration::from_secs(60 * 60);
 /// Writing site files is I/O bound, so more workers than this would only add contention.
 const BLOB_WORKERS: usize = 8;
-pub const PROJECT_FILE_EXTENSIONS: [&str; 2] = ["desegnos", "desegni"];
+pub const PROJECT_FILE_EXTENSIONS: [&str; 1] = ["desegnos"];
 
 fn project_extension(path: &Path) -> bool {
     path.extension()
@@ -64,7 +64,7 @@ struct Manifest {
     files: BTreeMap<String, String>,
 }
 
-/// The identity and exact manifest bytes read from a validated archive, before migration.
+/// The identity and exact manifest bytes read from a validated archive, without changing the file.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileStamp {
@@ -123,9 +123,7 @@ pub struct ProjectFile {
 impl ProjectFile {
     pub fn acquire(path: &Path) -> Result<Self> {
         if !project_extension(path) {
-            return Err(Error(
-                "Project files must use .desegnos (or the older .desegni extension).".into(),
-            ));
+            return Err(Error("Project files must use .desegnos.".into()));
         }
         let parent = path
             .parent()
@@ -141,9 +139,7 @@ impl ProjectFile {
                 let path = requested.canonicalize().map_err(io)?;
                 let metadata = path.metadata().map_err(io)?;
                 if !metadata.is_file() || !project_extension(&path) {
-                    return Err(Error(
-                        "Choose a regular .desegnos or .desegni project file.".into(),
-                    ));
+                    return Err(Error("Choose a regular .desegnos project file.".into()));
                 }
                 #[cfg(unix)]
                 {
@@ -518,9 +514,7 @@ fn read_project_document(path: &Path) -> Result<(DecodedProject, FileStamp)> {
         entries.insert(name, data);
     }
     let manifest: Manifest = serde_json::from_slice(&entries["manifest.json"]).map_err(io)?;
-    if !matches!(manifest.format.as_str(), "desegnos" | "desegni")
-        || ![1, 2, 3, 4, 5, 6, 7, 8, 9, SCHEMA_VERSION].contains(&manifest.schema_version)
-    {
+    if manifest.format != "desegnos" || manifest.schema_version != SCHEMA_VERSION {
         return Err(Error(
             "This project format is unsupported. The original has not been changed.".into(),
         ));
@@ -580,10 +574,8 @@ struct StoredJournalEntry<'a> {
     sha256: String,
     #[serde(borrow)]
     project: &'a serde_json::value::RawValue,
-    /// Site files are stored once in `blobs/` and referenced here; absent in older journals,
-    /// whose project bytes already contain every file.
-    #[serde(default)]
-    files: Option<BTreeMap<String, String>>,
+    /// Site files are stored once in `blobs/` and referenced here.
+    files: BTreeMap<String, String>,
 }
 
 /// What `clean_journals` removed.
@@ -700,14 +692,12 @@ impl Journal {
             }
             let entry: StoredJournalEntry<'_> = serde_json::from_slice(line)
                 .map_err(|e| Error(format!("A recovery entry is damaged: {e}")))?;
-            let document = match &entry.files {
-                None => {
-                    decode_project_with_source_hash(entry.project.get().as_bytes(), &entry.sha256)?
-                }
-                Some(files) => {
-                    restore_site_files(path, entry.project.get().as_bytes(), &entry.sha256, files)?
-                }
-            };
+            let document = restore_site_files(
+                path,
+                entry.project.get().as_bytes(),
+                &entry.sha256,
+                &entry.files,
+            )?;
             if let Some(old) = &previous
                 && (old.project.id != document.project.id
                     || old.project.revision >= document.project.revision)
@@ -970,9 +960,7 @@ fn journal_blob_hashes(path: &Path) -> Result<BTreeSet<String>> {
         }
         let entry: StoredJournalEntry<'_> = serde_json::from_slice(line)
             .map_err(|e| Error(format!("A recovery entry is damaged: {e}")))?;
-        if let Some(files) = entry.files {
-            hashes.extend(files.into_values());
-        }
+        hashes.extend(entry.files.into_values());
     }
     Ok(hashes)
 }
@@ -1285,23 +1273,6 @@ mod journal_tests {
             "reusing a site file must refresh its modification time"
         );
         assert!(!older_than(&metadata, BLOB_GRACE));
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn an_old_single_file_journal_still_recovers() {
-        let directory = directory();
-        let project = site_project("Old journal", &[("index.html", "<h1>Old</h1>")]);
-        let path = directory.join(format!("{}-{}.journal", project.id, Uuid::new_v4()));
-        let project_bytes = serde_json::to_vec(&project).unwrap();
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(b"{\"sha256\":\"");
-        bytes.extend_from_slice(digest(&project_bytes).as_bytes());
-        bytes.extend_from_slice(b"\",\"project\":");
-        bytes.extend_from_slice(&project_bytes);
-        bytes.extend_from_slice(b"}\n");
-        fs::write(&path, bytes).unwrap();
-        assert_eq!(Journal::recover(&path).unwrap(), Some(project));
         fs::remove_dir_all(directory).unwrap();
     }
 

@@ -133,13 +133,6 @@ struct RecoveryPointer {
     saved_revision: Option<u64>,
     saved_sha256: Option<String>,
     project_path: Option<PathBuf>,
-    /// The journal checksum of the saved file as silently upgraded on opening: the same project
-    /// at the same revision in newer bytes, so it holds no unsaved work.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    upgraded_sha256: Option<String>,
-    /// The saved file was upgraded with a notice; until saved, the upgrade is unsaved work.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    unsaved_migration: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -173,7 +166,6 @@ pub struct WorkspaceView {
     recovery: Option<RecoveryInfo>,
     recoveries: Vec<RecoveryInfo>,
     recovery_error: Option<String>,
-    migration_notice: Option<String>,
     open_projects: Vec<OpenProjectSummary>,
     any_dirty: bool,
     site_warnings: Vec<String>,
@@ -270,8 +262,6 @@ pub struct Workspace {
     recoveries: Vec<RecoveryCandidate>,
     recovery_error: Option<String>,
     prepared: Option<RequirementsSnapshot>,
-    migration_notice: Option<String>,
-    needs_migration_save: bool,
     recent_error: Option<String>,
     pending_save: Option<PendingSaveConflict>,
     website_import: Option<WebsiteImportSnapshot>,
@@ -290,13 +280,11 @@ struct OpenProject {
     journal: Option<Journal>,
     ownership: Option<File>,
     saved_revision: Option<u64>,
-    migration_notice: Option<String>,
-    needs_migration_save: bool,
 }
 
 impl OpenProject {
     fn dirty(&self) -> bool {
-        Some(self.session.project().revision) != self.saved_revision || self.needs_migration_save
+        Some(self.session.project().revision) != self.saved_revision
     }
 }
 
@@ -430,8 +418,6 @@ impl Workspace {
             recoveries: vec![],
             recovery_error: None,
             prepared: None,
-            migration_notice: None,
-            needs_migration_save: false,
             recent_error: None,
             pending_save: None,
             website_import: None,
@@ -496,48 +482,11 @@ impl Workspace {
             return Ok(None);
         };
         if Some(document.project.revision) == pointer.saved_revision
-            && (pointer.saved_sha256.as_ref() == Some(&document.source_sha256)
-                || pointer.upgraded_sha256.as_ref() == Some(&document.source_sha256)
-                || self.verify_silent_upgrade(project_id, &document, &pointer))
+            && pointer.saved_sha256.as_ref() == Some(&document.source_sha256)
         {
             return Ok(None);
         }
         Ok(Some((document, pointer)))
-    }
-
-    /// Records written before `upgradedSha256` existed: check the saved file itself. If the
-    /// journal is that file silently upgraded, remember its checksum so this is checked once.
-    fn verify_silent_upgrade(
-        &self,
-        project_id: Uuid,
-        document: &DecodedProject,
-        pointer: &RecoveryPointer,
-    ) -> bool {
-        if pointer.upgraded_sha256.is_some() || pointer.unsaved_migration {
-            return false;
-        }
-        let Some(saved) = pointer
-            .project_path
-            .as_ref()
-            .and_then(|path| desegnos_storage::load_project_document(path).ok())
-        else {
-            return false;
-        };
-        let clean = saved.project.id == project_id
-            && Some(saved.project.revision) == pointer.saved_revision
-            && pointer.saved_sha256.as_ref() == Some(&saved.source_sha256)
-            && saved.migrated()
-            && saved.migration_notice().is_none();
-        if clean {
-            let pointer = RecoveryPointer {
-                upgraded_sha256: Some(document.source_sha256.clone()),
-                ..pointer.clone()
-            };
-            if let Ok(json) = serde_json::to_string(&pointer) {
-                let _ = write_markdown(&self.pointer_path(project_id), &json);
-            }
-        }
-        clean
     }
 
     /// Journals of sessions that are no longer open, and site files no journal references,
@@ -705,9 +654,10 @@ impl Workspace {
                 .file
                 .as_ref()
                 .map(|f| f.path().to_string_lossy().into_owned()),
-            dirty: self.session.as_ref().is_some_and(|s| {
-                Some(s.project().revision) != self.saved_revision || self.needs_migration_save
-            }),
+            dirty: self
+                .session
+                .as_ref()
+                .is_some_and(|s| Some(s.project().revision) != self.saved_revision),
             can_undo: self.session.as_ref().is_some_and(Session::can_undo),
             can_redo: self.session.as_ref().is_some_and(Session::can_redo),
             history: self.session.as_ref().map(|session| {
@@ -730,7 +680,6 @@ impl Workspace {
                 .map(|candidate| candidate.info.clone())
                 .collect(),
             recovery_error: self.recovery_error.clone(),
-            migration_notice: self.migration_notice.clone(),
             open_projects: self.open_projects(),
             any_dirty: self.parked.iter().any(OpenProject::dirty) || self.active_dirty(),
             outside_edits: self
@@ -760,9 +709,9 @@ impl Workspace {
     }
 
     fn active_dirty(&self) -> bool {
-        self.session.as_ref().is_some_and(|session| {
-            Some(session.project().revision) != self.saved_revision || self.needs_migration_save
-        })
+        self.session
+            .as_ref()
+            .is_some_and(|session| Some(session.project().revision) != self.saved_revision)
     }
 
     /// Back to the start screen. The project lock is released; its recovery journal stays,
@@ -805,8 +754,6 @@ impl Workspace {
         self.ownership = None;
         self.saved_revision = None;
         self.prepared = None;
-        self.migration_notice = None;
-        self.needs_migration_save = false;
         self.pending_save = None;
         // The tab that followed the closed one, or the one before it when it was last.
         let next = position
@@ -910,8 +857,6 @@ impl Workspace {
                 journal: self.journal.take(),
                 ownership: self.ownership.take(),
                 saved_revision: self.saved_revision.take(),
-                migration_notice: self.migration_notice.take(),
-                needs_migration_save: std::mem::take(&mut self.needs_migration_save),
             });
         }
         self.prepared = None;
@@ -924,8 +869,6 @@ impl Workspace {
         self.journal = project.journal;
         self.ownership = project.ownership;
         self.saved_revision = project.saved_revision;
-        self.migration_notice = project.migration_notice;
-        self.needs_migration_save = project.needs_migration_save;
         self.prepared = None;
         self.pending_save = None;
     }
@@ -978,7 +921,6 @@ impl Workspace {
         document: DecodedProject,
         discard_recovery: bool,
     ) -> OpenResult<()> {
-        let migration_notice = document.migration_notice();
         let revision = document.project.revision;
         self.start_with_recovery(
             document.project,
@@ -986,9 +928,6 @@ impl Workspace {
             Some(revision),
             discard_recovery,
         )?;
-        if let Some(notice) = migration_notice {
-            self.note_migration(notice)?;
-        }
         self.remember_recent();
         Ok(())
     }
@@ -1047,26 +986,6 @@ impl Workspace {
             (file, document)
         };
         self.open_document(file, document, discard_recovery)
-    }
-
-    /// The active project was upgraded from its saved file with a notice: until it is saved,
-    /// the upgrade itself is unsaved work and stays offered for recovery.
-    fn note_migration(&mut self, notice: &str) -> NativeResult<()> {
-        self.migration_notice = Some(notice.into());
-        self.needs_migration_save = true;
-        if let (Some(session), Some(journal), Some(file)) =
-            (&self.session, &self.journal, &self.file)
-        {
-            self.write_pointer(
-                session.project().id,
-                journal,
-                Some(file),
-                self.saved_revision,
-                None,
-                true,
-            )?;
-        }
-        Ok(())
     }
 
     fn remember_recent(&mut self) {
@@ -1163,7 +1082,6 @@ impl Workspace {
             file.as_ref(),
             saved_revision,
             last_saved_path,
-            false,
         )?;
         self.pending_save = None;
         if !self.order.contains(&session.project().id) {
@@ -1177,8 +1095,6 @@ impl Workspace {
         }
         self.saved_revision = saved_revision;
         self.prepared = None;
-        self.migration_notice = None;
-        self.needs_migration_save = false;
         self.refresh_recoveries();
         Ok(())
     }
@@ -1190,7 +1106,6 @@ impl Workspace {
         file: Option<&ProjectFile>,
         saved_revision: Option<u64>,
         last_saved_path: Option<PathBuf>,
-        unsaved_migration: bool,
     ) -> NativeResult<()> {
         let saved = file
             .map(|file| -> NativeResult<DecodedProject> {
@@ -1201,16 +1116,6 @@ impl Workspace {
                 Ok(saved)
             })
             .transpose()?;
-        // A silently upgraded file is journaled in newer bytes; remember them as saved too.
-        let upgraded_sha256 = match &saved {
-            Some(saved) if saved.migrated() && !unsaved_migration => {
-                Journal::recover_document(journal.path())
-                    .map_err(message)?
-                    .filter(|entry| Some(entry.project.revision) == saved_revision)
-                    .map(|entry| entry.source_sha256)
-            }
-            _ => None,
-        };
         let pointer = RecoveryPointer {
             journal_file: journal
                 .path()
@@ -1221,8 +1126,6 @@ impl Workspace {
             saved_revision,
             saved_sha256: saved.map(|saved| saved.source_sha256),
             project_path: file.map(|f| f.path().to_owned()).or(last_saved_path),
-            upgraded_sha256,
-            unsaved_migration,
         };
         write_markdown(
             &self.pointer_path(project_id),
@@ -1297,14 +1200,11 @@ impl Workspace {
             Some(self.destination_file(&destination)?),
             Some(project.revision),
             None,
-            false,
         )?;
         if let SaveDestination::Chosen(file) = destination {
             self.file = Some(file);
         }
         self.saved_revision = Some(project.revision);
-        self.migration_notice = None;
-        self.needs_migration_save = false;
         self.remember_recent();
         Ok(())
     }
@@ -1515,7 +1415,6 @@ impl Workspace {
         let (document, pointer) = self
             .read_recovery(project_id)?
             .ok_or("There are no unsaved changes to recover for this project.")?;
-        let mut migration_notice = document.migration_notice();
         let project = document.project;
         let file = pointer.project_path.as_ref().and_then(|path| {
             let file = ProjectFile::acquire(path).ok()?;
@@ -1523,9 +1422,6 @@ impl Workspace {
             let matches = saved.project.id == project.id
                 && Some(saved.project.revision) == pointer.saved_revision
                 && Some(&saved.source_sha256) == pointer.saved_sha256.as_ref();
-            if matches {
-                migration_notice = migration_notice.or(saved.migration_notice());
-            }
             matches.then_some(file)
         });
         let saved_revision = file.as_ref().and(pointer.saved_revision);
@@ -1536,9 +1432,6 @@ impl Workspace {
             Some(ownership),
             pointer.project_path,
         )?;
-        if let Some(notice) = migration_notice {
-            self.note_migration(notice)?;
-        }
         Ok(())
     }
 }
@@ -1568,7 +1461,7 @@ pub fn create_project(
     identity_page_paths: Option<Vec<String>>,
     parent_directory: Option<PathBuf>,
 ) -> NativeResult<WorkspaceView> {
-    // New projects follow the editor's light/dark mode; older callers omit it and start light.
+    // The editor passes its theme; brand import starts light when no appearance is specified.
     let appearance = appearance.unwrap_or(Appearance::Light);
     generation
         .lock()
@@ -2550,7 +2443,7 @@ async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Opt
 }
 
 /// New Save As / conflict copies get their own folder. Choosing an existing archive still
-/// runs the established conflict/Replace flow, including legacy standalone destinations.
+/// runs the established conflict/Replace flow, including standalone destinations.
 fn copy_destination(path: Option<PathBuf>, project: &Project) -> NativeResult<Option<PathBuf>> {
     path.map(|path| {
         let path = if path.extension().is_none() {
@@ -2566,7 +2459,7 @@ fn copy_destination(path: Option<PathBuf>, project: &Project) -> NativeResult<Op
             .and_then(|s| s.to_str())
             .is_none_or(|ext| !desegnos_storage::PROJECT_FILE_EXTENSIONS.contains(&ext))
         {
-            return Err("Project copies must use .desegnos or .desegni.".into());
+            return Err("Project copies must use .desegnos.".into());
         }
         let parent = path.parent().ok_or("Choose a project location.")?;
         let name = path
@@ -3154,14 +3047,14 @@ mod tests {
         let project = project("Saved native project");
         workspace.start(project.clone(), None, None).unwrap();
         workspace
-            .save_snapshot(&project, Some(temp.0.join("site.desegni")))
+            .save_snapshot(&project, Some(temp.0.join("site.desegnos")))
             .unwrap();
         assert!(!workspace.view().dirty);
         drop(workspace);
         let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
         assert!(restarted.recoveries.is_empty());
         assert_eq!(
-            desegnos_storage::load_project(&temp.0.join("site.desegni")).unwrap(),
+            desegnos_storage::load_project(&temp.0.join("site.desegnos")).unwrap(),
             project
         );
     }
@@ -3173,7 +3066,7 @@ mod tests {
         let original = project("Original");
         workspace.start(original.clone(), None, None).unwrap();
         workspace.start(project("New project"), None, None).unwrap();
-        let path = temp.0.join("must-not-be-created.desegni");
+        let path = temp.0.join("must-not-be-created.desegnos");
         assert!(
             workspace
                 .save_snapshot(&original, Some(path.clone()))
@@ -3430,7 +3323,7 @@ mod tests {
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
         let first = project("Stays open too");
         let second = project("Saved before closing");
-        let path = temp.0.join("saved-before-closing.desegni");
+        let path = temp.0.join("saved-before-closing.desegnos");
         workspace
             .start(first.clone(), None, Some(first.revision))
             .unwrap();
@@ -3461,7 +3354,7 @@ mod tests {
             let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
             let original = project("Dismiss recovery");
             let id = original.id;
-            let path = temp.0.join("saved.desegni");
+            let path = temp.0.join("saved.desegnos");
             workspace.start(original.clone(), None, None).unwrap();
             if saved {
                 workspace
@@ -3597,7 +3490,7 @@ mod tests {
                 .any(|candidate| candidate.info.project_id == original.id)
         );
         let opened = project("Another saved project");
-        let file = ProjectFile::acquire(&temp.0.join("another.desegni")).unwrap();
+        let file = ProjectFile::acquire(&temp.0.join("another.desegnos")).unwrap();
         file.save(&opened).unwrap();
         workspace
             .start(opened.clone(), Some(file), Some(opened.revision))
@@ -3645,7 +3538,7 @@ mod tests {
         let original = project("Preserve file ownership");
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
         workspace.start(original.clone(), None, None).unwrap();
-        let old_path = temp.0.join("original.desegni");
+        let old_path = temp.0.join("original.desegnos");
         workspace
             .save_snapshot(&original, Some(old_path.clone()))
             .unwrap();
@@ -3659,7 +3552,7 @@ mod tests {
         ));
         fs::remove_file(&backup).unwrap();
         fs::create_dir(&backup).unwrap();
-        let new_path = temp.0.join("new.desegni");
+        let new_path = temp.0.join("new.desegnos");
         assert!(
             workspace
                 .save_snapshot(&candidate, Some(new_path.clone()))
@@ -3675,7 +3568,10 @@ mod tests {
         ProjectFile::acquire(&new_path).unwrap();
         assert_eq!(fs::read(pointer).unwrap(), before);
         assert_eq!(desegnos_storage::load_project(&old_path).unwrap(), original);
-        assert_eq!(desegnos_storage::load_project(&new_path).unwrap(), candidate);
+        assert_eq!(
+            desegnos_storage::load_project(&new_path).unwrap(),
+            candidate
+        );
     }
 
     #[test]
@@ -3851,7 +3747,7 @@ mod tests {
     fn an_older_saved_file_cannot_replace_a_pending_recovery_record() {
         let temp = Temp::new();
         let original = project("Recover before opening an older copy");
-        let path = temp.0.join("site.desegni");
+        let path = temp.0.join("site.desegnos");
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
         workspace.start(original.clone(), None, None).unwrap();
         workspace
@@ -3877,7 +3773,7 @@ mod tests {
         for condition in ["missing", "corrupt", "different", "changed", "diverged"] {
             let temp = Temp::new();
             let original = project("Recover without overwriting external changes");
-            let path = temp.0.join("site.desegni");
+            let path = temp.0.join("site.desegnos");
             let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
             workspace.start(original.clone(), None, None).unwrap();
             workspace
@@ -4009,7 +3905,7 @@ mod tests {
     fn a_pointer_cannot_hide_unsaved_data_by_claiming_a_clean_revision() {
         let temp = Temp::new();
         let original = project("Verify the actual clean snapshot");
-        let path = temp.0.join("site.desegni");
+        let path = temp.0.join("site.desegnos");
         let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
         workspace.start(original.clone(), None, None).unwrap();
         workspace
@@ -4273,163 +4169,6 @@ mod tests {
                 .recoveries
                 .is_empty()
         );
-    }
-
-    const SCHEMA_ONE: &[u8] = include_bytes!(
-        "../../crates/desegnos-storage/tests/fixtures/schema1-mixed-generation.desegni"
-    );
-
-    #[test]
-    fn opening_schema_one_discloses_migration_and_keeps_the_original_until_save() {
-        let temp = Temp::new();
-        let path = temp.0.join("legacy.desegni");
-        fs::write(&path, SCHEMA_ONE).unwrap();
-        let file = ProjectFile::acquire(&path).unwrap();
-        let document = file.load_document().unwrap();
-        let expected = document.project.clone();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.open_document(file, document, false).unwrap();
-        assert_eq!(workspace.session.as_ref().unwrap().project(), &expected);
-        assert_eq!(
-            workspace.view().migration_notice.as_deref(),
-            Some(GENERATION_MIGRATION_NOTICE)
-        );
-        assert!(workspace.view().dirty);
-        assert!(workspace.check_replace(false).is_err());
-        assert_eq!(fs::read(&path).unwrap(), SCHEMA_ONE);
-        drop(workspace);
-        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(restarted.recoveries.len(), 1);
-        restarted.recover(Some(expected.id), false).unwrap();
-        assert_eq!(
-            restarted.file.as_ref().unwrap().path(),
-            path.canonicalize().unwrap()
-        );
-        assert_eq!(
-            restarted.view().migration_notice.as_deref(),
-            Some(GENERATION_MIGRATION_NOTICE)
-        );
-        assert!(restarted.view().dirty);
-        restarted.save_snapshot(&expected, None).unwrap();
-        assert!(!restarted.view().dirty);
-        assert!(restarted.view().migration_notice.is_none());
-        assert_eq!(
-            fs::read(temp.0.join("legacy.desegni.previous")).unwrap(),
-            SCHEMA_ONE
-        );
-        assert_eq!(restarted.file.as_ref().unwrap().load().unwrap(), expected);
-        drop(restarted);
-        assert!(
-            Workspace::from_directory(temp.0.clone())
-                .unwrap()
-                .recoveries
-                .is_empty()
-        );
-    }
-
-    const SCHEMA_SEVEN: &[u8] =
-        include_bytes!("../../crates/desegnos-storage/tests/fixtures/schema7-untouched.desegni");
-
-    #[test]
-    fn an_untouched_silently_upgraded_file_is_not_offered_as_unsaved_work() {
-        // Opening a schema 7 file upgrades it without a notice, so its journal holds the saved
-        // file in newer bytes at the same revision. That used to be offered as unsaved work after
-        // a restart; recovered it was not dirty, so closing kept the record and the file could
-        // no longer be opened.
-        let temp = Temp::new();
-        let path = temp.0.join("site.desegni");
-        fs::write(&path, SCHEMA_SEVEN).unwrap();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.open_file_tab(&path, false).unwrap();
-        let opened = workspace.session.as_ref().unwrap().project().clone();
-        assert!(!workspace.view().dirty);
-        assert!(workspace.view().migration_notice.is_none());
-        let pointer_path = workspace.pointer_path(opened.id);
-        drop(workspace);
-
-        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert!(restarted.recoveries.is_empty());
-        restarted.open_file_tab(&path, false).unwrap();
-        assert_eq!(restarted.session.as_ref().unwrap().project(), &opened);
-        assert!(!restarted.view().dirty);
-        restarted.close();
-        assert!(restarted.recoveries.is_empty());
-        drop(restarted);
-
-        // Records written before the upgrade checksum existed are checked against the file once.
-        let mut record: serde_json::Value =
-            serde_json::from_slice(&fs::read(&pointer_path).unwrap()).unwrap();
-        let upgraded = record
-            .as_object_mut()
-            .unwrap()
-            .remove("upgradedSha256")
-            .unwrap();
-        fs::write(&pointer_path, serde_json::to_vec(&record).unwrap()).unwrap();
-        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert!(restarted.recoveries.is_empty());
-        let record: serde_json::Value =
-            serde_json::from_slice(&fs::read(&pointer_path).unwrap()).unwrap();
-        assert_eq!(record["upgradedSha256"], upgraded);
-        assert_eq!(fs::read(&path).unwrap(), SCHEMA_SEVEN);
-
-        // Real edits are still offered.
-        restarted.open_file_tab(&path, false).unwrap();
-        change_grid(&mut restarted);
-        drop(restarted);
-        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(restarted.recoveries.len(), 1);
-        restarted.recover(Some(opened.id), false).unwrap();
-        assert!(restarted.view().dirty);
-    }
-
-    #[test]
-    fn a_schema_one_recovery_journal_migrates_without_rewriting_its_original() {
-        // The actual old archive provides the original typed JSON and checksum, rather than a reconstructed model.
-        let temp = Temp::new();
-        let fixture_path = temp.0.join("source.desegni");
-        fs::write(&fixture_path, SCHEMA_ONE).unwrap();
-        let source = desegnos_storage::load_project_document(&fixture_path).unwrap();
-        let original_json = include_str!(
-            "../../crates/desegnos-storage/tests/fixtures/schema1-mixed-generation.project.json"
-        );
-        assert_eq!(
-            desegnos_core::digest(original_json.as_bytes()),
-            source.source_sha256
-        );
-        let journal_name = format!("{}-legacy.journal", source.project.id);
-        let journal_path = temp.0.join(&journal_name);
-        let journal_bytes = format!(
-            "{{\"sha256\":\"{}\",\"project\":{original_json}}}\n",
-            source.source_sha256
-        )
-        .into_bytes();
-        fs::write(&journal_path, &journal_bytes).unwrap();
-        let pointer = RecoveryPointer {
-            journal_file: journal_name,
-            saved_revision: None,
-            saved_sha256: None,
-            project_path: None,
-            upgraded_sha256: None,
-            unsaved_migration: false,
-        };
-        write_markdown(
-            &temp.0.join(format!("{}.recovery.json", source.project.id)),
-            &serde_json::to_string(&pointer).unwrap(),
-        )
-        .unwrap();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.recover(Some(source.project.id), false).unwrap();
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project(),
-            &source.project
-        );
-        assert_eq!(
-            workspace.view().migration_notice.as_deref(),
-            Some(GENERATION_MIGRATION_NOTICE)
-        );
-        assert!(workspace.view().dirty);
-        assert!(workspace.file.is_none());
-        assert_eq!(fs::read(journal_path).unwrap(), journal_bytes);
     }
 }
 

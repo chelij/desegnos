@@ -261,19 +261,14 @@ impl GenerationCandidate {
             regions == target_regions,
             "The generation result omitted a requested area.",
         )?;
-        let format = snapshot.format_version()?;
-        if format < 22 {
-            ensure(
-                self.documents.is_empty(),
-                "This requirements format cannot change framed documents.",
-            )?;
-        }
+        snapshot.format_version()?;
+
         // Framed requests edit their target document; only Flexible may also change the host page.
         let mut required_pages = BTreeSet::new();
         let mut allowed_pages: BTreeSet<Uuid> = target_pages.clone();
         let mut required_documents: BTreeSet<crate::DocumentTarget> = BTreeSet::new();
         let mut allowed_documents: BTreeSet<crate::DocumentTarget> = BTreeSet::new();
-        if format >= 22 {
+        {
             allowed_pages.clear();
             for (page_id, region_id) in &targets {
                 let page = project.page(*page_id)?;
@@ -339,29 +334,13 @@ impl GenerationCandidate {
         }
         let mut pages = BTreeSet::new();
         for page in &self.pages {
-            let allowed = if format >= 22 {
-                allowed_pages.contains(&page.page_id)
-            } else {
-                target_pages.contains(&page.page_id)
-            };
+            let allowed = { allowed_pages.contains(&page.page_id) };
             ensure(
                 allowed && pages.insert(page.page_id),
                 "The generation result contains a duplicate or unrequested page.",
             )?;
-            ensure(
-                format >= 17
-                    || targets.iter().filter(|(id, _)| *id == page.page_id).all(
-                        |(_, region_id)| {
-                            self.regions.iter().any(|region| {
-                                region.region_id == *region_id
-                                    && region.status == RegionStatus::Implemented
-                            })
-                        },
-                    ),
-                "A conflicted page cannot be represented as complete generated source.",
-            )?;
         }
-        if format >= 22 {
+        {
             ensure(
                 required_pages.iter().all(|id| pages.contains(id)),
                 "Return source for exactly the documents with implemented regions.",
@@ -370,7 +349,7 @@ impl GenerationCandidate {
             for document in &self.documents {
                 ensure(
                     (required_documents.contains(&document.document)
-                        || (format >= 23 && allowed_documents.contains(&document.document)))
+                        || (allowed_documents.contains(&document.document)))
                         && documents.insert(document.document.clone()),
                     "The generation result contains a duplicate or unrequested framed document.",
                 )?;
@@ -381,22 +360,8 @@ impl GenerationCandidate {
                     .all(|document| documents.contains(document)),
                 "Return source for exactly the framed documents with implemented regions.",
             )?;
-        } else if format >= 17 {
-            let ready_pages: BTreeSet<_> = targets
-                .iter()
-                .filter(|(_, id)| {
-                    self.regions.iter().any(|region| {
-                        region.region_id == *id && region.status == RegionStatus::Implemented
-                    })
-                })
-                .map(|(page, _)| *page)
-                .collect();
-            ensure(
-                pages == ready_pages,
-                "Return source for exactly the pages with implemented regions.",
-            )?;
         }
-        if format >= 17 {
+        {
             if !snapshot.is_flexible() {
                 self.validate_conflicting_regions(snapshot, project)?;
             }
@@ -415,12 +380,7 @@ impl GenerationCandidate {
                 }
             }
         }
-        if snapshot.format_version()? < 17 && self.is_ready() {
-            ensure(
-                pages == target_pages,
-                "The generation result omitted source for an affected page.",
-            )?;
-        }
+
         let mut capabilities = BTreeSet::new();
         for request in &self.component_requests {
             ensure(
@@ -432,18 +392,7 @@ impl GenerationCandidate {
                 "The generation result repeats a component capability for one area.",
             )?;
             // Since format 9 a draft finishes with a clearly marked placeholder for a missing
-            // service (for example a CAPTCHA that needs its own keys); older formats require a conflict.
-            if request.resolution == ComponentResolution::Unavailable
-                && snapshot.format_version()? < 9
-            {
-                ensure(
-                    self.regions.iter().any(|region| {
-                        region.region_id == request.region_id
-                            && region.status == RegionStatus::Conflict
-                    }),
-                    "An unavailable required component must be an explicit area conflict.",
-                )?;
-            }
+            // service (for example a CAPTCHA that needs its own keys).
         }
         let mut proposal_topics = BTreeSet::new();
         for proposal in &self.decision_proposals {
@@ -473,10 +422,10 @@ impl GenerationCandidate {
                 "Design feedback refers to an unrequested area.",
             )?;
         }
-        if snapshot.format_version()? >= 8 {
-            self.validate_project_images(project, snapshot.format_version()? >= 12)?;
+        {
+            self.validate_project_images(project)?;
         }
-        if snapshot.format_version()? >= 9 {
+        {
             for page in &self.pages {
                 crate::validate_page_source(&page.content)
                     .map_err(|error| Error(error.to_string()))?;
@@ -512,21 +461,14 @@ impl GenerationCandidate {
                 .all(|request| request.resolution == ComponentResolution::Native)
     }
 
-    /// Legacy requests retain their all-or-nothing application contract.
+    /// Apply ready areas from a validated current-format result.
     pub fn can_apply(&self, snapshot: &RequirementsSnapshot) -> bool {
-        if snapshot.format_version().is_ok_and(|format| format >= 22) {
-            self.regions
+        snapshot.format_version().is_ok()
+            && self
+                .regions
                 .iter()
                 .any(|region| region.status == RegionStatus::Implemented)
-                && (!self.pages.is_empty() || !self.documents.is_empty())
-        } else if snapshot.format_version().is_ok_and(|format| format >= 17) {
-            self.regions
-                .iter()
-                .any(|region| region.status == RegionStatus::Implemented)
-                && !self.pages.is_empty()
-        } else {
-            self.is_ready()
-        }
+            && (!self.pages.is_empty() || !self.documents.is_empty())
     }
 
     pub fn ensure_ready(&self) -> Result<()> {
@@ -726,13 +668,11 @@ impl Project {
         let resolved = crate::resolve_edits_during_generation(snapshot, candidate, self)?;
         candidate.validate(snapshot, &resolved.base)?;
         let generated = &resolved.candidate;
-        if snapshot.format_version()? >= 17 {
+        {
             ensure(
                 candidate.can_apply(snapshot),
                 "There are no implemented regions to apply.",
             )?;
-        } else {
-            candidate.ensure_ready()?;
         }
         if let Some(recorded) = &self.latest_generation
             && recorded.job_id == candidate.job_id
@@ -768,7 +708,7 @@ impl Project {
                 )?;
             }
         }
-        if snapshot.format_version()? >= 17 {
+        {
             ensure(
                 candidate.image_generation_requests()?.is_empty(),
                 "Images must be prepared before applying.",
@@ -815,8 +755,7 @@ impl Project {
             for region in &mut page.regions {
                 if candidate.regions.iter().any(|target| {
                     target.region_id == region.id
-                        && (snapshot.format_version().unwrap_or(0) < 17
-                            || target.status == RegionStatus::Implemented)
+                        && (false || target.status == RegionStatus::Implemented)
                 }) || (candidate
                     .pages
                     .iter()
@@ -904,15 +843,6 @@ fn same_topic(first: &str, second: &str) -> bool {
 }
 
 pub fn candidate_schema() -> serde_json::Value {
-    candidate_schema_value(true)
-}
-
-/// The schema emitted before framed documents existed; frozen requirements rebuild it exactly.
-pub(crate) fn candidate_schema_legacy() -> serde_json::Value {
-    candidate_schema_value(false)
-}
-
-fn candidate_schema_value(include_documents: bool) -> serde_json::Value {
     use serde_json::json;
     fn object(properties: serde_json::Value) -> serde_json::Value {
         let required: Vec<_> = properties
@@ -937,7 +867,7 @@ fn candidate_schema_value(include_documents: bool) -> serde_json::Value {
         object(json!({"kind":{"type":"string","enum":["page"]},"id":uuid})),
         object(json!({"kind":{"type":"string","enum":["region"]},"id":uuid}))
     ]});
-    let mut schema = object(json!({
+    let schema = object(json!({
         "jobId":uuid,
         "requirementsSha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
         "summary":text(16_384),
@@ -972,16 +902,6 @@ fn candidate_schema_value(include_documents: bool) -> serde_json::Value {
             "suggestion":text(MAX_EXPLANATION_CHARS)
         })),MAX_DESIGN_CRITICISMS)
     }));
-    if !include_documents {
-        // Frozen requirements from before framed documents rebuild their exact schema.
-        schema["properties"]
-            .as_object_mut()
-            .expect("properties is an object")
-            .remove("documents");
-        schema["required"]
-            .as_array_mut()
-            .expect("required is a list")
-            .retain(|name| name != "documents");
-    }
+
     schema
 }

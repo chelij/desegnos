@@ -402,11 +402,11 @@ pub fn collect_identity_source(path: &Path) -> Result<IdentitySource> {
         }
     } else if metadata.is_file() {
         match extension(&name).as_str() {
-            "desegnos" | "desegni" => collect_project(path, &metadata, &mut collector)?,
+            "desegnos" => collect_project(path, &metadata, &mut collector)?,
             "zip" => collect_zip(path, &metadata, &mut collector)?,
             _ => {
                 return Err(Error(
-                    "Choose a .desegnos or .desegni project, a website folder, or a .zip website archive."
+                    "Choose a .desegnos project, a website folder, or a .zip website archive."
                         .into(),
                 ));
             }

@@ -9,14 +9,11 @@
 /src-tauri/gen/
 *.log
 *.desegnos
-*.desegni
-!/crates/desegnos-storage/tests/fixtures/*.desegni
+!/benchmarks/generation/projects/*.desegnos
 *.desegnos.lock
-*.desegni.lock
 *.previous
 .env
 .env.*
 __pycache__/
 *.pyc
 /.worktrees/
-

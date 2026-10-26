@@ -145,17 +145,16 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         page: &crate::Page,
     ) -> bool {
-        snapshot.format_version().is_ok_and(|v| v >= 18)
-            && snapshot.target_ids().is_ok_and(|targets| {
-                page.regions.iter().any(|region| {
-                    targets.contains(&(page.id, region.id))
-                        && region.is_whole_page(page)
-                        && self.regions.iter().any(|outcome| {
-                            outcome.region_id == region.id
-                                && outcome.status == crate::RegionStatus::Implemented
-                        })
-                })
+        snapshot.target_ids().is_ok_and(|targets| {
+            page.regions.iter().any(|region| {
+                targets.contains(&(page.id, region.id))
+                    && region.is_whole_page(page)
+                    && self.regions.iter().any(|outcome| {
+                        outcome.region_id == region.id
+                            && outcome.status == crate::RegionStatus::Implemented
+                    })
             })
+        })
     }
 
     pub(crate) fn validate_conflicting_regions(
@@ -176,8 +175,7 @@ impl GenerationCandidate {
                 .iter()
                 .filter(|region| {
                     region.frame_target.is_none()
-                        && !(snapshot.format_version().is_ok_and(|v| v >= 18)
-                            && region.is_whole_page(page))
+                        && !region.is_whole_page(page)
                         && self.regions.iter().any(|outcome| {
                             outcome.region_id == region.id
                                 && outcome.status == crate::RegionStatus::Conflict
@@ -289,7 +287,7 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         project: &Project,
     ) -> Result<()> {
-        if snapshot.format_version()? >= 22 {
+        {
             self.validate_framed_documents(snapshot, project)?;
         }
         if snapshot.is_flexible() {
@@ -321,9 +319,7 @@ impl GenerationCandidate {
             }
             return crate::region_scripts::validate(self, snapshot, project);
         }
-        if snapshot.format_version()? < 14 {
-            return self.validate_scope_exact(snapshot, project);
-        }
+
         // From format 14 the AI sees compact page sources. Both sides are compared in that
         // form, so layout whitespace on either side never counts as a change.
         let mut candidate = self.clone();
@@ -331,7 +327,7 @@ impl GenerationCandidate {
             page.content = crate::compact_site_content(&page.content);
         }
         let mut project = project.compact_pages();
-        if snapshot.format_version()? >= 18 {
+        {
             crate::region_scripts::validate(&candidate, snapshot, &project)?;
             for page in &mut candidate.pages {
                 page.content.html = crate::region_scripts::strip(&page.content.html)?;
@@ -353,14 +349,8 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         project: &Project,
     ) -> Result<()> {
-        let format = snapshot.format_version()?;
-        if format < 22 {
-            ensure(
-                self.documents.is_empty(),
-                "This requirements format cannot change framed documents.",
-            )?;
-            return Ok(());
-        }
+        snapshot.format_version()?;
+
         let mut framed = BTreeSet::new();
         for (page_id, region_id) in snapshot.target_ids()? {
             let page = project.page(page_id)?;
@@ -376,7 +366,7 @@ impl GenerationCandidate {
                 framed.insert(frame.document.clone());
             }
         }
-        if format >= 23 {
+        {
             // Documents the request was given are editable even when no request is drawn on them.
             for included in &snapshot.documents {
                 if let crate::DocumentTarget::SiteFile { .. } = included.document {
@@ -417,11 +407,8 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         project: &Project,
     ) -> Result<()> {
-        if snapshot.format_version()? < 8 {
-            return Ok(());
-        }
         let targets = snapshot.target_ids()?;
-        let stable = snapshot.format_version()? >= 10;
+
         let host_pages: BTreeSet<_> = targets.iter().map(|(page, _)| *page).collect();
         for page in &self.pages {
             if !host_pages.contains(&page.page_id) {
@@ -429,7 +416,7 @@ impl GenerationCandidate {
                 continue;
             }
             let original = project.page(page.page_id)?;
-            if stable {
+            {
                 let known = original
                     .content
                     .as_ref()
@@ -482,44 +469,26 @@ impl GenerationCandidate {
             }
             let regions: Vec<_> = regions
                 .into_iter()
-                .filter(|region| {
-                    snapshot.format_version().is_ok_and(|v| v < 18)
-                        || !region.is_whole_page(original)
-                })
+                .filter(|region| !region.is_whole_page(original))
                 .collect();
             if !regions.is_empty() && regions.iter().all(|region| region.mobile_only) {
                 validate_phone_scope(original, &page.content)?;
                 continue;
             }
-            if snapshot.format_version()? >= 15
-                && original.content.is_some()
+            if original.content.is_some()
                 && regions.iter().any(|region| !region.shape.is_rect())
                 && regions
                     .iter()
                     .all(|region| region.has_targets() || !region.shape.is_rect())
             {
-                validate_shaped_scope(
-                    original,
-                    &page.content,
-                    &regions,
-                    (snapshot.format_version()? >= 17).then_some(self),
-                )?;
+                validate_shaped_scope(original, &page.content, &regions, self)?;
                 continue;
             }
             // Rectangular requests on an existing page have no trustworthy mapping
             // to old DOM nodes. Do not invent one from labels or model claims.
             let targeted = regions.iter().all(|region| region.has_targets());
-            if stable
-                && regions.iter().any(|region| region.has_targets())
-                && original.content.is_some()
-            {
-                validate_stable_scope(
-                    original,
-                    &page.content,
-                    &regions,
-                    snapshot.format_version()? >= 12,
-                    (snapshot.format_version()? >= 17).then_some(self),
-                )?;
+            if regions.iter().any(|region| region.has_targets()) && original.content.is_some() {
+                validate_stable_scope(original, &page.content, &regions, self)?;
                 continue;
             }
             if original
@@ -528,7 +497,7 @@ impl GenerationCandidate {
                 .is_some_and(|source| !source.html.trim().is_empty())
                 && !targeted
             {
-                if snapshot.format_version()? >= 17 {
+                {
                     let before =
                         crate::editing::parse(&original.content.as_ref().expect("source").html)?;
                     let after = crate::editing::parse(&page.content.html)?;
@@ -609,15 +578,6 @@ impl GenerationCandidate {
             let remaining = crate::editing::body(&document)?;
             if let Some(source) = &original.content {
                 let before = crate::editing::parse(&source.html)?;
-                let nodes = regions
-                    .iter()
-                    .map(|region| {
-                        crate::editing::locate(&before, region.element.as_ref().expect("targeted"))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                for node in nodes {
-                    node.remove_from_parent();
-                }
                 if let Some(message) = outside_difference(crate::editing::body(&before)?, remaining)
                 {
                     return Err(crate::Error(message));
@@ -751,20 +711,16 @@ fn validate_shaped_scope(
     original: &crate::Page,
     candidate: &crate::SiteContent,
     regions: &[&crate::Region],
-    current: Option<&GenerationCandidate>,
+    current: &GenerationCandidate,
 ) -> Result<()> {
     let source = original.content.as_ref().expect("checked source");
     if source.css != candidate.css {
-        if let Some(current) = current {
-            crate::generation_recovery::validate_region_css(
-                &source.css,
-                &candidate.css,
-                current,
-                original,
-            )?;
-        } else {
-            validate_selected_css(&source.css, &candidate.css, regions)?;
-        }
+        crate::generation_recovery::validate_region_css(
+            &source.css,
+            &candidate.css,
+            current,
+            original,
+        )?;
     }
     ensure(
         source.javascript == candidate.javascript,
@@ -949,24 +905,19 @@ fn validate_stable_scope(
     original: &crate::Page,
     candidate: &crate::SiteContent,
     regions: &[&crate::Region],
-    scoped_css: bool,
-    current: Option<&GenerationCandidate>,
+    current: &GenerationCandidate,
 ) -> Result<()> {
     let source = original.content.as_ref().expect("checked source");
-    if scoped_css && source.css != candidate.css {
-        if let Some(current) = current {
-            crate::generation_recovery::validate_region_css(
-                &source.css,
-                &candidate.css,
-                current,
-                original,
-            )?;
-        } else {
-            validate_selected_css(&source.css, &candidate.css, regions)?;
-        }
+    if source.css != candidate.css {
+        crate::generation_recovery::validate_region_css(
+            &source.css,
+            &candidate.css,
+            current,
+            original,
+        )?;
     }
     ensure(
-        (source.css == candidate.css || scoped_css) && source.javascript == candidate.javascript,
+        source.javascript == candidate.javascript,
         "The AI changed shared styling or behavior outside the selected elements. Your page is unchanged.",
     )?;
     let before = crate::editing::parse(&source.html)?;
@@ -1219,25 +1170,6 @@ fn validate_phone_scope(original: &crate::Page, candidate: &crate::SiteContent) 
     )
 }
 
-/// New rules may only match selected roots themselves. Nested selectors, global at-rules,
-/// selector functions and sibling/descendant combinators cannot broaden the edit.
-fn validate_selected_css(before: &str, after: &str, regions: &[&crate::Region]) -> Result<()> {
-    let suffix = after
-        .strip_prefix(before)
-        .ok_or_else(|| crate::Error("Existing CSS must remain unchanged.".into()))?;
-    let ids: BTreeSet<_> = regions
-        .iter()
-        .flat_map(|region| {
-            region
-                .targets()
-                .into_iter()
-                .chain(region.elements_in_area().map(|bound| &bound.target))
-        })
-        .map(|target| (crate::ELEMENT_ID_ATTRIBUTE.to_string(), target.id.clone()))
-        .collect();
-    validate_scoped_rules(suffix, &ids)
-}
-
 pub(crate) fn validate_scoped_rules(css: &str, ids: &BTreeSet<(String, String)>) -> Result<()> {
     use lightningcss::rules::{CssRule, CssRuleList};
     use lightningcss::stylesheet::{ParserOptions, PrinterOptions, StyleSheet};
@@ -1345,9 +1277,8 @@ mod wrapper_tests {
         tag: &str,
         text: &str,
     ) -> (Project, RequirementsSnapshot, GenerationCandidate) {
-        let saved: serde_json::Value =
-            serde_json::from_str(include_str!("../tests/fixtures/requirements8.json")).unwrap();
-        let mut project: Project = serde_json::from_value(saved["project"].clone()).unwrap();
+        let mut project: Project =
+            serde_json::from_str(include_str!("../tests/fixtures/current-project.json")).unwrap();
         project.schema_version = crate::SCHEMA_VERSION;
         project.pages[0].content = None;
         let template = project.pages[0].regions[0].clone();

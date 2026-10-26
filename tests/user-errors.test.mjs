@@ -52,7 +52,7 @@ try {
     assert.equal(userError("That's more than the AI can read at once. Untick a few files, or click 'Pick for me'."), "That's more than the AI can read at once. Untick a few files, or click 'Pick for me'.");
     assert.equal(userError('Confirm the intended audience before adding it to the brief.'), 'Confirm the intended audience before adding it to the brief.');
     assert.equal(userError(new Error('Choose an image first.')), 'Choose an image first.');
-    assert.equal(userError({ code: 'unchanged', message: 'Permission denied: /home/private/site.desegni' }), "Desegnos can't save here. Choose another folder.");
+    assert.equal(userError({ code: 'unchanged', message: 'Permission denied: /home/private/site.desegnos' }), "Desegnos can't save here. Choose another folder.");
     assert.equal(userError('No space left on device: /private/file'), 'Your storage is full. Free some space and try again.');
     assert.equal(userError('The system clipboard could not be read: native error'), "Desegnos couldn't read the clipboard. Copy the item again.");
     assert.equal(userError('The result is preserved, but its project dossier could not be saved: /private'), "Your result is saved, but the project brief couldn't be updated.");

@@ -173,10 +173,8 @@ pub struct IdentityCandidate {
     pub logo_asset_ids: Vec<Uuid>,
     pub warnings: Vec<String>,
     /// One short description per imported photo, so generation can choose fitting pictures.
-    #[serde(default)]
     pub photos: Vec<PhotoDescription>,
     /// The user's existing work and pages found in the sources, so generation knows what to link.
-    #[serde(default)]
     pub content: Vec<desegnos_core::ImportedItem>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1276,22 +1274,7 @@ impl IdentityService {
             .candidate
             .as_ref()
             .ok_or("The reviewed identity result is unavailable.")?;
-        // Earlier receipts had flat content. Explicitly reviewing that content as Home
-        // upgrades only the new project context, leaving the original receipt bytes alone.
-        let legacy_home = record.source.pages.is_empty()
-            && page_paths.is_some_and(|paths| paths.iter().any(|path| path == "/"));
-        let available_pages = if legacy_home {
-            vec![desegnos_core::SourcePage {
-                path: "/".into(),
-                title: "Home".into(),
-                url: None,
-                kind: "Home".into(),
-                photo_count: record.source.photos.len(),
-                item_count: candidate.content.len(),
-            }]
-        } else {
-            record.source.pages.clone()
-        };
+        let available_pages = record.source.pages.clone();
         let selected_pages: Vec<_> = available_pages
             .iter()
             .filter(|page| page_paths.is_some_and(|paths| paths.contains(&page.path)))
@@ -1404,19 +1387,14 @@ impl IdentityService {
             .filter(|item| {
                 photos_selected.contains(&item.photo.id)
                     && page_paths.is_none_or(|paths| {
-                        legacy_home
-                            || item
-                                .photo
-                                .source_pages
-                                .iter()
-                                .any(|page| paths.contains(&page.path))
+                        item.photo
+                            .source_pages
+                            .iter()
+                            .any(|page| paths.contains(&page.path))
                     })
             })
             .map(|item| {
                 let mut photo = item.photo.clone();
-                if legacy_home {
-                    photo.source_pages = vec![available_pages[0].reference()];
-                }
                 if let Some(found) = candidate
                     .photos
                     .iter()
@@ -1455,18 +1433,13 @@ impl IdentityService {
                 .filter(|(index, item)| {
                     items_selected.contains(index)
                         && page_paths.is_none_or(|paths| {
-                            legacy_home
-                                || item
-                                    .source_pages
-                                    .iter()
-                                    .any(|page| paths.contains(&page.path))
+                            item.source_pages
+                                .iter()
+                                .any(|page| paths.contains(&page.path))
                         })
                 })
                 .map(|(_, item)| {
                     let mut item = item.clone();
-                    if legacy_home {
-                        item.source_pages = vec![available_pages[0].reference()];
-                    }
                     item
                 })
                 .collect(),
@@ -1549,7 +1522,7 @@ pub async fn pick_identity_source(
             IdentitySourceKind::File => dialog
                 .add_filter(
                     "Project, ZIP or HTML files",
-                    &["desegnos", "desegni", "zip", "html", "htm"],
+                    &["desegnos", "zip", "html", "htm"],
                 )
                 .blocking_pick_files(),
             IdentitySourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
@@ -1561,10 +1534,7 @@ pub async fn pick_identity_source(
             .into_iter()
             .map(|path| path.into_path().map_err(error))
             .collect::<NativeResult<Vec<_>>>()?;
-        let project = paths.len() == 1
-            && paths[0]
-                .extension()
-                .is_some_and(|ext| ext == "desegnos" || ext == "desegni");
+        let project = paths.len() == 1 && paths[0].extension().is_some_and(|ext| ext == "desegnos");
         if project {
             return Ok::<_, String>(Some((
                 normalize_source(collect_identity_source(&paths[0]).map_err(error)?)?,

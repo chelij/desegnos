@@ -166,11 +166,6 @@ fn explicit_toggle_forces_scope_and_remembers_auto_detection_opt_out() {
         )
         .unwrap();
     assert!(p.pages[0].regions[0].is_whole_page(&p.pages[0]));
-    let mut legacy = serde_json::to_value(&p.pages[0].regions[0]).unwrap();
-    legacy.as_object_mut().unwrap().remove("wholePage");
-    legacy.as_object_mut().unwrap().remove("wholePageDisabled");
-    let legacy: Region = serde_json::from_value(legacy).unwrap();
-    assert!(!legacy.whole_page && !legacy.whole_page_disabled);
 }
 #[test]
 fn page_job_accepts_structure_css_and_javascript_and_recovery_keeps_them() {

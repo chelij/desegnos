@@ -186,10 +186,7 @@ impl OpenAiClient {
         key: &ApiKey,
         cancellation: &CancellationToken,
     ) -> (ProviderResponse, bool) {
-        if cancellation.is_cancelled()
-            || !settings.image_generation
-            || snapshot.format_version().unwrap_or(0) < 17
-        {
+        if cancellation.is_cancelled() || !settings.image_generation {
             return (response, false);
         }
         let Some(capability) = snapshot
@@ -352,11 +349,10 @@ pub(crate) mod adapter_tests {
     };
 
     pub(crate) fn fixture() -> (Project, RequirementsSnapshot, ProviderResponse) {
-        let value: Value = serde_json::from_str(include_str!(
-            "../../desegnos-core/tests/fixtures/requirements8.json"
+        let mut project: Project = serde_json::from_str(include_str!(
+            "../../desegnos-core/tests/fixtures/current-project.json"
         ))
         .unwrap();
-        let mut project: Project = serde_json::from_value(value["project"].clone()).unwrap();
         project.schema_version = SCHEMA_VERSION;
         project.pages[0].content = None;
         let snapshot = project
@@ -638,13 +634,6 @@ pub(crate) mod adapter_tests {
             .unwrap_err()
             .kind,
             crate::ErrorKind::SpendingLimit
-        );
-        let mut legacy = serde_json::to_value(settings).unwrap();
-        legacy.as_object_mut().unwrap().remove("imageGeneration");
-        assert!(
-            serde_json::from_value::<ProviderSettings>(legacy)
-                .unwrap()
-                .image_generation
         );
     }
 }

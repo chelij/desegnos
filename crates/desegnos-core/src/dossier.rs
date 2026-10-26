@@ -66,7 +66,7 @@ impl GenerationDossier {
         recorded_at_revision: u64,
         attempt_ordinal: usize,
     ) -> Result<Self> {
-        let criticism = if snapshot.format_version()? >= 17 {
+        let criticism = {
             // Conflict explanations survive partial apply even when advisory feedback fills its budget.
             let mut notes: Vec<DesignCriticism> = candidate
                 .regions
@@ -89,8 +89,6 @@ impl GenerationDossier {
                 }
             }
             notes
-        } else {
-            candidate.criticism.clone()
         };
         Ok(Self {
             job_id: candidate.job_id,

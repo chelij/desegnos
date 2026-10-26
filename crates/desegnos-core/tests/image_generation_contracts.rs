@@ -3,9 +3,8 @@ use serde_json::json;
 use std::collections::BTreeMap;
 
 fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
-    let old: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/requirements8.json")).unwrap();
-    let mut project: Project = serde_json::from_value(old["project"].clone()).unwrap();
+    let mut project: Project =
+        serde_json::from_str(include_str!("fixtures/current-project.json")).unwrap();
     project.schema_version = SCHEMA_VERSION;
     project.generation_mode = GenerationMode::Strict;
     // This fixture has one new rectangular area.
@@ -43,47 +42,6 @@ fn fixture() -> (Project, RequirementsSnapshot, GenerationCandidate) {
         documents: vec![],
     };
     (project, snapshot, candidate)
-}
-
-#[test]
-fn new_capabilities_and_contract_are_explicit_and_legacy_serialization_is_identical() {
-    let (project, snapshot, _) = fixture();
-    assert_eq!(snapshot.format_version().unwrap(), 26);
-    assert!(snapshot.markdown.contains("data-desegnos-generate"));
-    assert!(
-        snapshot
-            .markdown
-            .contains("Deliver every implementable region")
-    );
-    assert!(
-        !snapshot
-            .markdown
-            .contains("A page with an unresolved region conflict cannot")
-    );
-    assert_eq!(
-        serde_json::to_value(snapshot.capabilities.unwrap()).unwrap()["imageGeneration"],
-        json!({"maxImages":2,"sizes":["1024x1024"]})
-    );
-    let plain = project.prepare_requirements().unwrap();
-    assert!(!plain.markdown.contains("## Native image generation"));
-    assert_eq!(
-        serde_json::to_value(GenerationCapabilities::default()).unwrap(),
-        json!({"webSearch":true,"imageDownloads":8})
-    );
-    for fixture in [
-        include_str!("fixtures/requirements8.json"),
-        include_str!("fixtures/requirements9.json"),
-    ] {
-        let value: serde_json::Value = serde_json::from_str(fixture).unwrap();
-        let mut project: Project = serde_json::from_value(value["project"].clone()).unwrap();
-        project.schema_version = SCHEMA_VERSION;
-        let snapshot: RequirementsSnapshot =
-            serde_json::from_value(value["requirements"].clone()).unwrap();
-        let before = serde_json::to_vec(&snapshot).unwrap();
-        snapshot.validate_current(&project).unwrap();
-        assert_eq!(serde_json::to_vec(&snapshot).unwrap(), before);
-        assert!(!snapshot.markdown.contains("data-desegnos-generate"));
-    }
 }
 
 #[test]
@@ -324,54 +282,6 @@ fn edit_reference_uses_only_an_attachment_from_the_frozen_request() {
         .dependencies
         .retain(|key, _| !key.starts_with("region:"));
     assert!(request.reference_image(&foreign, &project).is_err());
-}
-
-#[test]
-fn old_capability_packet_keeps_unavailable_components_blocked() {
-    let value: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/requirements9.json")).unwrap();
-    let mut project: Project = serde_json::from_value(value["project"].clone()).unwrap();
-    project.schema_version = SCHEMA_VERSION;
-    let snapshot: RequirementsSnapshot =
-        serde_json::from_value(value["requirements"].clone()).unwrap();
-    let region = project.pages[0].regions[0].id;
-    let candidate = GenerationCandidate {
-        job_id: snapshot.job_id,
-        requirements_sha256: snapshot.sha256.clone(),
-        summary: "Legacy service placeholder".into(),
-        regions: vec![RegionOutcome {
-            region_id: region,
-            status: RegionStatus::Implemented,
-            explanation: "Draft with missing service.".into(),
-        }],
-        pages: vec![GeneratedPage {
-            page_id: project.home_page_id,
-            content: SiteContent {
-                html: format!(
-                    "<section data-desegnos-region='{region}'><p>Service placeholder</p></section>"
-                ),
-                css: String::new(),
-                javascript: String::new(),
-            },
-        }],
-        component_requests: vec![ComponentRequest {
-            region_id: region,
-            capability: "Private service".into(),
-            resolution: ComponentResolution::Unavailable,
-            reason: "No configuration supplied.".into(),
-        }],
-        decision_proposals: vec![],
-        criticism: vec![],
-
-        documents: vec![],
-    };
-    candidate.validate(&snapshot, &project).unwrap();
-    assert!(!candidate.can_apply(&snapshot));
-    assert!(
-        project
-            .apply_generation(&snapshot, &candidate, &[])
-            .is_err()
-    );
 }
 
 #[test]

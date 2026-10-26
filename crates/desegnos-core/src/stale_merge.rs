@@ -198,7 +198,7 @@ fn validate_merged(
 ) -> Result<()> {
     merged.validate_bounds()?;
     merged.validate_identity(snapshot)?;
-    let format = snapshot.format_version()?;
+    snapshot.format_version()?;
     for (index, page) in merged.pages.iter().enumerate() {
         if page.content == original.pages[index].content {
             continue;
@@ -206,7 +206,7 @@ fn validate_merged(
         page.content.validate()?;
         let after = base.parse_page_html(&page.content.html)?;
         crate::stable_targets::validate_ids(&after)?;
-        if format >= 9 {
+        {
             crate::validate_page_source(&page.content).map_err(|error| Error(error.to_string()))?;
             page.content.found_sources()?;
         }

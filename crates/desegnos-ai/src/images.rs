@@ -267,17 +267,15 @@ impl OpenAiClient {
         if cancellation.is_cancelled() {
             return response;
         }
-        let format = snapshot.format_version().unwrap_or(0);
-        if format < 7 {
+        if snapshot.format_version().is_err() {
             return response;
         }
+
         let Ok(mut candidate) = GenerationCandidate::from_reply(&response.text, snapshot, project)
         else {
             return response;
         };
-        if (8..12).contains(&format) && candidate.resolve_project_assets(project).is_err() {
-            return response;
-        }
+
         if candidate.validate(snapshot, project).is_err() {
             return response;
         }
@@ -285,9 +283,7 @@ impl OpenAiClient {
             return response;
         };
         if urls.is_empty() {
-            if format >= 8
-                && let Ok(text) = serde_json::to_string(&candidate)
-            {
+            if let Ok(text) = serde_json::to_string(&candidate) {
                 response.text = text;
             }
             return response;
@@ -420,11 +416,10 @@ mod tests {
                 std::future::pending::<()>().await;
                 drop(socket);
             });
-            let fixture: serde_json::Value = serde_json::from_str(include_str!(
-                "../../desegnos-core/tests/fixtures/requirements8.json"
+            let mut project: Project = serde_json::from_str(include_str!(
+                "../../desegnos-core/tests/fixtures/current-project.json"
             ))
             .unwrap();
-            let mut project: Project = serde_json::from_value(fixture["project"].clone()).unwrap();
             project.schema_version = desegnos_core::SCHEMA_VERSION;
             project.pages[0].content = None;
             let snapshot = project.prepare_requirements().unwrap();
@@ -578,104 +573,5 @@ mod tests {
             );
         }
         task.abort();
-    }
-}
-
-#[cfg(test)]
-mod capacity_benchmark {
-    use super::*;
-    use desegnos_core::*;
-    use serde_json::{Value, json};
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
-    #[tokio::test]
-    async fn eight_image_capacity_reduces_native_placeholders_without_expanding_legacy_authority() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let origin = format!("http://{}", listener.local_addr().unwrap());
-        let count = Arc::new(AtomicUsize::new(0));
-        let observed = count.clone();
-        let task = tokio::spawn(async move {
-            loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let observed = observed.clone();
-                tokio::spawn(async move {
-                    let mut request = vec![];
-                    loop {
-                        let mut part = [0; 4096];
-                        let n = socket.read(&mut part).await.unwrap();
-                        if n == 0 {
-                            return;
-                        }
-                        request.extend_from_slice(&part[..n]);
-                        if request.windows(4).any(|part| part == b"\r\n\r\n") {
-                            break;
-                        }
-                    }
-                    let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
-                    assert!(request.starts_with("get /images/"));
-                    assert!(
-                        !request.contains("authorization:")
-                            && !request.contains("cookie:")
-                            && !request.contains("referer:")
-                    );
-                    observed.fetch_add(1, Ordering::Relaxed);
-                    let png=STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGOwaQoAIgYIBQAdRgQ5DejjuQAAAABJRU5ErkJggg==").unwrap();
-                    socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",png.len()).as_bytes()).await.unwrap();
-                    socket.write_all(&png).await.unwrap();
-                });
-            }
-        });
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../desegnos-core/tests/fixtures/requirements8.json"
-        ))
-        .unwrap();
-        let mut project: Project = serde_json::from_value(fixture["project"].clone()).unwrap();
-        project.schema_version = desegnos_core::SCHEMA_VERSION;
-        let legacy: RequirementsSnapshot =
-            serde_json::from_value(fixture["requirements"].clone()).unwrap();
-        let nine: Value = serde_json::from_str(include_str!(
-            "../../desegnos-core/tests/fixtures/requirements9.json"
-        ))
-        .unwrap();
-        let nine: RequirementsSnapshot =
-            serde_json::from_value(nine["requirements"].clone()).unwrap();
-        let current = project.prepare_requirements().unwrap();
-        let client = OpenAiClient::for_loopback(&format!("{origin}/v1")).unwrap();
-        let mut measurements = vec![];
-        for snapshot in [legacy, nine, current] {
-            let before = count.load(Ordering::Relaxed);
-            let id = project.pages[0].regions[0].id;
-            let candidate=GenerationCandidate {job_id:snapshot.job_id,requirements_sha256:snapshot.sha256.clone(),summary:"Eight requested images.".into(),regions:vec![RegionOutcome{region_id:id,status:RegionStatus::Implemented,explanation:"Placed the requested images.".into()}],pages:vec![GeneratedPage{page_id:project.home_page_id,content:SiteContent{html:format!("<main data-desegnos-region='{id}'>{}</main>",(0..8).map(|index|format!("<img data-desegnos-download src='{origin}/images/photo-{index}.png' alt='Reference image {index}'>")).collect::<String>()),css:String::new(),javascript:String::new()}}],component_requests:vec![],decision_proposals:vec![],criticism:vec![],documents: vec![],};
-            candidate.validate(&snapshot, &project).unwrap();
-            let response = ProviderResponse {
-                text: serde_json::to_string(&candidate).unwrap(),
-                response_id: "resp_capacity_benchmark".into(),
-                usage: None,
-            };
-            let response = client
-                .download_images(response, &snapshot, &project, &CancellationToken::new())
-                .await;
-            let result = GenerationCandidate::from_json(&response.text).unwrap();
-            result.validate(&snapshot, &project).unwrap();
-            let metrics = result.pages[0].content.placeholder_metrics().unwrap();
-            measurements.push(json!({"requirementsFormat":snapshot.format_version().unwrap(),"downloadedImages":count.load(Ordering::Relaxed)-before,"placeholdersPerPage":[metrics.total]}));
-        }
-        task.abort();
-        assert_eq!(measurements[0]["downloadedImages"], 4);
-        assert_eq!(measurements[0]["placeholdersPerPage"], json!([4]));
-        assert_eq!(measurements[1]["downloadedImages"], 8);
-        assert_eq!(measurements[1]["placeholdersPerPage"], json!([0]));
-        assert_eq!(measurements[2]["downloadedImages"], 8);
-        assert_eq!(measurements[2]["placeholdersPerPage"], json!([0]));
-        println!(
-            "Image capacity benchmark: {}",
-            json!({"generationRequests":0,"sameImageSet":true,"measurements":measurements})
-        );
     }
 }

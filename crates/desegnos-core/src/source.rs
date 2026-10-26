@@ -1083,7 +1083,6 @@ impl Project {
                 }
             }
             region.elements = refreshed;
-            region.element = None;
         }
         page.content = Some(content);
         next.store_inline_images()?;

@@ -60,8 +60,7 @@ function readCodeWidth() { try { return Math.min(0.75, Math.max(0.2, Number(loca
 function readCodeView(projectId: string): CodeView { try { const value = localStorage.getItem(`desegnos.code-view.${projectId}`); return value === 'split' || value === 'code' ? value : 'design'; } catch { return 'design'; } }
 function readTheme(): Theme {
   try {
-    const saved = localStorage.getItem('desegnos.editor-theme') ?? localStorage.getItem('desegni.editor-theme');
-    if (saved) { localStorage.setItem('desegnos.editor-theme', saved); localStorage.removeItem('desegni.editor-theme'); }
+    const saved = localStorage.getItem('desegnos.editor-theme');
     return saved === 'light' || saved === 'dark' ? saved : 'system';
   }
   catch { return 'system'; }
@@ -88,7 +87,6 @@ function Editor() {
   const [notices, setNotices] = useState<{ id: number; message: string }[]>([]);
   const noticeId = useRef(0);
   const setNotice = useCallback((message: string) => { const id = ++noticeId.current; setNotices(items => [...items, { id, message }]); }, []);
-  const [dismissedMigration, setDismissedMigration] = useState('');
   // The recovery error can be put aside for this session; the recovery files stay on disk.
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
@@ -1219,7 +1217,6 @@ function Editor() {
     {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <ProblemBanner message={userError(view.recoveryError)} dismiss={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} />}
     {project?.website?.framework && <p className="field-help" role="note">Edits don't change the {project.website.framework} source files.</p>}
     {!!project?.website?.skipped.length && <details className="field-help"><summary>Skipped {project.website.skipped.length} files</summary><p>{project.website.skipped.slice(0, 5).join(", ")}</p></details>}
-    {view?.migrationNotice && dismissedMigration !== `${project?.id}:${view.migrationNotice}` && <Notice variant="warning" message={view.migrationNotice} dismiss={() => setDismissedMigration(`${project?.id}:${view.migrationNotice}`)} />}
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
       <SurfaceHost place="start" />
       {!showNew && <NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} recovery={recovery} />}

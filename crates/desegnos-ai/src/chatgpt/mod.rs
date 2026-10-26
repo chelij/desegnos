@@ -72,7 +72,6 @@ struct Attempt {
 
 impl ChatgptManager {
     pub fn initialize(directory: impl AsRef<Path>) -> ChatgptResult<Self> {
-        storage::migrate_accounts(directory.as_ref())?;
         Self::construct(
             directory.as_ref(),
             Endpoints::production(),

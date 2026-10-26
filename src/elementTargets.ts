@@ -21,7 +21,7 @@ export function sameTarget(a: ElementTarget, b: ElementTarget): boolean {
   if (!sameDocument(a.document, b.document)) return false;
   return a.id || b.id ? !!a.id && a.id === b.id : a.selector === b.selector && a.sourceSha256 === b.sourceSha256;
 }
-export function regionTargets(region: Region | undefined): ElementTarget[] { return region?.elements?.length ? region.elements : region?.element ? [region.element] : []; }
+export function regionTargets(region: Region | undefined): ElementTarget[] { return region?.elements ?? []; }
 export function sameTargets(a: ElementTarget[], b: ElementTarget[]): boolean { return a.length === b.length && a.every(target => b.some(other => sameTarget(target, other))); }
 export function unionRect(rects: Rect[]): Rect {
   const x = Math.min(...rects.map(rect => rect.x)), y = Math.min(...rects.map(rect => rect.y));

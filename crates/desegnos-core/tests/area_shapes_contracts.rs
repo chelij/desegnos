@@ -117,16 +117,16 @@ fn candidate(p: &Project, snapshot: &RequirementsSnapshot, html: String) -> Gene
 }
 
 #[test]
-fn missing_or_explicit_rect_shape_roundtrips_to_exact_legacy_json() {
-    let legacy = format!(
+fn omitted_or_explicit_rectangle_uses_the_current_encoding() {
+    let encoded = format!(
         "{{\"id\":\"{}\",\"rect\":{{\"x\":0.0,\"y\":0.0,\"width\":100.0,\"height\":100.0}},\"zIndex\":0,\"prompt\":\"Keep\"}}",
         Uuid::new_v4()
     );
-    let region: Region = serde_json::from_str(&legacy).unwrap();
+    let region: Region = serde_json::from_str(&encoded).unwrap();
     assert_eq!(region.shape, RegionShape::Rect);
     assert!(region.area_bounds.is_empty());
-    assert_eq!(serde_json::to_string(&region).unwrap(), legacy);
-    let mut explicit = serde_json::from_str::<serde_json::Value>(&legacy).unwrap();
+    assert_eq!(serde_json::to_string(&region).unwrap(), encoded);
+    let mut explicit = serde_json::from_str::<serde_json::Value>(&encoded).unwrap();
     explicit["shape"] = json!({"kind":"rect"});
     assert_eq!(serde_json::from_value::<Region>(explicit).unwrap(), region);
 }
@@ -141,7 +141,6 @@ fn shapes_roundtrip_in_schema_eight_without_a_migration() {
     ] {
         let p = project(shape.clone());
         let decoded = decode_project(&serde_json::to_vec(&p).unwrap()).unwrap();
-        assert!(!decoded.migrated());
         assert_eq!(decoded.project, p);
         assert_eq!(decoded.project.pages[0].regions[0].shape, shape);
     }
@@ -249,7 +248,7 @@ fn moving_and_resizing_only_changes_bounds_not_relative_points() {
 }
 
 #[test]
-fn rectangle_requirements_keep_format_fourteen_and_frozen_legacy_validation() {
+fn rectangle_requirements_keep_format_fourteen_and_frozen_encoded_validation() {
     let p = project(RegionShape::Rect);
     let snapshot = p.prepare_requirements().unwrap();
     assert_eq!(snapshot.format_version().unwrap(), 26);
@@ -308,13 +307,13 @@ fn shaped_requirements_describe_ellipse_and_rounded_page_pixel_polygon() {
         area["shape"]["points"],
         json!([[-10., 20.], [21., 20.], [5., 39.]])
     );
-    let mut legacy = snapshot.clone();
-    legacy.markdown =
-        legacy
+    let mut encoded = snapshot.clone();
+    encoded.markdown =
+        encoded
             .markdown
             .replacen("Requirements format: 26", "Requirements format: 14", 1);
-    legacy.sha256 = digest(legacy.markdown.as_bytes());
-    assert!(legacy.validate_current(&p).is_err());
+    encoded.sha256 = digest(encoded.markdown.as_bytes());
+    assert!(encoded.validate_current(&p).is_err());
 }
 
 #[test]

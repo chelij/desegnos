@@ -924,7 +924,7 @@ impl Project {
                 area_bounds: vec![],
                 prompt: prompt.clone(),
                 z_index: 0,
-                element: None,
+
                 frame_target: None,
                 elements: vec![],
                 allow_target_removal: false,
@@ -1005,9 +1005,8 @@ impl Project {
         let mut previous = None;
         let mut pasted = Vec::with_capacity(items.len());
         for item in &items {
-            let node = paste_element_content(
-                &doc, parent, anchor, previous, item, &base_css, &mut css,
-            )?;
+            let node =
+                paste_element_content(&doc, parent, anchor, previous, item, &base_css, &mut css)?;
             previous = Some(node);
             pasted.push(node);
         }
@@ -1067,9 +1066,7 @@ fn paste_element_content<'a>(
     }
     let replacements = rewrite_ids(root, &ids(doc), &content.visual_styles)?;
     let original = css.as_deref().unwrap_or(base_css);
-    if let Some(next) =
-        pseudo_stylesheet(root, &content.visual_styles, &replacements, original)?
-    {
+    if let Some(next) = pseudo_stylesheet(root, &content.visual_styles, &replacements, original)? {
         *css = Some(next);
     }
     offset_root(

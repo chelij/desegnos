@@ -558,7 +558,6 @@ impl Project {
                 }
                 region.frame_target = resolved.clone();
                 if resolved.is_some() {
-                    region.element = None;
                     region.elements.clear();
                     region.area_bounds.clear();
                     region.shape = crate::RegionShape::Rect;

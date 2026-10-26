@@ -298,8 +298,6 @@ pub struct Region {
     pub area_bounds: Vec<crate::TargetBounds>,
     pub z_index: i32,
     pub prompt: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub element: Option<ElementTarget>,
     /// This request edits a document shown inside one of the page's iframes; its rect is mapped
     /// into that document's CSS pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -407,14 +405,10 @@ impl Region {
     }
 
     pub fn targets(&self) -> Vec<&ElementTarget> {
-        if self.elements.is_empty() {
-            self.element.iter().collect()
-        } else {
-            self.elements.iter().collect()
-        }
+        self.elements.iter().collect()
     }
     pub fn has_targets(&self) -> bool {
-        !self.elements.is_empty() || self.element.is_some()
+        !self.elements.is_empty()
     }
 }
 
@@ -821,10 +815,6 @@ impl Project {
                     region.elements.len() <= crate::MAX_BATCH_ELEMENT_EDITS,
                     "A request supports at most 500 selected elements.",
                 )?;
-                ensure(
-                    region.elements.is_empty() || region.element.is_none(),
-                    "A request cannot mix legacy and stable targets.",
-                )?;
                 let mut target_ids = BTreeSet::new();
                 for element in region.targets() {
                     element.validate()?;
@@ -1124,7 +1114,7 @@ impl Project {
                     area_bounds: vec![],
                     z_index,
                     prompt: String::new(),
-                    element: None,
+
                     frame_target: None,
                     elements: vec![],
                     allow_target_removal: false,
@@ -1159,7 +1149,7 @@ impl Project {
                     area_bounds: vec![],
                     z_index,
                     prompt: String::new(),
-                    element: None,
+
                     frame_target: None,
                     elements: canonical,
                     allow_target_removal: false,
@@ -1196,7 +1186,7 @@ impl Project {
                     area_bounds: vec![],
                     z_index,
                     prompt: String::new(),
-                    element: None,
+
                     frame_target: None,
                     elements: targets,
                     allow_target_removal,
@@ -1232,7 +1222,7 @@ impl Project {
                     .find(|r| r.id == region_id && !r.completed)
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
                 region.elements = targets;
-                region.element = None;
+
                 region.rect = rect;
                 region.shape = RegionShape::Rect;
                 region.area_bounds.clear();
@@ -1367,7 +1357,6 @@ impl Project {
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
                 region.frame_target = frame_target.clone();
                 if frame_target.is_some() {
-                    region.element = None;
                     region.elements.clear();
                     region.area_bounds.clear();
                     region.shape = RegionShape::Rect;

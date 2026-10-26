@@ -184,22 +184,22 @@ mod tests {
             std::env::temp_dir().join(format!("desegnos-recents-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
         for index in 0..12 {
-            let path = directory.join(format!("{index}.desegni"));
+            let path = directory.join(format!("{index}.desegnos"));
             std::fs::write(&path, b"test-owned source").unwrap();
             remember(&directory, &path, &format!("Site {index}")).unwrap();
         }
         let entries = read(&directory).unwrap();
         assert_eq!(entries.len(), 10);
         assert_eq!(entries[0].name, "Site 11");
-        remember(&directory, &directory.join("5.desegni"), "Renamed site").unwrap();
+        remember(&directory, &directory.join("5.desegnos"), "Renamed site").unwrap();
         let entries = read(&directory).unwrap();
         assert_eq!(entries.len(), 10);
         assert_eq!(entries[0].name, "Renamed site");
         moved(
             &directory,
-            &directory.join("6.desegni"),
+            &directory.join("6.desegnos"),
             "Moved site",
-            &directory.join("5.desegni"),
+            &directory.join("5.desegnos"),
         )
         .unwrap();
         let entries = read(&directory).unwrap();
@@ -207,12 +207,12 @@ mod tests {
         assert!(
             !entries
                 .iter()
-                .any(|entry| entry.path == directory.join("5.desegni"))
+                .any(|entry| entry.path == directory.join("5.desegnos"))
         );
         let path = directory.join("recent-projects.json");
         std::fs::write(&path, b"broken catalogue").unwrap();
         assert!(read(&directory).is_err());
-        assert!(remember(&directory, &directory.join("5.desegni"), "Keep source").is_err());
+        assert!(remember(&directory, &directory.join("5.desegnos"), "Keep source").is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"broken catalogue");
         std::fs::remove_dir_all(directory).unwrap();
     }

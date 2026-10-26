@@ -62,7 +62,7 @@ async function validateFixtures() {
   for (const scenario of catalogue.scenarios) {
     assert.match(scenario.id, /^\d{2}-[a-z-]+$/);
     const fixture = fixtures.scenarios.find(item => item.id === scenario.id); assert.ok(fixture);
-    assert.equal(fixture.path, `projects/${scenario.id}.desegni`);
+    assert.equal(fixture.path, `projects/${scenario.id}.desegnos`);
     assert.equal(digest(await readFile(join(fixtureRoot, fixture.path))), fixture.sha256, `Changed input fixture ${scenario.id}`);
     assert.ok(scenario.criteria.length >= 3 && scenario.pages.length > 0);
   }
@@ -208,10 +208,10 @@ async function isolated() {
         const doc=document.querySelector('.static-preview iframe')?.contentDocument;
         if(!doc)return null;
         const slots=[...doc.querySelectorAll('[data-desegnos-placeholder]')].filter(node=>!node.parentElement?.closest('[data-desegnos-placeholder]')).length;
-        const legacy=[...doc.querySelectorAll('*')].filter(node=>!node.closest('[data-desegnos-placeholder]')&&[...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&/placeholder/i.test(child.textContent))).length;
-        return {markedSlots:slots,legacyLabels:legacy,total:slots+legacy};
+        const unmarked=[...doc.querySelectorAll('*')].filter(node=>!node.closest('[data-desegnos-placeholder]')&&[...node.childNodes].some(child=>child.nodeType===Node.TEXT_NODE&&/placeholder/i.test(child.textContent))).length;
+        return {markedSlots:slots,unmarkedLabels:unmarked,total:slots+unmarked};
       });
-      result.placeholdersPerPage.push({pageId:page.id,...(placeholders??{markedSlots:null,legacyLabels:null,total:null})});
+      result.placeholdersPerPage.push({pageId:page.id,...(placeholders??{markedSlots:null,unmarkedLabels:null,total:null})});
       await writeFile(join(evidence, `layout-${page.id}.json`), JSON.stringify(layout, null, 2), { mode: 0o600 });
     }
     await writeFile(join(evidence, 'owner-rating.json'), JSON.stringify({ version:1, reviewer:null, reviewedAt:null, usableWithoutManualFixes:null, strictOrderAndGrouping:null, actualBilledUsd:null, notes:'' }, null, 2), { mode: 0o600 });
@@ -265,8 +265,8 @@ async function main() {
   const environment = Object.fromEntries(['PATH','LANG','LC_ALL','LC_CTYPE','USER','LOGNAME','SHELL','HOME'].filter(name => process.env[name]).map(name => [name,process.env[name]]));
   for (const [variable,name] of [['XDG_DATA_HOME','data'],['XDG_CONFIG_HOME','config'],['XDG_CACHE_HOME','cache'],['XDG_RUNTIME_DIR','runtime']]) { environment[variable] = join(scratch,name); await mkdir(environment[variable],{mode:0o700}); }
   const request = { guard:randomUUID(), allowPaidGeneration:true, scenarioId:scenario.id, fixtureSha256:fixture.sha256, projectId:fixture.projectId, binary, binarySha256:digest(await readFile(binary)), budgetUsd, maxSeconds, evidence, originalDisplay:process.env.DISPLAY ?? null };
-  await copyFile(join(fixtureRoot, fixture.path), join(evidence,'input.desegni')); await chmod(join(evidence,'input.desegni'),0o600);
-  await copyFile(join(evidence,'input.desegni'), join(evidence,'working.desegnos')); await chmod(join(evidence,'working.desegnos'),0o600);
+  await copyFile(join(fixtureRoot, fixture.path), join(evidence,'input.desegnos')); await chmod(join(evidence,'input.desegnos'),0o600);
+  await copyFile(join(evidence,'input.desegnos'), join(evidence,'working.desegnos')); await chmod(join(evidence,'working.desegnos'),0o600);
   const requestPath = join(scratch,'launch.json'); await writeFile(requestPath,JSON.stringify(request),{mode:0o600});
   const original = await desktopState(); let child;
   await writeFile(join(evidence,'authorization.json'), JSON.stringify({...request,guard:undefined},null,2),{mode:0o600});

@@ -50,7 +50,7 @@ export type AcrossPagesView = { workspace: WorkspaceView; changes: AcrossPagesCh
 export type ElementVisual = { translate: string; color: string; backgroundColor: string; fontSize: string; width: string; height: string; borderRadius: string; padding: string; textAlign?: string };
 export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; preview?: string; text?: string; url?: string };
 export type PageSelection = { kind: 'page'; pageId: string } | { kind: 'prefix'; path: string } | { kind: 'all' };
-export type Region = { pages?: PageSelection[]; shape?: RegionShape; areaBounds?: { target: ElementTarget; rect: Rect }[]; attachments?: RequestAttachment[]; elements?: ElementTarget[]; element?: ElementTarget; frameTarget?: FrameTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; runtimeErrors?: string[]; wholePage?: boolean; wholePageDisabled?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
+export type Region = { pages?: PageSelection[]; shape?: RegionShape; areaBounds?: { target: ElementTarget; rect: Rect }[]; attachments?: RequestAttachment[]; elements?: ElementTarget[]; frameTarget?: FrameTarget; allowTargetRemoval?: boolean; mobileOnly?: boolean; runtimeErrors?: string[]; wholePage?: boolean; wholePageDisabled?: boolean; completed?: boolean; id: string; rect: Rect; zIndex: number; prompt: string };
 export type SiteContent = { html: string; css: string; javascript: string };
 export type Page = { id: string; name: string; path: string; included: boolean; viewport: Viewport; appearance: Appearance; regions: Region[]; content: SiteContent | null };
 export type Brief = { purpose: string; audience: string; brandName: string; tone: string };
@@ -70,7 +70,7 @@ export type HistoryView = { sessionId: string; start: number; position: number; 
 export type OpenProjectSummary = { id: string; name: string; dirty: boolean; active: boolean; pages: { id: string; name: string }[] };
 export type WorkspaceView = { documentsKey?: string; openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
   siteWarnings?: string[]; outsideEdits?: OutsideEdits; projectFolder?: boolean;
-  recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null; migrationNotice: string | null };
+  recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;
   regionCount: number; pageCount: number; dependencies: Record<string, string> };
 export type ProviderSettings = { model: string; maxOutputTokens: number; reasoningEffort: string; spendingLimitUsd: number; imageGeneration: boolean };

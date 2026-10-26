@@ -7,7 +7,6 @@ mod chatgpt;
 mod clipboard;
 mod crash_report;
 mod data_location;
-mod rename_migration;
 mod export;
 mod file_dialogs;
 mod generation;

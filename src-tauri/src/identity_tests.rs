@@ -460,7 +460,7 @@ fn selected_creation_is_blank_light_and_carries_only_approved_findings_and_image
                 .is_err()
         );
     }
-    let file = desegnos_storage::ProjectFile::acquire(&temp.0.join("new.desegni")).unwrap();
+    let file = desegnos_storage::ProjectFile::acquire(&temp.0.join("new.desegnos")).unwrap();
     file.save(&project).unwrap();
     assert_eq!(file.load().unwrap(), project);
 }
@@ -743,32 +743,6 @@ fn import_selection_accepts_only_reviewed_distinct_items_and_can_keep_content_al
         selected.findings.is_empty() && selected.assets.is_empty() && selected.photos.is_empty()
     );
     assert_eq!(selected.content, value.content);
-    let legacy_page = service
-        .reviewed_context_selected(
-            view.job_id,
-            &[],
-            &[],
-            Some(&[]),
-            Some(&[0]),
-            Some(&["/".into()]),
-        )
-        .unwrap();
-    assert_eq!(legacy_page.pages[0].path, "/");
-    assert_eq!(legacy_page.content[0].source_pages[0].title, "Home");
-    let legacy_project = service
-        .project_with_context(
-            legacy_page,
-            "Legacy content".into(),
-            Viewport {
-                width: 1440,
-                height: 900,
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        legacy_project.imported_identity.unwrap().pages[0].page_id,
-        legacy_project.home_page_id
-    );
 
     assert!(
         service

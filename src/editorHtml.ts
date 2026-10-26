@@ -28,7 +28,7 @@ export function projectEditorHtml(raw: string, showMetadata = false): HtmlProjec
   return projectSource(raw, hidden);
 }
 // Also used for CSS and JavaScript. Never give CodeMirror embedded asset bytes,
-// even for legacy/imported content that has not yet reached native storage.
+// even for imported content that has not yet reached native storage.
 export function projectCodeSource(raw: string): HtmlProjection { return projectSource(raw, []); }
 function projectSource(raw: string, hidden: { from: number; to: number; text: string; anchor: number }[]): HtmlProjection {
   const replacements: Replacement[] = hidden.map(({ from, to }) => ({ from, to, insert: '' }));

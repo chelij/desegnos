@@ -220,7 +220,7 @@ async function runIsolated() {
       report.scope = 'As-is website import, native heading editing and read-only chelib Astro import.';
       project = await websiteImportWorkflow(driver, physical, step, evidence);
     } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'project-folders') {
-      report.scope = 'Project folders, automatic saves, default/per-project locations, safe live-site sync, import, copies and legacy migration.';
+      report.scope = 'Project folders, automatic saves, default/per-project locations, safe live-site sync, import, copies and standalone archives.';
       project = await projectFoldersWorkflow(driver, physical, step, evidence);
     } else if (process.env.DESEGNOS_NATIVE_TEST_SCOPE === 'real-use') {
       report.scope = 'Real-use flows on copies of the owner\'s projects and unsaved work (scripts/usage-report.mjs).';

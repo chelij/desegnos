@@ -5,7 +5,7 @@ use std::{fs, sync::Arc};
 const PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jMZkAAAAASUVORK5CYII=";
 
 #[test]
-fn inline_pictures_migrate_deduplicate_share_history_and_survive_save_recovery_export() {
+fn inline_pictures_deduplicate_share_history_and_survive_save_recovery_export() {
     let root =
         std::env::temp_dir().join(format!("desegnos-picture-store-{}", uuid::Uuid::new_v4()));
     fs::create_dir_all(&root).unwrap();
@@ -23,11 +23,7 @@ fn inline_pictures_migrate_deduplicate_share_history_and_survive_save_recovery_e
         css: format!("body{{background:url({PNG})}}"),
         javascript: String::new(),
     });
-    let mut legacy = serde_json::to_value(&old).unwrap();
-    legacy["schemaVersion"] = 7.into();
-    let decoded = decode_project(&serde_json::to_vec(&legacy).unwrap()).unwrap();
-    assert!(decoded.migrated());
-    let project = decoded.project;
+    let project = Session::new(old.clone()).unwrap().project().clone();
     assert_eq!(project.pictures.len(), 1);
     let id = *project.pictures.keys().next().unwrap();
     assert!(
@@ -147,7 +143,7 @@ fn placed_imported_pictures_outlive_the_import_catalogue() {
 
 #[test]
 fn a_broken_inline_picture_stays_in_the_page_instead_of_blocking_the_project() {
-    // Truncated Base64 (length not a multiple of four) once saved by an older version.
+    // Truncated Base64 (length not a multiple of four) from an incomplete import.
     let broken = &PNG[..PNG.len() - 3];
     let mut old = Project::new(
         "Broken".into(),
@@ -163,11 +159,7 @@ fn a_broken_inline_picture_stays_in_the_page_instead_of_blocking_the_project() {
         css: String::new(),
         javascript: String::new(),
     });
-    let mut legacy = serde_json::to_value(&old).unwrap();
-    legacy["schemaVersion"] = 7.into();
-    let project = decode_project(&serde_json::to_vec(&legacy).unwrap())
-        .unwrap()
-        .project;
+    let project = Session::new(old).unwrap().project().clone();
     let html = &project.pages[0].content.as_ref().unwrap().html;
     assert!(html.contains(broken) && !html.contains(PNG));
     assert_eq!(project.pictures.len(), 1);

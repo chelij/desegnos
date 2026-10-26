@@ -570,7 +570,7 @@ fn area_behavior_preserves_shared_javascript() {
     let (mut p, _, _) = behavior_fixture(AUTOSORT);
     let region = &mut p.pages[0].regions[0];
     let id = region.id;
-    region.element = None;
+
     region.elements.clear();
     let doc = dom_query::Document::from(p.pages[0].content.as_ref().unwrap().html.as_str());
     doc.select("section").nodes()[0].set_attr("data-desegnos-region", &id.to_string());

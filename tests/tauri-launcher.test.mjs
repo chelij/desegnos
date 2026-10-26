@@ -11,7 +11,7 @@ test('Tauri launcher normalizes CI=1 and preserves other CI values', async () =>
   try {
     await mkdir(join(directory, 'scripts'));
     await mkdir(join(directory, 'node_modules/@tauri-apps/cli'), { recursive: true });
-    for (const name of ['tauri.mjs', 'launch-paths.mjs']) {
+    for (const name of ['tauri.mjs']) {
       await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(directory, 'scripts', name));
     }
     await writeFile(join(directory, 'scripts/toolchain.mjs'), 'export const toolchainEnvironment = () => ({ ...process.env });\n');

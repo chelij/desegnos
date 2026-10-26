@@ -163,7 +163,6 @@ pub struct ResponseFormat {
     pub body_bytes: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_message: Option<Box<str>>,
-    #[serde(default)]
     pub body_truncated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit_bytes: Option<usize>,
@@ -180,15 +179,10 @@ pub struct ProviderError {
     pub outcome: SubmissionOutcome,
     pub response_id: Option<String>,
     pub usage: Option<TokenUsage>,
-    #[serde(default)]
     pub authentication: AuthenticationMethod,
-    #[serde(default)]
     pub http_status: Option<u16>,
-    #[serde(default)]
     pub code: Option<Box<str>>,
-    #[serde(default)]
     pub param: Option<Box<str>>,
-    #[serde(default)]
     pub request_id: Option<Box<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<Box<ResponseFormat>>,

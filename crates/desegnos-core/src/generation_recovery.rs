@@ -60,29 +60,13 @@ fn event(
     });
 }
 
-/// Missing fields are resolved before typed parsing, without weakening the reply schema for
-/// older snapshots. Empty strings mean unchanged only when there is a nonempty source.
+/// Repair incomplete current provider replies before typed validation. Empty strings mean unchanged only when there is a nonempty source.
 pub fn recover_generation_reply(
     text: &str,
     snapshot: &RequirementsSnapshot,
     project: &Project,
 ) -> Result<(GenerationCandidate, Vec<ValidationEvent>)> {
-    if snapshot.format_version()? < 17 {
-        let mut candidate = GenerationCandidate::from_reply(text, snapshot, project)?;
-        let mut events = vec![];
-        for generated in &mut candidate.pages {
-            generated.content.html = repair_page_metadata(
-                &generated.content.html,
-                project.page(generated.page_id)?,
-                &mut events,
-            )?;
-        }
-        candidate.validate(snapshot, project)?;
-        if snapshot.is_flexible() {
-            record_outside_changes(&candidate, snapshot, project, &mut events)?;
-        }
-        return Ok((candidate, events));
-    }
+    snapshot.format_version()?;
     ensure(
         text.len() <= MAX_GENERATION_BYTES,
         "The AI reply exceeds the response limit.",
@@ -117,7 +101,7 @@ pub fn recover_generation_reply(
             else {
                 continue;
             };
-            let whole_page = snapshot.format_version()? >= 18
+            let whole_page = true
                 && page.regions.iter().any(|region| {
                     targets.contains(&(page.id, region.id))
                         && region.is_whole_page(page)
@@ -210,7 +194,7 @@ pub fn recover_generation_reply(
             }
         }
     }
-    if !snapshot.is_element_fix() && snapshot.format_version()? >= 18 {
+    if !snapshot.is_element_fix() {
         if let Some(pages) = value["pages"].as_array_mut() {
             for generated in pages {
                 let Some(page) = generated["pageId"]
@@ -1183,10 +1167,7 @@ pub(crate) fn validate_region_css(
 
 impl RequirementsSnapshot {
     pub fn validation_repair(&self, violations: &[ValidationEvent]) -> Result<Option<Self>> {
-        if self.format_version()? < 17
-            || self.markdown.contains(REPAIR_HEADING)
-            || MAX_VALIDATION_REPAIR_ROUNDS == 0
-        {
+        if self.markdown.contains(REPAIR_HEADING) || MAX_VALIDATION_REPAIR_ROUNDS == 0 {
             return Ok(None);
         }
         let failed: Vec<_> = violations
@@ -1445,8 +1426,7 @@ fn shared_dependencies(
                         Some("style" | "script" | "link")
                     )
                 }) {
-                    if snapshot.format_version()? >= 18
-                        && node.node_name().as_deref() == Some("script")
+                    if node.node_name().as_deref() == Some("script")
                         && node.attr("data-desegnos-script").is_some()
                         && node.attr("type").as_deref() == Some(crate::region_scripts::SCRIPT_TYPE)
                     {

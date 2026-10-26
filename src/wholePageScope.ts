@@ -2,7 +2,7 @@ import type { Page, Region } from './types';
 
 // Keep the coverage thresholds in sync with Region::auto_whole_page.
 export function autoWholePage(region: Region, page: Page): boolean {
-  if (region.frameTarget || region.mobileOnly || region.element || region.elements?.length || region.shape && region.shape.kind !== 'rect') return false;
+  if (region.frameTarget || region.mobileOnly || region.elements?.length || region.shape && region.shape.kind !== 'rect') return false;
   const width = Math.max(page.viewport.width, ...(region.areaBounds ?? []).map(bound => bound.rect.x + bound.rect.width));
   const height = region.areaBounds?.length ? Math.max(...region.areaBounds.map(bound => bound.rect.y + bound.rect.height)) : page.viewport.height;
   const overlap = (start: number, length: number, extent: number) => Math.max(0, Math.min(start + length, extent) - Math.max(start, 0));

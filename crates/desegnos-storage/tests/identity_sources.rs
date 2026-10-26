@@ -40,10 +40,9 @@ fn zip(temp: &Temp, name: &str, entries: &[(&str, &[u8])]) -> PathBuf {
 }
 
 #[test]
-fn brand_import_reads_new_and_legacy_project_names_without_changing_either() {
+fn brand_import_reads_the_project_without_changing_it() {
     let temp = Temp::new();
-    let legacy = temp.0.join("brand.desegni");
-    let current = temp.0.join("brand.desegnos");
+    let source_path = temp.0.join("brand.desegnos");
     let project = Project::new(
         "Brand source".into(),
         Viewport {
@@ -53,16 +52,12 @@ fn brand_import_reads_new_and_legacy_project_names_without_changing_either() {
         Appearance::Light,
     )
     .unwrap();
-    let file = ProjectFile::acquire(&legacy).unwrap();
+    let file = ProjectFile::acquire(&source_path).unwrap();
     file.save(&project).unwrap();
-    fs::copy(&legacy, &current).unwrap();
-    let original = fs::read(&legacy).unwrap();
-    let old_source = collect_identity_source(&legacy).unwrap();
-    let new_source = collect_identity_source(&current).unwrap();
-    assert_eq!(old_source.files, new_source.files);
-    assert_eq!(old_source.sha256, new_source.sha256);
-    assert_eq!(fs::read(&legacy).unwrap(), original);
-    assert_eq!(fs::read(&current).unwrap(), original);
+    drop(file);
+    let original = fs::read(&source_path).unwrap();
+    let source = collect_identity_source(&source_path).unwrap();
+    assert_eq!(fs::read(&source_path).unwrap(), original);
     assert!(!temp.0.join("brand.desegnos.lock").exists());
 }
 
@@ -236,7 +231,7 @@ fn built_site_is_readable_when_no_original_sources_are_available() {
 #[test]
 fn project_archive_is_verified_and_read_without_writer_lock_or_changes() {
     let temp = Temp::new();
-    let path = temp.0.join("website.desegni");
+    let path = temp.0.join("website.desegnos");
     let handle = ProjectFile::acquire(&path).unwrap();
     let mut project = Project::new(
         "Acme".into(),
@@ -283,10 +278,10 @@ fn project_archive_is_verified_and_read_without_writer_lock_or_changes() {
     );
     assert_eq!(before, fs::read(&path).unwrap());
     drop(handle);
-    fs::remove_file(temp.0.join("website.desegni.lock")).unwrap();
+    fs::remove_file(temp.0.join("website.desegnos.lock")).unwrap();
     collect_identity_source(&path).unwrap();
-    assert!(!temp.0.join("website.desegni.lock").exists());
-    assert!(!temp.0.join("website.desegni.previous").exists());
+    assert!(!temp.0.join("website.desegnos.lock").exists());
+    assert!(!temp.0.join("website.desegnos.previous").exists());
 }
 
 #[test]

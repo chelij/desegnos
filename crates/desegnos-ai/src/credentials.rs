@@ -132,66 +132,6 @@ impl Vault for SystemVault {
     }
 }
 
-/// Copies one owned credential without ever deleting the sole verified copy.
-/// A different credential already at the destination wins; retain the old entry.
-pub(crate) fn migrate_entry<T: PartialEq, E>(
-    old: impl FnOnce() -> std::result::Result<Option<T>, E>,
-    new: impl Fn() -> std::result::Result<Option<T>, E>,
-    set: impl FnOnce(&T) -> std::result::Result<(), E>,
-    remove: impl FnOnce() -> std::result::Result<(), E>,
-) -> std::result::Result<(), ()> {
-    let Some(value) = old().map_err(|_| ())? else {
-        return Ok(());
-    };
-    match new().map_err(|_| ())? {
-        Some(current) if current != value => return Err(()),
-        Some(_) => {}
-        None => set(&value).map_err(|_| ())?,
-    }
-    if new().map_err(|_| ())?.as_ref() != Some(&value) {
-        return Err(());
-    }
-    remove().map_err(|_| ())
-}
-
-pub(crate) fn migration_failed(entry: String) {
-    use std::collections::HashSet;
-    use std::sync::OnceLock;
-    static REPORTED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
-    if REPORTED
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(entry.clone())
-    {
-        eprintln!("Desegnos credential migration failed for {entry}; the old entry was retained.");
-    }
-}
-
-fn migrate_api_key(old_service: &'static str, new_service: &'static str) {
-    let old = SystemVault {
-        service: old_service,
-    };
-    let new = SystemVault {
-        service: new_service,
-    };
-    let read = |vault: &SystemVault| {
-        vault
-            .get()
-            .map(|key| key.map(|key| Zeroizing::new(key.expose().to_owned())))
-    };
-    if migrate_entry(
-        || read(&old),
-        || read(&new),
-        |value| new.set(&ApiKey::new(value.to_string())?),
-        || old.remove(),
-    )
-    .is_err()
-    {
-        migration_failed(old_service.into());
-    }
-}
-
 #[derive(Default)]
 struct CredentialState {
     session: Option<ApiKey>,
@@ -215,9 +155,6 @@ impl CredentialManager {
     }
 
     pub fn for_provider(provider: crate::ProviderId) -> Self {
-        if provider == crate::ProviderId::Openai {
-            migrate_api_key("io.desegni.openai", provider.service());
-        }
         Self {
             state: Mutex::new(CredentialState::default()),
             vault: Box::new(SystemVault {
@@ -227,7 +164,6 @@ impl CredentialManager {
     }
 
     pub fn for_images() -> Self {
-        migrate_api_key("io.desegni.openai.images", "io.desegnos.openai.images");
         Self {
             state: Mutex::new(CredentialState::default()),
             vault: Box::new(SystemVault {
@@ -392,90 +328,6 @@ mod tests {
             *self.0.lock().unwrap() = None;
             Ok(())
         }
-    }
-
-    fn migrate_memory(old: &Arc<MemoryVault>, new: &dyn Vault) -> std::result::Result<(), ()> {
-        let read = |vault: &dyn Vault| {
-            vault
-                .get()
-                .map(|key| key.map(|key| Zeroizing::new(key.expose().to_owned())))
-        };
-        migrate_entry(
-            || read(old),
-            || read(new),
-            |value| new.set(&ApiKey::new(value.to_string())?),
-            || old.remove(),
-        )
-    }
-
-    #[test]
-    fn credential_migration_copies_verifies_and_is_idempotent() {
-        let old = Arc::new(MemoryVault::default());
-        let new = Arc::new(MemoryVault::default());
-        old.set(&ApiKey::new(KEY.into()).unwrap()).unwrap();
-        migrate_memory(&old, &new).unwrap();
-        assert!(old.get().unwrap().is_none());
-        assert_eq!(new.get().unwrap().unwrap().expose(), KEY);
-        migrate_memory(&old, &new).unwrap();
-    }
-
-    #[test]
-    fn credential_migration_retains_old_on_write_failure_or_destination_conflict() {
-        let old = Arc::new(MemoryVault::default());
-        old.set(&ApiKey::new(KEY.into()).unwrap()).unwrap();
-        assert!(migrate_memory(&old, &LockedVault).is_err());
-        assert!(migrate_memory(&old, &UnavailableVault).is_err());
-        let new = Arc::new(MemoryVault::default());
-        new.set(&ApiKey::new("different-key".into()).unwrap())
-            .unwrap();
-        assert!(migrate_memory(&old, &new).is_err());
-        assert_eq!(old.get().unwrap().unwrap().expose(), KEY);
-        assert_eq!(new.get().unwrap().unwrap().expose(), "different-key");
-    }
-
-    #[test]
-    fn credential_migration_never_deletes_old_without_matching_readback() {
-        use std::cell::Cell;
-        let deleted = Cell::new(false);
-        let reads = Cell::new(0);
-        let result = migrate_entry::<String, ()>(
-            || Ok(Some(KEY.into())),
-            || {
-                reads.set(reads.get() + 1);
-                Ok(if reads.get() == 1 {
-                    None
-                } else {
-                    Some("corrupt-copy".into())
-                })
-            },
-            |_| Ok(()),
-            || {
-                deleted.set(true);
-                Ok(())
-            },
-        );
-        assert!(result.is_err());
-        assert!(!deleted.get());
-    }
-
-    #[test]
-    fn credential_migration_retries_failed_removal_without_overwriting_verified_copy() {
-        let result = migrate_entry::<String, ()>(
-            || Ok(Some(KEY.into())),
-            || Ok(Some(KEY.into())),
-            |_| panic!("must not overwrite an existing matching entry"),
-            || Err(()),
-        );
-        assert!(result.is_err());
-        assert!(
-            migrate_entry::<String, ()>(
-                || Ok(Some(KEY.into())),
-                || Ok(Some(KEY.into())),
-                |_| panic!("must not overwrite an existing matching entry"),
-                || Ok(()),
-            )
-            .is_ok()
-        );
     }
 
     #[test]

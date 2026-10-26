@@ -122,7 +122,7 @@ fn valid_site_path(path: &str) -> bool {
         && !path
             .split('/')
             .any(|part| part.to_lowercase().starts_with(".desegnos"))
-        && ![".desegnos", ".desegni", ".lock", ".previous"]
+        && ![".desegnos", ".desegnos", ".lock", ".previous"]
             .iter()
             .any(|ext| path.to_lowercase().ends_with(ext))
 }

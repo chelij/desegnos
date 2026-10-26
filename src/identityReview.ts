@@ -117,8 +117,7 @@ export function groupIdentityPages(source: IdentitySource | null, content: NonNu
     return group;
   };
   for (const page of source?.pages ?? []) add(page);
-  const fallback: SourcePage = { path: '/', title: 'Home', kind: 'Home', photoCount: 0, itemCount: 0 };
-  const refs = (pages?: { path: string; title: string; url?: string | null }[]) => pages?.length ? pages : [fallback];
+  const refs = (pages?: { path: string; title: string; url?: string | null }[]) => pages ?? [];
   for (const photo of source?.photos ?? []) for (const page of refs(photo.sourcePages)) {
     const group = add({ ...page, kind: page.path === '/' ? 'Home' : 'Other', photoCount: 0, itemCount: 0 });
     if (!group.photos.some(item => item.id === photo.id)) group.photos.push(photo);

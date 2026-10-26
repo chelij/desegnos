@@ -2,13 +2,8 @@ mod support;
 use desegnos_core::*;
 use support::without_editor_ids;
 fn project() -> Project {
-    let mut project: Project = serde_json::from_value(
-        serde_json::from_str::<serde_json::Value>(include_str!("fixtures/requirements8.json"))
-            .unwrap()["project"]
-            .clone(),
-    )
-    .unwrap();
-    project.schema_version = SCHEMA_VERSION;
+    let project: Project =
+        serde_json::from_str(include_str!("fixtures/current-project.json")).unwrap();
     project
 }
 #[test]
@@ -100,7 +95,7 @@ fn placeholder_metrics_count_slots_once_and_measure_legacy_unmarked_labels() {
         content.placeholder_metrics().unwrap(),
         PlaceholderMetrics {
             marked_slots: 1,
-            legacy_labels: 1,
+            unmarked_labels: 1,
             total: 2
         }
     );

@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 fn fixture(existing: bool) -> (Project, RequirementsSnapshot, GenerationCandidate) {
-    let saved: Value = serde_json::from_str(include_str!("fixtures/requirements8.json")).unwrap();
-    let mut project: Project = serde_json::from_value(saved["project"].clone()).unwrap();
+    let mut project: Project =
+        serde_json::from_str(include_str!("fixtures/current-project.json")).unwrap();
     project.generation_mode = GenerationMode::Strict;
     project.schema_version = SCHEMA_VERSION;
     let template = project.pages[0].regions[0].clone();
@@ -235,32 +235,6 @@ fn malformed_reply_has_repair_context_then_explicit_conflicts_without_source() {
     assert!(!conflicts.can_apply(&s));
     assert_eq!(conflicts.regions.len(), 3);
     assert!(conflicts.pages.is_empty());
-}
-
-#[test]
-fn older_requirements_bytes_are_untouched_and_recovery_is_disabled() {
-    for bytes in [
-        include_str!("fixtures/requirements8.json"),
-        include_str!("fixtures/requirements9.json"),
-    ] {
-        let fixture: Value = serde_json::from_str(bytes).unwrap();
-        let snapshot: RequirementsSnapshot =
-            serde_json::from_value(fixture["requirements"].clone()).unwrap();
-        let original = serde_json::to_vec(&snapshot).unwrap();
-        assert!(
-            snapshot
-                .validation_repair(&[ValidationEvent {
-                    kind: "replyStructure".into(),
-                    disposition: "conflicted".into(),
-                    region_id: None,
-                    message: "Invalid format".into()
-                }])
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(serde_json::to_vec(&snapshot).unwrap(), original);
-        assert_eq!(snapshot.sha256, digest(snapshot.markdown.as_bytes()));
-    }
 }
 
 #[test]

@@ -199,17 +199,6 @@ fn source_map_matches_nested_browser_selectors_and_utf16_columns_without_rewriti
         html
     );
 }
-#[test]
-fn a_saved_format_eight_packet_still_validates_without_changing_its_bytes() {
-    let golden: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/requirements8.json")).unwrap();
-    let mut project: Project = serde_json::from_value(golden["project"].clone()).unwrap();
-    project.schema_version = SCHEMA_VERSION;
-    let snapshot: RequirementsSnapshot =
-        serde_json::from_value(golden["requirements"].clone()).unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 8);
-    snapshot.validate_current(&project).unwrap();
-}
 
 #[test]
 fn full_documents_comments_crlf_and_multiline_attributes_have_exact_ranges() {
@@ -347,20 +336,6 @@ fn typed_source_preserves_stable_requests_and_removed_elements_become_stale() {
         .is_err()
     );
     assert_eq!(next.pages[0].regions[0].prompt, "Keep this change request");
-}
-
-#[test]
-fn a_saved_format_nine_packet_reconstructs_without_changing_its_bytes() {
-    // Captured by the unmodified 19be5b4 core, before format 10 was introduced.
-    let golden: serde_json::Value =
-        serde_json::from_str(include_str!("fixtures/requirements9.json")).unwrap();
-    let mut project: Project = serde_json::from_value(golden["project"].clone()).unwrap();
-    project.schema_version = SCHEMA_VERSION;
-    let snapshot: RequirementsSnapshot =
-        serde_json::from_value(golden["requirements"].clone()).unwrap();
-    assert_eq!(snapshot.format_version().unwrap(), 9);
-    assert_eq!(snapshot.sha256, digest(snapshot.markdown.as_bytes()));
-    snapshot.validate_current(&project).unwrap();
 }
 
 #[test]

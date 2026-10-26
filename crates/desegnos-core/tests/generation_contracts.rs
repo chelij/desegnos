@@ -686,7 +686,7 @@ fn source_candidate_and_requirements_limits_fail_without_truncation() {
             pages: vec![],
             shape: Default::default(),
             area_bounds: vec![],
-            element: None,
+
             elements: vec![],
             allow_target_removal: false,
             mobile_only: false,
@@ -1420,7 +1420,11 @@ fn direct_local_source_edits_merge_until_they_touch_the_generated_text() {
             },
         )
         .unwrap();
-    assert!(same_area.apply_generation(&snapshot, &candidate, &[]).is_err());
+    assert!(
+        same_area
+            .apply_generation(&snapshot, &candidate, &[])
+            .is_err()
+    );
 }
 
 #[test]

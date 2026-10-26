@@ -439,7 +439,7 @@ fn opening_a_folder_finds_its_archive_and_uses_newest_with_stable_ties() {
         project_in_folder(root).unwrap().as_deref(),
         Some(file.path())
     );
-    let newer = ProjectFile::acquire(&root.join("Newer.desegni")).unwrap();
+    let newer = ProjectFile::acquire(&root.join("Newer.desegnos")).unwrap();
     newer.save(&project).unwrap();
     let time = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
     fs::File::options()
@@ -458,7 +458,7 @@ fn opening_a_folder_finds_its_archive_and_uses_newest_with_stable_ties() {
 fn legacy_standalone_saves_do_not_claim_or_modify_the_parent_website() {
     let temp = Temp::new();
     let project = project();
-    let file = ProjectFile::acquire(&temp.0.join("Legacy.desegni")).unwrap();
+    let file = ProjectFile::acquire(&temp.0.join("Legacy.desegnos")).unwrap();
     fs::write(temp.0.join("index.html"), "Unrelated website").unwrap();
     file.save(&project).unwrap();
     assert!(!is_project_folder(file.path()));

@@ -103,15 +103,6 @@ try {
     assert.deepEqual(selectedPageContent(grouped, ['/projects'], ['a', 'b', 'shared'], [0]), { photos: ['b', 'shared'], items: [0] });
     assert.deepEqual(selectedPageContent(grouped, ['/', '/projects'], ['shared'], []), { photos: ['shared'], items: [] });
   });
-  await test('legacy photos and work are visible in Home without mutating evidence', () => {
-    const source = { photos: [{ id: 'legacy' }] };
-    const content = [{ title: 'Earlier work' }];
-    const before = JSON.stringify({ source, content });
-    const grouped = groupIdentityPages(source, content);
-    assert.equal(grouped[0].page.path, '/');
-    assert.equal(grouped[0].photos[0].id, 'legacy');
-    assert.equal(grouped[0].items[0].index, 0);
-    assert.equal(JSON.stringify({ source, content }), before);
-  });
+
 
 } finally { await rm(temporary, { recursive: true, force: true }); }
