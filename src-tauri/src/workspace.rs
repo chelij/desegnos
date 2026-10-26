@@ -8,11 +8,12 @@ use desegni_storage::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::Read,
     path::PathBuf,
     sync::Mutex,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -20,6 +21,24 @@ use uuid::Uuid;
 
 type NativeResult<T> = Result<T, String>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
+
+/// A discarded recovery is no longer offered, so its pointer and journal can go after a month.
+const DISCARDED_RECOVERY_GRACE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+
+fn valid_journal_file(journal_file: &str) -> bool {
+    journal_file.ends_with(".journal")
+        && !journal_file.contains(['/', '\\', ':'])
+        && !journal_file.starts_with('.')
+}
+
+fn older_than(entry: &fs::DirEntry, grace: Duration) -> bool {
+    entry
+        .metadata()
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age > grace)
+}
 
 /// Hash what framed documents are made of: page code and the HTML site files a frame can
 /// show. Request prompts, rectangles and other editor-only state stay out of it.
@@ -414,6 +433,7 @@ impl Workspace {
             site: None,
         };
         state.refresh_recoveries();
+        state.clean_journals();
         Ok(state)
     }
 
@@ -452,10 +472,7 @@ impl Workspace {
             return Err("The recovery pointer is too large. The original remains on disk.".into());
         }
         let pointer: RecoveryPointer = serde_json::from_slice(&bytes).map_err(message)?;
-        if !pointer.journal_file.ends_with(".journal")
-            || pointer.journal_file.contains(['/', '\\', ':'])
-            || pointer.journal_file.starts_with('.')
-        {
+        if !valid_journal_file(&pointer.journal_file) {
             return Err("The recovery pointer contains an invalid journal path.".into());
         }
         let document = Journal::recover_document(&self.directory.join(&pointer.journal_file))
@@ -514,6 +531,73 @@ impl Workspace {
             }
         }
         clean
+    }
+
+    /// Journals of sessions that are no longer open, and site files no journal references,
+    /// accumulate with every crash and every discarded recovery. Cleanup must never prevent
+    /// the editor from starting, so failures are only reported.
+    fn clean_journals(&self) {
+        let mut keep = BTreeSet::new();
+        let mut discarded = Vec::new();
+        let entries = match fs::read_dir(&self.directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                eprintln!("Could not clean recovery journals: {error}");
+                return;
+            }
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let is_discarded = name.ends_with(".recovery.discarded.json");
+            if !is_discarded && !name.ends_with(".recovery.json") {
+                continue;
+            }
+            // Recovery reads promise that unreadable originals stay on disk, so one pointer that
+            // cannot be understood cancels cleanup for the whole run: it may name any journal.
+            let pointer = fs::read(entry.path())
+                .map_err(|error| error.to_string())
+                .and_then(|bytes| {
+                    serde_json::from_slice::<RecoveryPointer>(&bytes)
+                        .map_err(|error| error.to_string())
+                });
+            let pointer = match pointer {
+                Ok(pointer) if valid_journal_file(&pointer.journal_file) => pointer,
+                Ok(_) => {
+                    eprintln!(
+                        "Could not clean recovery journals: {} has an invalid journal path.",
+                        entry.path().display()
+                    );
+                    return;
+                }
+                Err(error) => {
+                    eprintln!(
+                        "Could not clean recovery journals: {} could not be read: {error}",
+                        entry.path().display()
+                    );
+                    return;
+                }
+            };
+            keep.insert(pointer.journal_file);
+            if is_discarded && older_than(&entry, DISCARDED_RECOVERY_GRACE) {
+                discarded.push(entry.path());
+            }
+        }
+        for path in discarded {
+            // The journal becomes unreferenced, so cleanup can remove it too.
+            if let Err(error) = fs::remove_file(&path) {
+                eprintln!("Could not remove {}: {error}", path.display());
+            }
+        }
+        let is_closed = |project_id: Uuid| {
+            self.acquire_ownership(project_id)
+                .is_ok_and(|ownership| ownership.is_some())
+        };
+        if let Err(error) = desegni_storage::clean_journals(&self.directory, &keep, is_closed) {
+            eprintln!("Could not clean recovery journals: {error}");
+        }
     }
 
     fn refresh_recoveries(&mut self) {
@@ -2835,6 +2919,7 @@ mod tests {
         fs::create_dir(&folder).unwrap();
         let html = "<!doctype html><html><head><title>Original</title></head><body><h1>Website</h1></body></html>";
         fs::write(folder.join("index.html"), html).unwrap();
+        fs::write(folder.join("style.css"), "body { margin: 0 }").unwrap();
         let directory = temp.0.join("app-data");
         let mut workspace = Workspace::from_directory(directory.clone()).unwrap();
         workspace.open_file_tab(&folder, false).unwrap();
@@ -2855,10 +2940,28 @@ mod tests {
         );
         change_grid(&mut workspace);
         let edited = workspace.project().unwrap().clone();
+        // The imported site files are the bulk of the project; recovery must not repeat them.
+        let journal = workspace.journal.as_ref().unwrap();
+        let entry: serde_json::Value = serde_json::from_slice(
+            fs::read(journal.path())
+                .unwrap()
+                .strip_suffix(b"\n")
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !entry["files"].as_object().unwrap().is_empty(),
+            "imported site files must be stored out of line"
+        );
+        assert_eq!(entry["project"]["website"]["files"], serde_json::json!({}));
         drop(workspace);
         let mut restarted = Workspace::from_directory(directory).unwrap();
         restarted.recover(Some(edited.id), false).unwrap();
         assert_eq!(restarted.project().unwrap(), &edited);
+        assert_eq!(
+            restarted.project().unwrap().website.as_ref().unwrap().files,
+            edited.website.as_ref().unwrap().files
+        );
         assert_eq!(restarted.file.as_ref().unwrap().path(), path);
         restarted.save_snapshot(&edited, None).unwrap();
         assert!(!restarted.view().dirty);
@@ -3102,6 +3205,46 @@ mod tests {
                 .flatten()
                 .any(|entry| entry.file_name().to_string_lossy().ends_with(".journal"))
         );
+    }
+
+    #[test]
+    fn an_unreadable_recovery_pointer_cancels_journal_cleanup() {
+        for contents in [
+            "{ not a pointer".to_owned(),
+            r#"{"journalFile":"../escape.journal","savedRevision":null,"savedSha256":null,"projectPath":null}"#
+                .to_owned(),
+        ] {
+            let temp = Temp::new();
+            let directory = temp.0.clone();
+            let journal = directory.join(format!("{}-{}.journal", Uuid::new_v4(), Uuid::new_v4()));
+            fs::write(&journal, b"{\"not\":\"a journal\"}\n").unwrap();
+            let blobs = directory.join("blobs");
+            fs::create_dir(&blobs).unwrap();
+            let blob = blobs.join("0".repeat(64));
+            fs::write(&blob, b"unreferenced").unwrap();
+            let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+            for path in [&journal, &blob] {
+                File::options()
+                    .write(true)
+                    .open(path)
+                    .unwrap()
+                    .set_modified(two_hours_ago)
+                    .unwrap();
+            }
+            let pointer = directory.join(format!("{}.recovery.json", Uuid::new_v4()));
+            fs::write(&pointer, &contents).unwrap();
+
+            // The pointer may name any journal, so this run removes neither journal nor blob.
+            Workspace::from_directory(directory.clone()).unwrap();
+            assert!(journal.exists(), "{contents}");
+            assert!(blob.exists(), "{contents}");
+
+            // Without it the same directory is cleaned, so the assertions above are not empty.
+            fs::remove_file(&pointer).unwrap();
+            Workspace::from_directory(directory).unwrap();
+            assert!(!journal.exists());
+            assert!(!blob.exists());
+        }
     }
 
     #[test]
