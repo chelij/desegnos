@@ -28,7 +28,7 @@ try {
   }
   const { GenerationLog } = await import(pathToFileURL(join(temporary, 'GenerationLog.mjs')));
   const id = '12345678-1234-1234-1234-123456789abc';
-  const project = { id: 'project', revision: 1, pages: [{ id: 'page', name: 'Home', regions: [{ id, prompt: 'Add a booking form' }] }] };
+  const project = { id: 'project', revision: 1, pages: [{ id: 'page', name: 'Home', viewport: { width: 1200, height: 800 }, regions: [{ id, prompt: 'Add a booking form', rect: { x: 40, y: 40, width: 320, height: 200 } }] }] };
   const job = { jobId: 'job', status: 'blocked', settings: { model: 'model' }, requirements: { markdown: '' }, generationMode: 'fuzzy', areas: [{ pageId: 'page', regionId: id }],
     candidate: { summary: 'Booking form needs a service address.', regions: [{ regionId: id, status: 'conflict', explanation: `Area ${id}: Which booking service should this use?` }], criticism: [{ message: 'Keep the heading concise.', suggestion: 'Shorten the heading.' }], decisionProposals: [{ topic: `Booking links ${id}`, value: 'Use the booking service', scope: { kind: 'project' } }] },
     drafts: [{ id: 'draft', pageId: 'page', regionIds: [id], reason: 'CSS outside the region', code: '<script>PRIVATE GENERATED SOURCE</script>' }], usage: { inputTokens: 10, outputTokens: 20 }, repairRounds: 0 };
@@ -90,5 +90,12 @@ try {
   await test('the conversation leaves out Change request for the request already being edited', () => {
     assert.doesNotMatch(renderToStaticMarkup(React.createElement(GenerationLog, { ...props, requestEditorOpen: () => true })), />Change request</);
     assert.match(renderToStaticMarkup(React.createElement(GenerationLog, { ...props, requestEditorOpen: () => false })), />Change request</);
+  });
+  await test('a declared conflict offers one whole-page retry', () => {
+    const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, allowWholePage: async () => {} }));
+    assert.equal((html.match(/>Allow whole page and retry</g) ?? []).length, 1);
+    // A request already allowed to change the whole page has nothing to widen.
+    const wholePage = { ...project, pages: [{ ...project.pages[0], regions: [{ ...project.pages[0].regions[0], wholePage: true }] }] };
+    assert.doesNotMatch(renderToStaticMarkup(React.createElement(GenerationLog, { ...props, project: wholePage, allowWholePage: async () => {} })), /Allow whole page and retry/);
   });
 } finally { await rm(temporary, { recursive: true, force: true }); }

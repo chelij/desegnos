@@ -1,5 +1,5 @@
 import { ProblemBanner } from './ProblemBanner.js';
-import { areaProblems, fixLabel, jobOutcome, placeCallouts, type OutcomeFix } from './generationProblems';
+import { areaProblems, declaredConflict, fixLabel, jobOutcome, placeCallouts, type OutcomeFix } from './generationProblems';
 import type { GenerationController } from './useGeneration';
 import { userError, runtimeError, generationError, generationPageError } from './userErrors.js';
 import { isWholePage } from './wholePageScope';
@@ -11,6 +11,7 @@ import { canonicalSelections, documentKey, regionTargets, sameDocument, sameTarg
 import { MAX_SELECTION, marqueeSelections } from './elementSelection';
 import { acrossPagesFor, acrossPagesLabel, chosenAcrossPages, setAcrossPages, toggleAcrossPage, type AcrossPagesState, ACROSS_PAGES_OFF } from './acrossPages';
 import { adoptRequestFrame, frameTargetShown, pageRectToInnerDocument, remapFramedRequest, requestFrame } from './frameDocuments';
+import { adoptsFrameTarget } from './frameAdoption';
 import { useDraftText } from './DraftText';
 import { escapeHtml, imageFile } from './elementEditing';
 import { StyleBar, type StyleChange } from './StyleBar';
@@ -100,10 +101,11 @@ type CanvasProps = {
   inspectElement: (target: ElementTarget) => Promise<ElementDetails>; editElement: (target: ElementTarget, change: ElementEdit) => Promise<ElementTarget | null>; undoElement?: (target: ElementTarget) => Promise<ElementTarget | null>;
   editElements: (edits: { target: ElementTarget; change: ElementEdit }[]) => Promise<(ElementTarget | null)[]>; copyElements: (targets: ElementTarget[], styles: ElementStyleEdit[][]) => Promise<void>;
   findAcrossPages: (target: ElementTarget) => Promise<AcrossPagesMatch[]>; editAcrossPages: (target: ElementTarget, change: ElementEdit, documents: DocumentTarget[]) => Promise<AcrossPagesChange[]>;
+  allowWholePage?: (regionId: string) => Promise<void>;
   changeZoom: (zoom: number) => void; select: (id: string | null, cleanEmpty?: boolean) => void; add: (rect: Rect, shape?: RegionShape) => Promise<Region | null>; pickElement: (selection: ElementSelection[], pages?: PageSelection[]) => Promise<Region | null>; deleteElements: (elements: ElementTarget[]) => Promise<void>; change: (id: string, patch: RequestPatch) => Promise<Region>; remove: (id: string) => void; setTargetRemoval: (regionId: string, allowed: boolean) => void;
 };
 export type CanvasHandle = { liveHistory: (action: LiveHistoryAction) => void; selectSimilar: () => void; focusElement: (selector: string, tag: string, id?: string, expectedPageId?: string, document?: ElementTarget['document']) => ElementSelection | null; synchronize: (requireBounds?: boolean) => Promise<void>; addRequest: () => void; focusRequest: (id: string) => void; askAI: () => void; undoElement: () => Promise<void>; copyLayer: () => Promise<void>; cutLayer: () => Promise<void>; pasteLayer: () => Promise<void>; arrangeLayer: (direction: LayerDirection) => Promise<void> };
-export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, pages, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveDevice = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, findAcrossPages, editAcrossPages, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
+export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ generation, archiveReports = {}, fixRuntimeErrors, aiDisabled, observationsVersion, projectId, allowWholePage, pendingImagesChanged, projectImages = [], canUndo, canRedo, undo, redo, toggleGrid, configureGrid, page, pages, layersOpen, setLayersOpen, selectionChanged, multiChanged, repick, fixOnPhones, attach, detach, liveDevice = null, onLiveLocation, arrangeRequest, copyNative, cutNative, pasteNative, grid, gridSettings = DEFAULT_GRID, tool = 'select', requestShape = 'rect', rulerUnit = 'pixels', zoom, selected, focusRequest, viewAction, changing = [], highlighted = [], frameDocuments = [], ensureElementId, setFrameTarget, inspectElement, editElement, undoElement, editElements, copyElements, findAcrossPages, editAcrossPages, refreshElementBounds, openSource, resolveGenerationFix, changeZoom, select, add, pickElement, deleteElements, change, remove, setTargetRemoval }, ref) {
   const [dismissedProblems, setDismissedProblems] = useState<string[]>([]);
   // Pages chosen for the next Ask AI on an element; the request box has its own picker.
   const [requestPages, setRequestPages] = useState<PageSelection[]>([]);
@@ -852,7 +854,8 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
     ];
     if (!known.length) return false;
     let changed = false;
-    for (const region of current.regions.filter(item => !item.completed)) {
+    // A whole-page request stays on the host page; core keeps the same rule at prepare.
+    for (const region of current.regions.filter(adoptsFrameTarget)) {
       const existing = region.frameTarget;
       if (existing) {
         const valid = frameTargetShown(frames, existing) || known.some(item => item.iframeId === existing.iframeId && sameDocument(item.document, existing.document));
@@ -894,8 +897,10 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
       const current = pageRef.current;
       if (!current.content || !current.regions.some(region => !region.completed)) { setStale(new Set()); return; }
       await waitForSite(current.id);
-      if (await adoptFrameTargets()) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       if (!await settledFrame()) return;
+      // Frame boxes are only trustworthy once the page has settled: right after an undo or a new
+      // version, an iframe can briefly sit over another request and would wrongly adopt it.
+      if (await adoptFrameTargets()) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
       const version = acceptedVersionRef.current;
       if (JSON.stringify(pageRef.current.content) !== JSON.stringify(current.content) || pageRef.current.id !== current.id) throw new Error('The page changed while measuring its items. Try again.');
       const regions = pageRef.current.regions.filter(region => !region.completed && !region.frameTarget);
@@ -1721,11 +1726,13 @@ export const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas({ ge
           {inlineText && <InlineTextEditor key={`${inlineText.selection.element.sourceSha256}:${inlineText.index}`} text={inlineText} origin={origin} zoom={zoom} layer={overlayLayer + 4} disabled={editingElement} finish={finishText} />}
           {placeCallouts(problems, page.regions.map(region => region.rect), origin, zoom, dismissedProblems).map(position => {
             const problem = problems.find(item => item.key === position.key)!;
+            const request = page.regions.find(region => region.id === problem.regionId);
             const error = problemErrors[problem.key];
             const busy = problemBusy || !!generation?.operation || generation?.canStop;
             return <div key={problem.key} role="alert" className="area-problem" style={{ left: position.x, top: position.y, width: position.width, height: position.height, zIndex: overlayLayer + 5 }} onPointerDown={event => event.stopPropagation()}>
-              <span>{error ? generationError(error, page.regions.find(r => r.id === problem.regionId)?.prompt) : problem.message}</span>
+              <span>{error ? generationError(error, request?.prompt) : problem.message}</span>
               <div>{!problem.retryable ? <>
+                {allowWholePage && request && !isWholePage(request, page) && declaredConflict(generation?.job ?? null, problem.regionId) && <button disabled={busy || aiDisabled} onClick={() => { void allowWholePage(problem.regionId).catch(() => {}); }}>Allow whole page and retry</button>}
                 {!requestEditorOpen(problem.regionId, { selectedRegionId: selected, focusedRegionId: focusRequest }) && <button disabled={busy} onClick={() => { select(problem.regionId); setRequestFocus(previous => ({ id: problem.regionId, serial: previous.serial + 1 })); }}>Change request</button>}
                 {problem.fix && resolveGenerationFix && <button disabled={busy} onClick={() => resolveGenerationFix(problem.fix!, problem.regionId)}>{fixLabel(problem.fix)}</button>}
               </> : <>

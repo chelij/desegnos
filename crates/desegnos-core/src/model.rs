@@ -1252,13 +1252,12 @@ impl Project {
                     .iter_mut()
                     .find(|r| r.id == region_id && !r.completed)
                     .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                ensure(
-                    region.frame_target.is_none() || !whole_page,
-                    "A framed request changes only its framed document.",
-                )?;
                 region.whole_page = whole_page;
                 region.whole_page_disabled = !whole_page;
                 if whole_page {
+                    // A whole-page request edits the host page, so the framed document it was
+                    // drawn over is released in the same step instead of blocking the switch.
+                    region.frame_target = None;
                     region.mobile_only = false;
                 }
             }

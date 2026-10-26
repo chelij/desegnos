@@ -89,3 +89,10 @@ try {
     assert.match(app, /errors: errors\.slice\(0, 10\)\.map\(error => error\.slice\(0, 4096\)\)/);
   });
 } finally { await rm(temporary, { recursive: true, force: true }); }
+
+test('an AI scope explanation is not mistaken for a page edit', async () => {
+  const { generationError } = await import('../src/userErrors.ts');
+  const reason = 'Scope conflict: the tooltip belongs to Home. No project-page content has been changed.';
+  assert.notEqual(generationError(reason), 'The page was edited after the AI made this draft.');
+  assert.equal(generationError('The page changed while the AI was working.'), 'The page was edited after the AI made this draft.');
+});

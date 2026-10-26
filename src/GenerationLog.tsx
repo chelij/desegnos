@@ -1,6 +1,7 @@
 import { ProblemBanner } from './ProblemBanner.js';
 import { userError, generationError } from './userErrors.js';
-import { areaOutcome, fixLabel, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
+import { areaOutcome, declaredConflict, fixLabel, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
+import { isWholePage } from './wholePageScope.js';
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import { Disclosure } from './Disclosure';
@@ -14,8 +15,8 @@ import type { GenerationHistory, GenerationJobView, Project } from './types';
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
-export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, openImport, openBrief, manageUsage, editRequest, resultApplied, requestEditorOpen, reply }: {
-  resultApplied?: boolean; requestEditorOpen?: (regionId: string) => boolean;
+export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, openImport, openBrief, manageUsage, editRequest, allowWholePage, resultApplied, requestEditorOpen, reply }: {
+  resultApplied?: boolean; requestEditorOpen?: (regionId: string) => boolean; allowWholePage?: (regionId: string) => Promise<void>;
   settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
   job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; controller: GenerationController; close: () => void;
   reply: (targets: { pageId: string; regionId: string }[], text: string) => Promise<void>;
@@ -55,7 +56,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
     const draft = job?.drafts?.filter(draft => draft.regionIds.includes(area.regionId)).at(-1);
     const done = region?.completed || draft?.applied || job?.candidate?.regions.find(outcome => outcome.regionId === area.regionId)?.status === 'implemented';
     const current = region?.prompt;
-    return { done, key: area.regionId, pageId: region ? page!.id : '', exists: !!region, completed: region?.completed, page: sent?.pageName || page?.name || 'Removed page', box: index + 1, prompt: sent?.prompt || region?.prompt || '', current, outcome: job ? areaOutcome(job, area.regionId, current) : null, attachments: sent?.attachments ?? (past ? [] : region?.attachments ?? []), phone: !!(sent?.mobileOnly ?? (!past && region?.mobileOnly)) };
+    return { done, key: area.regionId, pageId: region ? page!.id : '', exists: !!region, completed: region?.completed, wholePage: !!page && !!region && isWholePage(region, page), page: sent?.pageName || page?.name || 'Removed page', box: index + 1, prompt: sent?.prompt || region?.prompt || '', current, outcome: job ? areaOutcome(job, area.regionId, current) : null, attachments: sent?.attachments ?? (past ? [] : region?.attachments ?? []), phone: !!(sent?.mobileOnly ?? (!past && region?.mobileOnly)) };
   });
   // Only areas whose result can still change are resent; declared gaps need a different request.
   const review = jobOutcome(job, id => requests.find(item => item.key === id)?.current);
@@ -109,7 +110,8 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             {review.blocked.map(item => <div key={item.regionId}>
               <span className="log-meta">{label(item.regionId)}</span>
               <p className="log-text">{item.reason}</p>
-              {(!requestEditorOpen?.(item.regionId) || (item.fix && openFix(item.fix))) && <div className="log-actions">
+              {(!requestEditorOpen?.(item.regionId) || (item.fix && openFix(item.fix)) || allowWholePage && declaredConflict(job, item.regionId)) && <div className="log-actions">
+                {allowWholePage && declaredConflict(job, item.regionId) && !requests.find(request => request.key === item.regionId)?.wholePage && <button type="button" className="primary" disabled={busy} onClick={() => { void allowWholePage(item.regionId).catch(() => {}); }}>Allow whole page and retry</button>}
                 {!requestEditorOpen?.(item.regionId) && <button type="button" onClick={() => editRequest(item.regionId)}>Change request</button>}
                 {item.fix && openFix(item.fix) && <button type="button" onClick={() => applyFix(item.fix!)}>{fixLabel(item.fix)}</button>}
               </div>}
@@ -154,8 +156,9 @@ function statusLabel(status: string) {
   return 'In progress';
 }
 
+// The AI's own feedback is prose: only raw markup or editor attributes need a plain stand-in.
 function humanText(value: string) {
-  if (/region|candidate|schema|data-desegnos-|excerpt|selector|conflict|validation|<\/?[a-z][^>]*>/i.test(value)) return generationError(value);
+  if (/data-desegnos-|<\/?[a-z][^>]*>/i.test(value)) return generationError(value);
   if (/kept the validated changes for area/i.test(value)) return 'Kept the validated changes for this request.';
   if (/dynamic or executable|Copy code/i.test(value)) return generationError(value);
   return value.replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, 'request').replace(/\barea [0-9a-f]{8,}[^\s]*/gi, 'request');

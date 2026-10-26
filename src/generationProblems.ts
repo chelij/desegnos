@@ -93,6 +93,11 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (regionId: s
   return { retryable, blocked, retryAll: ids.size === 0 && !blocked.length && ['failed', 'unknown', 'cancelled'].includes(job.status), retryBatches };
 }
 
+/// The AI declared a scope conflict for this request: its fix belongs outside the area.
+export function declaredConflict(job: GenerationJobView | null, regionId: string): boolean {
+  return !!job?.candidate?.regions.some(region => region.regionId === regionId && region.status === 'conflict');
+}
+
 export function areaProblems(job: GenerationJobView | null, page: Page): AreaProblem[] {
   if (!job || ['prepared', 'generating', 'ready', 'applying'].includes(job.status)) return [];
   const stale = staleResult(job);

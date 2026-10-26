@@ -541,7 +541,9 @@ impl Project {
             for region in next.pages[index]
                 .regions
                 .iter_mut()
-                .filter(|region| !region.completed)
+                // An explicit whole-page request belongs to the host page; adopting a frame
+                // would silently turn it back into a framed request.
+                .filter(|region| !region.completed && !region.whole_page)
             {
                 if let Some(existing) = &region.frame_target {
                     let shown = frames.iter().any(|frame| {

@@ -639,3 +639,134 @@ fn unmapped_local_conflict_does_not_freeze_page_layout() {
         recover_generation_reply(&serde_json::to_string(&c).unwrap(), &s, &p).unwrap();
     assert_eq!(recovered.pages[0].content, c.pages[0].content);
 }
+
+const FRAME_ID: &str = "framepage";
+
+/// A host page showing another page in an iframe, with one request measured over that frame.
+fn measured_frame_request() -> (Project, Uuid) {
+    let mut p = Project::new(
+        "Framed page".into(),
+        Viewport {
+            width: 1200,
+            height: 800,
+        },
+        Appearance::Light,
+    )
+    .unwrap();
+    p.pages.push(Page {
+        id: Uuid::new_v4(),
+        name: "Inner".into(),
+        path: "/inner".into(),
+        included: true,
+        viewport: p.viewport,
+        appearance: p.appearance,
+        regions: vec![],
+        content: Some(SiteContent {
+            html: "<main><h1>Inner page</h1></main>".into(),
+            css: String::new(),
+            javascript: String::new(),
+        }),
+    });
+    p.pages[0].content = Some(SiteContent {
+        html: format!("<iframe data-desegnos-id=\"{FRAME_ID}\" src=\"/inner\"></iframe>"),
+        css: String::new(),
+        javascript: String::new(),
+    });
+    let page_id = p.home_page_id;
+    let bounds = rect(100., 100., 500., 400.);
+    p = p
+        .apply(
+            p.revision,
+            Command::AddRegion {
+                page_id,
+                rect: bounds,
+            },
+        )
+        .unwrap();
+    let region_id = p.pages[0].regions[0].id;
+    p = p
+        .apply(
+            p.revision,
+            Command::UpdateRegion {
+                page_id,
+                region_id,
+                rect: bounds,
+                prompt: "Tidy the inner page".into(),
+            },
+        )
+        .unwrap();
+    let mut p = p;
+    p.pages[0].regions[0].area_bounds = vec![TargetBounds {
+        target: ElementTarget {
+            id: FRAME_ID.into(),
+            selector: "body > iframe:nth-of-type(1)".into(),
+            tag: "iframe".into(),
+            label: "Inner page".into(),
+            source_sha256: String::new(),
+        },
+        rect: bounds,
+    }];
+    (p, region_id)
+}
+
+#[test]
+fn turning_whole_page_on_releases_a_framed_request_in_one_step() {
+    let (p, region_id) = measured_frame_request();
+    let p = p.adopt_frame_targets().unwrap();
+    assert!(p.pages[0].regions[0].frame_target.is_some());
+    let mut session = Session::new(p.clone()).unwrap();
+    let before = session.history();
+    session
+        .execute(
+            p.revision,
+            Command::SetRegionWholePage {
+                page_id: p.home_page_id,
+                region_id,
+                whole_page: true,
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    let page = &session.project().pages[0];
+    let region = &page.regions[0];
+    assert!(region.frame_target.is_none());
+    assert!(region.whole_page);
+    assert!(region.is_whole_page(page));
+    assert_eq!(session.history().2, before.2 + 1, "one history step");
+    // Undo restores the framed request, because the release was part of that same step.
+    session.undo(|_| Ok(())).unwrap();
+    let page = &session.project().pages[0];
+    let region = &page.regions[0];
+    assert_eq!(region.frame_target.as_ref().unwrap().iframe_id, FRAME_ID);
+    assert!(!region.whole_page);
+    assert!(!region.is_whole_page(page));
+}
+
+#[test]
+fn frame_adoption_keeps_an_explicit_whole_page_request() {
+    let (p, region_id) = measured_frame_request();
+    let p = p
+        .apply(
+            p.revision,
+            Command::SetRegionWholePage {
+                page_id: p.home_page_id,
+                region_id,
+                whole_page: true,
+            },
+        )
+        .unwrap();
+    assert!(p.pages[0].regions[0].frame_target.is_none());
+    let adopted = p.adopt_frame_targets().unwrap();
+    assert_eq!(
+        adopted, p,
+        "adoption changes nothing for a whole-page request"
+    );
+    assert!(adopted.pages[0].regions[0].frame_target.is_none());
+    assert!(adopted.pages[0].regions[0].whole_page);
+    // Without the explicit choice the same measured box is adopted into the framed document.
+    let mut plain = adopted.clone();
+    plain.pages[0].regions[0].whole_page = false;
+    plain.pages[0].regions[0].whole_page_disabled = true;
+    let plain = plain.adopt_frame_targets().unwrap();
+    assert!(plain.pages[0].regions[0].frame_target.is_some());
+}
