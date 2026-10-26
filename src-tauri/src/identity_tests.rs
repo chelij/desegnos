@@ -870,7 +870,10 @@ fn automatic_picking_fits_the_complete_request_and_skips_large_lower_ranked_file
 
 #[test]
 fn real_astro_folder_default_selection_fits_without_sending_or_changing_files() {
-    let path = Path::new("~/Projects/chelib");
+    let Ok(path) = std::env::var("DESEGNOS_OWNER_SITE") else {
+        return;
+    };
+    let path = Path::new(&path);
     if !path.is_dir() {
         return;
     }

@@ -6,13 +6,13 @@ Create the real controlled export through the existing compiler and safe writer:
 
 ```sh
 mkdir -p test-results/export-browser-fixture
-node scripts/cargo.mjs run --offline -p desegni-storage --example export_browser_fixture -- test-results/export-browser-fixture
+node scripts/cargo.mjs run --offline -p desegni-storage --example export_browser_fixture -- "$PWD/test-results/export-browser-fixture"
 ```
 
 The example prints JSON containing the newly written website `path`. Pass that path to the browser matrix:
 
 ```sh
-~/.local/bin/xvfb-run -d node scripts/export-browser-test.mjs --site /absolute/new/export/path --output test-results/export-browser-matrix
+xvfb-run -d node scripts/export-browser-test.mjs --site /absolute/new/export/path --output "$PWD/test-results/export-browser-matrix"
 ```
 
 The matrix opens the same two-page export in Chromium and Firefox from disk, a local static server root, and a `/portfolio/` host subdirectory. It checks actual image decoding, stylesheet/background resources, a real JavaScript button, isolated page colors, nested navigation with query/fragment and return navigation. Twelve screenshots, versions, exact source hashes, local request paths, blocked background requests and cleanup results are retained. The exported files must remain byte-identical. The fixture uses valid 1×1 and 2×2 PNG candidates for its actual `1x`/`2x` responsive image declarations.

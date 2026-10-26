@@ -7,13 +7,13 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { toolchainEnvironment } from './toolchain.mjs';
+import { resolveDbusRunSession, resolveXvfbRun, xvfbEnvironment } from './xvfb.mjs';
 import { WebDriver, waitFor } from '../tests/native/webdriver.mjs';
 import { PhysicalInput } from '../tests/native/physical-workflow.mjs';
 import { chooseFile } from '../tests/native/file-dialog-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const fixtureRoot = join(root, 'benchmarks/generation');
-const guardedXvfb = '~/.local/bin/xvfb-run';
 const digest = value => createHash('sha256').update(value).digest('hex');
 const catalogue = JSON.parse(await readFile(join(fixtureRoot, 'scenarios.json'), 'utf8'));
 const fixtures = JSON.parse(await readFile(join(fixtureRoot, 'fixtures.json'), 'utf8'));
@@ -253,7 +253,9 @@ async function main() {
   assert.ok(Number.isFinite(budgetUsd) && budgetUsd > 0 && budgetUsd <= 100, 'Explicit --budget-usd must be > 0 and <= 100; this is not a billing cap.');
   assert.ok(Number.isInteger(maxSeconds) && maxSeconds >= 10 && maxSeconds <= 600, 'Explicit --max-seconds must be 10–600.');
   assert.ok(options['--binary'] && isAbsolute(options['--binary']), 'Choose an absolute native-tests DEBUG --binary.');
-  const binary = await realpath(options['--binary']); await access(binary); await access(guardedXvfb);
+  const binary = await realpath(options['--binary']); await access(binary);
+  const xvfbRun = resolveXvfbRun();
+  const dbusRunSession = resolveDbusRunSession();
   const binaryBytes = await readFile(binary);
   assert.ok(binaryBytes.includes(Buffer.from('DESEGNI_GENERATION_BENCHMARK')) && binaryBytes.includes(Buffer.from('provider-output-')), 'Rebuild the current debug native-tests binary with benchmark capture and isolated vault support before launching.');
   let key = await stdinKey();
@@ -269,7 +271,7 @@ async function main() {
   const original = await desktopState(); let child;
   await writeFile(join(evidence,'authorization.json'), JSON.stringify({...request,guard:undefined},null,2),{mode:0o600});
   try {
-    child = spawn(guardedXvfb,['-d','-e',join(evidence,'xvfb.log'),'-f',join(scratch,'Xauthority'),'-s','-screen 0 1600x1100x24','dbus-run-session','--',process.execPath,fileURLToPath(import.meta.url),'--isolated'],{cwd:root,detached:true,stdio:['pipe','ignore','ignore'],env:{...environment,GDK_BACKEND:'x11',GDK_SCALE:'1',GDK_DPI_SCALE:'1',DESEGNI_BENCHMARK_REQUEST:requestPath,DESEGNI_BENCHMARK_GUARD:request.guard,DESEGNI_NATIVE_TEST_EVIDENCE:evidence}});
+    child = spawn(xvfbRun,['-d','-e',join(evidence,'xvfb.log'),'-f',join(scratch,'Xauthority'),'-s','-screen 0 1600x1100x24',dbusRunSession,'--',process.execPath,fileURLToPath(import.meta.url),'--isolated'],{cwd:root,detached:true,stdio:['pipe','ignore','ignore'],env:xvfbEnvironment({...environment,GDK_SCALE:'1',GDK_DPI_SCALE:'1',DESEGNI_BENCHMARK_REQUEST:requestPath,DESEGNI_BENCHMARK_GUARD:request.guard,DESEGNI_NATIVE_TEST_EVIDENCE:evidence})});
     child.stdin.end(key); key = '';
     const interrupt = () => { void stop(child); }; process.once('SIGINT',interrupt); process.once('SIGTERM',interrupt);
     try { process.exitCode = await exit(child); } finally { process.removeListener('SIGINT',interrupt); process.removeListener('SIGTERM',interrupt); }

@@ -9,6 +9,7 @@ import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { toolchainEnvironment } from './toolchain.mjs';
+import { resolveDbusRunSession, resolveXvfbRun, xvfbEnvironment } from './xvfb.mjs';
 import { waitFor, WebDriver } from '../tests/native/webdriver.mjs';
 import { recoverProject } from '../tests/native/workflow.mjs';
 import { PhysicalInput } from '../tests/native/physical-workflow.mjs';
@@ -31,7 +32,6 @@ import { flashWorkflow } from '../tests/native/flash-workflow.mjs';
 import { projectFoldersWorkflow } from '../tests/native/project-folders-workflow.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const guardedXvfb = '~/.local/bin/xvfb-run';
 const args = process.argv.slice(2);
 
 async function hashFile(path) {
@@ -377,7 +377,8 @@ async function main() {
     if (status !== 0) throw new Error(`The explicit native-tests build failed (${status})`);
   }
   await access(binary);
-  await access(guardedXvfb);
+  const xvfbRun = resolveXvfbRun();
+  const dbusRunSession = resolveDbusRunSession();
   const evidence = resolve('test-results/native', new Date().toISOString().replace(/[:.]/g, '-') + `-${process.pid}`);
   await mkdir(evidence, { recursive: true });
   const scratch = await mkdtemp(join(tmpdir(), 'dsgn-native-'));
@@ -395,13 +396,13 @@ async function main() {
   let result = 1;
   let desktop;
   try {
-    const isolated = spawn(guardedXvfb, ['-d', '-e', join(evidence, 'xvfb.log'), '-f', join(scratch, 'Xauthority'), '-s', '-screen 0 1600x1100x24',
-      'dbus-run-session', '--', process.execPath, fileURLToPath(import.meta.url), '--isolated'], {
-      cwd: root, detached: true, stdio: 'inherit', env: { ...process.env,
+    const isolated = spawn(xvfbRun, ['-d', '-e', join(evidence, 'xvfb.log'), '-f', join(scratch, 'Xauthority'), '-s', '-screen 0 1600x1100x24',
+      dbusRunSession, '--', process.execPath, fileURLToPath(import.meta.url), '--isolated'], {
+      cwd: root, detached: true, stdio: 'inherit', env: xvfbEnvironment({ ...process.env,
         XDG_DATA_HOME: profile.data, XDG_CONFIG_HOME: profile.config, XDG_CACHE_HOME: profile.cache, XDG_RUNTIME_DIR: profile.runtime,
         GDK_SCALE: '1', GDK_DPI_SCALE: '1',
         ...(process.env.DESEGNI_NATIVE_TEST_ACCESSIBILITY === '1' ? { ATSPI_DBUS_IMPLEMENTATION: 'dbus-daemon' } : {}),
-        DESEGNI_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNI_NATIVE_TEST_BINARY: binary, DESEGNI_NATIVE_TEST_EVIDENCE: evidence },
+        DESEGNI_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNI_NATIVE_TEST_BINARY: binary, DESEGNI_NATIVE_TEST_EVIDENCE: evidence }),
     });
     const interrupt = () => terminateGroup(isolated, 'SIGTERM');
     process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);

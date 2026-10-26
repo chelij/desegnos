@@ -150,7 +150,7 @@ pnpm desktop build --debug --no-bundle
 pnpm desktop build --no-bundle
 ```
 
-Rust/provider tests need task-owned loopback sockets. The native harness uses guarded `~/.local/bin/xvfb-run -d` with isolated data and a private bus, and verifies the main desktop after cleanup. See [tests/native/README.md](../tests/native/README.md). The opt-in Linux vault runner creates a private Secret Service and verifies its process/bus/data before using synthetic credentials; ordinary tests never access a real vault.
+Rust/provider tests need task-owned loopback sockets. The native harness runs `xvfb-run -d` with isolated data and a private bus, resolved from `PATH` (or `XVFB_RUN`/`DBUS_RUN_SESSION`), and verifies the main desktop after cleanup. See [tests/native/README.md](../tests/native/README.md). The opt-in Linux vault runner creates a private Secret Service and verifies its process/bus/data before using synthetic credentials; ordinary tests never access a real vault.
 
 Normal Linux launch paths are the actual executables `target/debug/desegnos` and `target/release/desegnos`; managed `desegni` compatibility launch paths remain usable. Existing `.desegni` archives remain readable and save to their existing path; new saves default to `.desegnos`. These commands create no installers. Signing, updates, Windows/macOS verification, live OpenAI generation, complete export release scenarios, media/components, executable plugins and all remaining release scenarios remain required by the full plan.
 

@@ -7,10 +7,10 @@ import { createConnection, createServer } from 'node:net';
 import { isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { resolveDbusRunSession, resolveXvfbRun, xvfbEnvironment } from './xvfb.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const script = fileURLToPath(import.meta.url);
-const guardedXvfb = '~/.local/bin/xvfb-run';
 const helper = join(root, 'tests/native/x11-input.py');
 
 async function hashFile(path) {
@@ -133,12 +133,16 @@ async function isolated() {
   }
   const ownership = { display: process.env.DISPLAY, serverPid: null, socketPath, lockPath, guardLockPath, displayResources, ownershipVerified: false };
   await writeFile(join(scratch, 'display.json'), JSON.stringify(ownership));
-  assert.ok(displayResources[socketPath].exists && displayResources[guardLockPath].exists, 'The owned X socket or private guard lock is missing');
-  const owners = await guardLockOwners(displayResources[guardLockPath]);
-  assert.equal(owners.length, 1, 'The private Xvfb guard lock must have one verified holder');
+  assert.ok(displayResources[socketPath].exists, 'The owned X socket is missing');
+  // The owner's guarded Xvfb reserves a lock file; a plain PATH xvfb-run does not.
+  const guarded = displayResources[guardLockPath].exists;
+  ownership.guarded = guarded;
+  const owners = guarded ? await guardLockOwners(displayResources[guardLockPath]) : [];
+  if (guarded) assert.equal(owners.length, 1, 'The private Xvfb guard lock must have one verified holder');
+  else assert.ok(displayResources[lockPath].exists, 'The owned Xvfb server lock is missing');
   const serverPid = displayResources[lockPath].exists ? Number((await readFile(lockPath, 'utf8')).trim()) : owners[0];
   assert.ok(Number.isInteger(serverPid) && serverPid > 0);
-  assert.equal(owners[0], serverPid, 'Traditional X lock and private guard lock identify different processes');
+  if (guarded) assert.equal(owners[0], serverPid, 'Traditional X lock and private guard lock identify different processes');
   assert.equal((await stat(`/proc/${serverPid}`)).uid, process.getuid(), 'Xvfb belongs to another user');
   const serverEnvironment = (await readFile(`/proc/${serverPid}/environ`, 'utf8')).split('\0');
   const serverArguments = (await readFile(`/proc/${serverPid}/cmdline`, 'utf8')).split('\0');
@@ -238,7 +242,9 @@ async function main() {
   assert.equal(process.platform, 'linux', 'Normal startup verification requires the guarded Linux Xvfb route');
   assert.ok(args.length === 2 && args[0] === '--binary' && isAbsolute(args[1]), 'Provide --binary with an absolute normal-build executable path');
   const binary = await realpath(args[1]);
-  await access(binary); await access(guardedXvfb); await access(helper);
+  const xvfbRun = resolveXvfbRun();
+  const dbusRunSession = resolveDbusRunSession();
+  await access(binary); await access(helper);
   const evidence = resolve(root, 'test-results/startup', `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`);
   await mkdir(evidence, { recursive: true });
   const scratch = await mkdtemp('/tmp/desegni-startup-'); await chmod(scratch, 0o700);
@@ -246,7 +252,7 @@ async function main() {
   for (const variable of Object.keys(environment)) if (variable.startsWith('DBUS_') || variable.startsWith('GNOME_KEYRING_') || variable.startsWith('DESEGNI_NATIVE_TEST_') || variable.startsWith('DESEGNI_TEST_') || variable.startsWith('DESEGNI_STARTUP_') || variable.startsWith('TAURI_WEBDRIVER_')) delete environment[variable];
   for (const variable of ['DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY', 'SSH_AUTH_SOCK', 'OPENAI_API_KEY']) delete environment[variable];
   for (const [variable, directory] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) { environment[variable] = join(scratch, directory); await mkdir(environment[variable], { mode: 0o700 }); }
-  Object.assign(environment, { GDK_BACKEND: 'x11', GDK_SCALE: '1', GDK_DPI_SCALE: '1', XDG_SESSION_TYPE: 'x11', QT_QPA_PLATFORM: 'xcb',
+  Object.assign(environment, { GDK_SCALE: '1', GDK_DPI_SCALE: '1',
     DESEGNI_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNI_STARTUP_PREVIOUS_BUS: process.env.DBUS_SESSION_BUS_ADDRESS ?? '', DESEGNI_STARTUP_BINARY: binary,
     DESEGNI_STARTUP_EVIDENCE: evidence, DESEGNI_STARTUP_SCRATCH: scratch, DESEGNI_STARTUP_TOKEN: randomBytes(24).toString('hex') });
   const desktop = await desktopState();
@@ -257,7 +263,7 @@ async function main() {
   const interrupted = () => { if (session?.pid) signalGroup(session.pid, 'SIGTERM'); };
   process.once('SIGINT', interrupted); process.once('SIGTERM', interrupted);
   try {
-    session = spawn(guardedXvfb, ['-d', '-e', join(evidence, 'xvfb.log'), '-f', join(scratch, 'Xauthority'), '-s', '-screen 0 1600x1100x24', 'dbus-run-session', '--', process.execPath, script, '--isolated'], { cwd: root, env: environment, detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+    session = spawn(xvfbRun, ['-d', '-e', join(evidence, 'xvfb.log'), '-f', join(scratch, 'Xauthority'), '-s', '-screen 0 1600x1100x24', dbusRunSession, '--', process.execPath, script, '--isolated'], { cwd: root, env: xvfbEnvironment(environment), detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
     let forceTimer;
     const timer = setTimeout(() => { timedOut = true; signalGroup(session.pid, 'SIGTERM'); forceTimer = setTimeout(() => signalGroup(session.pid, 'SIGKILL'), 2000); }, 70_000);
     try { result = await exit(session); } finally { clearTimeout(timer); clearTimeout(forceTimer); }

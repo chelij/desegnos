@@ -601,7 +601,10 @@ fn svg_is_source_text_and_only_passive_logo_svg_is_reusable() {
 
 #[test]
 fn real_desegnos_brand_folder_keeps_tokens_and_deduplicates_logo_sizes_read_only() {
-    let root = std::path::Path::new("~/Projects/desegnos");
+    let Ok(root) = std::env::var("DESEGNOS_BRAND_FOLDER") else {
+        return;
+    };
+    let root = std::path::Path::new(&root);
     if !root.is_dir() {
         return;
     }

@@ -118,7 +118,13 @@ fn base_href_root_assets_and_cdn_are_preserved_and_resolved_only_for_canvas() {
 #[test]
 #[ignore = "owner's read-only site; run explicitly"]
 fn chelib_read_only_snapshot() {
-    let path = Path::new("~/Projects/chelib");
+    let Ok(path) = std::env::var("DESEGNOS_OWNER_SITE") else {
+        return;
+    };
+    let path = Path::new(&path);
+    if !path.is_dir() {
+        return;
+    }
     let site = detect_website_folder(path).unwrap().unwrap();
     println!(
         "chelib framework={:?}, fresh={}, output={:?}, pages={:?}",

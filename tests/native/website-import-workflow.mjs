@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { chooseFolder, savedState } from './file-dialog-workflow.mjs';
+import { ownerFolder } from './owner-paths.mjs';
 import { waitFor } from './webdriver.mjs';
 
 async function snapshot(root) {
@@ -81,8 +82,9 @@ export async function websiteImportWorkflow(driver, physical, step, evidence) {
     await waitFor(() => driver.execute(() => document.querySelector('.website-choice')?.textContent.includes('Build stopped.')), 'Stopping did not finish the build');
     await driver.button('Cancel');
   });
-  await step('chelib Astro built pages load into a separate project without changing any source files', async () => {
-    const source = '~/Projects/chelib'; const before = await snapshot(source);
+  const source = await ownerFolder('DESEGNOS_OWNER_SITE', 'Owner website import');
+  if (source) await step('chelib Astro built pages load into a separate project without changing any source files', async () => {
+    const before = await snapshot(source);
     await chooseFolder(physical, () => driver.menu(['Open project folder…']), source, output, 'chelib-folder');
     await waitFor(() => driver.execute(() => [...document.querySelectorAll('button')].some(n => n.textContent === 'Build site')), 'The original chelib folder did not offer Build site');
     await driver.button('Cancel');

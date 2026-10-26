@@ -5,23 +5,30 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chooseFile } from './file-dialog-workflow.mjs';
+import { ownerFile, ownerFolder } from './owner-paths.mjs';
 import { waitFor } from './webdriver.mjs';
 import { selectionJumpWorkflow } from './selection-jump-workflow.mjs';
 
 export async function flashWorkflow(driver, physical, step, evidence) {
-  const original = '~/Projects/chelib/chelib-redesign/chelib-redesign.desegnos';
+  const ownerSite = await ownerFolder('DESEGNOS_OWNER_SITE', 'Owner flash capture');
+  const original = ownerSite && await ownerFile(join(ownerSite, 'chelib-redesign/chelib-redesign.desegnos'), 'DESEGNOS_OWNER_SITE', 'Owner flash capture');
   const hash = async path => createHash('sha256').update(await readFile(path)).digest('hex');
-  const originalHash = await hash(original);
+  const originalHash = original ? await hash(original) : null;
   const output = resolve('test-results/flash', process.env.DESEGNI_FLASH_LABEL ?? 'capture');
   await mkdir(output, { recursive: true });
   const manifest = JSON.parse(await readFile(join(evidence, 'real-use-manifest.json'), 'utf8'));
-  const owner = manifest.projects.find(p => p.name === 'chelib-redesign');
-  assert.ok(owner, 'The owner project must be copied by seedRealUse');
-  assert.ok(owner.path.startsWith(evidence), 'Never open the original project');
-  assert.equal(await hash(owner.path), originalHash, 'The recent-project copy must match the requested owner archive');
-  await writeFile(join(output,'source-integrity.json'), JSON.stringify({ original, sha256:originalHash, copiedTo:owner.path },null,2));
+  const owner = original ? manifest.projects.find(p => p.name === 'chelib-redesign') : null;
+  if (original) {
+    assert.ok(owner, 'The owner project must be copied by seedRealUse');
+    assert.ok(owner.path.startsWith(evidence), 'Never open the original project');
+    assert.equal(await hash(owner.path), originalHash, 'The recent-project copy must match the requested owner archive');
+    await writeFile(join(output,'source-integrity.json'), JSON.stringify({ original, sha256:originalHash, copiedTo:owner.path },null,2));
+  }
+  const selectionOnly = process.env.DESEGNI_SELECTION_ONLY === '1';
+  if (selectionOnly && !original) return;
   await physical.initialize(evidence);
-  for (const kind of (process.env.DESEGNI_SELECTION_ONLY === '1' ? ['owner'] : ['owner', 'simple'])) {
+  const kinds = selectionOnly ? ['owner'] : original ? ['owner', 'simple'] : ['simple'];
+  for (const kind of kinds) {
     await step(`${kind}: trusted element drag with 60 Hz window capture and DOM trace`, async () => {
       if (kind === 'owner') {
         // The native picker is the same opening path used by the real-use suite.
@@ -99,7 +106,7 @@ export async function flashWorkflow(driver, physical, step, evidence) {
       }
     });
   }
-  if (process.env.DESEGNI_SELECTION_ONLY === '1') {
+  if (selectionOnly) {
     assert.equal(await hash(original), originalHash, 'Original archive changed');
     return;
   }
@@ -135,5 +142,5 @@ export async function flashWorkflow(driver, physical, step, evidence) {
     assert.ok(samples.length>10 && samples.every(s=>s.visible===1),'Live reload blanked its visible document');
     assert.deepEqual(await driver.execute(()=>window.__desegniTestErrors),[]);
   });
-  assert.equal(await hash(original), originalHash, 'The original archive changed during the native test');
+  if (original) assert.equal(await hash(original), originalHash, 'The original archive changed during the native test');
 }

@@ -2,11 +2,22 @@
 
 Run `pnpm test:native` from WebMaker. The runner builds the explicit `native-tests` feature with `src-tauri/tauri.test.conf.json`, then drives the real Tauri editor in WebKitGTK using its debug WebDriver and trusted X11 pointer/keyboard input. It calls actual Rust commands; it does not replace `invoke` or fabricate project state.
 
-The runner uses `~/.local/bin/xvfb-run -d`, a private display numbered at least 90, a private session bus/profile/data/runtime directory, and a free local port. It checks display and window ownership before input. It never moves windows or switches workspaces on the main display. Existing desktop sockets, locks and an initially working connection are checked after cleanup.
+The runner uses `xvfb-run -d` and `dbus-run-session`, resolved from `PATH` (or `XVFB_RUN`/`DBUS_RUN_SESSION`), on a private display numbered at least 90 with a private session bus/profile/data/runtime directory and a free local port. It checks display and window ownership before input. It never moves windows or switches workspaces on the main display. Existing desktop sockets, locks and an initially working connection are checked after cleanup.
 
 `--project-folders-only` covers automatic creation and first Save without a picker, portable names and collisions, per-project and persistent default locations with reset, archive/live-site sync, foreign-file preservation, sync warnings, Save As cancellation/copy folders, legacy in-place saves and Move, plain-website import with immutable originals, folder reopening, recents and crash recovery. Every native scope gets an isolated XDG Documents directory, so automatic saves cannot reach the owner's Documents folder.
 
-`--website-import-only` covers the default edit-or-brand choice, byte-preserving plain-site import, native heading editing, shared styles, original module execution and relative navigation in Live, build progress/Stop, read-only detection of `~/Projects/chelib`, a build on its private copy, separate framework-project placement and crash recovery. The original chelib folder is only read. Large recovery requests use a two-minute test timeout; dependencies copied for the build are removed before scanning retained evidence.
+`--website-import-only` covers the default edit-or-brand choice, byte-preserving plain-site import, native heading editing, shared styles, original module execution and relative navigation in Live, build progress/Stop, read-only detection of `DESEGNOS_OWNER_SITE`, a build on its private copy, separate framework-project placement and crash recovery. The original chelib folder is only read. Large recovery requests use a two-minute test timeout; dependencies copied for the build are removed before scanning retained evidence.
+
+## Portable tools and owner fixtures
+
+The native and startup runners require `xvfb-run` and `dbus-run-session` on `PATH`. Override them with `XVFB_RUN` and `DBUS_RUN_SESSION` when they live elsewhere; the runner then reports which command to install. Before launching, it unsets `WAYLAND_DISPLAY`/`WAYLAND_SOCKET` and sets `XDG_SESSION_TYPE=x11`, `GDK_BACKEND=x11` and `QT_QPA_PLATFORM=xcb`, so no wrapper script is needed.
+
+Two owner-only fixtures are opt-in and skipped cleanly when unset or missing:
+
+- `DESEGNOS_OWNER_SITE`: the Astro source website used by `--website-import-only` (read-only import) and by `--flash-only` (its `chelib-redesign/chelib-redesign.desegnos` archive must exist).
+- `DESEGNOS_BRAND_FOLDER`: the brand folder checked by the ignored `desegni-storage` test `real_desegnos_brand_folder_keeps_tokens_and_deduplicates_logo_sizes_read_only`.
+
+The ignored `desegni-storage` test `chelib_read_only_snapshot` and the `src-tauri` test `real_astro_folder_default_selection_fits_without_sending_or_changing_files` read `DESEGNOS_OWNER_SITE` the same way and return early when it is unset.
 
 To reuse a test build:
 

@@ -543,7 +543,7 @@ Run focused Rust domain/storage tests, formatting and lint checks, frontend type
 
 Use [WebdriverIO's Tauri service](https://v2.tauri.app/develop/tests/webdriver/) for native application workflows across all three platforms. Its embedded driver supports the native matrix; external driver limitations must not be mistaken for permission to skip macOS. Test plugins and driver endpoints exist only in dedicated test builds and are absent from shipping binaries.
 
-Linux GUI tests use `~/.local/bin/xvfb-run -d` or a verified secondary display. Do not move test windows or switch workspaces on the user's main monitor. If a suitable display is unavailable, report native GUI verification as unavailable; do not mark it passed. Verify desktop display connectivity after isolated test cleanup.
+Linux GUI tests use `xvfb-run -d` (resolved from `PATH`, or `XVFB_RUN`) or a verified secondary display. Do not move test windows or switch workspaces on the user's main monitor. If a suitable display is unavailable, report native GUI verification as unavailable; do not mark it passed. Verify desktop display connectivity after isolated test cleanup.
 
 | Scenario | Required proof |
 | --- | --- |
