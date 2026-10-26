@@ -55,3 +55,12 @@ lto = "thin"
 codegen-units = 1
 strip = true
 
+# Release speed with test hooks allowed: debug assertions stay on, so the release-only guards
+# against test-support and native-tests don't fire. For timing native workflows, never shipped.
+[profile.profiling]
+inherits = "release"
+debug-assertions = true
+overflow-checks = false
+strip = false
+debug = "line-tables-only"
+
