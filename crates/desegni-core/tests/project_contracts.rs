@@ -854,6 +854,8 @@ fn session_history_distinguishes_repeated_states_branches_and_retained_limits() 
                 |_| Ok(()),
             )
             .unwrap();
+        // This test counts steps, so each rename is a separate edit.
+        session.end_history_step();
     }
     let last = session.history();
     assert_eq!(last.2, 3);
@@ -902,6 +904,7 @@ fn session_history_distinguishes_repeated_states_branches_and_retained_limits() 
                 |_| Ok(()),
             )
             .unwrap();
+        session.end_history_step();
     }
     let history = session.history();
     assert_eq!((history.1, history.2, history.3), (8, 208, 208));

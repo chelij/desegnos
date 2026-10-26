@@ -12,13 +12,13 @@ pub struct Session {
     history_start: usize,
     history_version: u64,
     element_steps: Option<ElementSteps>,
-    /// The request whose text is being typed, and when it last changed: a burst of typing in
-    /// one box is one history step, not one per letter.
-    typing: Option<(uuid::Uuid, std::time::Instant)>,
+    /// The edit key whose burst is in progress, and when it last changed: a run of edits to
+    /// one box, element, page or project setting is one history step, not one per keystroke.
+    burst: Option<(String, std::time::Instant)>,
 }
 
-/// Typing that pauses longer than this starts a new history step.
-const TYPING_PAUSE: std::time::Duration = std::time::Duration::from_secs(2);
+/// Edits to the same thing that pause longer than this start a new history step.
+const STEP_PAUSE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Repeated "undo this element" presses walk further back through one element's versions.
 struct ElementSteps {
@@ -60,7 +60,7 @@ impl Session {
             history_start: 0,
             history_version: user_revision_floor,
             element_steps: None,
-            typing: None,
+            burst: None,
         })
     }
     pub fn project(&self) -> &Project {
@@ -92,8 +92,20 @@ impl Session {
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<()> {
         self.assert_revision(revision)?;
-        // Only the text of a request changed (its box stayed put).
-        let typed = match &command {
+        let key = self.burst_key(&command);
+        let candidate = self.project.apply(self.project.revision, command)?;
+        if candidate.revision == self.project.revision {
+            return Ok(());
+        }
+        durable(&candidate)?;
+        self.commit_or_merge(candidate, key);
+        Ok(())
+    }
+
+    /// Edits that land on the same thing in quick succession become one history step.
+    fn burst_key(&self, command: &Command) -> Option<String> {
+        match command {
+            // Only the text of a request changed (its box stayed put).
             Command::UpdateRegion {
                 region_id, rect, ..
             } => self
@@ -103,29 +115,12 @@ impl Session {
                 .flat_map(|page| &page.regions)
                 .find(|region| region.id == *region_id)
                 .filter(|region| region.rect == *rect)
-                .map(|region| region.id),
+                .map(|region| format!("prompt:{}", region.id)),
+            Command::UpdatePage { page_id, .. } => Some(format!("page:{page_id}")),
+            Command::RenameProject { .. } => Some("project-name".into()),
+            Command::SetGridSettings { .. } => Some("grid".into()),
             _ => None,
-        };
-        let candidate = self.project.apply(self.project.revision, command)?;
-        if candidate.revision == self.project.revision {
-            return Ok(());
         }
-        durable(&candidate)?;
-        let continues = typed.is_some()
-            && !self.undo.is_empty()
-            && self
-                .typing
-                .is_some_and(|(id, at)| Some(id) == typed && at.elapsed() < TYPING_PAUSE);
-        if continues {
-            self.user_revision_floor = candidate.revision;
-            self.history_version = candidate.revision;
-            self.project = candidate;
-            self.redo.clear();
-        } else {
-            self.commit(candidate);
-        }
-        self.typing = typed.map(|id| (id, std::time::Instant::now()));
-        Ok(())
     }
 
     pub fn import_website(
@@ -170,7 +165,7 @@ impl Session {
         let candidate = self.project.edit_page_source(revision, page_id, edit)?;
         if candidate.revision != self.project.revision {
             durable(&candidate)?;
-            self.commit(candidate);
+            self.commit_or_merge(candidate, Some(format!("source:{page_id}")));
         }
         Ok(())
     }
@@ -202,12 +197,25 @@ impl Session {
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<Option<crate::ElementTarget>> {
         self.assert_revision(revision)?;
+        // Text and style changes to one element continue its step; structural changes
+        // (replace, reorder, remove, duplicate) are always their own step.
+        let key = match edit {
+            crate::ElementEdit::Update { .. } | crate::ElementEdit::LayerStyles { .. } => {
+                let anchor = if target.id.is_empty() {
+                    target.selector.as_str()
+                } else {
+                    target.id.as_str()
+                };
+                Some(format!("element:{}:{anchor}", document.key()))
+            }
+            _ => None,
+        };
         let (next, target) =
             self.project
                 .edit_element_in(document, self.project.revision, target, edit)?;
         if next.revision != self.project.revision {
             durable(&next)?;
-            self.commit(next);
+            self.commit_or_merge(next, key);
         }
         Ok(target)
     }
@@ -222,9 +230,9 @@ impl Session {
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<Vec<Option<crate::ElementTarget>>> {
         self.assert_revision(revision)?;
-        let (next, targets) = self
-            .project
-            .edit_elements_in(document, self.project.revision, edits)?;
+        let (next, targets) =
+            self.project
+                .edit_elements_in(document, self.project.revision, edits)?;
         if next.revision != self.project.revision {
             durable(&next)?;
             self.commit(next);
@@ -381,6 +389,8 @@ impl Session {
         }
         durable(&next)?;
         self.project = next;
+        // A recorded Generate result ends any step in progress.
+        self.end_history_step();
         Ok(())
     }
 
@@ -493,8 +503,42 @@ impl Session {
         Ok(element)
     }
 
+    /// Commit the edit, or fold it into the step its burst key is still building, then make
+    /// it the current burst. `commit` drops the burst, so the new key is set afterwards.
+    fn commit_or_merge(&mut self, candidate: Project, key: Option<String>) {
+        self.commit_or_merge_at(candidate, key, std::time::Instant::now());
+    }
+
+    fn commit_or_merge_at(
+        &mut self,
+        candidate: Project,
+        key: Option<String>,
+        now: std::time::Instant,
+    ) {
+        let continues = key.is_some()
+            && !self.undo.is_empty()
+            && self.burst.as_ref().is_some_and(|(current, at)| {
+                Some(current) == key.as_ref() && now.duration_since(*at) < STEP_PAUSE
+            });
+        if continues {
+            self.user_revision_floor = candidate.revision;
+            self.history_version = candidate.revision;
+            self.project = candidate;
+            self.redo.clear();
+        } else {
+            self.commit(candidate);
+        }
+        self.burst = key.map(|key| (key, now));
+    }
+
+    /// End the step in progress: the next edit starts a new one. Called when focus leaves an
+    /// editor, a generation result lands, or the project is saved or switched.
+    pub fn end_history_step(&mut self) {
+        self.burst = None;
+    }
+
     fn commit(&mut self, candidate: Project) {
-        self.typing = None;
+        self.burst = None;
         self.user_revision_floor = candidate.revision;
         self.history_version = candidate.revision;
         self.undo
@@ -537,7 +581,7 @@ impl Session {
         }
         candidate.validate()?;
         durable(&candidate)?;
-        self.typing = None;
+        self.burst = None;
         self.user_revision_floor = candidate.revision;
         self.undo.pop();
         self.redo
@@ -579,7 +623,7 @@ impl Session {
         }
         candidate.validate()?;
         durable(&candidate)?;
-        self.typing = None;
+        self.burst = None;
         self.user_revision_floor = candidate.revision;
         self.redo.pop();
         self.undo
@@ -592,5 +636,73 @@ impl Session {
             revision >= self.user_revision_floor && revision <= self.project.revision,
             "The project changed before this operation could complete.",
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session() -> Session {
+        Session::new(
+            Project::new(
+                "Steps".into(),
+                crate::Viewport {
+                    width: 800,
+                    height: 600,
+                },
+                crate::Appearance::Light,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn renamed(session: &Session, name: &str) -> Project {
+        session
+            .project
+            .apply(
+                session.project.revision,
+                Command::RenameProject { name: name.into() },
+            )
+            .unwrap()
+    }
+
+    fn key() -> Option<String> {
+        Some("project-name".into())
+    }
+
+    #[test]
+    fn edits_under_the_step_gap_fold_into_one_history_step() {
+        let mut session = session();
+        let start = std::time::Instant::now();
+        session.commit_or_merge_at(renamed(&session, "One"), key(), start);
+        session.commit_or_merge_at(
+            renamed(&session, "Two"),
+            key(),
+            start + STEP_PAUSE - std::time::Duration::from_millis(1),
+        );
+        assert_eq!(session.history().2, 1, "still the same history position");
+        assert_eq!(session.undo.len(), 1);
+        assert_eq!(session.project.name, "Two");
+    }
+
+    #[test]
+    fn edits_after_the_step_gap_start_a_new_history_step() {
+        let mut session = session();
+        let start = std::time::Instant::now();
+        session.commit_or_merge_at(renamed(&session, "One"), key(), start);
+        let last = start + std::time::Duration::from_secs(4);
+        session.commit_or_merge_at(renamed(&session, "Two"), key(), last);
+        assert_eq!(session.history().2, 1);
+        session.commit_or_merge_at(
+            renamed(&session, "Three"),
+            key(),
+            last + STEP_PAUSE + std::time::Duration::from_millis(1),
+        );
+        assert_eq!(session.history().2, 2, "a pause committed a new step");
+        assert_eq!(session.undo.len(), 2);
+        session.undo(|_| Ok(())).unwrap();
+        assert_eq!(session.project.name, "Two");
     }
 }

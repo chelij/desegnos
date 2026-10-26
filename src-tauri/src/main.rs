@@ -189,6 +189,7 @@ fn main() {
             resolve_save_conflict,
             prepare_requirements,
             save_requirements,
+            end_history_step,
             recover_project,
             dismiss_recovery,
             get_project_notes,

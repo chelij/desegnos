@@ -45,6 +45,7 @@ fn main() {
             "refresh_element_target_bounds",
             "undo_project",
             "redo_project",
+            "end_history_step",
             "open_project",
             "save_project",
             "save_project_checked",

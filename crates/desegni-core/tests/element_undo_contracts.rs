@@ -80,6 +80,8 @@ fn each_press_steps_one_element_further_back_and_keeps_other_changes() {
     set_text(&mut s, HEADING, "h1", "Second");
     set_text(&mut s, NOTE, "p", "Changed note");
     set_text(&mut s, HEADING, "h1", "Third");
+    // Each press walks versions from separate edits, not one merged typing burst.
+    s.end_history_step();
     set_text(&mut s, HEADING, "h1", "Fourth");
 
     undo_heading(&mut s).unwrap();

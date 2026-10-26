@@ -2287,6 +2287,16 @@ pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
 #[serde(untagged)]
 pub enum OpenProjectResult {
     Workspace(Box<WorkspaceView>),
+/// End the history step in progress, so the next edit starts a new one.
+#[tauri::command(async)]
+pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
+    let mut state = state.lock().map_err(message)?;
+    if let Some(session) = state.session.as_mut() {
+        session.end_history_step();
+    }
+    Ok(())
+}
+
     Website {
         website: Box<crate::website_import::FolderSelection>,
     },
@@ -2426,6 +2436,9 @@ pub async fn save_project(
     let picked = copy_destination(picked, &project)?;
     state.save_snapshot(&project, picked)?;
     Ok(Some(state.view()))
+    if let Some(session) = state.session.as_mut() {
+        session.end_history_step();
+    }
 }
 
 async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Option<PathBuf>> {
@@ -2532,6 +2545,9 @@ pub async fn save_project_checked(
     let picked = copy_destination(picked, &project)?;
     state.save_snapshot_checked(&project, picked, choose_path)
 }
+    if let Some(session) = state.session.as_mut() {
+        session.end_history_step();
+    }
 
 #[tauri::command]
 pub async fn resolve_save_conflict(
