@@ -4,6 +4,10 @@ Create a website by describing what belongs on the page. Place requests on the c
 
 For a source-level guide to the codebase, see the [project map](docs/PROJECT_MAP.md).
 
+Getting started: [Install and build your first site](docs/INSTALL_AND_FIRST_SITE.md).
+
+Security: [Report vulnerabilities privately](SECURITY.md).
+
 ## Create your first website
 
 1. Choose **Blank website**, **Use my existing brand**, or **Open project**. Recent projects appear on the start screen.
