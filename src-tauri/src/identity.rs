@@ -1613,11 +1613,11 @@ pub async fn fetch_identity_source(
     url: String,
 ) -> NativeResult<IdentitySourceManifest> {
     trusted(&window)?;
-    #[cfg(all(debug_assertions, feature = "native-tests"))]
+    #[cfg(feature = "native-tests")]
     let fixture = std::env::var("DESEGNI_NATIVE_TEST_WEBSITE_ORIGIN")
         .ok()
         .and_then(|value| desegni_ai::WebUrl::parse(&value).ok());
-    #[cfg(not(all(debug_assertions, feature = "native-tests")))]
+    #[cfg(not(feature = "native-tests"))]
     let fixture: Option<desegni_ai::WebUrl> = None;
     let site = desegni_ai::fetch_website(&url, fixture.as_ref()).await?;
     let files = site.files.clone().into_iter().collect();

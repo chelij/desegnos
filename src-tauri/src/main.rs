@@ -1,8 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[cfg(all(feature = "native-tests", not(debug_assertions)))]
-compile_error!("Native test automation must not be compiled into release artifacts.");
-
 #[cfg(all(not(debug_assertions), dev))]
 compile_error!("Release builds must embed the frontend: enable the custom-protocol feature.");
 

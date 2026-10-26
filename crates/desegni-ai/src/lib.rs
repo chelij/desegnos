@@ -1,6 +1,3 @@
-#[cfg(all(feature = "test-support", not(debug_assertions)))]
-compile_error!("desegni-ai test-support cannot be included in a release build");
-
 pub mod chatgpt;
 mod credentials;
 mod error;

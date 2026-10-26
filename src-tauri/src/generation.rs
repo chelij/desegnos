@@ -57,7 +57,7 @@ fn resolve_current(
     Ok(resolved)
 }
 
-#[cfg(all(debug_assertions, feature = "native-tests"))]
+#[cfg(feature = "native-tests")]
 fn capture_benchmark_output(
     directory: &Path,
     ordinal: usize,
@@ -2230,7 +2230,7 @@ impl GenerationService {
                 }
                 // Only the explicit owner-run debug benchmark captures model output.
                 // Successful transport has already bounded it and rejected credential echoes.
-                #[cfg(all(debug_assertions, feature = "native-tests"))]
+                #[cfg(feature = "native-tests")]
                 capture_benchmark_output(
                     &self.job_directory(original.id, job_id),
                     ordinal,

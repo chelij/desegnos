@@ -1536,7 +1536,7 @@ fn identity_access_rechecks_account_selection_plan_storage_and_model_after_async
     }
 }
 
-#[cfg(all(debug_assertions, feature = "native-tests"))]
+#[cfg(feature = "native-tests")]
 #[test]
 fn benchmark_capture_is_opt_in_and_preserves_exact_output_per_attempt() {
     let temp = Temp::new();
