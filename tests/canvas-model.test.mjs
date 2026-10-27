@@ -374,7 +374,8 @@ try {
     const rows = section.split('\n').filter(line => line.trim().startsWith('|')).slice(2)
       .map(line => line.trim().split('|').slice(1, -1).map(cell => cell.trim()));
     const expected = {
-      'Select / Frame / Boundary / Pointer / Text / Pan': [['selectTool', 'V'], ['frameTool', 'F'], ['boundaryTool', 'B'], ['pointerTool', 'P'], ['textTool', 'T'], ['panTool', 'H']],
+      'Select / Request / Boundary / Pointer / Text / Pan': [['selectTool', 'V'], ['requestTool', 'F'], ['boundaryTool', 'B'], ['pointerTool', 'P'], ['textTool', 'T'], ['panTool', 'H']],
+      "Request on selection / request from a shape's outline": [['requestTool', 'F'], ['requestFromShape', 'Shift+F']],
       'Rectangle / Ellipse / Line / Image': [['rectTool', 'R'], ['ellipseTool', 'O'], ['lineTool', 'L'], ['imageTool', 'Shift+Ctrl/Cmd+K']],
       'Note (reference)': [['noteTool', 'N']],
       'Insert any element': [['insert', 'Ctrl/Cmd+I']],

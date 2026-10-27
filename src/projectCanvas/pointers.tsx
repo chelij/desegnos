@@ -3,7 +3,7 @@ import { useDraftText } from '../DraftText';
 import { Icon } from '../icons';
 import { POINTER_ARROW_PX, POINTER_BREAK_PX, POINTER_COMMENT_ZOOM, POINTER_HIT_PX, pointerRoute, pointerVisible, screenPoint, type AutoLink, type Boundary, type CanvasCamera, type PointerRoute, type PointerWorld } from '../projectCanvasGeometry';
 import type { Pointer, PointerStateView, Project, Rect } from '../types';
-import { elementBoxes } from './frames';
+import { elementBoxes } from './requests';
 
 export type PointerEntry = { pointer: Pointer; route: PointerRoute };
 

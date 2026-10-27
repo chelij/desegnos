@@ -48,43 +48,34 @@ function CodeField({ language, source, commit }: { language: string; source: str
   </div>;
 }
 
-function RequestArea({ element, project, sizeId, setRequest, generate, error }: {
-  element: Element; project: Project; sizeId: string | null; setRequest: (request: PendingRequest | null) => Promise<void> | void;
+function RequestArea({ element, project, request, setRequest, generate, error }: {
+  element: Element; project: Project; request: PendingRequest | null;
+  setRequest: (data: { text: string; attachments: RequestAttachment[] } | null) => void;
   generate: () => void; error: (message: string) => void;
 }) {
-  const pending = element.meta.pending;
-  const [prompt, setPrompt] = useState(pending?.prompt ?? '');
   const files = useRef<HTMLInputElement>(null);
-  useEffect(() => { setPrompt(pending?.prompt ?? ''); }, [pending?.prompt, element.id]);
-  const request = (patch: Partial<PendingRequest>): PendingRequest => ({
-    prompt: patch.prompt ?? pending?.prompt ?? '',
-    attachments: patch.attachments ?? pending?.attachments ?? [],
-    requestedAt: pending?.requestedAt ?? new Date().toISOString(),
-    // The size the request was written in, so the AI can answer for that size.
-    sizeId: patch.sizeId ?? pending?.sizeId ?? sizeId,
-  });
-  function commit() {
-    const text = prompt.trim();
-    if (!text) {
-      if (pending) void Promise.resolve(setRequest(null)).catch(reason => error(String(reason)));
-      return;
-    }
-    void Promise.resolve(setRequest(request({ prompt: text }))).catch(reason => error(String(reason)));
-  }
+  const [prompt, setPrompt] = useState(request?.text ?? '');
+  useEffect(() => { setPrompt(request?.text ?? ''); }, [request?.text, element.id]);
+  const save = (patch: { text?: string; attachments?: RequestAttachment[] }) => {
+    const text = patch.text ?? prompt;
+    const attachments = patch.attachments ?? request?.attachments ?? [];
+    if (!text.trim() && !attachments.length) { setRequest(null); return; }
+    setRequest({ text, attachments });
+  };
+  function commit() { save({ text: prompt }); }
   async function askAi() {
     const text = prompt.trim();
     if (!text) return;
-    try { await setRequest(request({ prompt: text })); }
-    catch (reason) { error(String(reason)); return; }
+    try { save({ text }); } catch (reason) { error(String(reason)); return; }
     generate();
   }
   function add(attachments: RequestAttachment[]) {
-    const next = [...(pending?.attachments ?? [])];
+    const next = [...(request?.attachments ?? [])];
     for (const attachment of attachments) {
       if (next.length >= 32) { error('A request supports at most 32 attachments.'); break; }
       next.push(attachment);
     }
-    void Promise.resolve(setRequest(request({ attachments: next }))).catch(reason => error(String(reason)));
+    save({ attachments: next });
   }
   async function attach(files: File[]) {
     const attachments: RequestAttachment[] = [];
@@ -134,22 +125,23 @@ function RequestArea({ element, project, sizeId, setRequest, generate, error }: 
         <button type="button" className="icon-button sm" aria-label="Attach files" title="Attach pictures or text files" onClick={() => files.current?.click()}><Icon name="paperclip" /></button>
       </div>
       <input ref={files} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html" onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; if (chosen.length) void attach(chosen); }} />
-      {(pending?.attachments.length ?? 0) > 0 ? <ul className="request-attachments">{pending!.attachments.map(attachment => <li key={attachment.id} title={attachment.kind === 'link' ? attachment.url : attachment.name}>
+      {(request?.attachments.length ?? 0) > 0 ? <ul className="request-attachments">{request!.attachments.map(attachment => <li key={attachment.id} title={attachment.kind === 'link' ? attachment.url : attachment.name}>
         {attachment.kind === 'image' && attachment.dataUri ? <img src={attachment.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true"><Icon name={attachment.kind === 'link' ? 'link' : 'text'} size={12} /></span>}
         <span className="attachment-name">{attachment.name}</span>
-        <button type="button" className="icon-button sm" aria-label={`Remove ${attachment.name}`} title={`Remove ${attachment.name}`} onClick={() => setRequest(request({ attachments: pending!.attachments.filter(item => item.id !== attachment.id) }))}><Icon name="close" /></button>
+        <button type="button" className="icon-button sm" aria-label={`Remove ${attachment.name}`} title={`Remove ${attachment.name}`} onClick={() => save({ attachments: request!.attachments.filter(item => item.id !== attachment.id) })}><Icon name="close" /></button>
       </li>)}</ul> : <p className="dock-hint">Drop files or links here</p>}
     </div>
     <p className="dock-hint">{pictureName(project, element.image) || elementKindLabel(element)}</p>
   </div>;
 }
 
-export function ElementProperties({ project, page, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, setRequest, updateContext, generate, error }: {
+export function ElementProperties({ project, page, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error }: {
   project: Project; page: Page; pageId: string; sizeId: string | null; elements: Element[]; busy: boolean;
   update: (patches: ElementPatch[]) => void;
   rename: (name: string | null) => Promise<void>;
   link: () => void; unlink: () => void; canLink: boolean; canUnlink: boolean;
-  setRequest: (elementId: string, request: PendingRequest | null) => void;
+  request: PendingRequest | null;
+  setRequest: (data: { text: string; attachments: RequestAttachment[] } | null) => void;
   updateContext: (elementId: string, context: RequestAttachment[]) => void;
   generate: () => void;
   error: (message: string) => void;
@@ -295,7 +287,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
       <PropertyField label="Language" value={single.language ?? ''} disabled={busy} valid={value => value.trim().length > 0} commit={value => update([{ id: single.id, language: value.trim() }])} />
       <CodeField language={single.language ?? ''} source={single.source ?? ''} commit={source => update([{ id: single.id, source }])} />
     </>}
-    {single && <RequestArea element={single} project={project} sizeId={sizeId} setRequest={request => setRequest(single.id, request)} generate={generate} error={error} />}
+    {single && <RequestArea element={single} project={project} request={request} setRequest={setRequest} generate={generate} error={error} />}
     {!single && <p className="dock-hint">{elements.map(element => elementKindLabel(element)).filter((label, index, all) => all.indexOf(label) === index).join(', ')}</p>}
   </div>;
 }

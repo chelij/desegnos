@@ -11,7 +11,7 @@ Date: 2026-10-19. Owner decisions. Where this file and [RELEASE_PLAN.md](RELEASE
 **Placement and control.** Other AI site builders are chat-first: you describe a page and accept what comes back. In Desegnos, you decide where things go and the AI fills them in. When the choice is between AI convenience and user control, control wins.
 
 What this means in practice:
-- **Placement fidelity is the core quality measure.** AI-made elements land in the frame that asked for them, and exports keep elements where they were placed, at about that size, in that order and grouping. Precise mode honours this closely.
+- **Placement fidelity is the core quality measure.** AI-made elements land in the request that asked for them, and exports keep elements where they were placed, at about that size, in that order and grouping. Precise mode honours this closely.
 - **Visual first.** Work happens on the canvas, not in code. Code exists only in exports, as ordinary files users can read and edit.
 - **Changes are scoped.** A request changes only the layer it targets, and everything else stays as it was. Pointers are the explicit way to let a request reach further.
 - **The output is ordinary files** that open without Desegnos and are not locked to any host.

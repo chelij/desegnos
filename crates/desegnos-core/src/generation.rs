@@ -1,7 +1,7 @@
 use crate::{
-    Element, ElementKind, ElementLayout, ElementMeta, ElementPatch, ElementStyle, Error,
-    Page, PlayAction, Project, RequestRecord, RequirementsSnapshot,
-    Result, Scope, digest, ensure, model::validate_text,
+    Element, ElementKind, ElementLayout, ElementMeta, ElementPatch, ElementStyle, Error, Page,
+    PlayAction, Project, RequestRecord, RequirementsSnapshot, Result, Scope, digest, ensure,
+    model::validate_text,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,12 +18,15 @@ pub const MAX_APPLIED_JOBS: usize = 10_000;
 pub(crate) const MAX_EXPLANATION_CHARS: usize = 4096;
 
 fn default_style() -> ElementStyle {
-    crate::empty_element(ElementKind::Box, crate::Rect {
-        x: 0.0,
-        y: 0.0,
-        width: 0.0,
-        height: 0.0,
-    })
+    crate::empty_element(
+        ElementKind::Box,
+        crate::Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 0.0,
+        },
+    )
     .style
 }
 
@@ -148,6 +151,24 @@ pub enum ElementOperation {
     },
     /// Remove one element from the layer's subtree.
     Remove { element_id: Uuid },
+    /// Add a new layer at the root of a target boundary, inside the request's area when it has
+    /// one. This is how an area over empty space inside a boundary fills it.
+    InsertInBoundary {
+        page_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_id: Option<Uuid>,
+        element: Box<ElementDraft>,
+    },
+    /// Add a reference item outside every boundary, inside the request's area when it has one.
+    AddReference { item: ReferenceDraft },
+}
+
+/// A reference item the AI may add outside every boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReferenceDraft {
+    pub rect: crate::Rect,
+    pub kind: crate::ReferenceKind,
 }
 
 /// A picture the AI asks for. Generated when the provider supports it; otherwise a Box
@@ -177,7 +198,13 @@ pub enum RequestStatus {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestOutcome {
-    pub element_id: Uuid,
+    /// The request this outcome answers. Absent on older replies, which name only a layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<Uuid>,
+    /// The layer this outcome anchors on. Absent for a request that only targets boundaries,
+    /// reference items, pointers or an empty area.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<Uuid>,
     pub status: RequestStatus,
     pub explanation: String,
     #[serde(default)]
@@ -340,12 +367,7 @@ impl GenerationCandidate {
             validate_operations(&request.operations, &image_keys)?;
         }
         for classification in &self.pointer_classifications {
-            validate_text(
-                &classification.comment,
-                "Pointer comment",
-                16_384,
-                false,
-            )?;
+            validate_text(&classification.comment, "Pointer comment", 16_384, false)?;
         }
         for proposal in &self.decision_proposals {
             validate_text(&proposal.topic, "Decision topic", 120, true)?;
@@ -398,16 +420,71 @@ impl GenerationCandidate {
         }
         let targets = snapshot.target_ids()?;
         let target_elements: BTreeSet<_> = targets.iter().map(|(_, element)| *element).collect();
-        let mut requests = BTreeSet::new();
-        for request in &self.requests {
-            ensure(
-                target_elements.contains(&request.element_id) && requests.insert(request.element_id),
-                "The generation result contains a duplicate or unrequested layer.",
-            )?;
+        let request_ids = snapshot.request_ids()?;
+        let mut answered_requests = BTreeSet::new();
+        let mut answered_elements = BTreeSet::new();
+        for outcome in &self.requests {
+            if let Some(request_id) = outcome.request_id {
+                ensure(
+                    request_ids.contains(&request_id) && answered_requests.insert(request_id),
+                    "The generation result contains a duplicate or unrequested request.",
+                )?;
+                let pending = project
+                    .requests
+                    .iter()
+                    .find(|request| request.id == request_id)
+                    .expect("a requested request exists");
+                if let Some(element_id) = outcome.element_id {
+                    let anchored = pending.targets.iter().any(|target| match target {
+                        crate::RequestTarget::Element { id, .. } => *id == element_id,
+                        _ => false,
+                    });
+                    ensure(
+                        anchored || target_elements.contains(&element_id),
+                        "The generation result answered a request with a layer it does not target.",
+                    )?;
+                }
+            } else {
+                let element_id = outcome.element_id.ok_or_else(|| {
+                    Error("A generation outcome names neither a request nor a layer.".into())
+                })?;
+                ensure(
+                    target_elements.contains(&element_id) && answered_elements.insert(element_id),
+                    "The generation result contains a duplicate or unrequested layer.",
+                )?;
+            }
+        }
+        // An element target is answered either directly or by the request that names it.
+        for element_id in &target_elements {
+            let covered = answered_elements.contains(element_id)
+                || project.requests.iter().any(|request| {
+                    answered_requests.contains(&request.id)
+                        && request.targets.iter().any(|target| match target {
+                            crate::RequestTarget::Element { id, .. } => id == element_id,
+                            _ => false,
+                        })
+                });
+            ensure(covered, "The generation result omitted a requested layer.")?;
         }
         ensure(
-            requests == target_elements,
-            "The generation result omitted a requested layer.",
+            project
+                .requests
+                .iter()
+                .filter(|request| request_ids.contains(&request.id))
+                .all(|request| {
+                    answered_requests.contains(&request.id)
+                        || (request
+                            .targets
+                            .iter()
+                            .any(|target| matches!(target, crate::RequestTarget::Element { .. }))
+                            && request.targets.iter().all(|target| match target {
+                                crate::RequestTarget::Element { id, .. } => {
+                                    answered_elements.contains(id)
+                                }
+                                _ => false,
+                            }))
+                }),
+            "The generation result omitted a requested request.",
         )?;
         for proposal in &self.decision_proposals {
             project.validate_scope(&proposal.scope)?;
@@ -452,14 +529,21 @@ impl GenerationCandidate {
         // by the same code that later applies them.
         let mut copy = project.clone();
         let generated = BTreeMap::new();
-        for request in &self.requests {
-            if request.status == RequestStatus::Implemented {
-                let (page_id, _) = targets
-                    .iter()
-                    .find(|(_, element)| *element == request.element_id)
-                    .copied()
-                    .expect("a requested layer has a page");
-                apply_request(&mut copy, page_id, request, self, &generated)?;
+        for outcome in &self.requests {
+            if outcome.status == RequestStatus::Implemented {
+                let page_id = outcome
+                    .request_id
+                    .and_then(|id| project.requests.iter().find(|request| request.id == id))
+                    .and_then(|request| request.targets.iter().find_map(|target| target.page()))
+                    .or_else(|| {
+                        outcome.element_id.and_then(|id| {
+                            targets
+                                .iter()
+                                .find(|(_, element)| *element == id)
+                                .map(|(page, _)| *page)
+                        })
+                    });
+                apply_request(&mut copy, page_id, outcome, self, &generated)?;
             }
         }
         copy.validate()?;
@@ -502,8 +586,13 @@ impl GenerationCandidate {
             .find(|request| request.status == RequestStatus::Conflict)
         {
             return Err(Error(format!(
-                "Resolve the conflict for layer {} before applying: {}",
-                request.element_id, request.explanation
+                "Resolve the conflict for request {} before applying: {}",
+                request
+                    .request_id
+                    .or(request.element_id)
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "unknown".into()),
+                request.explanation
             )));
         }
         ensure(
@@ -548,6 +637,30 @@ fn validate_operations(
                 !element_id.is_nil(),
                 "A remove operation needs an existing element id.",
             )?,
+            ElementOperation::InsertInBoundary {
+                page_id, element, ..
+            } => {
+                ensure(
+                    !page_id.is_nil(),
+                    "A boundary insert needs an existing boundary.",
+                )?;
+                validate_draft(element, image_keys, &mut new_ids)?;
+            }
+            ElementOperation::AddReference { item } => {
+                ensure(
+                    !matches!(item.kind, crate::ReferenceKind::Image { .. }),
+                    "A generated reference item cannot use picture bytes.",
+                )?;
+                let rect = item.rect;
+                ensure(
+                    [rect.x, rect.y, rect.width, rect.height]
+                        .iter()
+                        .all(|value| value.is_finite())
+                        && rect.width >= 1.0
+                        && rect.height >= 1.0,
+                    "A reference item needs finite coordinates and a positive size.",
+                )?;
+            }
         }
     }
     Ok(())
@@ -560,9 +673,14 @@ fn validate_draft(
 ) -> Result<()> {
     let _ = new_ids;
     ensure(
-        [draft.rect.x, draft.rect.y, draft.rect.width, draft.rect.height]
-            .iter()
-            .all(|value| value.is_finite())
+        [
+            draft.rect.x,
+            draft.rect.y,
+            draft.rect.width,
+            draft.rect.height,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
             && draft.rect.width >= 0.0
             && draft.rect.height >= 0.0,
         "A new element needs finite coordinates and a non-negative size.",
@@ -633,7 +751,10 @@ fn build_element(
         .and_then(|key| generated.get(&key.to_lowercase()).copied());
     let mut placeholder_text = None;
     let mut kind = draft.kind.clone();
-    if matches!(draft.kind, ElementKind::Image) && requested_picture.is_none() && draft.image.is_none() {
+    if matches!(draft.kind, ElementKind::Image)
+        && requested_picture.is_none()
+        && draft.image.is_none()
+    {
         // No picture generation available: keep the prompt visible in a Box instead.
         let prompt = draft
             .image_request
@@ -654,7 +775,9 @@ fn build_element(
         visible: draft.visible,
         locked: draft.locked,
         style: draft.style.clone(),
-        text: placeholder_text.clone().unwrap_or_else(|| draft.text.clone()),
+        text: placeholder_text
+            .clone()
+            .unwrap_or_else(|| draft.text.clone()),
         image: if matches!(draft.kind, ElementKind::Image) {
             requested_picture.or(draft.image)
         } else {
@@ -709,7 +832,8 @@ fn find_parent_rect(
         if element.id == id {
             return Some((parent, parent_rect));
         }
-        if let Some(found) = find_parent_rect(&element.children, id, Some(element.id), element.rect) {
+        if let Some(found) = find_parent_rect(&element.children, id, Some(element.id), element.rect)
+        {
             return Some(found);
         }
     }
@@ -724,82 +848,237 @@ fn fits(parent: &crate::Rect, child: &crate::Rect) -> bool {
         && child.y + child.height <= parent.height + TOLERANCE
 }
 
+/// What one reply outcome may change. Element targets grant their subtree plus what their
+/// pointers grant; a boundary target grants every layer inside it; a pointer target grants what
+/// that pointer points at.
+struct RequestScope {
+    allowed: BTreeSet<Uuid>,
+    boundary_pages: BTreeSet<Uuid>,
+    area: Option<crate::RequestArea>,
+}
+
+fn scope_for(
+    project: &Project,
+    request: Option<&crate::PendingRequest>,
+    anchor_page: Option<Uuid>,
+) -> RequestScope {
+    let mut allowed = BTreeSet::new();
+    let mut boundary_pages = BTreeSet::new();
+    if let Some(request) = request {
+        for target in &request.targets {
+            match target {
+                crate::RequestTarget::Element { page, id, .. } => {
+                    let (elements, pages) = project.editable_element_ids(*page, *id);
+                    allowed.extend(elements);
+                    boundary_pages.extend(pages);
+                }
+                crate::RequestTarget::Boundary { page, .. } => {
+                    boundary_pages.insert(*page);
+                    if let Some(page) = project.pages.iter().find(|item| item.id == *page) {
+                        for element in &page.elements {
+                            allowed.extend(project.element_subtree_ids(element.id));
+                            let (_, pages) = project.editable_element_ids(page.id, element.id);
+                            boundary_pages.extend(pages);
+                        }
+                    }
+                }
+                crate::RequestTarget::Pointer { id } => {
+                    if let Some(pointer) = project.pointers.iter().find(|pointer| pointer.id == *id)
+                    {
+                        match &pointer.to {
+                            crate::PointerTarget::Element {
+                                page_id,
+                                element_id,
+                                ..
+                            } => {
+                                allowed.extend(project.element_subtree_ids(*element_id));
+                                let (_, pages) =
+                                    project.editable_element_ids(*page_id, *element_id);
+                                boundary_pages.extend(pages);
+                            }
+                            crate::PointerTarget::Boundary { page_id, .. } => {
+                                boundary_pages.insert(*page_id);
+                            }
+                            crate::PointerTarget::Reference { .. }
+                            | crate::PointerTarget::Url { .. } => {}
+                        }
+                    }
+                }
+                crate::RequestTarget::Reference { .. } => {}
+            }
+        }
+    } else if let Some(page_id) = anchor_page {
+        boundary_pages.insert(page_id);
+    }
+    RequestScope {
+        allowed,
+        boundary_pages,
+        area: request.and_then(|request| request.area.clone()),
+    }
+}
+
+fn shape_contains(shape: &crate::RequestShape, point: crate::RequestPoint) -> bool {
+    match shape {
+        crate::RequestShape::Rect { rect } => {
+            point.x >= rect.x
+                && point.x <= rect.x + rect.width
+                && point.y >= rect.y
+                && point.y <= rect.y + rect.height
+        }
+        crate::RequestShape::Ellipse { rect } => {
+            let rx = rect.width / 2.0;
+            let ry = rect.height / 2.0;
+            if rx <= 0.0 || ry <= 0.0 {
+                return false;
+            }
+            let dx = (point.x - (rect.x + rx)) / rx;
+            let dy = (point.y - (rect.y + ry)) / ry;
+            dx * dx + dy * dy <= 1.0
+        }
+        crate::RequestShape::Polygon { points } | crate::RequestShape::Freehand { points } => {
+            // Even-odd ray casting, with boundary points counted as inside.
+            let mut inside = false;
+            let mut previous = points.last().expect("a shape has points");
+            for current in points {
+                let on_edge = point_segment_distance(point, previous, current) <= 0.5;
+                if on_edge {
+                    return true;
+                }
+                if (current.y > point.y) != (previous.y > point.y) {
+                    let x = (previous.x - current.x) * (point.y - current.y)
+                        / (previous.y - current.y)
+                        + current.x;
+                    if point.x < x {
+                        inside = !inside;
+                    }
+                }
+                previous = current;
+            }
+            inside
+        }
+    }
+}
+
+fn point_segment_distance(
+    point: crate::RequestPoint,
+    start: &crate::RequestPoint,
+    end: &crate::RequestPoint,
+) -> f64 {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let length = dx * dx + dy * dy;
+    if length == 0.0 {
+        return ((point.x - start.x).powi(2) + (point.y - start.y).powi(2)).sqrt();
+    }
+    let t = (((point.x - start.x) * dx + (point.y - start.y) * dy) / length).clamp(0.0, 1.0);
+    ((point.x - (start.x + t * dx)).powi(2) + (point.y - (start.y + t * dy)).powi(2)).sqrt()
+}
+
+/// A requested area is the real outline; new content must sit inside it.
+fn area_allows(area: &crate::RequestArea, rect: &crate::Rect) -> bool {
+    let corners = [
+        (rect.x, rect.y),
+        (rect.x + rect.width, rect.y),
+        (rect.x + rect.width, rect.y + rect.height),
+        (rect.x, rect.y + rect.height),
+        (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0),
+    ];
+    corners
+        .iter()
+        .all(|(x, y)| shape_contains(&area.shape, crate::RequestPoint { x: *x, y: *y }))
+}
+
+fn collect_history_ids(element: &Element, ids: &mut BTreeSet<Uuid>) {
+    ids.insert(element.id);
+    for child in &element.children {
+        collect_history_ids(child, ids);
+    }
+}
+
 fn apply_operations(
     project: &mut Project,
-    page_id: Uuid,
-    target_element: Uuid,
+    scope: &RequestScope,
+    anchor: Option<Uuid>,
     operations: &[ElementOperation],
     candidate: &GenerationCandidate,
     generated: &BTreeMap<String, Uuid>,
-) -> Result<()> {
-    let (allowed, _allowed_pages) = project.editable_element_ids(page_id, target_element);
+) -> Result<BTreeSet<Uuid>> {
     let images: BTreeMap<String, String> = candidate
         .images
         .iter()
         .map(|image| (image.key.to_lowercase(), image.prompt.clone()))
         .collect();
+    let mut touched = BTreeSet::new();
     for operation in operations {
         match operation {
             ElementOperation::ReplaceChildren { children } => {
-                let target = project
-                    .editable_element_mut(target_element)
-                    .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                ensure(
-                    target.kind.holds_children(),
-                    "Only a box or a group can hold elements.",
-                )?;
-                let parent_rect = target.rect;
+                let target = anchor
+                    .filter(|id| scope.allowed.contains(id))
+                    .ok_or_else(|| {
+                        Error("The generation result changed a layer outside its request.".into())
+                    })?;
                 let mut built = Vec::with_capacity(children.len());
                 for child in children {
                     let element = build_element(child, generated, &images)?;
+                    built.push(element);
+                }
+                let parent_rect = project
+                    .element(target)
+                    .map(|(_, element)| element.rect)
+                    .expect("the anchor exists");
+                for element in &built {
                     ensure(
                         fits(&parent_rect, &element.rect),
                         "A generated element must stay inside its frame.",
                     )?;
-                    built.push(element);
                 }
+                for element in &built {
+                    collect_history_ids(element, &mut touched);
+                }
+                touched.insert(target);
                 project
-                    .editable_element_mut(target_element)
+                    .editable_element_mut(target)
                     .expect("the target exists")
                     .children = built;
             }
             ElementOperation::Update { patches } => {
-                let sizes: BTreeSet<Uuid> = project
-                    .page(page_id)?
-                    .sizes
-                    .iter()
-                    .map(|size| size.id)
-                    .collect();
                 for patch in patches {
                     ensure(
-                        patch.element_id == target_element || allowed.contains(&patch.element_id),
+                        scope.allowed.contains(&patch.element_id),
                         "The generation result changed a layer outside its request.",
                     )?;
+                    let (owner, _) = project
+                        .element(patch.element_id)
+                        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
+                    let owner_page = owner.id;
+                    let sizes: BTreeSet<Uuid> = project
+                        .page(owner_page)?
+                        .sizes
+                        .iter()
+                        .map(|size| size.id)
+                        .collect();
                     ensure(
-                        patch
-                            .size_id
-                            .is_none_or(|size_id| sizes.contains(&size_id)),
+                        patch.size_id.is_none_or(|size_id| sizes.contains(&size_id)),
                         "The generation result changed a size this boundary does not have.",
                     )?;
-                    if patch.element_id != target_element {
-                        let (_, _, parent_rect) = element_page_and_parent(project, patch.element_id)
-                            .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                        if let Some(rect) = &patch.rect {
-                            ensure(
-                                fits(&parent_rect, rect),
-                                "A generated element must stay inside its parent.",
-                            )?;
-                        }
+                    let (_, _, parent_rect) = element_page_and_parent(project, patch.element_id)
+                        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
+                    if let Some(rect) = &patch.rect {
+                        ensure(
+                            fits(&parent_rect, rect),
+                            "A generated element must stay inside its parent.",
+                        )?;
                     }
                     let target = crate::elements::size_target_for_patch(
                         project,
-                        project.page(page_id)?,
+                        project.page(owner_page)?,
                         &patch.clone().patch(),
                     )?;
                     let element = project
                         .editable_element_mut(patch.element_id)
                         .ok_or_else(|| Error("This layer no longer exists.".into()))?;
                     crate::elements::apply_sized_patch(element, patch.clone().patch(), target)?;
+                    touched.insert(patch.element_id);
                 }
             }
             ElementOperation::Insert {
@@ -808,7 +1087,7 @@ fn apply_operations(
                 element,
             } => {
                 ensure(
-                    allowed.contains(parent_id) || *parent_id == target_element,
+                    scope.allowed.contains(parent_id),
                     "The generation result inserted outside its request.",
                 )?;
                 let parent_rect = project
@@ -827,12 +1106,15 @@ fn apply_operations(
                     parent.kind.holds_children(),
                     "Only a box or a group can hold elements.",
                 )?;
-                let at = index.unwrap_or(parent.children.len()).min(parent.children.len());
+                let at = index
+                    .unwrap_or(parent.children.len())
+                    .min(parent.children.len());
+                collect_history_ids(&built, &mut touched);
                 parent.children.insert(at, built);
             }
             ElementOperation::Remove { element_id } => {
                 ensure(
-                    *element_id != target_element && allowed.contains(element_id),
+                    scope.allowed.contains(element_id),
                     "The generation result removed a layer outside its request.",
                 )?;
                 ensure(
@@ -840,14 +1122,106 @@ fn apply_operations(
                     "This layer no longer exists.",
                 )?;
             }
+            ElementOperation::InsertInBoundary {
+                page_id,
+                size_id,
+                element,
+            } => {
+                let boundary = scope
+                    .area
+                    .as_ref()
+                    .filter(|area| area.page == Some(*page_id))
+                    .is_some()
+                    || scope.boundary_pages.contains(page_id);
+                ensure(
+                    boundary,
+                    "The generation result inserted into a boundary outside its request.",
+                )?;
+                let page = project.page(*page_id)?;
+                ensure(
+                    size_id.is_none_or(|size| page.sizes.iter().any(|item| item.id == size)),
+                    "The generation result inserted into a size this boundary does not have.",
+                )?;
+                let size = match size_id {
+                    Some(size) => page.sizes.iter().find(|item| item.id == *size),
+                    None => page.sizes.first(),
+                }
+                .ok_or_else(|| Error("This boundary has no size.".into()))?;
+                let built = build_element(element, generated, &images)?;
+                ensure(
+                    built.rect.x >= 0.0
+                        && built.rect.y >= 0.0
+                        && built.rect.x + built.rect.width <= size.width as f64 + 0.5
+                        && built.rect.y + built.rect.height <= size.height as f64 + 0.5,
+                    "A generated element must stay inside its boundary.",
+                )?;
+                if let Some(area) = &scope.area {
+                    ensure(
+                        area_allows(area, &built.rect),
+                        "A generated element must stay inside the request area.",
+                    )?;
+                }
+                collect_history_ids(&built, &mut touched);
+                project.page_mut(*page_id)?.elements.push(built);
+            }
+            ElementOperation::AddReference { item } => {
+                let area = scope
+                    .area
+                    .as_ref()
+                    .filter(|area| area.page.is_none())
+                    .ok_or_else(|| {
+                        Error("Reference items may only be added through an area outside every boundary.".into())
+                    })?;
+                ensure(
+                    area_allows(area, &item.rect),
+                    "A generated reference item must stay inside the request area.",
+                )?;
+                ensure(
+                    !matches!(item.kind, crate::ReferenceKind::Image { .. }),
+                    "A generated reference item cannot use picture bytes.",
+                )?;
+                project.add_reference_item(
+                    crate::ReferenceItem {
+                        id: Uuid::new_v4(),
+                        rect: item.rect,
+                        kind: item.kind.clone(),
+                    },
+                    None,
+                )?;
+            }
         }
     }
-    Ok(())
+    Ok(touched)
+}
+
+fn record_request_history(
+    project: &mut Project,
+    ids: &BTreeSet<Uuid>,
+    request: &crate::PendingRequest,
+    outcome: &str,
+    job_id: Uuid,
+) {
+    for id in ids {
+        let Some(element) = project.element_mut(*id) else {
+            continue;
+        };
+        if element.meta.requests.len() >= crate::MAX_ELEMENT_REQUESTS {
+            element.meta.requests.remove(0);
+        }
+        element.meta.requests.push(RequestRecord {
+            id: Uuid::new_v4(),
+            prompt: request.text.clone(),
+            attachments: request.attachments.clone(),
+            created_at: request.requested_at.clone(),
+            outcome: Some(outcome.to_string()),
+            job_id: Some(job_id.to_string()),
+        });
+    }
 }
 
 fn apply_request(
     project: &mut Project,
-    page_id: Uuid,
+    page_id: Option<Uuid>,
     request: &RequestOutcome,
     candidate: &GenerationCandidate,
     generated: &BTreeMap<String, Uuid>,
@@ -855,32 +1229,45 @@ fn apply_request(
     if !matches!(request.status, RequestStatus::Implemented) {
         return Ok(());
     }
-    apply_operations(project, page_id, request.element_id, &request.operations, candidate, generated)?;
-    let pending = project
-        .element(request.element_id)
-        .map(|(_, element)| element.meta.pending.clone())
-        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-    let element = project
-        .element_mut(request.element_id)
-        .expect("the requested layer exists");
-    if let Some(pending) = pending {
+    // The reply may name the pending request; older replies name one layer. Either way the
+    // request is read before it is changed so its text can become layer history.
+    let pending = request
+        .request_id
+        .and_then(|id| project.requests.iter().find(|item| item.id == id))
+        .or_else(|| {
+            request.element_id.and_then(|id| {
+                project.requests.iter().find(|item| {
+                    item.targets.iter().any(|target| match target {
+                        crate::RequestTarget::Element { id: target_id, .. } => *target_id == id,
+                        _ => false,
+                    })
+                })
+            })
+        })
+        .cloned();
+    let anchor_page = page_id.or_else(|| {
+        request
+            .element_id
+            .and_then(|id| project.element(id).map(|(page, _)| page.id))
+    });
+    let scope = scope_for(project, pending.as_ref(), anchor_page);
+    let touched = apply_operations(
+        project,
+        &scope,
+        request.element_id,
+        &request.operations,
+        candidate,
+        generated,
+    )?;
+    if let Some(pending) = &pending {
         let outcome = if request.explanation.trim().is_empty() {
             candidate.summary.clone()
         } else {
             request.explanation.clone()
         };
-        if element.meta.requests.len() >= crate::MAX_ELEMENT_REQUESTS {
-            element.meta.requests.remove(0);
-        }
-        element.meta.requests.push(RequestRecord {
-            id: Uuid::new_v4(),
-            prompt: pending.prompt,
-            attachments: pending.attachments,
-            created_at: pending.requested_at,
-            outcome: Some(outcome),
-            job_id: Some(candidate.job_id.to_string()),
-        });
-        element.meta.pending = None;
+        record_request_history(project, &touched, pending, &outcome, candidate.job_id);
+        // A pending request is fulfilled once its reply is applied.
+        project.requests.retain(|item| item.id != pending.id);
     }
     Ok(())
 }
@@ -910,7 +1297,8 @@ pub fn apply_generation_output(
             continue;
         };
         let picture = crate::project_assets::store_picture_uri(uri)?;
-        next.pictures.insert(picture, std::sync::Arc::from(uri.as_str()));
+        next.pictures
+            .insert(picture, std::sync::Arc::from(uri.as_str()));
         generated.insert(image.key.to_lowercase(), picture);
     }
     let targets = snapshot.target_ids()?;
@@ -918,13 +1306,18 @@ pub fn apply_generation_output(
         if request.status != RequestStatus::Implemented {
             continue;
         }
-        let (page_id, _) = targets
-            .iter()
-            .find(|(_, element)| *element == request.element_id)
-            .copied()
-            .ok_or_else(|| Error("A request has no target layer.".into()))?;
+        let page_id = request
+            .request_id
+            .and_then(|id| next.requests.iter().find(|pending| pending.id == id))
+            .and_then(|pending| pending.targets.iter().find_map(|target| target.page()))
+            .or_else(|| {
+                request
+                    .element_id
+                    .and_then(|id| next.element(id).map(|(page, _)| page.id))
+            });
         apply_request(&mut next, page_id, request, candidate, &generated)?;
     }
+    let _ = targets;
     for classification in &candidate.pointer_classifications {
         let pointer = next
             .pointers
@@ -943,14 +1336,10 @@ pub fn apply_generation_output(
             .decision_proposals
             .get(*index)
             .ok_or_else(|| Error("An accepted decision is not in this result.".into()))?;
-        if let Some(existing) = next
-            .decisions
-            .iter_mut()
-            .find(|decision| {
-                decision.scope == proposal.scope
-                    && decision.topic.eq_ignore_ascii_case(proposal.topic.trim())
-            })
-        {
+        if let Some(existing) = next.decisions.iter_mut().find(|decision| {
+            decision.scope == proposal.scope
+                && decision.topic.eq_ignore_ascii_case(proposal.topic.trim())
+        }) {
             existing.value = proposal.value.trim().into();
             existing.accepted_at_revision = next.revision;
         } else {
@@ -1052,8 +1441,12 @@ pub fn candidate_schema() -> serde_json::Value {
     }
     let uuid = uuid_schema();
     let colour = json!({"type":"string","description":"#rgb, #rrggbb or #rrggbbaa; transparent is allowed."});
-    let stroke = object(json!({"color":nullable(colour.clone()),"width":{"type":"number","minimum":0,"maximum":256}}));
-    let shadow = object(json!({"x":{"type":"number"},"y":{"type":"number"},"blur":{"type":"number","minimum":0,"maximum":4096},"color":nullable(colour.clone())}));
+    let stroke = object(
+        json!({"color":nullable(colour.clone()),"width":{"type":"number","minimum":0,"maximum":256}}),
+    );
+    let shadow = object(
+        json!({"x":{"type":"number"},"y":{"type":"number"},"blur":{"type":"number","minimum":0,"maximum":4096},"color":nullable(colour.clone())}),
+    );
     let text_style = object(json!({
         "fontFamily":text(200),"size":{"type":"number","minimum":1,"maximum":512},
         "weight":{"type":"integer","minimum":1,"maximum":1000},"italic":{"type":"boolean"},
@@ -1065,37 +1458,66 @@ pub fn candidate_schema() -> serde_json::Value {
         "fill":nullable(colour),"stroke":stroke,"radius":{"type":"number","minimum":0},
         "opacity":{"type":"number","minimum":0,"maximum":1},"shadow":shadow,"textStyle":text_style
     }));
-    let rect = object(json!({"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number","minimum":0},"height":{"type":"number","minimum":0}}));
+    let rect = object(
+        json!({"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number","minimum":0},"height":{"type":"number","minimum":0}}),
+    );
     let layout = json!({"oneOf":[
         object(json!({"kind":{"type":"string","enum":["free"]}})),
         object(json!({"kind":{"type":"string","enum":["stack"]},"direction":{"type":"string","enum":["row","column"]},"gap":{"type":"number"},"padding":{"type":"number"},"align":{"type":"string","enum":["start","center","end","stretch"]},"justify":{"type":"string","enum":["start","center","end","spaceBetween"]},"wrap":{"type":"boolean"}})),
         object(json!({"kind":{"type":"string","enum":["grid"]},"columns":{"type":"integer","minimum":1,"maximum":64},"gap":{"type":"number"},"padding":{"type":"number"}}))
     ]});
     let kind = json!({"type":"string","enum":["box","group","text","ellipse","line","image","button","link","input","textarea","select","checkbox","radio","video","audio","embed","code"]});
-    let draft = partial_object(json!({
-        "kind":kind,"rect":rect,"name":nullable(text(120)),
-        "rotation":{"type":"number"},"visible":{"type":"boolean"},"locked":{"type":"boolean"},
-        "style":style,"text":text(16_384),"image":nullable(uuid.clone()),
-        "imageRequest":nullable(text(120)),"url":nullable(text(2048)),"layout":layout,
-        "inputType":{"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]},
-        "options":{"type":"array","minItems":1,"maxItems":100,"items":text(120)},
-        "language":text(40),"source":text(200_000),
-        "children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}
-    }), &["kind","rect","name","rotation","visible","locked","style","text","image","imageRequest","url","layout","children"]);
-    let update = partial_object(json!({
-        "elementId":uuid.clone(),"rect":rect,"rotation":{"type":"number"},"style":style,
-        "text":text(16_384),"url":text(2048),"layout":layout,"visible":{"type":"boolean"},
-        "locked":{"type":"boolean"},"name":text(120),
-        "inputType":{"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]},
-        "options":{"type":"array","maxItems":100,"items":text(120)},
-        "language":text(40),"source":text(200_000),
-        "sizeId":{"anyOf":[uuid.clone(),{"type":"null"}],"description":"Change only this linked size of the boundary; omit for the base values every size inherits."}
-    }), &["elementId"]);
+    let draft = partial_object(
+        json!({
+            "kind":kind,"rect":rect,"name":nullable(text(120)),
+            "rotation":{"type":"number"},"visible":{"type":"boolean"},"locked":{"type":"boolean"},
+            "style":style,"text":text(16_384),"image":nullable(uuid.clone()),
+            "imageRequest":nullable(text(120)),"url":nullable(text(2048)),"layout":layout,
+            "inputType":{"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]},
+            "options":{"type":"array","minItems":1,"maxItems":100,"items":text(120)},
+            "language":text(40),"source":text(200_000),
+            "children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}
+        }),
+        &[
+            "kind",
+            "rect",
+            "name",
+            "rotation",
+            "visible",
+            "locked",
+            "style",
+            "text",
+            "image",
+            "imageRequest",
+            "url",
+            "layout",
+            "children",
+        ],
+    );
+    let update = partial_object(
+        json!({
+            "elementId":uuid.clone(),"rect":rect,"rotation":{"type":"number"},"style":style,
+            "text":text(16_384),"url":text(2048),"layout":layout,"visible":{"type":"boolean"},
+            "locked":{"type":"boolean"},"name":text(120),
+            "inputType":{"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]},
+            "options":{"type":"array","maxItems":100,"items":text(120)},
+            "language":text(40),"source":text(200_000),
+            "sizeId":{"anyOf":[uuid.clone(),{"type":"null"}],"description":"Change only this linked size of the boundary; omit for the base values every size inherits."}
+        }),
+        &["elementId"],
+    );
+    let reference_kind = json!({"oneOf":[
+        object(json!({"kind":{"type":"string","enum":["note"]},"text":text(16_384)})),
+        object(json!({"kind":{"type":"string","enum":["link"]},"url":text(2048),"title":text(120)})),
+        object(json!({"kind":{"type":"string","enum":["swatch"]},"color":text(32)}))
+    ]});
     let operation = json!({"oneOf":[
         object(json!({"kind":{"type":"string","enum":["replaceChildren"]},"children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}})),
         object(json!({"kind":{"type":"string","enum":["update"]},"patches":{"type":"array","minItems":1,"maxItems":2048,"items":update}})),
         partial_object(json!({"kind":{"type":"string","enum":["insert"]},"parentId":uuid.clone(),"index":{"type":"integer","minimum":0},"element":{"$ref":"#/$defs/element"}}), &["kind","parentId","element"]),
-        object(json!({"kind":{"type":"string","enum":["remove"]},"elementId":uuid.clone()}))
+        object(json!({"kind":{"type":"string","enum":["remove"]},"elementId":uuid.clone()})),
+        partial_object(json!({"kind":{"type":"string","enum":["insertInBoundary"]},"pageId":uuid.clone(),"sizeId":nullable(uuid.clone()),"element":{"$ref":"#/$defs/element"}}), &["kind","pageId","element"]),
+        object(json!({"kind":{"type":"string","enum":["addReference"]},"item":object(json!({"rect":rect,"kind":reference_kind}))}))
     ]});
     let action = json!({"oneOf":[
         object(json!({"kind":{"type":"string","enum":["goTo"]},"boundary":uuid.clone()})),
@@ -1115,7 +1537,8 @@ pub fn candidate_schema() -> serde_json::Value {
         "requirementsSha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
         "summary":text(16_384),
         "requests":array(object(json!({
-            "elementId":uuid.clone(),
+            "requestId":nullable(uuid.clone()),
+            "elementId":nullable(uuid.clone()),
             "status":{"type":"string","enum":["implemented","conflict"]},
             "explanation":text(MAX_EXPLANATION_CHARS),
             "operations":array(operation,2048)

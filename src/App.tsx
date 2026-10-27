@@ -6,7 +6,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { native, edit } from './api';
-import { ToolStrip, type EditorTool, type ProjectTool } from './EditorTools';
+import { ToolStrip, type EditorTool, type ProjectTool, type RequestToolShape } from './EditorTools';
 import { WorkspaceSurface, WorkspaceSurfaces, SurfaceHost, isTextField } from './WorkspaceSurface';
 import { ProjectCanvas, type ProjectCanvasHandle } from './ProjectCanvas';
 import { RecoveryChoice, isPendingRecovery, type PendingRecovery, type RecoveryChoices } from './RecoveryBanner';
@@ -29,7 +29,7 @@ import { isNestedLayer } from './projectCanvas/links';
 import { setPasteDefault, usePasteDefault } from './pastePreference';
 import { ElementProperties } from './projectCanvas/elementProperties';
 import { elementPath, findElementIn } from './projectCanvas/elementGeometry';
-import { BoundaryProperties, CanvasLayers, EditorDock, PointerProperties, ProjectProperties, ReferenceProperties, UntitledSaveForm, usePanelState } from './EditorDock';
+import { BoundaryProperties, CanvasLayers, EditorDock, PointerProperties, ProjectProperties, ReferenceProperties, RequestProperties, UntitledSaveForm, usePanelState } from './EditorDock';
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
 import { showsOpener } from './visibleActions';
@@ -85,16 +85,10 @@ function elementTreeIds(elements: Element[]): string[] {
   return elementTree(elements).map(element => element.id);
 }
 
-function pendingCount(elements: Element[]): number {
-  return elements.reduce((count, element) => count + (element.meta.pending?.prompt.trim() ? 1 : 0) + pendingCount(element.children), 0);
+function ownerPageId(project: Project, elementId: string): string | null {
+  return project.pages.find(page => !!findElementIn(page.elements, elementId))?.id ?? null;
 }
 
-function pendingElementIds(elements: Element[]): string[] {
-  return elements.flatMap(element => [
-    ...(element.meta.pending?.prompt.trim() ? [element.id] : []),
-    ...pendingElementIds(element.children),
-  ]);
-}
 
 export default function App({ initialView }: { initialView?: WorkspaceView } = {}) {
   return <NoticeProvider><WorkspaceSurfaces><EditorCrashBoundary><Editor initialView={initialView} /></EditorCrashBoundary></WorkspaceSurfaces></NoticeProvider>;
@@ -125,8 +119,10 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const [insertKind, setInsertKind] = useState<ElementKind | null>(null);
   const [insertSignal, setInsertSignal] = useState(0);
   const [boundaryKind, setBoundaryKind] = useState<BoundaryKind>('page');
+  const [requestToolShape, setRequestToolShape] = useState<RequestToolShape>('pick');
   const [canvasSelection, setCanvasSelection] = useState<CanvasTarget[]>([]);
   const [canvasFocus, setCanvasFocus] = useState<string | null>(null);
+  const [canvasFocusSize, setCanvasFocusSize] = useState<string | null>(null);
   const [canvasBoundaries, setCanvasBoundaries] = useState<Boundary[]>([]);
   const [canvasZoom, setCanvasZoom] = useState(1);
   const canvasRef = useRef<ProjectCanvasHandle>(null);
@@ -282,8 +278,9 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       reference: reference.map(({ itemId, x, y }) => ({ item_id: itemId, x, y })),
     });
   }, [mutate]);
-  const selectCanvasBoundary = useCallback((pageId: string | null, _sizeId?: string | null, additive = false) => {
+  const selectCanvasBoundary = useCallback((pageId: string | null, sizeId?: string | null, additive = false) => {
     setCanvasFocus(pageId);
+    setCanvasFocusSize(sizeId ?? null);
     if (!additive || !pageId) setCanvasSelection([]);
   }, []);
   const selectCanvasReference = useCallback((itemId: string, additive = false) => {
@@ -296,6 +293,9 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const selectCanvasPointer = useCallback((pointerId: string, additive = false) => {
     setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'pointer', pointerId }, additive));
   }, []);
+  const selectCanvasRequest = useCallback((requestId: string, additive = false) => {
+    setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'request', requestId }, additive));
+  }, []);
   const clearCanvasSelection = useCallback(() => setCanvasSelection([]), []);
   const addCanvasReference = useCallback(async (item: ReferenceItem, pictureDataUri?: string) => {
     await mutate(pictureDataUri === undefined
@@ -304,11 +304,6 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   }, [mutate]);
   const updateCanvasReference = useCallback((itemId: string, patch: { rect?: Rect; text?: string; url?: string; title?: string; color?: string }) => {
     void mutate({ type: 'update_reference_item', item_id: itemId, ...patch }).catch(() => {});
-  }, [mutate]);
-  const removeCanvasReference = useCallback((ids: string[]) => {
-    if (!ids.length) return;
-    setCanvasSelection(current => current.filter(target => target.kind !== 'reference' || !ids.includes(target.itemId)));
-    void mutate({ type: 'remove_reference_items', ids }).catch(() => {});
   }, [mutate]);
   const addCanvasPointer = useCallback(async (pointer: Pointer) => {
     await mutate({ type: 'add_pointer', pointer });
@@ -351,7 +346,11 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     return mutate({ type: 'paste_linked_instances', items }).then(() => undefined);
   }, [mutate]);
   const removeLinkedDefinition = useCallback((id: string) => {
-    void mutate({ type: 'remove_linked_definition', id }).catch(() => {});
+    const name = current.current?.project?.linked?.[id]?.name ?? 'this linked element';
+    const action = async () => { await mutate({ type: 'delete_items', linked_ids: [id] }); };
+    if (!askBeforeDelete()) { run(action); return; }
+    setSkipNextAsk(false);
+    setConfirmation({ title: 'Remove this linked element?', message: `Remove ${name}? Every copy becomes a plain layer.`, action, skippable: true });
   }, [mutate]);
   // An inline field reports its own error, so a rejected name never leaves the panel.
   const renameCanvasElement = useCallback((pageId: string, elementId: string, name: string | null) => {
@@ -362,16 +361,37 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       accept(next); return next;
     }, false, true).then(() => undefined);
   }, [queue, accept]);
-  const setCanvasElementRequest = useCallback(async (elementId: string, request: PendingRequest | null) => {
-    await mutate({ type: 'set_element_request', element_id: elementId, request });
+  const addCanvasRequest = useCallback(async (request: PendingRequest) => {
+    await mutate({ type: 'add_request', request });
   }, [mutate]);
+  const updateCanvasRequest = useCallback(async (request: PendingRequest) => {
+    await mutate({ type: 'update_request', request });
+  }, [mutate]);
+  const removeCanvasRequests = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    setCanvasSelection(current => current.filter(target => target.kind !== 'request' || !ids.includes(target.requestId)));
+    void mutate({ type: 'remove_requests', ids }).catch(() => {});
+  }, [mutate]);
+  // The layer's request box in Properties edits the one request that targets only that layer.
+  const setCanvasElementRequest = useCallback((elementId: string, data: { text: string; attachments: RequestAttachment[] } | null) => {
+    const project = current.current?.project;
+    if (!project) return;
+    const existing = (project.requests ?? []).find(request => request.targets.length === 1
+      && request.targets[0].kind === 'element' && request.targets[0].id === elementId) ?? null;
+    if (data === null || (!data.text.trim() && !data.attachments.length)) {
+      if (existing) removeCanvasRequests([existing.id]);
+      return;
+    }
+    const page = project.pages.find(item => item.id === ownerPageId(project, elementId));
+    const request: PendingRequest = existing
+      ? { ...existing, text: data.text, attachments: data.attachments }
+      : { id: crypto.randomUUID(), text: data.text, attachments: data.attachments, requestedAt: new Date().toISOString(),
+        targets: [{ kind: 'element', page: page?.id ?? '', size: page && page.sizes.length > 1 ? baseSizeId(page) : null, id: elementId }], area: null };
+    if (existing) void updateCanvasRequest(request).catch(() => {});
+    else void addCanvasRequest(request).catch(() => {});
+  }, [addCanvasRequest, updateCanvasRequest, removeCanvasRequests]);
   const updateCanvasElementContext = useCallback((elementId: string, context: RequestAttachment[]) => {
     void mutate({ type: 'update_element_context', element_id: elementId, context }).catch(() => {});
-  }, [mutate]);
-  const removeCanvasPointers = useCallback((ids: string[]) => {
-    if (!ids.length) return;
-    setCanvasSelection(current => current.filter(target => target.kind !== 'pointer' || !ids.includes(target.pointerId)));
-    void mutate({ type: 'remove_pointers', ids }).catch(() => {});
   }, [mutate]);
   const keepPointerComment = useCallback((pointerId: string) => {
     void mutate({ type: 'set_pointer_wiring', pointer_id: pointerId, wiring: null }).catch(() => {});
@@ -393,9 +413,9 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     setCanvasFocus(pageId);
     setCanvasSelection(added ? [{ kind: 'element', pageId, elementId: added.id, sizeId: sizeId ?? null }] : []);
   }, [mutate]);
-  const attachReferenceContext = useCallback(async (elementIds: string[], itemIds: string[]) => {
-    if (!elementIds.length || !itemIds.length) return;
-    await mutate({ type: 'attach_reference_context', element_ids: elementIds, item_ids: itemIds });
+  const attachReferenceContext = useCallback(async (requestIds: string[], itemIds: string[]) => {
+    if (!requestIds.length || !itemIds.length) return;
+    await mutate({ type: 'attach_reference_context', request_ids: requestIds, item_ids: itemIds });
   }, [mutate]);
   const reportCanvasZoom = useCallback((zoom: number) => setCanvasZoom(zoom), []);
   const updateCanvasPage = useCallback((pageId: string, patch: { name?: string; path?: string; appearance?: Appearance; included?: boolean }) => {
@@ -918,14 +938,17 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         }
         case 'insert': event.preventDefault(); setInsertKind(null); setInsertSignal(value => value + 1); return;
         case 'imageTool': event.preventDefault(); setInsertKind(null); setCanvasTool('image'); return;
-        case 'selectTool': case 'frameTool': case 'boundaryTool': case 'pointerTool': case 'textTool': case 'panTool':
+        case 'selectTool': case 'boundaryTool': case 'pointerTool': case 'textTool': case 'panTool':
         case 'rectTool': case 'ellipseTool': case 'lineTool': case 'noteTool': {
           event.preventDefault(); setInsertKind(null);
-          setCanvasTool(action === 'selectTool' ? 'select' : action === 'frameTool' ? 'frame' : action === 'boundaryTool' ? 'boundary'
+          setCanvasTool(action === 'selectTool' ? 'select' : action === 'boundaryTool' ? 'boundary'
             : action === 'pointerTool' ? 'pointer' : action === 'textTool' ? 'text' : action === 'panTool' ? 'pan'
               : action === 'rectTool' ? 'rect' : action === 'ellipseTool' ? 'ellipse' : action === 'lineTool' ? 'line' : 'note');
           return;
         }
+        case 'requestTool': case 'requestFromShape':
+          // The canvas starts a request on the selection; with nothing selected F picks the tool.
+          return;
         case 'askAI': event.preventDefault(); document.querySelector<HTMLElement>('[data-element-request]')?.focus(); return;
         case 'hidePanels':
           if (!project) return;
@@ -963,7 +986,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const onStartPage = !project || showStartPage;
   const pointerStates = view?.pointerStates ?? [];
   const pointerStateMap = Object.fromEntries((checkedStates && checkedProject === project?.id ? checkedStates : pointerStates).map(item => [item.id, item])) as Record<string, PointerStateView>;
-  const requestedAreas = project ? project.pages.reduce((count, page) => count + pendingCount(page.elements), 0) : 0;
+  const requestedAreas = project ? (project.requests ?? []).filter(request => request.text.trim()).length : 0;
   const needsGeneratingPointers = pointerStates.filter(item => item.state === 'needsGenerating').length;
   const effectivePointerStates = checkedStates && checkedProject === project?.id ? checkedStates : pointerStates;
   const clashPointers = effectivePointerStates.filter(item => item.state === 'contradicts' || item.state === 'broken' || item.state === 'codeChanged');
@@ -996,18 +1019,21 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   generationOwns.current = generation.owns;
   const working = generation.canStop || activeGeneration(generation.job) || !!generation.operation;
   useEffect(() => { setShowLog(false); setSelected(null); }, [activeProjectId]);
-  useEffect(() => { setCanvasSelection([]); setCanvasFocus(null); }, [view?.project?.id]);
+  useEffect(() => { setCanvasSelection([]); setCanvasFocus(null); setCanvasFocusSize(null); }, [view?.project?.id]);
   useEffect(() => {
     const pages = view?.project?.pages, reference = view?.project?.reference ?? [], pointers = view?.project?.pointers ?? [];
     setCanvasSelection(current => {
-      const next = current.filter(target => target.kind === 'element'
+      const requests = view?.project?.requests ?? [];
+      const next = current.filter(target => target.kind === 'request'
+        ? requests.some(request => request.id === target.requestId)
+        : target.kind === 'element'
         ? !!pages?.some(page => page.id === target.pageId && findElementIn(page.elements, target.elementId)
           && (target.sizeId === null || page.sizes.some(size => size.id === target.sizeId)))
         : target.kind === 'pointer' ? pointers.some(pointer => pointer.id === target.pointerId) : reference.some(item => item.id === target.itemId));
       return next.length === current.length ? current : next;
     });
     if (canvasFocus && !pages?.some(page => page.id === canvasFocus)) setCanvasFocus(null);
-  }, [view?.project?.pages, view?.project?.reference, view?.project?.pointers, canvasFocus]);
+  }, [view?.project?.pages, view?.project?.reference, view?.project?.pointers, view?.project?.requests, canvasFocus]);
   useEffect(() => { if (generation.visible) { setShowLog(true); generation.close(); } }, [generation.visible]);
   const draftCount = announcedDraftCount(generation.job, generation.owns);
   const showGenerationStatus = !!generation.error || announcesStatus(generation.job, { owns: generation.owns, stopped: generation.stopped, working });
@@ -1031,7 +1057,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     for (const target of targets) {
       const element = project?.pages.find(page => page.id === target.pageId) && findElementIn(project!.pages.find(page => page.id === target.pageId)!.elements, target.elementId);
       if (!element) continue;
-      const prompt = element.meta.pending?.prompt.trim() ?? '';
+      const prompt = (current.current?.project?.requests ?? []).find(request => request.targets.some(target => target.kind === 'element' && target.id === element.id))?.text.trim() ?? '';
       await changeRequest(target.pageId, target.elementId, { prompt: prompt ? `${prompt}\n\nFeedback: ${text}` : `Feedback: ${text}` });
       elementIds.push(target.elementId);
     }
@@ -1055,22 +1081,27 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     setShowLog(true);
     void generation.prepare(elementIds, contextItems).catch(() => {});
   }
+  function requestTargetingElement(project: Project, elementId: string): PendingRequest | null {
+    return (project.requests ?? []).find(request => request.targets.some(target => target.kind === 'element' && target.id === elementId)) ?? null;
+  }
   async function changeRequest(pageId: string, elementId: string, patch: { prompt?: string | (() => string); rect?: Rect }): Promise<{ prompt: string }> {
-    const element = current.current?.project?.pages.find(page => page.id === pageId) && findElementIn(current.current!.project!.pages.find(page => page.id === pageId)!.elements, elementId);
-    if (!element) throw new Error('This layer is no longer in the project.');
-    if (patch.rect) await updateCanvasElements(pageId, [{ id: elementId, rect: patch.rect }]);
-    const prompt = (typeof patch.prompt === 'function' ? patch.prompt() : patch.prompt) ?? element.meta.pending?.prompt ?? '';
-    const existing = element.meta.pending;
-    const request: PendingRequest = { prompt, attachments: existing?.attachments ?? [], requestedAt: existing?.requestedAt ?? new Date().toISOString(), sizeId: existing?.sizeId ?? null };
-    await mutate({ type: 'set_element_request', element_id: elementId, request });
+    const project = current.current?.project;
+    const page = project?.pages.find(item => item.id === pageId);
+    if (!project || !page || !findElementIn(page.elements, elementId)) throw new Error('This layer is no longer in the project.');
+    const existing = requestTargetingElement(project, elementId);
+    const prompt = (typeof patch.prompt === 'function' ? patch.prompt() : patch.prompt) ?? existing?.text ?? '';
+    const request: PendingRequest = existing
+      ? { ...existing, text: prompt }
+      : { id: crypto.randomUUID(), text: prompt, attachments: [], requestedAt: new Date().toISOString(),
+        targets: [{ kind: 'element', page: pageId, size: page.sizes.length > 1 ? baseSizeId(page) : null, id: elementId }], area: null };
+    await mutate(existing ? { type: 'update_request', request } : { type: 'add_request', request });
     return { prompt };
   }
-  const attachToRequest = useCallback(async (elementId: string, files: File[], links: string[]) => {
-    const owner = current.current?.project?.pages.find(item => !!findElementIn(item.elements, elementId));
-    if (!owner) return;
-    const element = findElementIn(owner.elements, elementId)!;
+  const attachToRequest = useCallback(async (requestId: string, files: File[], links: string[]) => {
+    const request = (current.current?.project?.requests ?? []).find(item => item.id === requestId);
+    if (!request) return;
     const readImage = (file: File) => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error(`${file.name} could not be read.`)); reader.readAsDataURL(file); });
-    const attachments = [...(element.meta.pending?.attachments ?? [])];
+    const attachments = [...request.attachments];
     const problems: string[] = [];
     for (const file of files) {
       try {
@@ -1085,7 +1116,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       try { attachments.push({ id: crypto.randomUUID().replace(/-/g, '').slice(0, 16), name: new URL(url).hostname.slice(0, 120), kind: 'link', url }); }
       catch (reason) { problems.push(errorMessage(reason)); }
     }
-    await mutate({ type: 'set_element_request', element_id: elementId, request: { prompt: element.meta.pending?.prompt ?? '', attachments, requestedAt: element.meta.pending?.requestedAt ?? new Date().toISOString() } });
+    await mutate({ type: 'update_request', request: { ...request, attachments } });
     if (problems.length) setError(problems.join(' ')); else setNotice('Attached to the request.');
   }, [mutate]);
   async function switchAppearance(next: 'light' | 'dark') {
@@ -1096,21 +1127,39 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     }
   }
   // One confirmation covers a whole canvas selection, then each item removes itself.
-  function removeCanvasSelection(referenceIds: string[], pointerIds: string[] = [], elementIds: { pageId: string; elementId: string }[] = [], ask = true) {
-    if (!referenceIds.length && !pointerIds.length && !elementIds.length) return;
+  function removeCanvasSelection(referenceIds: string[], pointerIds: string[] = [], requestIds: string[] = [], elementIds: { pageId: string; elementId: string }[] = [], ask = true) {
+    if (!referenceIds.length && !pointerIds.length && !requestIds.length && !elementIds.length) return;
     const action = async () => {
-      if (pointerIds.length) await mutate({ type: 'remove_pointers', ids: pointerIds });
-      if (referenceIds.length) await mutate({ type: 'remove_reference_items', ids: referenceIds });
-      for (const pageId of [...new Set(elementIds.map(item => item.pageId))]) {
-        await mutate({ type: 'remove_elements', page_id: pageId, ids: elementIds.filter(item => item.pageId === pageId).map(item => item.elementId) });
-      }
+      await mutate({
+        type: 'delete_items',
+        elements: elementIds.map(item => [item.pageId, item.elementId]) as [string, string][],
+        reference_ids: referenceIds,
+        pointer_ids: pointerIds,
+        request_ids: requestIds,
+      });
       setSelected(null); setCanvasSelection([]);
       requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
     };
-    const plural = referenceIds.length + pointerIds.length + elementIds.length > 1;
+    const plural = referenceIds.length + pointerIds.length + requestIds.length + elementIds.length > 1;
     if (!ask || !askBeforeDelete()) { run(action); return; }
     setSkipNextAsk(false);
-    setConfirmation({ title: plural ? 'Remove these items?' : 'Remove this item?', message: plural ? 'Remove these layers, reference items and pointers?' : 'Remove this item?', action, skippable: true });
+    setConfirmation({ title: plural ? 'Remove these items?' : 'Remove this item?', message: plural ? 'Remove these layers, reference items, pointers and requests?' : 'Remove this item?', action, skippable: true });
+  }
+  // A boundary is deleted as a whole page, or as the selected linked size.
+  function deleteBoundary(pageId: string, sizeId: string | null) {
+    const page = project?.pages.find(item => item.id === pageId);
+    if (!page) return;
+    const size = sizeId ? page.sizes.find(item => item.id === sizeId) : null;
+    const removeSize = !!size && page.sizes.length > 1;
+    const name = removeSize ? `${page.name} · ${size.label}` : page.name;
+    const action = async () => {
+      await mutate(removeSize ? { type: 'delete_items', size_ids: [[pageId, size!.id]] } : { type: 'delete_items', page_ids: [pageId] });
+      setCanvasFocus(null); setCanvasFocusSize(null); setCanvasSelection([]);
+      requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
+    };
+    if (!askBeforeDelete()) { run(action); return; }
+    setSkipNextAsk(false);
+    setConfirmation({ title: removeSize ? 'Remove this size?' : 'Remove this boundary?', message: removeSize ? `Remove ${name}? Its layers stay in the other sizes.` : `Remove ${name} and everything in it?`, action, skippable: true });
   }
   const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
   const canEditProject = !!project && !onStartPage;
@@ -1172,6 +1221,9 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const selectedPointer = canvasSelection.length === 1 && canvasSelection[0].kind === 'pointer'
     ? (project?.pointers ?? []).find(item => item.id === (canvasSelection[0] as { kind: 'pointer'; pointerId: string }).pointerId) ?? null
     : null;
+  const selectedRequest = canvasSelection.length === 1 && canvasSelection[0].kind === 'request'
+    ? (project?.requests ?? []).find(item => item.id === (canvasSelection[0] as { kind: 'request'; requestId: string }).requestId) ?? null
+    : null;
   const selectedElementTargets = canvasSelection.flatMap(target => target.kind === 'element' ? [target] : []);
   const selectedElementPageId = selectedElementTargets.length && selectedElementTargets.every(target => target.pageId === selectedElementTargets[0].pageId) ? selectedElementTargets[0].pageId : null;
   const selectedElements = selectedElementPageId && project
@@ -1180,6 +1232,9 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       return element ? [element] : [];
     })
     : [];
+  const selectedElementRequest = selectedElements.length === 1 && project
+    ? (project.requests ?? []).find(request => request.targets.length === 1 && request.targets[0].kind === 'element' && request.targets[0].id === selectedElements[0].id) ?? null
+    : null;
   const selectedPointerState = selectedPointer ? pointerStateMap[selectedPointer.id] ?? null : null;
   const selectedPointerOther = selectedPointerState?.clashWith.length
     ? (project?.pointers ?? []).find(item => item.id === selectedPointerState.clashWith[0]) ?? null
@@ -1190,7 +1245,12 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     const index = selectedPointer ? ids.indexOf(selectedPointer.id) : -1;
     setCanvasSelection([{ kind: 'pointer', pointerId: ids[(index + 1) % ids.length] }]);
   }
-  function chooseTool(next: EditorTool) { setInsertKind(null); setCanvasTool(next); }
+  function chooseTool(next: EditorTool) {
+    setInsertKind(null); setCanvasTool(next);
+    // The next press belongs to the canvas: leave the tool strip or its flyout behind, so no
+    // button keeps focus or the pointer.
+    canvasRef.current?.focusCanvas();
+  }
   function moveCanvasElementTo(pageId: string, sizeId: string, elementId: string, parentId: string | null, index: number) {
     const projectNow = current.current?.project;
     const page = projectNow?.pages.find(page => page.id === pageId);
@@ -1206,10 +1266,11 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     void moveCanvasElements([{ id: elementId, to_page_id: pageId, to_parent_id: parentId, index, rect, size_id: sizeId }]);
   }
   function armInsert(kind: ElementKind) {
-    if (kind === 'image') { setInsertKind(null); setCanvasTool('image'); return; }
-    if (kind === 'text') { setInsertKind(null); setCanvasTool('text'); return; }
+    if (kind === 'image') { setInsertKind(null); setCanvasTool('image'); canvasRef.current?.focusCanvas(); return; }
+    if (kind === 'text') { setInsertKind(null); setCanvasTool('text'); canvasRef.current?.focusCanvas(); return; }
     setInsertKind(kind);
     setCanvasTool('insert');
+    canvasRef.current?.focusCanvas();
   }
   return <div className="application editor-shell">
     {closeRequest && <WorkspaceSurface place="banner" title="Close Desegnos?" close={() => { closeRequest.resolve(false); setCloseRequest(null); }}><p>{closeRequest.message}</p><div className="form-actions"><button onClick={() => { closeRequest.resolve(true); setCloseRequest(null); }}>Close Desegnos</button><button onClick={() => { closeRequest.resolve(false); setCloseRequest(null); }}>Keep editing</button></div></WorkspaceSurface>}
@@ -1262,14 +1323,15 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         onZoom={value => canvasRef.current?.zoomTo(value)}
         onFit={() => canvasRef.current?.fit()}
         boundaryKind={boundaryKind} onBoundaryKind={setBoundaryKind}
+        requestShape={requestToolShape} onRequestShape={setRequestToolShape}
         onInsert={armInsert} insertSignal={insertSignal} />}
       <div className="editor-work">
       <main className="workspace" id="project-panel">
       <div className="design-pane">
       <SurfaceHost place="canvas" />
       <NoticeHost />
-      <ProjectCanvas ref={canvasRef} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} selection={canvasSelection} focused={canvasFocus} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} clearSelection={clearCanvasSelection} changeRequest={(pageId, elementId, patch) => changeRequest(pageId, elementId, patch)} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(elementId, files, links) => run(() => attachToRequest(elementId, files, links))} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} onZoom={reportCanvasZoom} onLayout={setCanvasBoundaries}
-        selectElement={selectCanvasElement} removeElements={(items, ask) => removeCanvasSelection([], [], items, ask)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
+      <ProjectCanvas ref={canvasRef} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} updateRequest={updateCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} requestShape={requestToolShape} onRequestShape={setRequestToolShape} onZoom={reportCanvasZoom} onLayout={setCanvasBoundaries}
+        selectElement={selectCanvasElement} removeElements={(items, ask) => removeCanvasSelection([], [], [], items, ask)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
         linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
         play={play} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
@@ -1305,9 +1367,11 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
               keepCode={() => run(() => keepPointerCode(selectedPointer.id))}
               keepThis={() => selectedPointerOther && keepPointerThis(selectedPointer.id, selectedPointerOther.id)}
               merge={() => selectedPointerOther && mergePointerClash(selectedPointer, selectedPointerOther)}
-              reattach={() => canvasRef.current?.armPointer(selectedPointer.id)} remove={() => removeCanvasPointers([selectedPointer.id])} />
+              reattach={() => canvasRef.current?.armPointer(selectedPointer.id)} remove={() => removeCanvasSelection([], [selectedPointer.id])} />
           : selectedReferenceItem
-          ? <ReferenceProperties item={selectedReferenceItem} busy={pending > 0} update={patch => updateCanvasReference(selectedReferenceItem.id, patch)} remove={() => removeCanvasReference([selectedReferenceItem.id])} />
+          ? <ReferenceProperties item={selectedReferenceItem} busy={pending > 0} update={patch => updateCanvasReference(selectedReferenceItem.id, patch)} remove={() => removeCanvasSelection([selectedReferenceItem.id])} />
+          : selectedRequest
+          ? <RequestProperties request={selectedRequest} project={project} busy={pending > 0} update={updateCanvasRequest} remove={() => removeCanvasSelection([], [], [selectedRequest.id])} attach={attachReferenceContext} />
           : selectedElements.length && selectedElementPageId
             ? <ElementProperties project={project} page={project.pages.find(page => page.id === selectedElementPageId)!} pageId={selectedElementPageId} sizeId={selectedElementTargets[0].sizeId} elements={selectedElements} busy={pending > 0}
                 update={patches => void updateCanvasElements(selectedElementPageId, patches)}
@@ -1315,7 +1379,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                 link={() => canvasRef.current?.linkSelection()} unlink={() => canvasRef.current?.unlinkSelection()}
                 canLink={selectedElementTargets.length >= 2}
                 canUnlink={selectedElementTargets.length === 1 && (!!selectedElements[0]?.link || isNestedLayer(project, selectedElements[0]?.id ?? ''))}
-                setRequest={setCanvasElementRequest} updateContext={updateCanvasElementContext}
+                request={selectedElementRequest} setRequest={data => setCanvasElementRequest(selectedElements[0].id, data)} updateContext={updateCanvasElementContext}
                 generate={() => generate(selectedElements.map(element => element.id))} error={setError} />
           : selectedBoundary
             ? <BoundaryProperties page={selectedBoundary} busy={pending > 0} commit={patch => updateCanvasPage(selectedBoundary.id, patch)}
@@ -1325,13 +1389,20 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                 addSize={(preset, width, height) => addCanvasPageSize(selectedBoundary.id, preset, width, height)}
                 removeSize={size => {
                   setConfirmation({ title: `Remove the ${size.label} size?`, message: 'Its layers stay in the other sizes; their overrides for this size are removed.', action: async () => { removeCanvasPageSize(selectedBoundary.id, size.id); } });
-                }} />
+                }}
+                remove={() => deleteBoundary(selectedBoundary.id, canvasFocusSize)} />
             : <ProjectProperties project={project} busy={pending > 0} rename={renameProject} setGrid={showDotGrid} setGridSettings={changeGridFlags}
                 save={view?.untitled ? () => run(() => save()) : undefined} />}
         </>}
         layers={<CanvasLayers project={project} boundaries={canvasBoundaries} selection={canvasSelection} focused={canvasFocus} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer}
-          selectElement={selectCanvasElement} updateElements={(pageId, sizeId, patches) => void updateCanvasElements(pageId, patches.map(patch => ({ ...patch, size_id: sizeId })))}
-          moveElement={moveCanvasElementTo} removeLinked={removeLinkedDefinition} />} />
+          selectRequest={id => selectCanvasRequest(id)} selectElement={selectCanvasElement} updateElements={(pageId, sizeId, patches) => void updateCanvasElements(pageId, patches.map(patch => ({ ...patch, size_id: sizeId })))}
+          moveElement={moveCanvasElementTo} removeLinked={removeLinkedDefinition}
+          removeElements={ids => {
+            const elementIds = ids.flatMap(id => { const page = project.pages.find(item => !!findElementIn(item.elements, id)); return page ? [{ pageId: page.id, elementId: id }] : []; });
+            removeCanvasSelection([], [], [], elementIds);
+          }}
+          deleteBoundary={deleteBoundary} removeRequest={id => removeCanvasSelection([], [], [id])}
+          removeReference={id => removeCanvasSelection([id])} removePointer={id => removeCanvasSelection([], [id])} />} />
       </div>
       <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 ? `${canvasSelection.length} selected` : ''}</span><div className="canvas-status-actions">{playIsActive(play) && <StatusChip tone="info" role="status" className="play-chip" onClick={() => setPlay(idlePlay)} ariaLabel="Stop Play">Playing · Esc to stop</StatusChip>}{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
     </>}

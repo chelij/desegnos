@@ -14,6 +14,8 @@ pub const MAX_PAGE_SIZES: usize = 8;
 pub const MAX_PROMPT_CHARS: usize = 16_384;
 pub const MAX_REFERENCE_ITEMS: usize = 1000;
 pub const MAX_POINTERS: usize = 1000;
+pub const MAX_REQUESTS: usize = 256;
+pub const MAX_REQUEST_TARGETS: usize = 64;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -120,6 +122,239 @@ impl Rect {
     }
 }
 
+/// A point in canvas coordinates, used by request-area outlines.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequestPoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+impl RequestPoint {
+    fn validate(&self) -> Result<()> {
+        ensure(
+            self.x.is_finite() && self.y.is_finite(),
+            "Request area points must be finite.",
+        )
+    }
+}
+
+/// What a pending request may change. A request keeps its targets until it is applied or
+/// removed, so the request box can be edited without losing its scope.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum RequestTarget {
+    Element {
+        page: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<Uuid>,
+        id: Uuid,
+    },
+    Boundary {
+        page: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<Uuid>,
+    },
+    Reference {
+        id: Uuid,
+    },
+    Pointer {
+        id: Uuid,
+    },
+}
+
+impl RequestTarget {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::Element { page, id, .. } => ensure(
+                !page.is_nil() && !id.is_nil(),
+                "A request target needs a boundary and a layer.",
+            ),
+            Self::Boundary { page, .. } => {
+                ensure(!page.is_nil(), "A request target needs a boundary.")
+            }
+            Self::Reference { id } | Self::Pointer { id } => {
+                ensure(!id.is_nil(), "A request target needs an identifier.")
+            }
+        }
+    }
+
+    /// The boundary a target belongs to, when it has one.
+    pub fn page(&self) -> Option<Uuid> {
+        match self {
+            Self::Element { page, .. } | Self::Boundary { page, .. } => Some(*page),
+            Self::Reference { .. } | Self::Pointer { .. } => None,
+        }
+    }
+}
+
+/// The outline of a request area. Coverage uses the real outline, not the bounding box.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum RequestShape {
+    Rect { rect: Rect },
+    Ellipse { rect: Rect },
+    Polygon { points: Vec<RequestPoint> },
+    Freehand { points: Vec<RequestPoint> },
+}
+
+impl RequestShape {
+    fn validate(&self) -> Result<()> {
+        match self {
+            Self::Rect { rect } | Self::Ellipse { rect } => rect.validate(Viewport {
+                width: 1,
+                height: 1,
+            }),
+            Self::Polygon { points } | Self::Freehand { points } => {
+                ensure(
+                    (3..=4096).contains(&points.len()),
+                    "A request area needs between 3 and 4,096 points.",
+                )?;
+                for point in points {
+                    point.validate()?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Axis-aligned bounds of the outline, used to place new content and its marker.
+    pub fn bounds(&self) -> Rect {
+        match self {
+            Self::Rect { rect } | Self::Ellipse { rect } => *rect,
+            Self::Polygon { points } | Self::Freehand { points } => {
+                let left = points
+                    .iter()
+                    .map(|point| point.x)
+                    .fold(f64::INFINITY, f64::min);
+                let top = points
+                    .iter()
+                    .map(|point| point.y)
+                    .fold(f64::INFINITY, f64::min);
+                let right = points
+                    .iter()
+                    .map(|point| point.x)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                let bottom = points
+                    .iter()
+                    .map(|point| point.y)
+                    .fold(f64::NEG_INFINITY, f64::max);
+                Rect {
+                    x: left,
+                    y: top,
+                    width: (right - left).max(1.0),
+                    height: (bottom - top).max(1.0),
+                }
+            }
+        }
+    }
+}
+
+/// Where a request area sits: inside one boundary size, or free on the canvas.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RequestArea {
+    /// The boundary page the area was drawn in; absent means canvas coordinates outside every
+    /// boundary. Canvas coordinates use the same origin as boundary positions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page: Option<Uuid>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<Uuid>,
+    pub shape: RequestShape,
+}
+
+impl RequestArea {
+    pub fn validate(&self) -> Result<()> {
+        ensure(
+            self.page.is_some() || self.size.is_none(),
+            "A request area names a size only inside a boundary.",
+        )?;
+        self.shape.validate()
+    }
+}
+
+/// A request waiting for Generate. Requests belong to the project, so they can target any mix
+/// of layers, boundaries, reference items and pointers, with or without a drawn area.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PendingRequest {
+    pub id: Uuid,
+    pub text: String,
+    #[serde(default)]
+    pub attachments: Vec<RequestAttachment>,
+    #[serde(default)]
+    pub targets: Vec<RequestTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub area: Option<RequestArea>,
+    pub requested_at: String,
+}
+
+impl PendingRequest {
+    pub fn validate(&self) -> Result<()> {
+        ensure(!self.id.is_nil(), "A request needs a nonempty identifier.")?;
+        validate_text(&self.text, "Request", MAX_PROMPT_CHARS, false)?;
+        ensure(
+            !self.requested_at.is_empty()
+                && self.requested_at.chars().count() <= 64
+                && !self.requested_at.chars().any(char::is_control),
+            "A request needs a short creation time.",
+        )?;
+        ensure(
+            self.attachments.len() <= crate::MAX_ELEMENT_CONTEXT,
+            "A request supports at most 32 attachments.",
+        )?;
+        for attachment in &self.attachments {
+            attachment.validate()?;
+        }
+        ensure(
+            self.targets.len() <= MAX_REQUEST_TARGETS,
+            "A request targets at most 64 things.",
+        )?;
+        for target in &self.targets {
+            target.validate()?;
+        }
+        if let Some(area) = &self.area {
+            area.validate()?;
+        }
+        Ok(())
+    }
+
+    /// True when the request targets this layer directly.
+    pub fn targets_element(&self, page: Uuid, id: Uuid, size: Option<Uuid>) -> bool {
+        self.targets.iter().any(|target| match target {
+            RequestTarget::Element {
+                page: target_page,
+                size: target_size,
+                id: target_id,
+            } => {
+                *target_page == page
+                    && *target_id == id
+                    && (target_size.is_none() || size.is_none() || *target_size == size)
+            }
+            _ => false,
+        })
+    }
+
+    /// True when the request targets this boundary or a layer in it.
+    pub fn targets_boundary(&self, page: Uuid, size: Option<Uuid>) -> bool {
+        self.targets.iter().any(|target| match target {
+            RequestTarget::Boundary {
+                page: target_page,
+                size: target_size,
+            }
+            | RequestTarget::Element {
+                page: target_page,
+                size: target_size,
+                ..
+            } => {
+                *target_page == page
+                    && (size.is_none() || target_size.is_none() || *target_size == size)
+            }
+            _ => false,
+        })
+    }
+}
+
 /// How a page behaves inside its canvas boundary.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -180,10 +415,7 @@ pub struct PageSize {
 
 impl PageSize {
     pub fn validate(&self) -> Result<()> {
-        ensure(
-            !self.id.is_nil(),
-            "A size needs a nonempty identifier.",
-        )?;
+        ensure(!self.id.is_nil(), "A size needs a nonempty identifier.")?;
         validate_text(&self.label, "Size name", 60, true)?;
         Viewport {
             width: self.width,
@@ -377,8 +609,13 @@ pub struct ReferencePlacement {
     deny_unknown_fields
 )]
 pub enum ReferenceKind {
-    Note { text: String },
-    Link { url: String, title: String },
+    Note {
+        text: String,
+    },
+    Link {
+        url: String,
+        title: String,
+    },
     /// A picture already stored in `project.pictures`; bytes never leave the project.
     Image {
         picture: Uuid,
@@ -386,7 +623,9 @@ pub enum ReferenceKind {
         #[serde(default, skip_serializing_if = "String::is_empty")]
         name: String,
     },
-    Swatch { color: String },
+    Swatch {
+        color: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -482,8 +721,12 @@ pub enum PointerTarget {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size_id: Option<Uuid>,
     },
-    Reference { item_id: Uuid },
-    Url { url: String },
+    Reference {
+        item_id: Uuid,
+    },
+    Url {
+        url: String,
+    },
 }
 
 /// What Play can do with a simple pointer. Everything else exports only.
@@ -560,18 +803,16 @@ impl ExportRecord {
                 && std::path::Path::new(&self.destination).is_absolute(),
             "An export destination must be an absolute folder path.",
         )?;
-        validate_text(
-            &self.exported_at,
-            "Export time",
-            64,
-            true,
-        )?;
+        validate_text(&self.exported_at, "Export time", 64, true)?;
         ensure(
             self.pages.len() <= MAX_PAGES,
             "An export records at most 100 boundaries.",
         )?;
         for page in &self.pages {
-            ensure(!page.page_id.is_nil(), "An exported boundary needs a nonempty identifier.")?;
+            ensure(
+                !page.page_id.is_nil(),
+                "An exported boundary needs a nonempty identifier.",
+            )?;
             validate_path(&page.path)?;
         }
         ensure(
@@ -581,10 +822,18 @@ impl ExportRecord {
         for exported in self.pointers.values() {
             ensure(
                 exported.fingerprint.len() == 64
-                    && exported.fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                    && exported
+                        .fingerprint
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit()),
                 "An export fingerprint must be a SHA-256 digest.",
             )?;
-            validate_text(&exported.comment, "Pointer comment", MAX_PROMPT_CHARS, false)?;
+            validate_text(
+                &exported.comment,
+                "Pointer comment",
+                MAX_PROMPT_CHARS,
+                false,
+            )?;
         }
         Ok(())
     }
@@ -602,7 +851,11 @@ pub struct Pointer {
     #[serde(default)]
     pub wiring: Option<PointerWiring>,
     /// A simple action the comment asks for, and the comment it was classified from.
-    #[serde(default, deserialize_with = "crate::required_nullable", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::required_nullable",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub play: Option<PlayAction>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub play_comment: String,
@@ -611,14 +864,12 @@ pub struct Pointer {
 impl Pointer {
     pub fn validate(&self) -> Result<()> {
         ensure(!self.id.is_nil(), "A pointer needs a nonempty identifier.")?;
-        validate_text(
-            &self.comment,
-            "Pointer comment",
-            MAX_PROMPT_CHARS,
-            false,
-        )?;
+        validate_text(&self.comment, "Pointer comment", MAX_PROMPT_CHARS, false)?;
         if let PointerTarget::Url { url } = &self.to {
-            ensure(valid_http_url(url), "A pointer URL must start with http:// or https://.")?;
+            ensure(
+                valid_http_url(url),
+                "A pointer URL must start with http:// or https://.",
+            )?;
         }
         if let Some(wiring) = &self.wiring {
             ensure(
@@ -632,23 +883,19 @@ impl Pointer {
                 false,
             )?;
         }
-        validate_text(
-            &self.play_comment,
-            "Play comment",
-            MAX_PROMPT_CHARS,
-            false,
-        )?;
-        if let Some(PlayAction::Swap { element, with_element }) = &self.play {
+        validate_text(&self.play_comment, "Play comment", MAX_PROMPT_CHARS, false)?;
+        if let Some(PlayAction::Swap {
+            element,
+            with_element,
+        }) = &self.play
+        {
             ensure(
                 element != with_element,
                 "A swap pointer needs two different layers.",
             )?;
         }
         if let Some(PlayAction::GoTo { boundary }) = &self.play {
-            ensure(
-                !boundary.is_nil(),
-                "A go-to pointer needs a boundary.",
-            )?;
+            ensure(!boundary.is_nil(), "A go-to pointer needs a boundary.")?;
         }
         Ok(())
     }
@@ -709,11 +956,14 @@ fn pointer_target_missing(project: &Project, target: &PointerTarget) -> bool {
             .iter()
             .find(|page| page.id == *page_id)
             .is_none_or(|page| size_id.is_some_and(|size| page.size(size).is_none())),
-        PointerTarget::Reference { item_id } => !project.reference.iter().any(|item| item.id == *item_id),
+        PointerTarget::Reference { item_id } => {
+            !project.reference.iter().any(|item| item.id == *item_id)
+        }
         // A URL is drawn on its reference card; without that card the line has no target.
-        PointerTarget::Url { url } => !project.reference.iter().any(|item| {
-            matches!(&item.kind, ReferenceKind::Link { url: card, .. } if card == url)
-        }),
+        PointerTarget::Url { url } => !project
+            .reference
+            .iter()
+            .any(|item| matches!(&item.kind, ReferenceKind::Link { url: card, .. } if card == url)),
     }
 }
 
@@ -902,6 +1152,10 @@ pub struct Project {
     /// history; a definition outlives its last copy.
     #[serde(default)]
     pub linked: BTreeMap<Uuid, LinkedDefinition>,
+    /// Requests waiting for Generate. They belong to the project, not to one layer, because a
+    /// request can target several layers, boundaries, reference items and pointers at once.
+    #[serde(default)]
+    pub requests: Vec<PendingRequest>,
     pub decisions: Vec<Decision>,
     pub exceptions: Vec<DesignException>,
     pub extensions: BTreeMap<String, ExtensionRecord>,
@@ -1070,7 +1324,7 @@ pub enum Command {
     /// Selected reference items travel with these requests as context, through the same
     /// request attachments generation already sends.
     AttachReferenceContext {
-        element_ids: Vec<Uuid>,
+        request_ids: Vec<Uuid>,
         item_ids: Vec<Uuid>,
     },
     DeletePage {
@@ -1127,6 +1381,24 @@ pub enum Command {
         page_id: Uuid,
         ids: Vec<Uuid>,
     },
+    /// One Delete gesture across every selected kind: layers, reference items, pointers,
+    /// requests, boundaries, linked sizes and linked definitions, in one undo step.
+    DeleteItems {
+        #[serde(default)]
+        elements: Vec<(Uuid, Uuid)>,
+        #[serde(default)]
+        reference_ids: Vec<Uuid>,
+        #[serde(default)]
+        pointer_ids: Vec<Uuid>,
+        #[serde(default)]
+        request_ids: Vec<Uuid>,
+        #[serde(default)]
+        page_ids: Vec<Uuid>,
+        #[serde(default)]
+        size_ids: Vec<(Uuid, Uuid)>,
+        #[serde(default)]
+        linked_ids: Vec<Uuid>,
+    },
     GroupElements {
         page_id: Uuid,
         ids: Vec<Uuid>,
@@ -1135,10 +1407,17 @@ pub enum Command {
         page_id: Uuid,
         id: Uuid,
     },
-    /// Set or clear the request waiting for Generate on a layer.
-    SetElementRequest {
-        element_id: Uuid,
-        request: Option<crate::PendingRequest>,
+    /// Queue a request on its targets. Adding, editing and removing a request are each one
+    /// undo step.
+    AddRequest {
+        request: PendingRequest,
+    },
+    /// Replace a request's text, attachments, targets or area.
+    UpdateRequest {
+        request: PendingRequest,
+    },
+    RemoveRequests {
+        ids: Vec<Uuid>,
     },
     UpdateElementContext {
         element_id: Uuid,
@@ -1209,9 +1488,12 @@ impl Command {
             Self::PasteLinkedInstances { .. } => "Pasted linked elements",
             Self::MoveElements { .. } => "Moved elements",
             Self::RemoveElements { .. } => "Removed elements",
+            Self::DeleteItems { .. } => "Removed items",
             Self::GroupElements { .. } => "Grouped elements",
             Self::UngroupElements { .. } => "Ungrouped elements",
-            Self::SetElementRequest { .. } => "Asked AI on a layer",
+            Self::AddRequest { .. } => "Asked AI",
+            Self::UpdateRequest { .. } => "Changed a request",
+            Self::RemoveRequests { .. } => "Removed a request",
             Self::UpdateElementContext { .. } => "Changed layer context",
             Self::SetBrief { .. } => "Changed the project brief",
             Self::SetDecision { .. } => "Kept a decision",
@@ -1260,6 +1542,7 @@ impl Project {
             reference: vec![],
             pointers: vec![],
             linked: BTreeMap::new(),
+            requests: vec![],
             decisions: vec![],
             exceptions: vec![],
             extensions: BTreeMap::new(),
@@ -1316,6 +1599,7 @@ impl Project {
             reference: vec![],
             pointers: vec![],
             linked: BTreeMap::new(),
+            requests: vec![],
             decisions: vec![],
             exceptions: vec![],
             extensions: BTreeMap::new(),
@@ -1334,7 +1618,7 @@ impl Project {
             .ok_or_else(|| Error("This page no longer exists.".into()))
     }
 
-    fn page_mut(&mut self, id: Uuid) -> Result<&mut Page> {
+    pub(crate) fn page_mut(&mut self, id: Uuid) -> Result<&mut Page> {
         self.pages
             .iter_mut()
             .find(|p| p.id == id)
@@ -1374,7 +1658,10 @@ impl Project {
             "A project holds at most 1,000 pointers.",
         )?;
         ensure(
-            !self.pointers.iter().any(|existing| existing.id == pointer.id),
+            !self
+                .pointers
+                .iter()
+                .any(|existing| existing.id == pointer.id),
             "This pointer already exists.",
         )?;
         self.pointers.push(pointer);
@@ -1417,7 +1704,7 @@ impl Project {
         Ok(())
     }
 
-    fn add_reference_item(
+    pub(crate) fn add_reference_item(
         &mut self,
         mut item: ReferenceItem,
         picture_data_uri: Option<String>,
@@ -1476,7 +1763,10 @@ impl Project {
                     *value = next;
                 }
             }
-            ReferenceKind::Link { url: link, title: name } => {
+            ReferenceKind::Link {
+                url: link,
+                title: name,
+            } => {
                 ensure(
                     text.is_none() && color.is_none(),
                     "This reference item is not a note or a swatch.",
@@ -1508,14 +1798,35 @@ impl Project {
 
     /// One gesture: the layer disappears and its request text and attachments become
     /// reference items beside where it was dropped.
+    /// One gesture: the layer disappears and the request text and attachments aimed at it
+    /// become reference items beside where it was dropped.
     fn element_to_reference(&mut self, page_id: Uuid, element_id: Uuid, rect: Rect) -> Result<()> {
         let page = self.page_mut(page_id)?;
         let element = crate::elements::remove_element(&mut page.elements, element_id)
             .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-        let pending = element.meta.pending.clone();
-        let prompt = pending
-            .as_ref()
-            .map(|request| request.prompt.clone())
+        // Requests that named the removed layer lose that target; the first one's text and
+        // attachments become the note and its cards. A request with no targets left is gone.
+        let mut prompt: Option<String> = None;
+        let mut attachments: Vec<crate::RequestAttachment> = vec![];
+        for request in &mut self.requests {
+            let named = request.targets.iter().any(
+                |target| matches!(target, RequestTarget::Element { id, .. } if *id == element_id),
+            );
+            if !named {
+                continue;
+            }
+            if prompt.is_none() && !request.text.trim().is_empty() {
+                prompt = Some(request.text.clone());
+            }
+            if attachments.is_empty() {
+                attachments = request.attachments.clone();
+            }
+            request.targets.retain(
+                |target| !matches!(target, RequestTarget::Element { id, .. } if *id == element_id),
+            );
+        }
+        self.requests.retain(|request| !request.targets.is_empty());
+        let prompt = prompt
             .filter(|prompt| !prompt.trim().is_empty())
             .unwrap_or_else(|| element.label());
         let note = converted_reference_note(rect);
@@ -1525,7 +1836,7 @@ impl Project {
             kind: ReferenceKind::Note { text: prompt },
         }];
         let mut x = note.x + note.width + 16.0;
-        for attachment in pending.map(|request| request.attachments).unwrap_or_default() {
+        for attachment in attachments {
             let item = match attachment.kind {
                 crate::AttachmentKind::Link => attachment.url.map(|url| {
                     let title = url::Url::parse(&url)
@@ -1577,64 +1888,61 @@ impl Project {
     }
 
     /// Selected reference items become request attachments on these pending requests.
-    fn attach_reference_context(
-        &mut self,
-        element_ids: &[Uuid],
-        item_ids: &[Uuid],
-    ) -> Result<()> {
-        ensure(!element_ids.is_empty(), "Select a layer with a request first.")?;
-        let contexts: Vec<(String, crate::AttachmentKind, Option<String>, Option<String>)> =
-            item_ids
-                .iter()
-                .map(|id| {
-                    let item = self
-                        .reference
-                        .iter()
-                        .find(|item| item.id == *id)
-                        .ok_or_else(|| Error("This reference item no longer exists.".into()))?;
-                    Ok(match &item.kind {
-                        ReferenceKind::Note { text } => (
-                            "Reference note".to_string(),
-                            crate::AttachmentKind::Text,
-                            Some(text.clone()),
-                            None,
-                        ),
-                        ReferenceKind::Link { url, title } => (
-                            if title.trim().is_empty() {
-                                url.clone()
-                            } else {
-                                title.clone()
-                            },
-                            crate::AttachmentKind::Link,
-                            None,
-                            Some(url.clone()),
-                        ),
-                        // Reference pictures travel by name only; their bytes never leave the project.
-                        ReferenceKind::Image { picture, name } => (
-                            reference_picture_name(*picture, name),
-                            crate::AttachmentKind::Text,
-                            Some(reference_picture_name(*picture, name)),
-                            None,
-                        ),
-                        ReferenceKind::Swatch { color } => (
-                            "Reference colour".to_string(),
-                            crate::AttachmentKind::Text,
-                            Some(color.clone()),
-                            None,
-                        ),
-                    })
+    fn attach_reference_context(&mut self, request_ids: &[Uuid], item_ids: &[Uuid]) -> Result<()> {
+        ensure(!request_ids.is_empty(), "Write a request first.")?;
+        let contexts: Vec<(
+            String,
+            crate::AttachmentKind,
+            Option<String>,
+            Option<String>,
+        )> = item_ids
+            .iter()
+            .map(|id| {
+                let item = self
+                    .reference
+                    .iter()
+                    .find(|item| item.id == *id)
+                    .ok_or_else(|| Error("This reference item no longer exists.".into()))?;
+                Ok(match &item.kind {
+                    ReferenceKind::Note { text } => (
+                        "Reference note".to_string(),
+                        crate::AttachmentKind::Text,
+                        Some(text.clone()),
+                        None,
+                    ),
+                    ReferenceKind::Link { url, title } => (
+                        if title.trim().is_empty() {
+                            url.clone()
+                        } else {
+                            title.clone()
+                        },
+                        crate::AttachmentKind::Link,
+                        None,
+                        Some(url.clone()),
+                    ),
+                    // Reference pictures travel by name only; their bytes never leave the project.
+                    ReferenceKind::Image { picture, name } => (
+                        reference_picture_name(*picture, name),
+                        crate::AttachmentKind::Text,
+                        Some(reference_picture_name(*picture, name)),
+                        None,
+                    ),
+                    ReferenceKind::Swatch { color } => (
+                        "Reference colour".to_string(),
+                        crate::AttachmentKind::Text,
+                        Some(color.clone()),
+                        None,
+                    ),
                 })
-                .collect::<Result<_>>()?;
-        for element_id in element_ids {
-            let element = self
-                .element_mut(*element_id)
-                .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-            let pending = element
-                .meta
-                .pending
-                .as_mut()
-                .ok_or_else(|| Error("Give this layer a request first.".into()))?;
-            let mut used: BTreeSet<String> = pending
+            })
+            .collect::<Result<_>>()?;
+        for request_id in request_ids {
+            let request = self
+                .requests
+                .iter_mut()
+                .find(|request| request.id == *request_id)
+                .ok_or_else(|| Error("This request no longer exists.".into()))?;
+            let mut used: BTreeSet<String> = request
                 .attachments
                 .iter()
                 .map(|item| item.id.clone())
@@ -1642,19 +1950,23 @@ impl Project {
             let mut additions = Vec::new();
             for (name, kind, text, url) in &contexts {
                 // An empty note carries no reference.
-                if *kind == crate::AttachmentKind::Text && text.as_deref().is_none_or(str::is_empty) {
+                if *kind == crate::AttachmentKind::Text && text.as_deref().is_none_or(str::is_empty)
+                {
                     continue;
                 }
-                let duplicate = pending.attachments.iter().chain(additions.iter()).any(|existing| {
-                    existing.kind == *kind
-                        && existing.text == *text
-                        && existing.url == *url
-                });
+                let duplicate =
+                    request
+                        .attachments
+                        .iter()
+                        .chain(additions.iter())
+                        .any(|existing| {
+                            existing.kind == *kind && existing.text == *text && existing.url == *url
+                        });
                 if duplicate {
                     continue;
                 }
                 let id = (1..)
-                    .map(|n| format!("a{}{n}", &element_id.simple().to_string()[..4]))
+                    .map(|n| format!("a{n}"))
                     .find(|id| !used.contains(id))
                     .expect("an unused identifier");
                 used.insert(id.clone());
@@ -1669,15 +1981,56 @@ impl Project {
                 });
             }
             ensure(
-                pending.attachments.len() + additions.len() <= 16,
+                request.attachments.len() + additions.len() <= 16,
                 "A request supports at most 16 attachments.",
             )?;
-            pending.attachments.extend(additions);
+            request.attachments.extend(additions);
         }
         Ok(())
     }
 
-    /// A note, link, colour or picture dragged into a boundary becomes a layer there.
+    fn add_request(&mut self, request: PendingRequest) -> Result<()> {
+        request.validate()?;
+        ensure(
+            self.requests.len() < MAX_REQUESTS,
+            "A project holds at most 256 pending requests.",
+        )?;
+        ensure(
+            !self
+                .requests
+                .iter()
+                .any(|existing| existing.id == request.id),
+            "This request already exists.",
+        )?;
+        self.requests.push(request);
+        Ok(())
+    }
+
+    fn update_request(&mut self, request: PendingRequest) -> Result<()> {
+        request.validate()?;
+        let existing = self
+            .requests
+            .iter_mut()
+            .find(|existing| existing.id == request.id)
+            .ok_or_else(|| Error("This request no longer exists.".into()))?;
+        *existing = request;
+        Ok(())
+    }
+
+    fn remove_requests(&mut self, ids: &[Uuid]) -> Result<()> {
+        ensure(!ids.is_empty(), "Select a request first.")?;
+        for id in ids {
+            ensure(
+                self.requests.iter().any(|request| request.id == *id),
+                "This request no longer exists.",
+            )?;
+        }
+        self.requests.retain(|request| !ids.contains(&request.id));
+        Ok(())
+    }
+
+    /// A note, link, colour or picture dragged into a boundary becomes a layer there, with a
+    /// pending request that carries the note's text or the link as its context.
     fn reference_to_element(&mut self, item_id: Uuid, page_id: Uuid, rect: Rect) -> Result<()> {
         let item = self
             .reference
@@ -1698,6 +2051,7 @@ impl Project {
             text: None,
             url,
         };
+        let mut request: Option<(String, Vec<crate::RequestAttachment>)> = None;
         let mut element = match item.kind {
             ReferenceKind::Image { picture, .. } => {
                 let mut element = crate::empty_element(crate::ElementKind::Image, rect);
@@ -1705,14 +2059,9 @@ impl Project {
                 element
             }
             ReferenceKind::Note { text } => {
-                let mut element = crate::empty_element(crate::ElementKind::Box, rect);
+                let element = crate::empty_element(crate::ElementKind::Box, rect);
                 if !text.trim().is_empty() {
-                    element.meta.pending = Some(crate::PendingRequest {
-                        prompt: text,
-                        attachments: vec![],
-                        requested_at: "reference".into(),
-                        size_id: None,
-                    });
+                    request = Some((text, vec![]));
                 }
                 element
             }
@@ -1725,36 +2074,70 @@ impl Project {
                 .chars()
                 .take(120)
                 .collect();
-                let mut element = crate::empty_element(crate::ElementKind::Box, rect);
-                element.meta.pending = Some(crate::PendingRequest {
-                    prompt: String::new(),
-                    attachments: vec![attachment(
+                let element = crate::empty_element(crate::ElementKind::Box, rect);
+                request = Some((
+                    String::new(),
+                    vec![attachment(
                         attachment_id(),
                         name,
                         crate::AttachmentKind::Link,
                         None,
                         Some(url),
                     )],
-                    requested_at: "reference".into(),
-                    size_id: None,
-                });
+                ));
                 element
             }
             ReferenceKind::Swatch { color } => {
-                let mut element = crate::empty_element(crate::ElementKind::Box, rect);
-                element.meta.pending = Some(crate::PendingRequest {
-                    prompt: format!("Use {color}"),
-                    attachments: vec![],
-                    requested_at: "reference".into(),
-                    size_id: None,
-                });
+                let element = crate::empty_element(crate::ElementKind::Box, rect);
+                request = Some((format!("Use {color}"), vec![]));
                 element
             }
         };
         element.rect = rect;
         let page = self.page_mut(page_id)?;
-        page.elements.push(element);
+        page.elements.push(element.clone());
+        if let Some((text, attachments)) = request {
+            let request = PendingRequest {
+                id: Uuid::new_v4(),
+                text,
+                attachments,
+                targets: vec![RequestTarget::Element {
+                    page: page_id,
+                    size: Some(page.base_size_id()),
+                    id: element.id,
+                }],
+                area: None,
+                requested_at: "reference".into(),
+            };
+            self.add_request(request)?;
+        }
         Ok(())
+    }
+
+    /// Drop request targets that no longer exist, and requests left with nothing to act on.
+    pub(crate) fn prune_requests(&mut self) {
+        let pages: BTreeMap<Uuid, &Page> = self.pages.iter().map(|page| (page.id, page)).collect();
+        let references: BTreeSet<Uuid> = self.reference.iter().map(|item| item.id).collect();
+        let pointers: BTreeSet<Uuid> = self.pointers.iter().map(|pointer| pointer.id).collect();
+        self.requests.retain_mut(|request| {
+            request.targets.retain(|target| match target {
+                RequestTarget::Element { page, size, id } => pages.get(page).is_some_and(|page| {
+                    size.is_none_or(|size| page.sizes.iter().any(|item| item.id == size))
+                        && crate::elements::find_in(&page.elements, *id).is_some()
+                }),
+                RequestTarget::Boundary { page, size } => pages.get(page).is_some_and(|page| {
+                    size.is_none_or(|size| page.sizes.iter().any(|item| item.id == size))
+                }),
+                RequestTarget::Reference { id } => references.contains(id),
+                RequestTarget::Pointer { id } => pointers.contains(id),
+            });
+            if let Some(area) = &request.area
+                && area.page.is_some_and(|page| !pages.contains_key(&page))
+            {
+                request.area = None;
+            }
+            !request.targets.is_empty() || request.area.is_some()
+        });
     }
 
     pub fn pending_count(&self) -> usize {
@@ -1769,6 +2152,62 @@ impl Project {
         validate_text(&self.name, "Project name", 120, true)?;
         self.viewport.validate()?;
         self.grid_settings.validate()?;
+        ensure(
+            self.requests.len() <= MAX_REQUESTS,
+            "A project holds at most 256 pending requests.",
+        )?;
+        let mut request_ids = BTreeSet::new();
+        for request in &self.requests {
+            ensure(
+                request_ids.insert(request.id),
+                "Request identifiers must be unique.",
+            )?;
+            request.validate()?;
+            for target in &request.targets {
+                match target {
+                    RequestTarget::Element { page, size, id } => {
+                        let page = self.page(*page)?;
+                        ensure(
+                            page.sizes
+                                .iter()
+                                .any(|item| size.is_none_or(|size| size == item.id)),
+                            "A request target names a size this boundary does not have.",
+                        )?;
+                        ensure(
+                            crate::elements::find_in(&page.elements, *id).is_some(),
+                            "A request targets a layer that no longer exists.",
+                        )?;
+                    }
+                    RequestTarget::Boundary { page, size } => {
+                        let page = self.page(*page)?;
+                        ensure(
+                            page.sizes
+                                .iter()
+                                .any(|item| size.is_none_or(|size| size == item.id)),
+                            "A request target names a size this boundary does not have.",
+                        )?;
+                    }
+                    RequestTarget::Reference { id } => ensure(
+                        self.reference.iter().any(|item| item.id == *id),
+                        "A request targets a reference item that no longer exists.",
+                    )?,
+                    RequestTarget::Pointer { id } => ensure(
+                        self.pointers.iter().any(|pointer| pointer.id == *id),
+                        "A request targets a pointer that no longer exists.",
+                    )?,
+                }
+            }
+            if let Some(area) = &request.area
+                && let Some(page_id) = area.page
+            {
+                let page = self.page(page_id)?;
+                ensure(
+                    area.size
+                        .is_none_or(|size| page.sizes.iter().any(|item| item.id == size)),
+                    "A request area names a size this boundary does not have.",
+                )?;
+            }
+        }
         ensure(
             self.pages.len() <= MAX_PAGES,
             "A project contains at most 100 pages.",
@@ -1802,10 +2241,7 @@ impl Project {
             "A reference holds at most 1,000 items.",
         )?;
         for item in &self.reference {
-            ensure(
-                ids.insert(item.id),
-                "Project identifiers must be unique.",
-            )?;
+            ensure(ids.insert(item.id), "Project identifiers must be unique.")?;
             item.validate(self)?;
         }
         ensure(
@@ -1871,7 +2307,6 @@ impl Project {
                 &mut ids,
                 &mut element_count,
             )?;
-            validate_request_sizes(&page.elements, &size_ids)?;
         }
         if !self.pages.is_empty() {
             ensure(
@@ -2048,7 +2483,10 @@ impl Project {
                 reference,
             } => {
                 ensure(
-                    !next.pages.iter().any(|page| page.sizes.iter().any(|item| item.id == size.id)),
+                    !next
+                        .pages
+                        .iter()
+                        .any(|page| page.sizes.iter().any(|item| item.id == size.id)),
                     "This size already exists.",
                 )?;
                 let page_id = Uuid::new_v4();
@@ -2058,7 +2496,11 @@ impl Project {
                 next.pages.push(Page {
                     id: page_id,
                     name: name.trim().into(),
-                    path: if next.pages.is_empty() && path != "/" { "/".into() } else { path },
+                    path: if next.pages.is_empty() && path != "/" {
+                        "/".into()
+                    } else {
+                        path
+                    },
                     included: true,
                     output: OutputType::default(),
                     sizes: vec![size],
@@ -2097,18 +2539,12 @@ impl Project {
             }
             Command::RemovePageSize { page_id, size_id } => {
                 let page = next.page_mut(page_id)?;
-                ensure(
-                    page.sizes.len() > 1,
-                    "A boundary keeps at least one size.",
-                )?;
+                ensure(page.sizes.len() > 1, "A boundary keeps at least one size.")?;
                 ensure(
                     page.base_size_id() != size_id,
                     "The base size cannot be removed.",
                 )?;
-                ensure(
-                    page.size(size_id).is_some(),
-                    "This size no longer exists.",
-                )?;
+                ensure(page.size(size_id).is_some(), "This size no longer exists.")?;
                 page.sizes.retain(|size| size.id != size_id);
                 for element in page.elements.iter_mut() {
                     clear_size_overrides(element, size_id);
@@ -2116,6 +2552,7 @@ impl Project {
                 for definition in next.linked.values_mut() {
                     clear_size_overrides(&mut definition.master, size_id);
                 }
+                next.prune_requests();
             }
             Command::SetCanvasLayout {
                 placements,
@@ -2147,6 +2584,7 @@ impl Project {
                     )?;
                 }
                 next.reference.retain(|item| !ids.contains(&item.id));
+                next.prune_requests();
             }
             Command::AddPointer { pointer } => next.add_pointer(pointer)?,
             Command::UpdatePointer {
@@ -2164,6 +2602,7 @@ impl Project {
                     )?;
                 }
                 next.pointers.retain(|pointer| !ids.contains(&pointer.id));
+                next.prune_requests();
             }
             Command::SetPointerWiring {
                 pointer_id,
@@ -2238,9 +2677,9 @@ impl Project {
                 rect,
             } => next.reference_to_element(item_id, page_id, rect)?,
             Command::AttachReferenceContext {
-                element_ids,
+                request_ids,
                 item_ids,
-            } => next.attach_reference_context(&element_ids, &item_ids)?,
+            } => next.attach_reference_context(&request_ids, &item_ids)?,
             Command::DeletePage { page_id } => {
                 next.page(page_id)?;
                 ensure(
@@ -2248,11 +2687,11 @@ impl Project {
                     "The home page cannot be deleted.",
                 )?;
                 next.pages.retain(|p| p.id != page_id);
+                next.prune_requests();
             }
-            Command::SetElementRequest {
-                element_id,
-                request,
-            } => next.set_element_request(element_id, request)?,
+            Command::AddRequest { request } => next.add_request(request)?,
+            Command::UpdateRequest { request } => next.update_request(request)?,
+            Command::RemoveRequests { ids } => next.remove_requests(&ids)?,
             Command::ImportWebsite {
                 pages,
                 reference,
@@ -2307,14 +2746,89 @@ impl Project {
             Command::UpdateElements { page_id, patches } => {
                 next.update_elements(page_id, patches)?
             }
-            Command::LinkElements { ids, source_id } => {
-                next.link_elements(ids, source_id)?
-            }
+            Command::LinkElements { ids, source_id } => next.link_elements(ids, source_id)?,
             Command::UnlinkElements { ids } => next.unlink_elements(ids)?,
             Command::RemoveLinkedDefinition { id } => next.remove_linked_definition(id)?,
             Command::PasteLinkedInstances { items } => next.paste_linked_instances(items)?,
             Command::MoveElements { moves } => next.move_elements(moves)?,
             Command::RemoveElements { page_id, ids } => next.remove_elements(page_id, ids)?,
+            Command::DeleteItems {
+                elements,
+                reference_ids,
+                pointer_ids,
+                request_ids,
+                page_ids,
+                size_ids,
+                linked_ids,
+            } => {
+                // Explicitly selected requests go first, so removing their targets in the same
+                // gesture cannot prune them out from under the request check.
+                for id in request_ids {
+                    ensure(
+                        next.requests.iter().any(|request| request.id == id),
+                        "This request no longer exists.",
+                    )?;
+                    next.requests.retain(|request| request.id != id);
+                }
+                let mut by_page: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
+                for (page_id, element_id) in elements {
+                    next.page(page_id)?;
+                    ensure(
+                        crate::elements::find_in(&next.page(page_id)?.elements, element_id)
+                            .is_some(),
+                        "This layer no longer exists.",
+                    )?;
+                    by_page.entry(page_id).or_default().push(element_id);
+                }
+                for (page_id, ids) in by_page {
+                    next.remove_elements(page_id, ids)?;
+                }
+                for id in reference_ids {
+                    ensure(
+                        next.reference.iter().any(|item| item.id == id),
+                        "This reference item no longer exists.",
+                    )?;
+                    next.reference.retain(|item| item.id != id);
+                }
+                for id in pointer_ids {
+                    ensure(
+                        next.pointers.iter().any(|pointer| pointer.id == id),
+                        "This pointer no longer exists.",
+                    )?;
+                    next.pointers.retain(|pointer| pointer.id != id);
+                }
+                for id in linked_ids {
+                    next.delete_linked_definition(id)?;
+                }
+                for (page_id, size_id) in size_ids {
+                    let page = next.page_mut(page_id)?;
+                    ensure(page.sizes.len() > 1, "A boundary keeps at least one size.")?;
+                    ensure(
+                        page.base_size_id() != size_id,
+                        "The base size cannot be removed.",
+                    )?;
+                    ensure(page.size(size_id).is_some(), "This size no longer exists.")?;
+                    page.sizes.retain(|size| size.id != size_id);
+                    for element in page.elements.iter_mut() {
+                        clear_size_overrides(element, size_id);
+                    }
+                    for definition in next.linked.values_mut() {
+                        clear_size_overrides(&mut definition.master, size_id);
+                    }
+                }
+                for page_id in page_ids {
+                    ensure(
+                        next.pages.iter().any(|page| page.id == page_id),
+                        "This boundary no longer exists.",
+                    )?;
+                    ensure(
+                        page_id != next.home_page_id,
+                        "The home page cannot be deleted.",
+                    )?;
+                    next.pages.retain(|page| page.id != page_id);
+                }
+                next.prune_requests();
+            }
             Command::GroupElements { page_id, ids } => next.group_elements(page_id, ids)?,
             Command::UngroupElements { page_id, id } => next.ungroup_elements(page_id, id)?,
             Command::UpdateElementContext {
@@ -2377,23 +2891,6 @@ impl Project {
         next.validate()?;
         Ok(next)
     }
-}
-
-/// A request names the size it was written in, so that size must belong to the boundary.
-fn validate_request_sizes(elements: &[Element], sizes: &BTreeSet<Uuid>) -> Result<()> {
-    for element in elements {
-        ensure(
-            element
-                .meta
-                .pending
-                .as_ref()
-                .and_then(|pending| pending.size_id)
-                .is_none_or(|size| sizes.contains(&size)),
-            "A request names a size this boundary does not have.",
-        )?;
-        validate_request_sizes(&element.children, sizes)?;
-    }
-    Ok(())
 }
 
 fn clear_size_overrides(element: &mut Element, size_id: Uuid) {

@@ -25,7 +25,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | **Box** | An element that holds children and lays them out freely, in a stack or in a grid. | `ElementKind::Box`, `Element.layout` |
 | **Layer** | One element or a collection of elements (a group), with its own AI request history and context. | `Element`, `Element.meta` |
 | **Group** | A layer made of several elements (Ctrl/Cmd+G). | `ElementKind::Group`, `group_elements` |
-| **Frame** | A box drawn with a request; the AI fills it with elements. | `ElementKind::Box`, `ElementMeta.pending` |
+| **Request** (tool and box) | What you ask the AI for, aimed at targets you click with the Request tool (default Pick), an area you draw in a shape, or a selection (F), with text saying what to make or change. It targets whatever it covers or what was selected: layers, boundaries, reference items, pointers. | `PendingRequest`, `Project.requests`, `EditorTool` `request` |
 | **Insert** | Adds any kind of element by hand (Ctrl/Cmd+I). | `INSERT_GROUPS`, `EditorTool` `insert` |
 | **Linked element** | A named element whose copies are one element: edit one, all change. Each copy keeps its own position. | `Element.link`, `Project.linked`, `LinkedDefinition`, `resolve_element` |
 | **Link / Unlink** | Join elements under one name / detach a copy (Ctrl/Cmd+Alt+K / B). | `Command::LinkElements` / `UnlinkElements`, `link_elements`, `unlink_elements` |
@@ -35,8 +35,10 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 
 | Term | Meaning | In code |
 |---|---|---|
-| **Request** | What you ask the AI to make or change, written in a frame or a layer's request box. | `PendingRequest`, `ElementMeta.pending` |
-| **Request box** | Where a request is typed: on a frame, or under a layer in Properties. | — |
+| **Request text** | What you ask the AI to make or change, written in a request box or a layer's request box. | `PendingRequest.text` |
+| **Request box** | Where request text is typed: on a request on the canvas, or under a layer in Properties. | `RequestBoxEditor`, `RequestProperties` |
+| **Request shape** | The outline of a request area: rectangle, ellipse, polygon, freehand, or taken from a shape on the canvas (Shift+F). Coverage uses the real outline. | `RequestShape`, `RequestArea`, `src/projectCanvas/requestGeometry.ts` |
+| **Targets** | What a request may change: what it covers or what was selected. Its scope. | `RequestTarget`, `PendingRequest.targets`, `scope_for` |
 | **Request history** | Past requests for one layer, shown in Properties. | `ElementMeta.requests`, `RequestRecord` |
 | **Context** | What travels with a request: attachments, selected reference items, pointers touching it. | `RequestAttachment` |
 | **Generate** | Sends pending requests; the AI answers with elements, not code. | `GenerationCandidate`, `apply_generation_output` |
@@ -96,7 +98,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 
 | Term | Meaning |
 |---|---|
-| **Tool strip** | Left edge: Select V, Frame F, Boundary B, Pointer P, Text T, Shape R/O/L, Image, Note N, Insert, Pan H. |
+| **Tool strip** | Left edge: Select V, Request F, Boundary B, Pointer P, Text T, Shape R/O/L, Image, Note N, Insert, Pan H. |
 | **Dock** | Right edge: Properties above Layers. Collapses to icons; Tab hides all panels. |
 | **Properties** | Settings of the selection: layer settings, then request box, history and context. |
 | **Layers** | Boundaries with their layers, then Reference, then Pointers. |
@@ -108,6 +110,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | Term | Why |
 |---|---|
 | **Moodboard** | Renamed Reference. |
+| **Frame** | Renamed Request. |
 | **Open in editor**, per-page editor | Everything is edited visually on the canvas. |
 | **Snapshot**, live boundary | The canvas draws elements, not code. Play and Preview export replace running in place. |
 | **Design / Split / Code** | No code exists before export. |

@@ -1,6 +1,6 @@
 import { Notice, ProblemBanner, needsAiSettings, type ProblemAction } from './ProblemBanner.js';
 import { userError, outcomeReason } from './userErrors.js';
-import { fixLabel, jobOutcome, staleResult } from './generationProblems.js';
+import { fixLabel, jobOutcome, requestText, staleResult } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
 import { scopeLabel } from './Notes';
@@ -73,7 +73,7 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   const job = operation === 'Preparing AI instructions…' ? null : currentJob;
   if (!job && !operation && !error && !controller.stopped) return null;
   const minutes = elapsedSeconds ?? 0;
-  const review = jobOutcome(job, id => project ? projectElement(project, id)?.meta.pending?.prompt : undefined);
+  const review = jobOutcome(job, id => project && projectElement(project, id) ? requestText(project, id) : undefined);
   const needsInput = review.blocked.length > 0 && review.retryable.length === 0 && !review.retryAll;
   const retry = review.retryable.length > 0 || review.retryAll || review.retryBatches || (controller.stopped && !review.blocked.length);
   const retryRequests = () => {
@@ -120,7 +120,7 @@ export function GenerationDetails({ controller, project, settings, openSettings,
   const candidate = job?.candidate;
   const conflicts = candidate?.requests.filter(request => request.status === 'conflict') ?? [];
   const generatedImages = candidate?.images ?? [];
-  const review = jobOutcome(job, id => projectElement(project, id)?.meta.pending?.prompt);
+  const review = jobOutcome(job, id => projectElement(project, id) ? requestText(project, id) : undefined);
   const canRetry = review.retryable.length > 0 || review.retryAll || review.retryBatches;
   const retryRequests = () => {
     if (review.retryBatches) void controller.retry().catch(() => {});
@@ -202,15 +202,15 @@ export function GenerationDetails({ controller, project, settings, openSettings,
           {job.status === 'applied' && conflicts.length > 0 && <p>Applied {candidate.requests.length - conflicts.length} of {candidate.requests.length} requests</p>}
           {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft">
             <ul className="generation-list">{candidate.requests.filter(request => request.status !== 'implemented').map(request => {
-              const element = projectElement(project, request.elementId);
-              const gap = review.blocked.find(item => item.elementId === request.elementId);
-              return <li key={request.elementId}><strong>{requestLabel(project, request.elementId)}</strong><p className="preserve-text">{element?.meta.pending?.prompt}</p>
-                {gap ? <><p className="preserve-text">{gap.reason}</p>{(!requestEditorOpen?.(request.elementId) || gap.fix) && <div className="form-actions">
-                  {!requestEditorOpen?.(request.elementId) && <button type="button" onClick={() => changeRequest(request.elementId)}>Change request</button>}
+              const elementId = request.elementId ?? '';
+              const gap = review.blocked.find(item => item.elementId === elementId);
+              return <li key={elementId || request.requestId || 'request'}><strong>{requestLabel(project, elementId)}</strong><p className="preserve-text">{project ? requestText(project, elementId) : ''}</p>
+                {gap ? <><p className="preserve-text">{gap.reason}</p>{(!requestEditorOpen?.(elementId) || gap.fix) && <div className="form-actions">
+                  {!requestEditorOpen?.(elementId) && <button type="button" onClick={() => changeRequest(elementId)}>Change request</button>}
                   {gap.fix && <button type="button" onClick={() => openFix(gap.fix!)}>{fixLabel(gap.fix)}</button>}
                 </div>}</> : <span>Needs attention</span>}</li>;
             })}</ul>
-            <Disclosure summary="Technical details"><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.requests.filter(request => request.status !== 'implemented').map(request => <li key={request.elementId}><strong>{requestLabel(project, request.elementId)}</strong><p>{request.explanation}</p></li>)}</ul></Disclosure>
+            <Disclosure summary="Technical details"><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.requests.filter(request => request.status !== 'implemented').map(request => <li key={request.elementId ?? request.requestId ?? 'request'}><strong>{requestLabel(project, request.elementId ?? '')}</strong><p>{request.explanation}</p></li>)}</ul></Disclosure>
           </section> : <><h3>Your layers</h3><p>{candidate.summary}</p></>}
           {generatedImages.length > 0 && <section aria-label="Generated images"><h3>Requested pictures</h3><ul className="generation-list">{generatedImages.map(image => <li key={image.key}><strong>{image.key}</strong><p>{image.prompt}</p></li>)}</ul></section>}
           {candidate.decisionProposals.length > 0 && <Disclosure className="proposal-list" summary={`Suggested rules (${candidate.decisionProposals.length})`}>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
@@ -218,13 +218,13 @@ export function GenerationDetails({ controller, project, settings, openSettings,
             <span><strong>{proposal.topic}</strong><span className="preserve-text">{outcomeReason(proposal.value)}</span><span className="small muted">{scopeLabel(project, proposal.scope)} · {outcomeReason(proposal.rationale)}</span></span>
           </label>)}</Disclosure>}
           {candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.elementId ? requestLabel(project, criticism.elementId) : 'Whole project'}</strong><p>{outcomeReason(criticism.message)}</p><p className="muted">{outcomeReason(criticism.suggestion)}</p></li>)}</ul></Disclosure>}
-          <Disclosure className="generation-coverage" summary="Request details"><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.requests.map(request => <tr key={request.elementId}><th>{requestLabel(project, request.elementId)}</th><td>{readable(request.status)}</td><td>{request.status === 'conflict' ? outcomeReason(request.explanation) : request.explanation}</td></tr>)}</tbody></table></div>
+          <Disclosure className="generation-coverage" summary="Request details"><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.requests.map(request => <tr key={request.elementId ?? request.requestId ?? 'request'}><th>{requestLabel(project, request.elementId ?? '')}</th><td>{readable(request.status)}</td><td>{request.status === 'conflict' ? outcomeReason(request.explanation) : request.explanation}</td></tr>)}</tbody></table></div>
           </Disclosure>
         </>}</section>
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
           {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready changes' : 'Apply changes'}</button>}
-          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => allElements(page.elements).some(element => element.meta.pending?.prompt.trim()))} onClick={retryRequests}>Try again</button>}
+          {canRetry && <button className="primary" disabled={!!operation || !(project.requests ?? []).some(request => request.text.trim())} onClick={retryRequests}>Try again</button>}
         </div>
       </>}
     </div>

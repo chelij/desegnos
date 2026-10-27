@@ -1,176 +1,335 @@
 # Desegnos project map
 
-A source map for people and AI agents. Paths are relative to this document. Product direction is [PRODUCT.md](../PRODUCT.md), the canvas concept [CANVAS.md](../CANVAS.md), the editor look [DESIGN.md](../DESIGN.md) and vocabulary [GLOSSARY.md](../GLOSSARY.md).
+A source map for people and AI agents. Paths are relative to this document. Product direction is [PRODUCT.md](../PRODUCT.md), the canvas concept [CANVAS.md](../CANVAS.md), the editor look and behaviour [DESIGN.md](../DESIGN.md) and the vocabulary [GLOSSARY.md](../GLOSSARY.md). Check claims here against the source before changing behaviour.
 
 ## Architecture
 
-The Rust workspace has three libraries and the Tauri desktop application. Crates use `desegnos`; the application identifier is `io.github.chelij.desegnos`.
+The Rust workspace has three libraries and the Tauri desktop application. Crates use the `desegnos` name; the application identifier is `io.github.chelij.desegnos`.
 
-- **`desegnos-core`** owns the project model, canvas elements, boundaries, pointers, reference, history semantics, generation contracts, direct renderers, export plans and website-to-element conversion.
-- **`desegnos-storage`** owns the `.desegnos` SQLite project, versions and alternatives, folders, safe export writing, brand evidence and website snapshot readers.
-- **`desegnos-ai`** owns provider requests, credentials, ChatGPT authentication, streaming replies, image APIs and safe website fetching.
-- **Tauri** owns native state, dialogs, project tabs, loopback static servers, import rendering, workspace/generation orchestration and export.
-- **React/TypeScript** owns the canvas editor. [main.tsx](../src/main.tsx) mounts [App.tsx](../src/App.tsx); [api.ts](../src/api.ts) wraps `invoke`; [types.ts](../src/types.ts) mirrors native payloads.
+- **`desegnos-core`** is pure project logic: the model, elements, boundaries, pointers, reference, history semantics, generation contracts and validation, direct renderers, export plans and website-to-element conversion. It performs no I/O.
+- **`desegnos-storage`** owns disk: the `.desegnos` SQLite project, content-addressed versions and branches, project folders, safe staged export writing, website snapshots and brand-source readers.
+- **`desegnos-ai`** owns provider communication: request bodies and schemas, credentials and secure storage, streaming transports, image APIs, ChatGPT sign-in and bounded public website fetching.
+- **Tauri** (`src-tauri/src/`) owns native authority: windows and commands, dialogs, open-project tabs, loopback static servers, generation/export lifecycles, recovery and app data.
+- **React/TypeScript** (`src/`) owns the canvas editor. [main.tsx](../src/main.tsx) mounts [App.tsx](../src/App.tsx); [api.ts](../src/api.ts) wraps `invoke`; [types.ts](../src/types.ts) mirrors native payloads and `Command`.
 
-Typical boundary: component → `native(command, args)` → Tauri command → library operation → serialized view. `WorkspaceView` returns the authoritative project, its open-project tabs and history state. Mutations carry an expected revision; `Session` persists a recovery snapshot before publishing.
+Typical boundary: component → `native(command, args)` or `edit(revision, command)` → `#[tauri::command]` → library operation → serialized `WorkspaceView`. `WorkspaceView` returns the authoritative `Project`, its open-project tabs, undo/history state, recovery offers and derived pointer states. Every edit carries the revision it was made against; stale edits are rejected rather than merged. Mutations autosave to the hidden recovery branch before the view is published (throttled to every 3 seconds). All AI, file, dialog and clipboard capability stays in native code; the renderer never receives credentials or arbitrary filesystem access.
 
 There is one editor: the project canvas. Code is not stored on the canvas and exists only in exports. Imported websites become canvas elements; brand import remains evidence for the project brief.
 
 ## Source tree
 
 ```text
+Cargo.toml, package.json, index.html, vite.config.ts, rust-toolchain.toml
 crates/
 ├── desegnos-core/src/       Project model, elements, generation, renderers, export, website import.
-├── desegnos-storage/src/    SQLite project, versions, safe export writing, import snapshots.
+│   └── render/pdf.rs        Minimal PDF writer for slide decks.
+├── desegnos-storage/src/    SQLite project, versions, safe export writing, website and brand sources.
 └── desegnos-ai/src/         Providers, transports, credentials, images, ChatGPT, website fetching.
-    └── chatgpt/             Sign-in, account lifecycle, token storage and HTTP/callback.
-src-tauri/src/               Desktop commands, workspace, export, local site, import.
+    └── chatgpt/             Sign-in, accounts, token storage, HTTP and loopback callback.
+src-tauri/src/               Desktop commands, workspace, generation, export, local site, import.
 src/                         React editor: canvas, dock, menus, dialogs, generation, import.
-├── projectCanvas/           Canvas layers: boundaries, elements, frames, reference, pointers.
-└── assets/brand/            Bundled wordmarks and Archivo font.
-tests/                       Kept Node tests (canvas geometry).
-scripts/                     Toolchain/release wrappers and usage reporting.
+├── projectCanvas/           Canvas layers: boundaries, requests, elements, reference, pointers, Play.
+└── assets/brand/            Bundled wordmarks and Archivo web font.
+tests/                       Kept Node tests; native/ holds Xvfb smoke and fake provider/OAuth servers.
+scripts/                     Toolchain/release wrappers, startup and vault checks, usage reporting.
 docs/                        Contracts, guides and this map.
+test-results/                Local evidence from smoke, startup and vault runs (gitignored).
 ```
 
 ## `desegnos-core`
 
-[lib.rs](../crates/desegnos-core/src/lib.rs) re-exports the public API.
+[lib.rs](../crates/desegnos-core/src/lib.rs) wires the modules and re-exports the public API.
 
 | Module | Owns |
 | --- | --- |
-| [model.rs](../crates/desegnos-core/src/model.rs) | `Project`, `Page`/boundary placement, `Command`, `Project::apply`/`validate`, reference items, pointers, decisions and brief. |
-| [elements.rs](../crates/desegnos-core/src/elements.rs) | `Element` tree, kinds, styles, free/stack/grid layout, overrides, linked definitions, patches and moves. |
-| [session.rs](../crates/desegnos-core/src/session.rs) | `Session`: revision checks, undo/redo, burst steps, export metadata outside undo, generation application and history labels. |
-| [pointers.rs](../crates/desegnos-core/src/pointers.rs) | Pointer model, derived clash states and target descriptions. |
-| [requirements.rs](../crates/desegnos-core/src/requirements.rs) | Frozen `RequirementsSnapshot`, capabilities, request markdown and `validate_current`. |
-| [generation.rs](../crates/desegnos-core/src/generation.rs) | `GenerationCandidate`, validation, batches, images and `apply_generation_output`. |
-| [request_history.rs](../crates/desegnos-core/src/request_history.rs) | Earlier-request index compaction and context. |
-| [dossier.rs](../crates/desegnos-core/src/dossier.rs) | `GenerationDossier`, application status and recording. |
-| [attachments.rs](../crates/desegnos-core/src/attachments.rs) | Bounded text, picture and link attachments on layers. |
-| [identity.rs](../crates/desegnos-core/src/identity.rs), [identity_pages.rs](../crates/desegnos-core/src/identity_pages.rs) | `ImportedIdentity`, `ImportedContext`, evidence pages and `import_context`. |
-| [project_assets.rs](../crates/desegnos-core/src/project_assets.rs) | `desegnos-asset:` references, the content-addressed picture store and `prepare_picture`. |
-| [picture_scaling.rs](../crates/desegnos-core/src/picture_scaling.rs), [image_generation.rs](../crates/desegnos-core/src/image_generation.rs) | AI previews, display scaling and the image request type. |
-| [provenance.rs](../crates/desegnos-core/src/provenance.rs) | Found-content address validation. |
-| [website.rs](../crates/desegnos-core/src/website.rs) | `website_links`, `website_assets` and `css_urls`: page, asset and stylesheet references. |
-| [website_import.rs](../crates/desegnos-core/src/website_import.rs) | Browser capture types and the pure conversion into pages, elements, script notes, behaviour pointers and linked-size overrides. |
-| [export.rs](../crates/desegnos-core/src/export.rs) | Export plans, website/app bundles, pointer fingerprints and direct slide/image bundles. |
-| [render.rs](../crates/desegnos-core/src/render.rs), [render/](../crates/desegnos-core/src/render/) | Direct PDF, PNG and SVG rendering from the element tree. |
+| [model.rs](../crates/desegnos-core/src/model.rs) | `Project`, `Page` (the spec's boundary) and `PageSize`, reference items, pointers and wiring, pending requests with their targets and areas, brief, decisions, exceptions, export records, `CanvasTemplate`, the `Command` enum, `Project::apply`/`validate` and project revision. |
+| [elements.rs](../crates/desegnos-core/src/elements.rs) | `Element` tree, element kinds, styles, free/stack/grid layout, per-size overrides, linked definitions, element patches and moves, `resolve_element`/`resolve_for_size`, nested ids and outlines. |
+| [session.rs](../crates/desegnos-core/src/session.rs) | `Session`: revision checks, undo/redo, burst-step merging, version labels, export metadata outside undo, generation recording/application, context import, restore and history position. |
+| [pointers.rs](../crates/desegnos-core/src/pointers.rs) | Pointer states (unwired, needs generating/exporting, code changed, wired, contradicts, broken), contradiction detection and target descriptions. |
+| [requirements.rs](../crates/desegnos-core/src/requirements.rs) | Frozen `RequirementsSnapshot` (current format 30), capabilities, request markdown, targeted requirements and `validate_current`. |
+| [generation.rs](../crates/desegnos-core/src/generation.rs) | `GenerationCandidate`, `ElementOperation` (including area-bound `InsertInBoundary`/`AddReference`), request scopes and outcomes, batches, generated images, pointer classifications, validation and `apply_generation_output`. |
+| [request_history.rs](../crates/desegnos-core/src/request_history.rs) | Text-only earlier-request context derived from frozen requests, plus retry rejection history. |
+| [dossier.rs](../crates/desegnos-core/src/dossier.rs) | `GenerationDossier`, application status, acceptance data and recording on the project. |
+| [attachments.rs](../crates/desegnos-core/src/attachments.rs) | Bounded text, picture and link attachments on requests, previews and validation. |
+| [identity.rs](../crates/desegnos-core/src/identity.rs) | `ImportedIdentity`, `ImportedContext`, evidence pages, project photos/items and merging approved brand context into the brief. |
+| [identity_pages.rs](../crates/desegnos-core/src/identity_pages.rs) | Source-page kinds and portable route names for imported evidence. |
+| [project_assets.rs](../crates/desegnos-core/src/project_assets.rs) | `desegnos-asset:` references, the content-addressed picture store, `prepare_picture`, image catalogues and unused-picture cleanup. |
+| [picture_scaling.rs](../crates/desegnos-core/src/picture_scaling.rs) | AI preview size/quality and display-scaled picture copies. |
+| [image_generation.rs](../crates/desegnos-core/src/image_generation.rs) | `ImageGenerationRequest` and generated-image types. Task data cannot grant credentials or file access. |
+| [provenance.rs](../crates/desegnos-core/src/provenance.rs) | Validation for `data-desegnos-found` public HTTPS source addresses. |
+| [website.rs](../crates/desegnos-core/src/website.rs) | `website_links`, `website_assets` and `css_urls`: stylesheets, logos, pages, photos, media frames and CSS references. |
+| [website_import.rs](../crates/desegnos-core/src/website_import.rs) | `WebCapture` types and the pure conversion into pages, elements, reference notes, behaviour pointers and linked-size overrides. |
+| [export.rs](../crates/desegnos-core/src/export.rs) | Export plans, exact AI request markdown, schemas, reply parsing/validation, AI and direct bundles, manifests, pointer fingerprints and `RecordExport`. |
+| [render.rs](../crates/desegnos-core/src/render.rs) | Direct SVG/PNG/PDF rendering from the resolved tree, bundled Archivo glyph outlines and raster limits. |
+| [render/pdf.rs](../crates/desegnos-core/src/render/pdf.rs) | Minimal vector/raster PDF deck writer. No embedded font program. |
 
 ## `desegnos-storage`
 
 | Module | Owns |
 | --- | --- |
-| [lib.rs](../crates/desegnos-storage/src/lib.rs) | Module wiring, `load_project` and safe small-file writes. |
-| [project_db.rs](../crates/desegnos-storage/src/project_db.rs) | `ProjectDatabase`: the `.desegnos` SQLite file, content-addressed versions, autosave, alternatives, history, restore, save conflicts and compaction. |
-| [project_parts.rs](../crates/desegnos-storage/src/project_parts.rs) | `split_project`/`join_project`: one part per boundary, shared settings, reference, pointers, brief, identity, dossier and pictures. |
-| [project_folder.rs](../crates/desegnos-storage/src/project_folder.rs) | Project-folder naming and one-project-file lookup. |
-| [website_export.rs](../crates/desegnos-storage/src/website_export.rs) | Safe staged destination writing and receipts for exports. |
-| [website_snapshot.rs](../crates/desegnos-storage/src/website_snapshot.rs) | Bounded folder/ZIP website snapshots, page routes and the private import folder. |
-| [identity_source.rs](../crates/desegnos-storage/src/identity_source.rs) | Brand evidence collection from files, folders, archives and websites. |
-| [request_zip.rs](../crates/desegnos-storage/src/request_zip.rs) | Bounded attachment ZIP extraction. |
-| [system_tools.rs](../crates/desegnos-storage/src/system_tools.rs) | Executable discovery for external tools. |
+| [lib.rs](../crates/desegnos-storage/src/lib.rs) | Module wiring, `load_project`, atomic small-file writes, `.previous` backups and `write_markdown`. |
+| [project_db.rs](../crates/desegnos-storage/src/project_db.rs) | `ProjectDatabase`: the `.desegnos` SQLite file, blobs/versions/branches/head tables, WAL transactions, checked saves, the hidden `__autosave` branch, alternatives, restore, compaction and save-conflict stamps. |
+| [project_parts.rs](../crates/desegnos-storage/src/project_parts.rs) | `split_project`/`join_project`: one part per boundary, plus `reference`, `pointers`, `brief`, `identity`, `dossier`, `settings` and one part per picture. |
+| [project_folder.rs](../crates/desegnos-storage/src/project_folder.rs) | Project-folder naming, one-project-file lookup, managed-folder creation and name sanitising. |
+| [website_export.rs](../crates/desegnos-storage/src/website_export.rs) | Bounded, staged export writing, no-replace destination rules, output verification, receipts and `read_export_file`. |
+| [website_snapshot.rs](../crates/desegnos-storage/src/website_snapshot.rs) | Bounded folder/ZIP website snapshots, page routes, private import folders and read-only snapshot writing. |
+| [identity_source.rs](../crates/desegnos-storage/src/identity_source.rs) | Read-only brand evidence from files, folders, archives and websites, including photos and assets. |
+| [request_zip.rs](../crates/desegnos-storage/src/request_zip.rs) | Bounded in-memory ZIP extraction into request attachments. |
+| [system_tools.rs](../crates/desegnos-storage/src/system_tools.rs) | Bounded executable discovery for external tools used by diagnostics and OS opening. |
 
 ## `desegnos-ai`
 
+[lib.rs](../crates/desegnos-ai/src/lib.rs) wires the modules and re-exports the public API.
+
 | Module | Owns |
 | --- | --- |
-| [providers.rs](../crates/desegnos-ai/src/providers.rs), [transport.rs](../crates/desegnos-ai/src/transport.rs) | Provider/model catalogues, `ProviderClient`, streaming, identity analysis and access checks. |
-| [settings.rs](../crates/desegnos-ai/src/settings.rs), [credentials.rs](../crates/desegnos-ai/src/credentials.rs) | `ProviderSettings`, authentication, usage/cost estimates and masked key storage. |
-| [error.rs](../crates/desegnos-ai/src/error.rs), [sse.rs](../crates/desegnos-ai/src/sse.rs) | Provider errors, submission outcomes, scrubbed diagnostics and the bounded SSE decoder. |
-| [identity.rs](../crates/desegnos-ai/src/identity.rs), [website.rs](../crates/desegnos-ai/src/website.rs) | Brand budgets; `fetch_website`, `fetch_website_snapshot` and `fetch_website_image` under public-address, size and timeout rules. |
-| [images.rs](../crates/desegnos-ai/src/images.rs), [image_generation.rs](../crates/desegnos-ai/src/image_generation.rs), [image_access.rs](../crates/desegnos-ai/src/image_access.rs) | Public image fetching/decoding, the image API and cached image access. |
-| [chatgpt/](../crates/desegnos-ai/src/chatgpt/) | `ChatgptManager`: browser sign-in, accounts, token refresh, model discovery and sign-out. |
+| [providers.rs](../crates/desegnos-ai/src/providers.rs) | `ProviderId`, `ProviderDescriptor`, provider catalogue, `ProviderAdapter`, `ProviderClient`, estimates, model access checks and generation/identity dispatch. |
+| [transport.rs](../crates/desegnos-ai/src/transport.rs) | `OpenAiClient`, HTTP/SSE streaming, deadlines/idle limits, response identity and correlation, model discovery and ChatGPT bearer use. |
+| [settings.rs](../crates/desegnos-ai/src/settings.rs) | `ProviderSettings`, model catalogue, request bodies, token/size limits, cost estimates and billed output caps. |
+| [credentials.rs](../crates/desegnos-ai/src/credentials.rs) | `ApiKey`, `CredentialManager`, system/session storage, masked identifiers and credential status. |
+| [error.rs](../crates/desegnos-ai/src/error.rs) | `ProviderError`, error kinds, submission outcomes, diagnostics scrubbing and authentication context. |
+| [sse.rs](../crates/desegnos-ai/src/sse.rs) | Bounded SSE decoder, event framing, terminal output extraction and stream validation. |
+| [identity.rs](../crates/desegnos-ai/src/identity.rs) | Brand analysis bodies/budgets, logo and photo images, identity schema checks and estimates. |
+| [website.rs](../crates/desegnos-ai/src/website.rs) | `fetch_website`, `fetch_website_snapshot` and `fetch_website_image` under public-address, size, redirect and timeout rules. |
+| [images.rs](../crates/desegnos-ai/src/images.rs) | Public image/document fetching and decoding with address and size limits. |
+| [image_generation.rs](../crates/desegnos-ai/src/image_generation.rs) | Bounded Image API requests/edits, model names, reply decoding and generated bytes. |
+| [image_access.rs](../crates/desegnos-ai/src/image_access.rs) | Account-specific image capability discovery and caching. |
+| [chatgpt/mod.rs](../crates/desegnos-ai/src/chatgpt/mod.rs) | `ChatgptManager`: browser sign-in lifecycle, accounts, token refresh, model discovery and sign-out. |
+| [chatgpt/callback.rs](../crates/desegnos-ai/src/chatgpt/callback.rs) | Loopback OAuth callback listener with state checks and cancellation. |
+| [chatgpt/http.rs](../crates/desegnos-ai/src/chatgpt/http.rs) | OAuth discovery, authorize/token/JWKS calls, JWT validation, revocation and model access. |
+| [chatgpt/storage.rs](../crates/desegnos-ai/src/chatgpt/storage.rs) | Registration/token records, system vault abstraction, test vault and bounded private files. |
+| [chatgpt/types.rs](../crates/desegnos-ai/src/chatgpt/types.rs) | ChatGPT error/view/account types. |
+| [tests.rs](../crates/desegnos-ai/src/tests.rs), [identity_tests.rs](../crates/desegnos-ai/src/identity_tests.rs) | Rust provider/transport/identity tests, including loopback fake servers. |
+| [chatgpt/tests.rs](../crates/desegnos-ai/src/chatgpt/tests.rs) | ChatGPT OAuth/token/storage tests against loopback servers. |
+| [chatgpt/README.md](../crates/desegnos-ai/src/chatgpt/README.md), [chatgpt/dependency-review.json](../crates/desegnos-ai/src/chatgpt/dependency-review.json), [chatgpt/fixtures/test-jwk.json](../crates/desegnos-ai/src/chatgpt/fixtures/test-jwk.json), [chatgpt/fixtures/test-key.der](../crates/desegnos-ai/src/chatgpt/fixtures/test-key.der) | Documents that boundary and supplies its test JWK/key. |
 
 ## Native shell: `src-tauri/src/`
 
 | File | Owns |
 | --- | --- |
-| [main.rs](../src-tauri/src/main.rs) | Service initialization, command registry, plugins and window lifecycle. |
-| [workspace.rs](../src-tauri/src/workspace.rs) | `Workspace`, `WorkspaceView`, open projects/tabs, untitled projects and their recovery databases, autosave, recovery, save conflicts, history/alternatives, folders and recents. |
-| [generation.rs](../src-tauri/src/generation.rs) | `GenerationService`: prepare/submit/finish/cancel/retry, usage, job persistence, settings and the apply seam. |
-| [website_import.rs](../src-tauri/src/website_import.rs) | Fetches or reads a website, serves the snapshot, resolves captured pictures into the project store and applies the import as one undo step. |
-| [local_site.rs](../src-tauri/src/local_site.rs) | `LocalSite` and `ImportSite`: token-prefixed GET/HEAD static servers for previews and imported pages. |
-| [identity.rs](../src-tauri/src/identity.rs) | `IdentityService`: brand source selection/fetching, analysis and approved context. |
-| [export.rs](../src-tauri/src/export.rs) | `ExportService`: frozen-revision export, preview servers, pointer checks and open-in-browser. |
-| [chatgpt.rs](../src-tauri/src/chatgpt.rs) | `ChatgptState`, account epochs and auth commands. |
-| [project_location.rs](../src-tauri/src/project_location.rs), [recent.rs](../src-tauri/src/recent.rs) | App settings in `project-settings.json` (default project parent, show start page on launch) and the recent-project catalogue with pins and last-opened times. |
-| [clipboard.rs](../src-tauri/src/clipboard.rs), [image_drop.rs](../src-tauri/src/image_drop.rs), [request_zip.rs](../src-tauri/src/request_zip.rs) | Clipboard, window image drops and attachment ZIP adapters. |
-| [system_open.rs](../src-tauri/src/system_open.rs), [file_dialogs.rs](../src-tauri/src/file_dialogs.rs), [portal.rs](../src-tauri/src/portal.rs), [linux_startup.rs](../src-tauri/src/linux_startup.rs) | OS opening, dialogs/portal detection and Linux graphics startup. |
-| [data_location.rs](../src-tauri/src/data_location.rs), [crash_report.rs](../src-tauri/src/crash_report.rs), [updates.rs](../src-tauri/src/updates.rs), [usage.rs](../src-tauri/src/usage.rs) | Data folder selection, crash reports, update checks and local usage logs. |
+| [main.rs](../src-tauri/src/main.rs) | Service initialization on the chosen data folder, command registry, plugins, window lifecycle and crash finish. |
+| [workspace.rs](../src-tauri/src/workspace.rs) | `Workspace`, `WorkspaceView`, active plus parked projects, tabs, untitled projects and their recovery databases, autosave, recovery, checked saves/conflicts, project folders, recents, history/alternatives and the generation/import publication seams. |
+| [generation.rs](../src-tauri/src/generation.rs) | `GenerationService`: provider settings/credentials/access, prepare/submit/retry/cancel/discard/apply, job persistence, dossier maintenance, usage and AI settings commands. |
+| [export.rs](../src-tauri/src/export.rs) | `ExportService`: frozen export jobs, previews, destination writes, safe commits, `RecordExport`, recheck, pointer code/comment clash commands and open-in-browser. |
+| [website_import.rs](../src-tauri/src/website_import.rs) | Fetch/read a website, install a token-served snapshot, validate captures, resolve pictures into the project store and apply an import as one undo step. |
+| [identity.rs](../src-tauri/src/identity.rs) | `IdentityService`: brand source selection/fetching, analysis lifecycle, photo descriptions and approved-context handoff. |
+| [local_site.rs](../src-tauri/src/local_site.rs) | `LocalSite` and `ImportSite`: loopback GET/HEAD static servers with token prefixes, path rules and stop control. |
+| [chatgpt.rs](../src-tauri/src/chatgpt.rs) | `ChatgptState`: accounts, sign-in commands, epochs/revocation, secure-storage repair and usage links. |
+| [project_location.rs](../src-tauri/src/project_location.rs), [recent.rs](../src-tauri/src/recent.rs) | App settings in `project-settings.json` (default project location, show start page on launch) and the recent-project catalogue with pins and last-opened times. |
+| [clipboard.rs](../src-tauri/src/clipboard.rs), [image_drop.rs](../src-tauri/src/image_drop.rs), [request_zip.rs](../src-tauri/src/request_zip.rs) | Editor-only clipboard adapter, OS image-drop events and request-ZIP adapter. |
+| [system_open.rs](../src-tauri/src/system_open.rs), [file_dialogs.rs](../src-tauri/src/file_dialogs.rs), [portal.rs](../src-tauri/src/portal.rs), [linux_startup.rs](../src-tauri/src/linux_startup.rs) | OS opening with Linux fallbacks, dialog result handling, XDG desktop-portal detection and the NVIDIA/Wayland startup workaround. |
+| [data_location.rs](../src-tauri/src/data_location.rs), [crash_report.rs](../src-tauri/src/crash_report.rs), [updates.rs](../src-tauri/src/updates.rs), [usage.rs](../src-tauri/src/usage.rs), [release.rs](../src-tauri/src/release.rs) | Writable data-folder choice, opt-in crash reports, manual GitHub release check, local usage JSONL and the shared repository constant. |
 
 ## Editor: `src/`
 
-| Files | Owns |
+| File | Owns |
 | --- | --- |
-| [App.tsx](../src/App.tsx) | Workspace queue, project tabs, menu actions, navigation surfaces, generation/export orchestration and global shortcut dispatch. |
-| [ProjectCanvas.tsx](../src/ProjectCanvas.tsx), [projectCanvasGeometry.ts](../src/projectCanvasGeometry.ts) | Canvas surface: camera, drag/draw/resize, boundaries, frames, reference, pointers and elements; pure geometry helpers. |
-| [projectCanvas/boundaries.tsx](../src/projectCanvas/boundaries.tsx) | Boundaries and page names. |
-| [projectCanvas/elements.tsx](../src/projectCanvas/elements.tsx), [elementGeometry.ts](../src/projectCanvas/elementGeometry.ts) | Element rendering, selection overlay, inline text editing, creation and measurement. |
-| [projectCanvas/frames.tsx](../src/projectCanvas/frames.tsx), [reference.tsx](../src/projectCanvas/reference.tsx), [pointers.tsx](../src/projectCanvas/pointers.tsx) | Frame boxes/request editor, reference items, pointer lines/comments/handles and automatic link lines. |
-| [projectCanvas/elementProperties.tsx](../src/projectCanvas/elementProperties.tsx), [elementLayers.tsx](../src/projectCanvas/elementLayers.tsx) | Element Properties and the Layers tree. |
-| [projectCanvas/sizes.ts](../src/projectCanvas/sizes.ts), [links.ts](../src/projectCanvas/links.ts), [play.ts](../src/projectCanvas/play.ts) | Linked-size resolution, linked elements and Play actions. |
-| [projectCanvas/surface.ts](../src/projectCanvas/surface.ts), [linkedChoices.tsx](../src/projectCanvas/linkedChoices.tsx), [exportPanel.tsx](../src/projectCanvas/exportPanel.tsx) | Camera/wheel/Space pan, inline choices and the export panel. |
-| [EditorDock.tsx](../src/EditorDock.tsx), [EditorTools.tsx](../src/EditorTools.tsx) | Right dock (Properties/Layers), the tool strip and their tooltips. |
-| [shortcuts.ts](../src/shortcuts.ts) | The single keymap: actions, keys, display strings, matching and the generated keyboard help. |
-| [WebsiteImport.tsx](../src/WebsiteImport.tsx), [websiteImportExtract.ts](../src/websiteImportExtract.ts) | Import dialog, hidden page rendering and the script-disabled extraction wrapper. |
-| [ImportContext.tsx](../src/ImportContext.tsx), [identityReview.ts](../src/identityReview.ts) | Brand evidence review; approved context becomes brief decisions and project images. |
-| [CodeEditor.tsx](../src/CodeEditor.tsx), [codeMirrorMetadata.ts](../src/codeMirrorMetadata.ts), [editorHtml.ts](../src/editorHtml.ts) | CodeMirror used by `code` elements. No page source editor exists. |
-| [useGeneration.ts](../src/useGeneration.ts), [Generation.tsx](../src/Generation.tsx), [GenerationLog.tsx](../src/GenerationLog.tsx), [generationProblems.ts](../src/generationProblems.ts), [generationSession.ts](../src/generationSession.ts) | Job lifecycle/polling, feedback/details, request history and notices. |
-| [AiSettings.tsx](../src/AiSettings.tsx) | Provider/model/key/sign-in settings and access checks. |
-| [StartPage.tsx](../src/StartPage.tsx), [ProjectLocation.tsx](../src/ProjectLocation.tsx), [Onboarding.tsx](../src/Onboarding.tsx) | Home: Blank canvas and template tiles, recovery and recent projects with pin/remove. Default project location, first-use tips and the start-page launch setting. New projects are untitled tabs whose first save names them inline in the dock. |
-| [Notes.tsx](../src/Notes.tsx), [StyleGuide.tsx](../src/StyleGuide.tsx) | Project brief/decisions/exceptions and the project style view. |
-| [ProblemBanner.tsx](../src/ProblemBanner.tsx), [userErrors.ts](../src/userErrors.ts), [noticeSummary.ts](../src/noticeSummary.ts) | Notice queue/host, error translation and change summaries. |
-| [RecoveryBanner.tsx](../src/RecoveryBanner.tsx), [SaveConflict.tsx](../src/SaveConflict.tsx) | Recovery choices and checked-save conflict resolution. |
-| [WorkspaceSurface.tsx](../src/WorkspaceSurface.tsx), [Menus.tsx](../src/Menus.tsx), [visibleActions.ts](../src/visibleActions.ts) | Surfaces/focus, menus and opener visibility. |
-| [HistoryPanel.tsx](../src/HistoryPanel.tsx), [useHistory.ts](../src/useHistory.ts), [DraftText.tsx](../src/DraftText.tsx), [deletePreference.ts](../src/deletePreference.ts), [pastePreference.ts](../src/pastePreference.ts), [usage.ts](../src/usage.ts), [CrashReport.tsx](../src/CrashReport.tsx) | History/alternatives, history labels, text drafts, preferences, usage and crash surfaces. |
-| [types.ts](../src/types.ts) | TypeScript mirror of native payloads, including website captures and import views. |
-| [styles.css](../src/styles.css), [brand.css](../src/brand.css), [shell.css](../src/shell.css), [canvas.css](../src/canvas.css), [ui.css](../src/ui.css), [dialogs.css](../src/dialogs.css), [notice.css](../src/notice.css), [startPage.css](../src/startPage.css) | Shell, canvas, dialogs, notices, Home and import presentation. |
+| [App.tsx](../src/App.tsx) | Root screen: workspace loading, project tabs, menus, shortcut dispatch, canvas selection, save/export/generation/import orchestration, start page, recovery and notices. |
+| [main.tsx](../src/main.tsx) | Mounts `App`, installs the usage log and history-step listener, and loads global CSS. |
+| [api.ts](../src/api.ts) | `native` invocation plus usage recording; `edit(revision, command)` for revision-checked edits. |
+| [types.ts](../src/types.ts) | TypeScript mirror of native payloads, views, `Command`, import captures and generation/export types. |
+| [ProjectCanvas.tsx](../src/ProjectCanvas.tsx) | The canvas: camera, gestures, Request Pick clicks and area shapes, boundary/reference/pointer/element interaction, Delete for every selection kind, inline editing, Play clicks, preview overlay and native drops. |
+| [projectCanvasGeometry.ts](../src/projectCanvasGeometry.ts) | Canvas geometry: boundary layout/push/snap, element/request/reference boxes and reference rects, pointer routes, selection targets, camera fit/zoom, dot grid. Its `FrameCorner`, `FRAME_SNAP`, `MIN_FRAME_SIZE`, `snapToFrameGrid`, `frameBox`, `drawnFrameRect` and `referenceFrameRect` names predate the Frame → Request rename. |
+| [canvasGeometry.ts](../src/canvasGeometry.ts) | Generic geometry: rect changes, snaps, rulers/ticks, zoom steps, workspace clipping and resize helpers. |
+| [EditorDock.tsx](../src/EditorDock.tsx) | Right dock host, Layers/Requests tree and boundary, reference, request, project and pointer Properties; docking, widths, collapse and hidden states. |
+| [EditorTools.tsx](../src/EditorTools.tsx) | Left tool strip, Request area-shape flyout (Pick, Rectangle, Ellipse, Polygon, Freehand), insert flyout, zoom control, labels and shortcut tooltips. |
+| [shortcuts.ts](../src/shortcuts.ts) | The single keymap: actions, keys, display strings, matching and generated keyboard help. F starts a Request on the selection or picks the Request tool, Shift+F takes a selected shape's outline, and Delete/Backspace removes the selection. |
+| [Menus.tsx](../src/Menus.tsx) | Accessible menu button, popover positioning and keyboard navigation. |
+| [WorkspaceSurface.tsx](../src/WorkspaceSurface.tsx) | Panel/banner/start/canvas surface host, stacking, focus return and `isTextField`. |
+| [ProblemBanner.tsx](../src/ProblemBanner.tsx), [noticeSummary.ts](../src/noticeSummary.ts) | Notice queue/host, problem banners and outside-change summaries. `noticeSummary.ts` is exercised by tests but has no current editor import. |
+| [Disclosure.tsx](../src/Disclosure.tsx), [StatusChip.tsx](../src/StatusChip.tsx), [icons.tsx](../src/icons.tsx) | Shared disclosure row, status badge and inline icon set. |
+| [DraftText.tsx](../src/DraftText.tsx) | `useDraftText`: batched text commits that never overwrite newer typing. |
+| [HistoryPanel.tsx](../src/HistoryPanel.tsx), [useHistory.ts](../src/useHistory.ts), [historySteps.ts](../src/historySteps.ts) | Versions/alternatives in the dock, derived history labels, and ending the native history step when a text field loses focus. |
+| [Generation.tsx](../src/Generation.tsx), [GenerationLog.tsx](../src/GenerationLog.tsx) | Generation review panel and AI conversation/details: coverage, usage, retries, proposals, criticism and raw reply. |
+| [useGeneration.ts](../src/useGeneration.ts), [generationSession.ts](../src/generationSession.ts) | Job lifecycle/polling/submit/cancel/retry, owned-session notices and restored-job silence. |
+| [generationProblems.ts](../src/generationProblems.ts), [userErrors.ts](../src/userErrors.ts) | Per-area problem callouts/outcomes and user-facing translations of native/provider errors. |
+| [AiSettings.tsx](../src/AiSettings.tsx) | Provider/model/key, ChatGPT accounts, secure-storage status and access checks. |
+| [ImportContext.tsx](../src/ImportContext.tsx), [identityReview.ts](../src/identityReview.ts) | Brand evidence review/approval and parsing findings into colours, fonts, logos and sections. |
+| [WebsiteImport.tsx](../src/WebsiteImport.tsx), [websiteImportExtract.ts](../src/websiteImportExtract.ts) | Import dialog, hidden page rendering and the script-disabled extraction wrapper that posts a compact page tree. |
+| [StartPage.tsx](../src/StartPage.tsx), [ProjectLocation.tsx](../src/ProjectLocation.tsx) | Home rail, template tiles, recent projects with pin/remove, launch setting; default project-location settings. |
+| [RecoveryBanner.tsx](../src/RecoveryBanner.tsx), [SaveConflict.tsx](../src/SaveConflict.tsx) | Recovery choice and checked-save conflict resolution with typed results. |
+| [Notes.tsx](../src/Notes.tsx), [StyleGuide.tsx](../src/StyleGuide.tsx) | Project brief, decisions and exceptions with scope labels; visual brand rules and samples. |
+| [CodeEditor.tsx](../src/CodeEditor.tsx), [codeMirrorMetadata.ts](../src/codeMirrorMetadata.ts), [editorHtml.ts](../src/editorHtml.ts) | CodeMirror for `code` elements, metadata anchor mapping across edits, and reversible projection of inline resources. No page-source editor exists. |
+| [pastePreference.ts](../src/pastePreference.ts), [deletePreference.ts](../src/deletePreference.ts) | Linked/unlinked paste default and ask-before-delete preference. |
+| [updateCheck.ts](../src/updateCheck.ts), [usage.ts](../src/usage.ts) | Update-result copy and batched local usage events. |
+| [CrashReport.tsx](../src/CrashReport.tsx), [crashReportText.ts](../src/crashReportText.ts), [visibleActions.ts](../src/visibleActions.ts) | Editor error boundary/crash notice, crash copy and issue-address fallback, and conditional-control visibility rules. |
+| [styles.css](../src/styles.css), [brand.css](../src/brand.css), [shell.css](../src/shell.css), [canvas.css](../src/canvas.css), [ui.css](../src/ui.css), [dialogs.css](../src/dialogs.css), [notice.css](../src/notice.css), [startPage.css](../src/startPage.css) | Base tokens/reset, brand type/wordmarks, app shell and tabs, canvas layers, shared controls, dialogs/surfaces, notices and Home. |
+| [assets/brand/desegnos-wordmark-light.svg](../src/assets/brand/desegnos-wordmark-light.svg), [desegnos-wordmark-dark.svg](../src/assets/brand/desegnos-wordmark-dark.svg), [archivo-variable.woff2](../src/assets/brand/archivo-variable.woff2) | Bundled wordmarks and Archivo web font referenced by the shell and brand CSS. |
 
-## Key flows
+## `src/projectCanvas/`
 
-### Editing canvas elements
+| Module | Owns |
+| --- | --- |
+| [boundaries.tsx](../src/projectCanvas/boundaries.tsx) | Boundary content per linked size: element trees, hidden-size placeholders and Play rendering. |
+| [boundaryLabels.tsx](../src/projectCanvas/boundaryLabels.tsx) | Boundary names above each corner in screen pixels; labels double as drag handles. |
+| [elementGeometry.ts](../src/projectCanvas/elementGeometry.ts) | Element paths, text measurement, picture URLs, labels, insert groups, origins and parent-relative rects. |
+| [elementLayers.tsx](../src/projectCanvas/elementLayers.tsx) | Layers tree rows for one size, collapse state, visibility/lock/delete buttons, drag reordering and drop targets. |
+| [elementProperties.tsx](../src/projectCanvas/elementProperties.tsx) | A layer's Properties: geometry, style, text, image, layout, code, request box, history and context attachments. |
+| [elements.tsx](../src/projectCanvas/elements.tsx) | Element drawing, selection overlay, resize handles and inline text editing. |
+| [exportPanel.tsx](../src/projectCanvas/exportPanel.tsx) | Export dock panel: boundary/output rows, status, warnings, estimate and result actions. |
+| [requests.tsx](../src/projectCanvas/requests.tsx) | Requests on the canvas: pending request markers, area outlines and target highlights, covered-target collection, target labels, the request box editor and boundary shifts. |
+| [requestGeometry.ts](../src/projectCanvas/requestGeometry.ts) | Request area outlines: shape bounds, point-in-outline coverage for rect/ellipse/polygon/freehand and SVG path data. |
+| [linkedChoices.tsx](../src/projectCanvas/linkedChoices.tsx) | Inline paste Linked/Unlinked, link-copy and size-placeholder choices. |
+| [links.ts](../src/projectCanvas/links.ts) | Linked-definition resolution, shared path/id hashing with the core, copy inspection and structure comparison. |
+| [play.ts](../src/projectCanvas/play.ts) | Transient Play state, click-to-pointer lookup and visual show/hide/toggle/swap application. |
+| [pointers.tsx](../src/projectCanvas/pointers.tsx) | Pointer lines, comments on lines, handles, hit routes, automatic link lines and comment editors. |
+| [reference.tsx](../src/projectCanvas/reference.tsx) | Reference items (note, link, image, swatch), picture lookup and the reference note editor. |
+| [sizes.ts](../src/projectCanvas/sizes.ts) | Size presets, base-size rules, per-size override resolution and boundary names. |
+| [surface.ts](../src/projectCanvas/surface.ts) | Camera hook, wheel/Space pan, zoom-at-pointer, screen rects and native drag types. |
 
-1. [ProjectCanvas.tsx](../src/ProjectCanvas.tsx) turns pointer gestures into element commands.
-2. [App.tsx](../src/App.tsx) queues one `Command` per gesture → [model.rs](../crates/desegnos-core/src/model.rs) `Project::apply` validates and bumps the revision → [Session](../crates/desegnos-core/src/session.rs) records the history step and the labels a saved version is named from.
-3. Elements carry visual properties only. Pictures are referenced by id from the project store.
-4. Undo/redo use the same session; restoring a saved version is stored as a new version and applied as one undo step.
+## Key data flows
 
-### Frames and AI requests
+### Project file: open, save, version, restore
 
-1. A frame is a box with a pending request; any layer can carry a request too.
-2. **Generate** → `prepare_generation` → [requirements.rs](../crates/desegnos-core/src/requirements.rs) freezes the task (brief, decisions, frames, elements, reference, pointers, pictures) → job persisted.
-3. `start_generation`/`retry_generation` stream from the selected provider with cancellation, usage and retry limits. The reply is stored as a candidate.
-4. Applying the candidate calls `apply_generation_output` and publishes elements as editable layers in one undo step.
+1. **Open** (`open_project`, recent, or Home) → `Workspace::open_file_tab` → `ProjectDatabase::open` on the `.desegnos` file, taking a sidecar `.lock` and enabling WAL. `load_project` joins the content-addressed parts back into a `Project`.
+2. **Untitled** (`new_untitled_project`) creates `Project::untitled` named `Canvas N` (blank or a template's starter boundaries) and a real SQLite database under app data `untitled/<id>.desegnos`, plus a `<project-id>.recovery.json` pointer. Opening, creating and recovering add a tab; `switch_project`/`close_project` change the active one. Closing the last tab returns to Home.
+3. **Autosave** while dirty runs at most every 3 seconds (`autosave_project`) into the hidden `__autosave` branch, so a crash keeps edits. Saves seconds apart amend the previous version instead of adding one.
+4. **Save** (`save_untitled_project`, `save_project_checked`, `save_project`, `save_project_copy`) writes one transaction and labels the new version from `Session` history. `save_untitled_project` asks for a name and file for an untitled project and removes its recovery database; `save_project_copy` writes one version without history. Checked saves compare the stored `FileStamp` (project id + head version); a changed/different/unreadable file returns a conflict resolved by `resolve_save_conflict` as copy, replace or cancel.
+5. **Versions** are manifests of part hashes with parent, branch, time and label. `restore_version` writes the restored state as a new version and applies it as **one undo step**; history is never rewritten. `switch_alternative` / `create_alternative` / `rename_alternative` / `delete_alternative` move between named branches (`Main` cannot be deleted); `compact_history` thins old versions.
+6. **Recovery** at startup scans `.recovery.json` pointers, reads the autosave branch with `read_autosave` and publishes `WorkspaceView.recoveries`. `recover_project` loads the unsaved state, `dismiss_recovery` discards the autosave copy and clears the offer; [RecoveryBanner.tsx](../src/RecoveryBanner.tsx) offers Recover or Open saved version. A project folder holds the `.desegnos` file and nothing else; `move_into_project_folder` relocates the active save without touching neighbours.
 
-### Project tabs, save and recovery
+### Edit commands and undo
 
-1. [workspace.rs](../src-tauri/src/workspace.rs) keeps the active `Session` plus parked projects, each with its own `ProjectDatabase`.
-2. Launch shows Home unless **Menu → Preferences → Show start page on launch** is off, which opens a blank untitled canvas instead. Closing the last tab returns to Home. `new_untitled_project` adds an untitled tab named with the lowest unused `Canvas N`, with no boundaries or with a template's starter boundaries; `switch_project` and `close_project` change the active canvas without replacing the others.
-3. An untitled project keeps its recovery database in the app data folder. Edits stay in memory; while a project is dirty they reach the hidden autosave branch every few seconds, so a crash keeps them on disk.
-4. `save_untitled_project` asks for a name and file, writes one transaction and removes the recovery copy. `save_project_checked` does the same for projects that already have a file. Stamp conflicts resolve through [SaveConflict.tsx](../src/SaveConflict.tsx).
-5. A newer autosave is offered through [RecoveryBanner.tsx](../src/RecoveryBanner.tsx) and the recovery list on launch. History and alternatives are shown in the dock by [HistoryPanel.tsx](../src/HistoryPanel.tsx).
+1. A canvas gesture or panel control builds a `Command` (`InsertElements`, `UpdateElements`, `MoveElements`, `GroupElements`, `LinkElements`, `AddRequest`, `UpdateRequest`, `RemoveRequests`, `DeleteItems`, `SetCanvasLayout`, `ImportWebsite`, `RecordExport`, …).
+2. [App.tsx](../src/App.tsx) calls `edit(revision, command)` → `edit_project` → `Session::execute`. `assert_revision` rejects a stale base; `Project::apply` validates the command, enforces bounds and increments `Project.revision`.
+3. `Session` pushes the previous project onto the undo stack as one history step. A burst of edits to one request text, page/size setting, pointer comment, project name or grid merges into one step until the pause (5 seconds) or `end_history_step` (`historySteps.ts` calls it when a text field loses focus).
+4. `undo_project`/`redo_project` traverse the same session; autosave then runs if due. Element designs, requests, reference, pointers, brief and boundaries all share this history and durability.
+5. Recording an export is metadata, not a design change: `Session::record_export` updates the project without pushing an undo step. Applying a generation reply is one design edit and one undo step.
 
-### Import (brand evidence and website elements)
+### Requests: targets and areas
 
-1. [ImportContext.tsx](../src/ImportContext.tsx) fetches a website, archive or folder through `pick_identity_source`/`fetch_identity_source` → [identity.rs](../src-tauri/src/identity.rs) and [identity_source.rs](../crates/desegnos-storage/src/identity_source.rs). Approved findings become brief decisions and pictures; pages stay evidence.
-2. **Import website…** calls `prepare_website_import_url` or `pick_website_import_source` → [website_import.rs](../src-tauri/src/website_import.rs). Native fetches with [website.rs](../crates/desegnos-ai/src/website.rs) or reads with [website_snapshot.rs](../crates/desegnos-storage/src/website_snapshot.rs), writes a private temp folder and serves it through `ImportSite`.
-3. [WebsiteImport.tsx](../src/WebsiteImport.tsx) renders each page in a hidden iframe through the extraction wrapper in [websiteImportExtract.ts](../src/websiteImportExtract.ts). The site page itself runs in a nested script-disabled frame.
-4. Captures go to `import_website_pages`. Native downloads or reads pictures through the project picture store, then [website_import.rs](../crates/desegnos-core/src/website_import.rs) converts the tree into pages, elements, script notes and behaviour pointers. `Command::ImportWebsite` applies the whole import as one undo step.
+1. **Pick** is the Request tool's default mode. With a layer, reference item, pointer or boundary selected, F starts a request on the selection; with nothing selected it selects the tool. A click starts the request on the target under the cursor, or removes it when it is already the target; Shift-click adds or removes one target of a multi-target request.
+2. **Areas** come from the tool's flyout: Rectangle, Ellipse, Polygon and Freehand. [requestGeometry.ts](../src/projectCanvas/requestGeometry.ts) tests the real outline (`requestAreaContains`), not its bounding box, and [requests.tsx](../src/projectCanvas/requests.tsx) collects `coveredTargets`: layers mostly inside, boundaries wholly inside, reference items inside and pointers whose line crosses. An empty area inside a boundary targets that boundary, so new layers can fill the area.
+3. **Shift+F** uses the selected shape's own outline (its rectangle, or its ellipse for an ellipse layer) as the area and keeps the shape as a target. Polygon points close with Enter or a click near the first point; Escape cancels a draft.
+4. The box is `RequestBoxEditor` in screen pixels beside the targets. Enter queues a `PendingRequest` (`text`, `attachments`, `targets`, `area`, `requestedAt`) through `add_request`; Escape cancels. `RequestLayer` draws each pending request's marker, area outline and, when selected, its target highlights. The dock's Requests group and [RequestProperties](../src/EditorDock.tsx) edit text, show targets and the area label, attach reference items and delete the request.
 
-### Export
+### Deleting selections
 
-1. **Export…** freezes an export job on a saved revision. Websites and app screens send one AI request after an explicit paid-send decision; slides and images render directly.
-2. [export.rs](../crates/desegnos-core/src/export.rs) plans and fingerprints the output. [website_export.rs](../crates/desegnos-storage/src/website_export.rs) writes it safely.
-3. The project records the export destination, page paths and pointer fingerprints. Recording an export is metadata, not an undo step.
+1. **Delete/Backspace** removes every selection kind in one gesture: layers, reference items, pointers and requests, or the focused boundary when nothing is selected. [ProjectCanvas.tsx](../src/ProjectCanvas.tsx) collects the selection and calls `removeCanvasSelection` in [App.tsx](../src/App.tsx), which sends one `delete_items` command.
+2. The dock's row trash buttons use the same path: a layer row, reference row, pointer row or request row deletes just that item, and a boundary is removed as a page or as one linked size through `delete_items` page/size ids. [RequestProperties](../src/EditorDock.tsx) has its own Delete request action.
+3. Core removes explicitly selected requests first, then their targets, then `prune_requests` drops dangling targets and requests left with nothing to act on. A confirmation covers the gesture unless the ask-before-delete preference is off; undo restores everything.
 
-### Keyboard
+### Generation: request → element operations → apply
 
-[shortcuts.ts](../src/shortcuts.ts) is the only keymap. The tool strip ([EditorTools.tsx](../src/EditorTools.tsx)), the menu ([App.tsx](../src/App.tsx)) and the keyboard help read its labels; canvas actions match its actions in [ProjectCanvas.tsx](../src/ProjectCanvas.tsx). Text fields keep their own editing keys.
+1. Each `PendingRequest` in `Project.requests` carries its text, attachments, targets and optional area. Requests are built on the canvas by Pick clicks, a drawn area or F/Shift+F, or edited in the request dock or a layer's Properties box (which edits the one request that targets only that layer).
+2. **Generate** → `prepare_generation` → `GenerationService::prepare_requests` → `Project::prepare_targeted_requirements` freezes a `RequirementsSnapshot`: brief, decisions, exceptions, each request's text, targets and area, all linked sizes and element trees, reference, pointers, pictures and capabilities. Every pending request is frozen with its own digest, so changing its text, targets or area makes the snapshot stale. It carries a SHA-256 digest and requirements format 30. The job is persisted before any paid send.
+3. `start_generation` / `retry_generation` stream from the selected provider with cancellation, deadline, usage and validation. The accepted reply is a `GenerationCandidate`: per-request `ElementOperation`s (`ReplaceChildren`, `Update`, `Insert`, `Remove`, `InsertInBoundary`, `AddReference`), generated image requests, pointer classifications, decision proposals and design criticism. `get_generation` polls the latest job; `list_generations`/`get_past_generation` expose history; `cancel_generation` and `discard_generation` stop or drop it.
+4. `apply_generation` rechecks that the snapshot is still current, resolves permitted images through the provider and project picture store, then `Workspace::apply_generated` → `Session::apply_generation` → `apply_generation_output`. The core validates ids, scope and layout, assigns element ids, applies overrides/Play actions, records the applied job id and publishes the new elements. This is one undo step.
+5. `record_generation` stores the draft dossier (`GenerationDossier`: attempt, base revision, requirements/candidate digests, summary, targets, proposals, criticism, application status) for history and audit. Automatic site application never silently accepts identity proposals.
+
+### Export: AI website/app, direct PDF/PNG/SVG, fingerprints and clashes
+
+1. **Export** opens the panel. `prepare_export` checks the project id and revision, requires an included boundary for preview, and requires a saved version for a full export. `plan_export` chooses included boundaries and freezes one AI request for pages whose `OutputType` needs AI (webpage, app screen), including every linked size, pointers with comments, reference material and the brief.
+2. Direct pages render without AI and are added to direct-only and mixed AI bundles: all included slides become one `slides.pdf` deck; image boundaries become PNG and, when the tree is vector-representable, SVG. `direct_export_bundle` or `ai_export_bundle` → `render.rs`/`render/pdf.rs` → the staged writer.
+3. AI pages wait in a prepared job. `start_export` is the explicit paid-send decision; the reply is parsed with `parse_export_reply` and validated with `ai_export_bundle` (strict JSON files, paths, sizes). Once written, a full export records an `ExportRecord` (version, destination, pages and the fingerprint of every pointer's code) via `RecordExport`; a preview writes a temporary folder instead and serves it.
+4. **Fingerprints** are SHA-256 digests over each pointer's marked HTML/CSS/JS/SVG fragments. `PointerStateView` derives wired, needs generating, needs exporting, code changed, contradicts or broken from the project plus the last export; the canvas draws the corresponding line state.
+5. **Clashes** are never fixed silently. `recheck_export` rereads the written files and reports drift. Keep code → `keep_pointer_code` rewrites the comment to match the marked code; Keep comment → `ForgetExportPointer` drops the wiring so the next export rebuilds it. Contradicting pointers resolve with `ResolvePointerClash` (keep one, drop others, optional merged comment); broken pointers are reattached or removed.
+6. `open_in_browser` serves the last export through `LocalSite`; `open_export_folder` refuses a replaced/moved folder; the manifest is `desegnos-export.json`. Exports are ordinary files with no Desegnos runtime.
+
+### Preview export and Play
+
+1. **Preview export** (Ctrl/Cmd+Enter) calls `prepare_export` with `preview: true` and exactly one included AI boundary. It writes to a fresh temporary preview folder without the manifest, serves it through `LocalSite` at a token-prefixed loopback URL, and [ProjectCanvas.tsx](../src/ProjectCanvas.tsx) draws it in an opaque sandboxed iframe over the boundary. A revision change marks it stale; Refresh re-exports, Escape/Close calls `close_preview` and stops the server.
+2. **Play** (Shift+Space) is client-only and never saved. `PlayState` (`src/projectCanvas/play.ts`) holds the active boundary plus hidden elements and swaps. Clicking an element runs the matching pointer whose `Pointer.play` action was classified by generation: go to boundary, show, hide, toggle or swap. Go-to re-fits the camera on the target boundary. Escape exits.
+3. Preview and Play share `preview-overlay`/`.playing` canvas layers, but Preview shows real exported code while Play only restyles the in-memory design.
+
+### Website import to elements
+
+1. **Import website…** calls `prepare_website_import_url` or `pick_website_import_source` → bounded fetch (`fetch_website_snapshot`) or read (`collect_website_snapshot`) into a private import folder, served by `ImportSite`.
+2. [WebsiteImport.tsx](../src/WebsiteImport.tsx) renders each page in a hidden iframe through [websiteImportExtract.ts](../src/websiteImportExtract.ts). The page itself runs in a nested script-disabled frame; only the extractor reads the DOM and posts a compact `WebCapture` tree of positions, text, computed styles, links, pictures and script tags.
+3. `import_website_pages` validates routes and picture sources, downloads or reads bounded images, stores them through `Project::prepare_picture`, then calls the pure `import_website` conversion in core. It returns pages, elements, reference notes, behaviour pointers where recognisable, linked-size overrides and pictures.
+4. `Command::ImportWebsite` applies the whole import in **one undo step**. Page code never runs; scripts become notes or pointer comments.
+
+Brand import is separate: `pick_identity_source`/`fetch_identity_source` → [identity.rs](../src-tauri/src/identity.rs) and [identity_source.rs](../crates/desegnos-storage/src/identity_source.rs) collect evidence; `analyze_identity` asks the configured provider; approved findings and logos go through `import_context` into brief decisions and project pictures as one undo step. Evidence pages and source files never gain file or network authority.
+
+### Start page, untitled projects and recovery
+
+1. Launch asks `get_app_settings`. With **Show start page on launch** on, [StartPage.tsx](../src/StartPage.tsx) shows the Home rail, Blank canvas and template tiles, then recent projects. Turning the setting off calls `new_untitled_project` immediately and, if recoveries exist, offers them.
+2. A template (`website`, `appScreen`, `slideDeck`, `socialImage`) creates its own starter boundaries with common sizes; `blank` creates one untitled canvas. Untitled projects get the lowest unused `Canvas N` and live in app data until their first save names them.
+3. Recent projects support pin, remove and Enter/double-click open. `forget_recent_project` and `set_recent_project_pin` only change the catalogue; the project files are untouched.
+4. Recovery offers appear on Home and in the project surface. Recover opens the hidden autosave branch in its own tab; Open saved version opens the file and discards the autosave; dismiss discards the autosave copy. A failed checked save shows [SaveConflict.tsx](../src/SaveConflict.tsx) instead of overwriting.
+
+## Terminology: spec vs code
+
+[GLOSSARY.md](../GLOSSARY.md) is authoritative for names. Current code still carries older identifiers:
+
+| Spec term | In code | Note |
+| --- | --- | --- |
+| **Boundary** | `Page`, `PageSize`, `Page.sizes`, `BoundaryKind::{Page, Screen}` | One `Page` draws one boundary per linked size. "Page" here is a canvas output, not an HTML page or the Home page. |
+| **Layer** | `Element`, `ElementKind::Group` | A layer is one element or a group; `ElementMeta` carries its request history and context. |
+| **Request** | `PendingRequest`, `Project.requests`, `RequestLayer`, `RequestBoxEditor`, [RequestProperties](../src/EditorDock.tsx), `request_history.rs` | Requests belong to the project, not to one layer, so one request can target a mix of layers, boundaries, reference items and pointers. The old **Frame** word survives in geometry helpers (`FrameCorner`, `FRAME_SNAP`, `MIN_FRAME_SIZE`, `snapToFrameGrid`, `frameBox`, `drawnFrameRect`, `referenceFrameRect` in [projectCanvasGeometry.ts](../src/projectCanvasGeometry.ts)) and in unused `.request-frame`/`.frame-overlay` CSS rules; read all of them as Request. The session label `"AI filled frames"` is historical wording for a generation step. |
+| **Reference** | `Project.reference`, `ReferenceItem`, `ReferenceKind`, [reference.tsx](../src/projectCanvas/reference.tsx) | The spec renamed **Moodboard** to Reference. No `moodboard` identifier remains in `src/`, `crates/` or `src-tauri/`; only the glossary's Gone table still records the old word. |
+| **Pointer / comment / wired** | `Pointer`, `Pointer.comment`, `PointerWiring`, `PointerState` | `Pointer.play` holds a classified simple action. |
+| **Clash** | `PointerState::{CodeChanged, Contradicts, Broken}`, `ExportRecord.pointers`, `pointer_fingerprints` | Resolved by `ResolvePointerClash`, `SetPointerWiring`/Keep code and `ForgetExportPointer`/Keep comment. |
+| **Linked sizes / base size / override / placeholder** | `PageSize`, `Page.sizes`, `ElementOverride`, `Element.overrides`, `resolve_for_size`, [sizes.ts](../src/projectCanvas/sizes.ts) | Single click edits one size, double click all linked sizes; placeholders mark hidden elements. |
+| **Play / Preview export** | `PlayState`, `playClick`/`playPointerAt`, `prepare_export { preview: true }`, `LocalSite` | Play is transient; Preview runs the real export in a sandbox. |
+| **Export / Open in browser** | `ExportPlan`, `plan_export`, `ai_export_bundle`, `direct_export_bundle`, `ExportRecord`, `LocalSite` | Websites/apps use AI; slides/images render directly. |
+| **Project file / version / history / alternative** | `ProjectDatabase`, `versions` table, `ProjectHistoryView`, `branches` table, `create_alternative` | Restore is a new version and one undo step. |
+| **Flexible / Precise** | `GenerationMode::{Fuzzy, Strict}` | Project-level setting frozen into the generation job. |
+| **Scope / targets** | `Scope` (project, boundary or layer) and `PendingRequest.targets` | Decisions and exceptions carry a `Scope`; a request's scope is its targets plus what pointers grant. |
+| **Targets** | `RequestTarget` (`element`, `boundary`, `reference`, `pointer`), `coveredTargets`, `requestTargetKey`, `scope_for` | What a request may change. Pick targets what you click, an area targets what its outline covers, and F/Shift+F target the selection. Core validates targets on every edit and prunes those that disappear. |
+| **Request shape** | `RequestShape` (`rect`, `ellipse`, `polygon`, `freehand`), `RequestArea`, [requestGeometry.ts](../src/projectCanvas/requestGeometry.ts) | Coverage uses the real outline: `requestAreaContains`, `requestShapePath` and `requestShapeBounds` in the renderer, `RequestShape` validation in core. Rectangle, ellipse, polygon and freehand are implemented; Shift+F takes a selected shape's outline. |
+
+## Tests, builds and evidence
+
+| Command | Runs |
+| --- | --- |
+| `npm run dev` | Vite frontend on `127.0.0.1:1420` (strict port). |
+| `npm run desktop` | `scripts/tauri.mjs` → Tauri dev app. |
+| `npm run typecheck` | `tsc --noEmit`. |
+| `npm run build` | `tsc --noEmit && vite build`. |
+| `npm test` | `cargo test --workspace` through `scripts/cargo.mjs`. |
+| `npm run check:rust` | Clippy for the workspace, all targets, warnings denied. |
+| `npm run test:canvas` | `tests/project-canvas-geometry.test.mjs` + `tests/canvas-model.test.mjs`. |
+| `npm run test:editor` | The kept React/Node tests: CodeMirror state, crash copy, generation cancellation/conversation/problems/session/status, identity review, import flow, notice system/summary, problem banner, recovery banner, start page, update check, visible actions, workspace surfaces, editor SSR. |
+| `npm run test:smoke` | `tests/native/canvas-smoke.mjs`: builds the `native-tests,gtk-dialogs` app and drives the real editor on a guarded Xvfb display and private session bus. Linux only. |
+| `npm run test:vault` | `scripts/test-vault.mjs`: native secret-service vault flow against a loopback provider. |
+| `npm run release:local` | `scripts/build-release.mjs`: Tauri release build (no bundle), then the guarded Linux startup check. `--dist` keeps the full LTO release profile. |
+
+Kept tests not wired into an npm script: `node tests/build-release.test.mjs` (release orchestration without Cargo) and `node tests/tauri-launcher.test.mjs` (launcher environment). `node scripts/startup-test.mjs --binary <path>` runs the guarded startup check directly.
+
+| Test file | Covers |
+| --- | --- |
+| [build-release.test.mjs](../tests/build-release.test.mjs) | Release orchestration, `--dist` profile and failure stopping. |
+| [canvas-model.test.mjs](../tests/canvas-model.test.mjs) | Linked-size helpers, overrides, placeholders, origins, id parity with Rust, keymap uniqueness and CANVAS.md keyboard parity. |
+| [code-mirror-state.test.mjs](../tests/code-mirror-state.test.mjs) | CodeMirror metadata, exact edits, undo/redo and lagging React echoes. |
+| [crash-report.test.mjs](../tests/crash-report.test.mjs) | Crash notice copy and issue-address fallback. |
+| [editor-shell-ssr.test.mjs](../tests/editor-shell-ssr.test.mjs) | Server render of the editor shell with an unwired pointer. |
+| [generation-cancellation.test.mjs](../tests/generation-cancellation.test.mjs) | Prepare/start/stop ordering and no request after Stop. |
+| [generation-conversation.test.mjs](../tests/generation-conversation.test.mjs) | Declared-question, rejection and open-request actions in the AI conversation. |
+| [generation-problems.test.mjs](../tests/generation-problems.test.mjs) | Per-area callout placement, pan and dismissal. |
+| [generation-session.test.mjs](../tests/generation-session.test.mjs) | Owned vs restored job notices. |
+| [generation-status.test.mjs](../tests/generation-status.test.mjs) | Status-bar retry, fix and question logic. |
+| [identity-review.test.mjs](../tests/identity-review.test.mjs) | Colour/font parsing, roles and deduplication. |
+| [import-flow.test.mjs](../tests/import-flow.test.mjs) | Brand source review, resume and page-import handoff. |
+| [notice-summary.test.mjs](../tests/notice-summary.test.mjs) | Outside-change summaries and fallbacks. |
+| [notice-system.test.mjs](../tests/notice-system.test.mjs) | Headless notice queue, preemption, duplicates and layout. |
+| [problem-banner.test.mjs](../tests/problem-banner.test.mjs) | Banner variants, callbacks, close and priority order. |
+| [project-canvas-geometry.test.mjs](../tests/project-canvas-geometry.test.mjs) | Boundary layout/push/snap, sizes and camera fitting. |
+| [recovery-banner.test.mjs](../tests/recovery-banner.test.mjs) | Recovery error typing, choice markup and persistence beside open projects. |
+| [start-page.test.mjs](../tests/start-page.test.mjs) | Home rail, templates, recents, pin/remove and launch toggle. |
+| [tauri-launcher.test.mjs](../tests/tauri-launcher.test.mjs) | Launcher `CI` normalization and environment. |
+| [update-check.test.mjs](../tests/update-check.test.mjs) | Newer/current/no-release update messages. |
+| [visible-actions.test.mjs](../tests/visible-actions.test.mjs) | Conditional control visibility across surfaces. |
+| [workspace-surfaces.test.mjs](../tests/workspace-surfaces.test.mjs) | No modal dialogs, panel switching, save-conflict focus and Escape. |
+| [typescript.mjs](../tests/typescript.mjs) | Compiles browser TS entry points into an importable Node tree for tests. |
+| [native/canvas-smoke.mjs](../tests/native/canvas-smoke.mjs) | Real-app Xvfb/WebDriver smoke: Home, templates, tools, Request Pick and drawn area shapes with queued requests, boundary/element drawing, Properties, Layers, sizes, History and save/reopen. |
+| [native/webdriver.mjs](../tests/native/webdriver.mjs) | Minimal WebDriver client and wait helpers. |
+| [native/provider-server.mjs](../tests/native/provider-server.mjs) | Loopback provider fixture that asserts no synthetic keys leak. |
+| [native/oauth-server.mjs](../tests/native/oauth-server.mjs) | Loopback OAuth/JWKS fixture. |
+| [native/x11-input.py](../tests/native/x11-input.py) | X11 input helper for the native save dialog. |
+
+Evidence lands under `test-results/`, which is gitignored:
+
+- `test-results/smoke/<ISO>-<pid>/`: `app.log`, `xvfb.log`, `report.json`, `final.png`, `saved-project.sha256`, dialog JSON, `browser-errors.json`, `desktop-cleanup.json`; failures add `failure.png`, `failure.html` and `failure-steps.json`.
+- `test-results/startup/<ISO>-<pid>/`: `app.log`, `startup.png`, `report.json`, `cleanup.json`, Xvfb log.
+- `test-results/system-vault/<ISO>-<pid>/`: vault test evidence.
+
+Older logs, screenshots and JSON at the root of `test-results/` are historical records from earlier work; they are not regenerated by the current scripts.
 
 ## Scripts and documents
 
-- [cargo.mjs](../scripts/cargo.mjs), [tauri.mjs](../scripts/tauri.mjs), [toolchain.mjs](../scripts/toolchain.mjs): tool discovery and Cargo/Tauri wrappers.
-- [build-release.mjs](../scripts/build-release.mjs), [build-release.sh](../scripts/build-release.sh): local release orchestration.
-- [usage-report.mjs](../scripts/usage-report.mjs), [startup-test.mjs](../scripts/startup-test.mjs), [test-vault.mjs](../scripts/test-vault.mjs): local diagnostics.
-- [docs/](./): contracts and notes. Check their claims against source before changing behaviour.
+- [cargo.mjs](../scripts/cargo.mjs), [tauri.mjs](../scripts/tauri.mjs), [toolchain.mjs](../scripts/toolchain.mjs): Cargo/Tauri wrappers and pinned toolchain discovery.
+- [build-release.mjs](../scripts/build-release.mjs), [build-release.sh](../scripts/build-release.sh): local release build and startup check; `--dist` for publishing.
+- [startup-test.mjs](../scripts/startup-test.mjs), [test-vault.mjs](../scripts/test-vault.mjs), [xvfb.mjs](../scripts/xvfb.mjs): guarded native diagnostics.
+- [usage-report.mjs](../scripts/usage-report.mjs): summarises local usage JSONL and generation folders into Markdown. It sends nothing.
+- [docs/](./): contracts and guides, including [CHATGPT_CONTRACT.md](./CHATGPT_CONTRACT.md), [IDENTITY_IMPORT.md](./IDENTITY_IMPORT.md), [INSTALL_AND_FIRST_SITE.md](./INSTALL_AND_FIRST_SITE.md), [GENERATION_BENCHMARK.md](./GENERATION_BENCHMARK.md) and the CodeMirror dependency records. Check their claims against source before changing behaviour.

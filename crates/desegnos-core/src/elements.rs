@@ -86,15 +86,22 @@ pub enum ElementKind {
     Image,
     Button,
     Link,
-    Input { input_type: InputType },
+    Input {
+        input_type: InputType,
+    },
     Textarea,
-    Select { options: Vec<String> },
+    Select {
+        options: Vec<String>,
+    },
     Checkbox,
     Radio,
     Video,
     Audio,
     Embed,
-    Code { language: String, source: String },
+    Code {
+        language: String,
+        source: String,
+    },
 }
 
 impl ElementKind {
@@ -236,40 +243,6 @@ impl ElementLayout {
     }
 }
 
-/// A request waiting to be sent for one layer. A frame is a box with one; Ask AI and the
-/// request box in Properties put one on any layer.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PendingRequest {
-    pub prompt: String,
-    #[serde(default)]
-    pub attachments: Vec<RequestAttachment>,
-    pub requested_at: String,
-    /// The linked size the request was written in, so the AI can answer for that size.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size_id: Option<Uuid>,
-}
-
-impl PendingRequest {
-    pub fn validate(&self) -> Result<()> {
-        validate_text(&self.prompt, "Request", MAX_PROMPT_CHARS, false)?;
-        ensure(
-            !self.requested_at.is_empty()
-                && self.requested_at.chars().count() <= 64
-                && !self.requested_at.chars().any(char::is_control),
-            "A request needs a short creation time.",
-        )?;
-        ensure(
-            self.attachments.len() <= MAX_ELEMENT_CONTEXT,
-            "A request supports at most 32 attachments.",
-        )?;
-        for attachment in &self.attachments {
-            attachment.validate()?;
-        }
-        Ok(())
-    }
-}
-
 /// One past request on a layer. Outcome and job arrive with the AI step; until then a manual
 /// Ask AI records the prompt and leaves them empty.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -325,9 +298,6 @@ pub struct ElementMeta {
     /// Newest last on disk; Properties lists them newest first.
     pub requests: Vec<RequestRecord>,
     pub context: Vec<RequestAttachment>,
-    /// A request waiting for Generate. One per layer; applying clears it.
-    #[serde(default, deserialize_with = "crate::required_nullable", skip_serializing_if = "Option::is_none")]
-    pub pending: Option<PendingRequest>,
 }
 
 impl ElementMeta {
@@ -345,9 +315,6 @@ impl ElementMeta {
         )?;
         for attachment in &self.context {
             attachment.validate()?;
-        }
-        if let Some(pending) = &self.pending {
-            pending.validate()?;
         }
         Ok(())
     }
@@ -451,14 +418,10 @@ pub struct Element {
 
 impl Element {
     pub fn validate(&self, project: &Project) -> Result<()> {
-        ensure(
-            !self.id.is_nil(),
-            "An element needs a nonempty identifier.",
-        )?;
+        ensure(!self.id.is_nil(), "An element needs a nonempty identifier.")?;
         validate_element_rect(&self.rect)?;
         ensure(
-            self.rotation.is_finite()
-                && self.rotation.abs() <= 360_000.0,
+            self.rotation.is_finite() && self.rotation.abs() <= 360_000.0,
             "An element rotation must be finite.",
         )?;
         if let Some(name) = &self.name {
@@ -528,8 +491,7 @@ impl Element {
             ElementKind::Code { language, source } => {
                 validate_text(language, "Code language", 40, false)?;
                 ensure(
-                    source.chars().count() <= MAX_ELEMENT_CODE_CHARS
-                        && !source.contains('\0'),
+                    source.chars().count() <= MAX_ELEMENT_CODE_CHARS && !source.contains('\0'),
                     "A code block is limited to 200,000 characters.",
                 )?;
             }
@@ -542,10 +504,7 @@ impl Element {
             )?;
         }
         if !self.kind.holds_children() {
-            ensure(
-                self.layout.is_free(),
-                "Only a box lays out its children.",
-            )?;
+            ensure(self.layout.is_free(), "Only a box lays out its children.")?;
         }
         if let Some(url) = &self.url {
             validate_http_url(url)?;
@@ -692,7 +651,10 @@ fn validate_colour(value: &str, label: &str) -> Result<()> {
         }
         None => false,
     };
-    ensure(valid, format!("{label} must be a #rgb, #rrggbb or #rrggbbaa colour."))
+    ensure(
+        valid,
+        format!("{label} must be a #rgb, #rrggbb or #rrggbbaa colour."),
+    )
 }
 
 /// Validates one page's element forest and records every id in the project set. `sizes` holds
@@ -1043,17 +1005,22 @@ fn definition_master(content: &Element) -> Element {
     master
 }
 
+fn collect_link_instances(elements: &[Element], link: Uuid, ids: &mut Vec<Uuid>) {
+    for element in elements {
+        if element.link == Some(link) {
+            ids.push(element.id);
+        }
+        collect_link_instances(&element.children, link, ids);
+    }
+}
+
 fn tree_has_link(elements: &[Element], link: Uuid) -> bool {
     elements
         .iter()
         .any(|element| element.link == Some(link) || tree_has_link(&element.children, link))
 }
 
-fn collect_resolved_ids(
-    project: &Project,
-    elements: &[Element],
-    ids: &mut BTreeSet<Uuid>,
-) {
+fn collect_resolved_ids(project: &Project, elements: &[Element], ids: &mut BTreeSet<Uuid>) {
     for element in elements {
         ids.insert(element.id);
         match element.link.and_then(|id| project.linked.get(&id)) {
@@ -1095,9 +1062,9 @@ pub struct LinkedPasteInstance {
 impl Project {
     /// The page and element for an id, wherever the tree holds it.
     pub fn element(&self, id: Uuid) -> Option<(&Page, &Element)> {
-        self.pages.iter().find_map(|page| {
-            find_element(&page.elements, id).map(|element| (page, element))
-        })
+        self.pages
+            .iter()
+            .find_map(|page| find_element(&page.elements, id).map(|element| (page, element)))
     }
 
     pub fn element_mut(&mut self, id: Uuid) -> Option<&mut Element> {
@@ -1109,33 +1076,22 @@ impl Project {
         None
     }
 
-    /// A request waiting for Generate, on any layer of any boundary.
+    /// A request waiting for Generate that names this layer as a target.
     pub fn element_has_pending_request(&self, id: Uuid) -> bool {
-        self.element(id)
-            .and_then(|(_, element)| element.meta.pending.as_ref())
-            .is_some_and(|pending| !pending.prompt.trim().is_empty())
+        self.requests.iter().any(|request| {
+            !request.text.trim().is_empty()
+                && request
+                    .targets
+                    .iter()
+                    .any(|target| matches!(target, crate::RequestTarget::Element { id: target_id, .. } if *target_id == id))
+        })
     }
 
     pub fn pending_request_count(&self) -> usize {
-        self.pages
+        self.requests
             .iter()
-            .map(|page| count_pending(&page.elements))
-            .sum()
-    }
-
-    pub(crate) fn set_element_request(
-        &mut self,
-        element_id: Uuid,
-        request: Option<PendingRequest>,
-    ) -> Result<()> {
-        if let Some(request) = &request {
-            request.validate()?;
-        }
-        let element = self
-            .element_mut(element_id)
-            .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-        element.meta.pending = request;
-        Ok(())
+            .filter(|request| !request.text.trim().is_empty())
+            .count()
     }
 
     /// Element ids in a layer's subtree, including the layer itself and the layers a linked
@@ -1501,8 +1457,9 @@ impl Project {
     fn rename_definition(&mut self, definition: Uuid, name: &str) -> Result<()> {
         validate_text(name, "Linked element name", MAX_ELEMENT_NAME_CHARS, true)?;
         ensure(
-            !self.linked.iter().any(|(other, item)| *other != definition
-                && item.name.eq_ignore_ascii_case(name.trim())),
+            !self.linked.iter().any(|(other, item)| {
+                *other != definition && item.name.eq_ignore_ascii_case(name.trim())
+            }),
             "A linked element with this name already exists.",
         )?;
         let item = self
@@ -1573,7 +1530,7 @@ impl Project {
         for (_, content) in &contents {
             ensure(
                 same_element_structure(&winner, content),
-                "Different structure, can't link"
+                "Different structure, can't link",
             )?;
         }
         let name = self.unique_link_name(winner.name.as_deref());
@@ -1613,6 +1570,24 @@ impl Project {
         Ok(())
     }
 
+    /// Delete a linked definition with its copies: each copy becomes a plain layer with the
+    /// definition's content, so no layer loses what it showed.
+    pub(crate) fn delete_linked_definition(&mut self, id: Uuid) -> Result<()> {
+        ensure(
+            self.linked.contains_key(&id),
+            "This linked element no longer exists.",
+        )?;
+        let mut instances = Vec::new();
+        for page in &self.pages {
+            collect_link_instances(&page.elements, id, &mut instances);
+        }
+        for instance in instances {
+            self.detach_instance(instance)?;
+        }
+        self.linked.remove(&id);
+        Ok(())
+    }
+
     pub(crate) fn remove_linked_definition(&mut self, id: Uuid) -> Result<()> {
         ensure(
             self.linked.contains_key(&id),
@@ -1629,10 +1604,7 @@ impl Project {
         Ok(())
     }
 
-    pub(crate) fn paste_linked_instances(
-        &mut self,
-        items: Vec<LinkedPasteInstance>,
-    ) -> Result<()> {
+    pub(crate) fn paste_linked_instances(&mut self, items: Vec<LinkedPasteInstance>) -> Result<()> {
         ensure(!items.is_empty(), "Choose a layer to paste.")?;
         for item in items {
             ensure(!item.id.is_nil(), "A pasted layer needs an identifier.")?;
@@ -1791,9 +1763,8 @@ impl Project {
             let children = match movement.to_parent_id {
                 None => &mut page.elements,
                 Some(parent_id) => {
-                    let parent = find_element_mut(&mut page.elements, parent_id).ok_or_else(|| {
-                        Error("The destination box no longer exists.".into())
-                    })?;
+                    let parent = find_element_mut(&mut page.elements, parent_id)
+                        .ok_or_else(|| Error("The destination box no longer exists.".into()))?;
                     ensure(
                         parent.kind.holds_children(),
                         "Only a box or a group can hold children.",
@@ -1828,6 +1799,7 @@ impl Project {
             }
         }
         remove_selected(&mut page.elements, &present);
+        self.prune_requests();
         Ok(())
     }
 
@@ -1864,14 +1836,16 @@ impl Project {
         let parent = parent.expect("selected layers have a parent");
         let top = *positions.last().expect("selected layers");
         let children = container_mut(&mut page.elements, &parent);
-        let union = positions.iter().fold(None::<Rect>, |union, index| {
-            let rect = children[*index].rect;
-            Some(match union {
-                None => rect,
-                Some(union) => union_rect(&union, &rect),
+        let union = positions
+            .iter()
+            .fold(None::<Rect>, |union, index| {
+                let rect = children[*index].rect;
+                Some(match union {
+                    None => rect,
+                    Some(union) => union_rect(&union, &rect),
+                })
             })
-        })
-        .expect("selected layers have a union");
+            .expect("selected layers have a union");
         let mut grouped = Vec::with_capacity(positions.len());
         for index in &positions {
             grouped.push(children[*index].clone());
@@ -1948,9 +1922,17 @@ pub struct ElementPatch {
     pub style: Option<ElementStyle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub image: Option<Option<Uuid>>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub url: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<ElementLayout>,
@@ -1958,7 +1940,11 @@ pub struct ElementPatch {
     pub visible: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locked: Option<bool>,
-    #[serde(default, deserialize_with = "double_option", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub name: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_type: Option<InputType>,
@@ -2054,7 +2040,9 @@ impl ElementPatch {
         }
         if let Some(language) = self.language {
             match &mut element.kind {
-                ElementKind::Code { language: value, .. } => {
+                ElementKind::Code {
+                    language: value, ..
+                } => {
                     validate_text(&language, "Code language", 40, false)?;
                     *value = language;
                 }
@@ -2065,8 +2053,7 @@ impl ElementPatch {
             match &mut element.kind {
                 ElementKind::Code { source: value, .. } => {
                     ensure(
-                        source.chars().count() <= MAX_ELEMENT_CODE_CHARS
-                            && !source.contains('\0'),
+                        source.chars().count() <= MAX_ELEMENT_CODE_CHARS && !source.contains('\0'),
                         "A code block is limited to 200,000 characters.",
                     )?;
                     *value = source;
@@ -2366,22 +2353,6 @@ fn remove_selected(elements: &mut Vec<Element>, ids: &BTreeSet<Uuid>) {
     for element in elements.iter_mut() {
         remove_selected(&mut element.children, ids);
     }
-}
-
-
-fn count_pending(elements: &[Element]) -> usize {
-    elements
-        .iter()
-        .map(|element| {
-            usize::from(
-                element
-                    .meta
-                    .pending
-                    .as_ref()
-                    .is_some_and(|pending| !pending.prompt.trim().is_empty()),
-            ) + count_pending(&element.children)
-        })
-        .sum()
 }
 
 /// A compact subtree for the AI: kinds, rects, styles, text, layout and children, without

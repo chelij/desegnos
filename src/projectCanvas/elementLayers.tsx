@@ -14,11 +14,12 @@ type DragState = { pageId: string; sizeId: string; id: string; parentId: string 
 export type ElementDropTarget = { pageId: string; sizeId: string; parentId: string | null; index: number };
 
 /** One row tree per size boundary: layers hidden in this size stay listed, dimmed. */
-export function ElementLayerRows({ project, pageId, sizeId, elements, parentId, depth, selection, collapsed, toggle, select, update, fixed, onDragStart, onDrop }: {
+export function ElementLayerRows({ project, pageId, sizeId, elements, parentId, depth, selection, collapsed, toggle, select, update, remove, fixed, onDragStart, onDrop }: {
   project: Project; pageId: string; sizeId: string; elements: Element[]; parentId: string | null; depth: number;
   selection: string[]; collapsed: ReadonlySet<string>; toggle: (id: string) => void;
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
   update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
+  remove: (pageId: string, sizeId: string, id: string) => void;
   fixed: ReadonlySet<string>;
   onDragStart: (state: DragState) => void;
   onDrop: (event: DragEvent, target: ElementDropTarget) => void;
@@ -66,19 +67,21 @@ export function ElementLayerRows({ project, pageId, sizeId, elements, parentId, 
           aria-pressed={!element.visible} onClick={() => update(pageId, sizeId, [{ id: element.id, visible: !element.visible }])}><Icon name={element.visible ? 'eye' : 'eye-off'} size={13} /></button>
         <button type="button" className="icon-button sm dock-row-toggle" aria-label={`${element.locked ? 'Unlock' : 'Lock'} ${elementLabel(element)}`} title={element.locked ? 'Unlock' : 'Lock'}
           aria-pressed={element.locked} onClick={() => update(pageId, sizeId, [{ id: element.id, locked: !element.locked }])}><Icon name={element.locked ? 'lock' : 'unlock'} size={13} /></button>
+        <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${elementLabel(element)}`} title="Delete layer" onClick={() => remove(pageId, sizeId, element.id)}><Icon name="trash" size={13} /></button>
       </div>
       {hasChildren && open && <ul className="dock-tree-element-children">
         <ElementLayerRows project={project} pageId={pageId} sizeId={sizeId} elements={element.children} parentId={element.id} depth={depth + 1}
-          selection={selection} collapsed={collapsed} toggle={toggle} select={select} update={update} fixed={fixed} onDragStart={onDragStart} onDrop={onDrop} />
+          selection={selection} collapsed={collapsed} toggle={toggle} select={select} update={update} remove={remove} fixed={fixed} onDragStart={onDragStart} onDrop={onDrop} />
       </ul>}
     </li>;
   })}</>;
 }
 
-export function ElementLayers({ project, pageId, sizeId, elements, selection, select, update, move }: {
+export function ElementLayers({ project, pageId, sizeId, elements, selection, select, update, remove, move }: {
   project: Project; pageId: string; sizeId: string; elements: Element[]; selection: string[];
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
   update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
+  remove: (pageId: string, sizeId: string, id: string) => void;
   move: (pageId: string, sizeId: string, id: string, parentId: string | null, index: number) => void;
 }) {
   const fixed = useMemo(() => nestedLayerIds(project), [project]);
@@ -100,6 +103,6 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
   return <ul className="dock-tree-elements" onDragOver={event => { if (dragging) event.preventDefault(); }}
     onDrop={event => { event.preventDefault(); if (dragging) move(pageId, sizeId, dragging.id, null, elements.length); setDragging(null); }}>
     <ElementLayerRows project={project} pageId={pageId} sizeId={sizeId} elements={elements} parentId={null} depth={0}
-      selection={selection} collapsed={collapsed} toggle={toggle} select={select} update={update} fixed={fixed} onDragStart={setDragging} onDrop={drop} />
+      selection={selection} collapsed={collapsed} toggle={toggle} select={select} update={update} remove={remove} fixed={fixed} onDragStart={setDragging} onDrop={drop} />
   </ul>;
 }

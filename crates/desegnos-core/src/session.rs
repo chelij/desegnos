@@ -90,15 +90,17 @@ impl Session {
     /// Edits that land on the same thing in quick succession become one history step.
     fn burst_key(&self, command: &Command) -> Option<String> {
         match command {
-            // Only the text of a request changed (its layer stayed put).
-            Command::SetElementRequest {
-                element_id,
-                request: Some(request),
-            } => self
+            // Only the text of a request changed (its targets and attachments stayed put).
+            Command::UpdateRequest { request } => self
                 .project
-                .element(*element_id)
-                .filter(|(_, element)| element.meta.pending.as_ref().is_none_or(|pending| pending.attachments == request.attachments))
-                .map(|_| format!("request:{element_id}")),
+                .requests
+                .iter()
+                .find(|existing| existing.id == request.id)
+                .filter(|existing| {
+                    existing.attachments == request.attachments
+                        && existing.targets == request.targets
+                })
+                .map(|existing| format!("request:{}", existing.id)),
             Command::UpdatePage { page_id, .. } => Some(format!("page:{page_id}")),
             Command::UpdatePageSize {
                 page_id, size_id, ..

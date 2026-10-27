@@ -4,7 +4,7 @@ Date: 2026-10-27. The canvas format starts from scratch: old project files are n
 
 ## Idea
 
-One infinite canvas per project. Everything on it is visual: you place elements by hand or ask the AI to fill a frame, and what you see is the design. Code exists only at export, when the AI does the heavy lifting of turning the design into a real website or app. Slides and images export directly. The bounds you draw decide what ships. Placement and control still win over AI convenience.
+One infinite canvas per project. Everything on it is visual: you place elements by hand or ask the AI to fill a request, and what you see is the design. Code exists only at export, when the AI does the heavy lifting of turning the design into a real website or app. Slides and images export directly. The bounds you draw decide what ships. Placement and control still win over AI convenience.
 
 ## Primitives
 
@@ -12,7 +12,7 @@ One infinite canvas per project. Everything on it is visual: you place elements 
 |---|---|---|
 | **Element** | Text, box, shape, line, image, control… | A visual item that can have children |
 | **Layer** | — | One element, or a collection of elements, with its own AI request history and context |
-| **Frame** | A box with a request | A box element the AI fills with visual elements |
+| **Request** | A box with what you want in it | A box element the AI fills with visual elements |
 | **Boundary** | A rectangle on empty canvas | An output: a page, slide, image or app screen, with its own size and type |
 | **Pointer** | A line from an element or boundary to something else | Behaviour or reference, described by its comment |
 | **Reference** | Anything placed outside every boundary | Material the AI can read; never shipped |
@@ -30,7 +30,10 @@ One infinite canvas per project. Everything on it is visual: you place elements 
 - Elements carry visual properties only: position, size, fill, stroke, radius, shadow, opacity, text style, image, layout. No HTML, CSS or JavaScript lives on the canvas.
 - A layer is one element or a collection of elements (a group). Each layer carries its AI request history and context (attachments, reference items, pointers touching it), shown in Properties under the layer's own settings.
 - Users add elements by hand; the AI request box is the fallback for anything they would rather describe. Common elements sit in the tool strip; Insert lists every kind.
-- A frame is a box whose request the AI fills with visual elements on the canvas, which can then be edited by hand like any others. Asking AI on any layer changes that layer's elements the same way.
+- The Request tool works like a pointer by default: the cursor is an arrow, clicking anything targets it (Shift-click adds more, click again removes), and a request box appears beside the targets to type in. Enter sends it to the pending requests; Escape cancels.
+- A request can target anything on the canvas, two ways. **By area** (choose a shape in the tool's flyout): draw a request anywhere, over anything; whatever it covers (layers, part of a boundary, whole boundaries, reference items, pointers) is what the AI may change. A request over empty space inside a boundary makes new content there; over empty space outside every boundary it makes new reference. **By selection:** select any mix of things and press F (or Ctrl/Cmd+K); the request targets exactly the selection.
+- A request area can be any shape. The Request tool's flyout offers Pick (the default), then Rectangle, Ellipse, Polygon and Freehand (lasso); coverage uses the real outline, not its bounding box. Any shape already on the canvas can define one: select a shape and press Shift+F to turn its outline into a request area (the shape itself stays).
+- A request's targets are its scope: the AI changes only those, plus what pointers from them grant. Requests show their targets highlighted while selected, and the AI's result replaces the request box with the edited or new layers; the request text moves into those layers' history.
 
 ## Linked elements
 
@@ -106,9 +109,10 @@ Every tool and action has a shortcut, using the keys other design tools use.
 
 | Action | Keys |
 |---|---|
-| Select / Frame / Boundary / Pointer / Text / Pan | V / F / B / P / T / H (hold Space to pan) |
+| Select / Request / Boundary / Pointer / Text / Pan | V / F / B / P / T / H (hold Space to pan) |
 | Rectangle / Ellipse / Line / Image | R / O / L / Shift+Ctrl/Cmd+K |
 | Note (reference) | N |
+| Request on selection / request from a shape's outline | F / Shift+F |
 | Insert any element | Ctrl/Cmd+I |
 | Copy / Paste / Paste with choice / Duplicate | Ctrl/Cmd+C / V / Shift+V / D |
 | Link / Unlink | Ctrl/Cmd+Alt+K / Ctrl/Cmd+Alt+B |
@@ -134,7 +138,7 @@ The active tool decides what a click does, as in Photoshop. Each tool has its ow
 | Text | Place or edit text | — |
 | Rectangle / Ellipse / Line | Draw the shape | — |
 | Image | Place a picture | — |
-| Frame | Draw a box with a request | — |
+| Request | Pick targets (default), or draw a request area in the flyout's shape; then type what to make or change | — |
 | Boundary | Draw a Page or Screen boundary | — |
 | Pointer | Drag from an element or boundary to its target | — |
 | Note | Place a reference note | — |

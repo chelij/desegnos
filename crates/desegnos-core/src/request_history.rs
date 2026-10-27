@@ -50,7 +50,7 @@ pub fn earlier_requests(
                             serde_json::from_value(value.get("rect")?.clone()).ok()?;
                         let request = value.get("request")?.as_str()?;
                         let question = requests.iter().find(|r| {
-                            r.element_id == element_id && r.status == RequestStatus::Conflict
+                            r.element_id == Some(element_id) && r.status == RequestStatus::Conflict
                         });
                         let outcome =
                             if !matches!(outcome, "undone" | "rejected by user" | "failed") {

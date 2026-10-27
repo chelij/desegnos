@@ -954,7 +954,7 @@ impl GenerationService {
                     && view.failure_kind.is_none(),
                 |c| {
                     c.requests.iter().any(|r| {
-                        r.element_id == entry.element_id
+                        r.element_id == Some(entry.element_id)
                             && r.status == desegnos_core::RequestStatus::Conflict
                     })
                 },

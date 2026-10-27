@@ -3,12 +3,12 @@ import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { native } from './api';
 import { isTextField } from './WorkspaceSurface';
-import { automaticLinks, boundaryAt, boundaryKey, boundaryMoves, canvasRectFromPage, canvasTargetKey, dotGrid, drawnBoundaryRect, drawnFrameRect, fitCamera, insideAnyBoundary, layoutBoundaries, referenceFrameRect, referenceItemAt, referenceMoves, referenceNoteRect, movedReferenceRect, nearestEdgeAnchors, pageRectFromCanvas, panCamera, pointerRoute, pushApartBoundaries, pushApartReference, resizedReferenceRect, sameBoundaries, samePointerEndpoint, selectedPointers, viewportWorldRect, type Boundary, type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point, type ReferenceBox, type ReferenceMove, type RequestBox } from './projectCanvasGeometry';
-import type { BoundaryKind, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, Page, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem } from './types';
-import type { ProjectTool } from './EditorTools';
+import { automaticLinks, boundaryAt, boundaryKey, boundaryMoves, canvasRectFromPage, canvasTargetKey, dotGrid, drawnBoundaryRect, fitCamera, insideAnyBoundary, layoutBoundaries, pointerAt, POINTER_HIT_PX, referenceFrameRect, referenceItemAt, referenceMoves, referenceNoteRect, movedReferenceRect, nearestEdgeAnchors, pageRectFromCanvas, panCamera, pointerRoute, pushApartBoundaries, pushApartReference, resizedReferenceRect, sameBoundaries, samePointerEndpoint, selectedPointers, viewportWorldRect, type Boundary, type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point, type ReferenceBox, type ReferenceMove, type RequestBox } from './projectCanvasGeometry';
+import type { BoundaryKind, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, Page, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from './types';
+import type { ProjectTool, RequestToolShape } from './EditorTools';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { BoundaryLayer } from './projectCanvas/boundaries';
-import { elementBoxes, elementBoxesNow, FrameLayer, FrameRequestEditor, type FrameDraft, type RequestPatch } from './projectCanvas/frames';
+import { coveredTargets, dedupeTargets, elementBoxes, elementBoxesNow, requestShapeBounds, requestTargetKey, RequestBoxEditor, RequestLayer } from './projectCanvas/requests';
 import { ReferenceLayer, ReferenceNoteEditor, shownReference } from './projectCanvas/reference';
 import { pointerEntries, pointerWorld, PointerComments, PointerHandles, PointerLines } from './projectCanvas/pointers';
 import { centre, screenRect, useCanvasCamera, type NativeDrag, type ScreenRect } from './projectCanvas/surface';
@@ -28,7 +28,7 @@ import {
 type PanDrag = { kind: 'pan'; pointerId: number; start: Point; camera: CanvasCamera; moved: boolean; pageId: string | null };
 type MoveBoundaryDrag = { kind: 'move-boundary'; pointerId: number; start: Point; pageId: string; sizeId: string; origin: Rect; rect: Rect; moved: boolean };
 type DrawBoundaryDrag = { kind: 'draw-boundary'; pointerId: number; start: Point; rect: Rect; moved: boolean };
-type DrawFrameDrag = { kind: 'draw-frame'; pointerId: number; start: Point; pageId: string; sizeId: string; boundary: Rect; rect: Rect; moved: boolean };
+type DrawRequestAreaDrag = { kind: 'draw-request-area'; pointerId: number; start: Point; current: Point; shape: 'rect' | 'ellipse' | 'freehand'; points: Point[]; moved: boolean };
 type DrawNoteDrag = { kind: 'draw-note'; pointerId: number; start: Point; rect: Rect; moved: boolean };
 type DrawPointerDrag = { kind: 'draw-pointer'; pointerId: number; start: Point; source: PointerSource; sourceRect: Rect; current: Point; moved: boolean };
 type ReattachPointerDrag = { kind: 'reattach-pointer'; pointerId: number; start: Point; pointer: string; end: 'from' | 'to'; original: PointerSource | PointerTarget; fixed: Point; current: Point; moved: boolean };
@@ -44,14 +44,20 @@ type MoveElementsDrag = { kind: 'move-elements'; pointerId: number; start: Point
 type ResizeElementDrag = { kind: 'resize-element'; pointerId: number; start: Point; corner: ElementCorner; entry: ElementEntry; rect: Rect; moved: boolean };
 type DrawElementDrag = { kind: 'draw-element'; pointerId: number; start: Point; pageId: string; sizeId: string; parentId: string | null; parentOrigin: Point; boundary: Rect; rect: Rect; elementKind: ElementKind; line: boolean; rotation: number; moved: boolean };
 type MarqueeDrag = { kind: 'marquee'; pointerId: number; start: Point; current: Point; pageId: string | null; additive: boolean; moved: boolean };
-type Drag = PanDrag | MoveBoundaryDrag | DrawBoundaryDrag | DrawFrameDrag | DrawNoteDrag | DrawPointerDrag | ReattachPointerDrag | MoveSelectionDrag | ResizeReferenceDrag | MoveElementsDrag | ResizeElementDrag | DrawElementDrag | MarqueeDrag;
+type Drag = PanDrag | MoveBoundaryDrag | DrawBoundaryDrag | DrawRequestAreaDrag | DrawNoteDrag | DrawPointerDrag | ReattachPointerDrag | MoveSelectionDrag | ResizeReferenceDrag | MoveElementsDrag | ResizeElementDrag | DrawElementDrag | MarqueeDrag;
 
 const CORNERS: FrameCorner[] = ['nw', 'ne', 'sw', 'se'];
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 const DRAW_TOOLS: ProjectTool[] = ['rect', 'ellipse', 'line', 'insert'];
+// A click with the Boundary tool places its default boundary instead of doing nothing.
+const CLICK_BOUNDARY_SIZE = { width: 480, height: 360 };
+const REQUEST_EDITOR_WIDTH = 280;
+const REQUEST_EDITOR_HEIGHT = 84;
+/** The pointer fields a drag reads, shared by React's synthetic events and native window ones. */
+type DragInput = Pick<PointerEvent, 'pointerId' | 'clientX' | 'clientY' | 'button' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey'>;
 
 export type PreviewState = { pageId: string; url: string; stale: boolean };
-export type ProjectCanvasHandle = { fit: () => void; fitSelection: () => void; zoomStep: (direction: number) => void; zoomTo: (zoom: number) => void; focusBoundary: (pageId: string) => void; armPointer: (pointerId: string) => void; linkSelection: () => void; unlinkSelection: () => void };
+export type ProjectCanvasHandle = { focusCanvas: () => void; fit: () => void; fitSelection: () => void; zoomStep: (direction: number) => void; zoomTo: (zoom: number) => void; focusBoundary: (pageId: string) => void; armPointer: (pointerId: string) => void; linkSelection: () => void; unlinkSelection: () => void };
 
 export type ProjectCanvasProps = {
   project: Project; openPage: (pageId: string) => void;
@@ -60,14 +66,17 @@ export type ProjectCanvasProps = {
   selection: CanvasTarget[]; focused: string | null;
   selectBoundary: (pageId: string | null, sizeId?: string | null, additive?: boolean) => void;
   selectReference: (itemId: string, additive?: boolean) => void; selectPointer: (pointerId: string, additive?: boolean) => void; selectElement: (pageId: string, elementId: string, sizeId: string | null, additive?: boolean) => void; clearSelection: () => void;
-  changeRequest: (pageId: string, elementId: string, patch: RequestPatch) => Promise<{ prompt: string }>;
-  removeSelection: (referenceIds: string[], pointerIds: string[]) => void;
+  removeSelection: (referenceIds: string[], pointerIds: string[], requestIds: string[], elementIds?: { pageId: string; elementId: string }[]) => void;
   removeElements: (elements: { pageId: string; elementId: string }[], ask?: boolean) => void;
+  deleteBoundary: (pageId: string, sizeId: string | null) => void;
+  addRequest: (request: PendingRequest) => Promise<void>;
+  updateRequest: (request: PendingRequest) => Promise<void>;
+  selectRequest: (requestId: string) => void;
   addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>;
   updateReference: (itemId: string, patch: { rect?: Rect; text?: string; url?: string; title?: string; color?: string }) => void;
   elementToReference: (pageId: string, elementId: string, rect: Rect) => Promise<void>;
   referenceToElement: (itemId: string, pageId: string, rect: Rect, sizeId?: string | null) => Promise<void>;
-  attachToRequest: (elementId: string, files: File[], links: string[]) => void;
+  attachToRequest: (requestId: string, files: File[], links: string[]) => void;
   insertElements: (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => Promise<void>;
   updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void;
   moveElements: (moves: ElementMove[]) => Promise<unknown> | void;
@@ -80,7 +89,8 @@ export type ProjectCanvasProps = {
   updatePointer: (pointerId: string, patch: { from?: PointerSource; to?: PointerTarget; comment?: string }) => Promise<unknown>;
   pointerStates: Record<string, PointerStateView>;
   tool: ProjectTool; insertKind: ElementKind | null; onTool: (tool: ProjectTool) => void;
-  boundaryKind: BoundaryKind; onZoom: (zoom: number) => void; onLayout: (boundaries: Boundary[]) => void;
+  boundaryKind: BoundaryKind; requestShape: RequestToolShape; onRequestShape: (shape: RequestToolShape) => void; focusedSize: string | null;
+  onZoom: (zoom: number) => void; onLayout: (boundaries: Boundary[]) => void;
   play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; onPlayExit: () => void;
   preview: PreviewState | null; previewClose: () => void; previewRefresh: () => void;
 };
@@ -146,9 +156,10 @@ const intersects = (first: Rect, second: Rect) => first.x < second.x + second.wi
 
 export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>(function ProjectCanvas({
   project, openPage, createBoundary, savePlacements, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
-  changeRequest, removeSelection, removeElements, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
+  removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
+  addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
-  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, onZoom, onLayout,
+  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout,
   play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
 }, ref) {
   const surface = useRef<HTMLDivElement>(null);
@@ -171,7 +182,9 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   const { camera, setCamera, panning, setPanning, spaceHeld, space, touched, fit, zoomStep, zoomTo, worldPoint } = useCanvasCamera(surface, boundaries, project.id);
   const [moving, setMoving] = useState<{ pageId: string; sizeId: string; rect: Rect } | null>(null);
   const [draft, setDraft] = useState<Rect | null>(null);
-  const [draftFrame, setDraftFrame] = useState<FrameDraft>(null);
+  const [draftArea, setDraftArea] = useState<RequestShape | null>(null);
+  const [requestDraft, setRequestDraft] = useState<{ targets: RequestTarget[]; area: RequestArea | null; screen: ScreenRect } | null>(null);
+  const [polygonDraft, setPolygonDraft] = useState<Point[] | null>(null);
   const [draftNote, setDraftNote] = useState<Rect | null>(null);
   const [draftElement, setDraftElement] = useState<{ rect: Rect; line: boolean; rotation: number } | null>(null);
   const [marquee, setMarquee] = useState<Rect | null>(null);
@@ -179,6 +192,10 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   const [armedPointer, setArmedPointer] = useState<{ pointerId: string; end: 'from' | 'to' } | null>(null);
   const [movingItems, setMovingItems] = useState<Record<string, Rect>>({});
   const [movingElements, setMovingElements] = useState<Record<string, Rect>>({});
+  // A drag outlives a single pointer event. The window owns motion and release, so a failed
+  // pointer capture, a retargeted event or an overlay layer cannot strand an active drag.
+  const dragSession = useRef<{ move: (event: PointerEvent) => void; end: (event: PointerEvent) => void } | null>(null);
+  const dragHandlers = useRef<{ move: (event: DragInput) => void; end: (event: DragInput) => void } | null>(null);
   const [editing, setEditing] = useState<{ pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean } | null>(null);
   const [pendingImage, setPendingImage] = useState<{ uri: string; width: number; height: number; name: string } | null>(null);
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
@@ -186,6 +203,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   // Drop and bridge listeners need the latest canvas state without re-registering on every pan.
   const latest = useRef({ camera, boundaries, project, selection, focused, addReference, attachToRequest, selectPointer, selectElement, removeElements, insertElements, updateElements, moveElements, groupElements, ungroupElements, tool, insertKind, editing, play, onPlayElement });
   latest.current = { camera, boundaries, project, selection, focused, addReference, attachToRequest, selectPointer, selectElement, removeElements, insertElements, updateElements, moveElements, groupElements, ungroupElements, tool, insertKind, editing, play, onPlayElement };
+  dragHandlers.current = { move: pointerMove, end: pointerUp };
 
   const pageKey = project.pages.map(page => `${page.id}:${page.sizes.map(size => `${size.id}:${size.label}:${size.width}:${size.height}:${size.kind}:${size.x}:${size.y}:${elementBoundsHeight(resolveForSize(project, page, size.id), size.height)}`).join(',')}:${page.elements.length}`).join('|');
   useEffect(() => {
@@ -197,6 +215,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   useEffect(() => { onLayout(boundaries); }, [boundaries, onLayout]);
   useEffect(() => { onZoom(camera.zoom); }, [camera.zoom, onZoom]);
   useEffect(() => { setPasteChoice(null); setLinkChoice(null); setPlaceholderChoice(null); }, [project.id]);
+  useEffect(() => { if (tool !== 'request') { setRequestDraft(null); setPolygonDraft(null); setDraftArea(null); } }, [tool]);
+  useEffect(() => { if (requestShape === 'pick') setPolygonDraft(null); }, [requestShape]);
 
   // Keep the visible world in step with the surface, so far-away pointers can be culled.
   useEffect(() => {
@@ -211,6 +231,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 
   function escapeCanvas() {
     if (playIsActive(latest.current.play)) { onPlayExit(); return; }
+    if (requestDraft || polygonDraft || draftArea) { cancelRequestDraft(); return; }
     if (editing) { cancelEditingText(); return; }
     if (selection.length) {
       const target = selection.find(target => target.kind === 'element');
@@ -232,19 +253,23 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         escapeCanvas();
         return;
       }
-      if (shortcutFor(event, false) !== 'delete' || !selection.length) return;
+      if (shortcutFor(event, false) !== 'delete') return;
       event.preventDefault();
+      if (!selection.length) {
+        if (focused) deleteBoundary(focused, focusedSize);
+        return;
+      }
       const elements = selection.flatMap(target => target.kind === 'element' ? [{ pageId: target.pageId, elementId: target.elementId }] : []);
-      if (elements.length) { removeElements(elements); return; }
+      const requests = selection.flatMap(target => target.kind === 'request' ? [target.requestId] : []);
       const items = selection.flatMap(target => target.kind === 'reference' ? [target.itemId] : []);
-      removeSelection(items, selectedPointers(selection));
+      removeSelection(items, selectedPointers(selection), requests, elements);
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
-  }, [selection, focused, editing, selectBoundary, removeSelection, removeElements, pasteChoice, linkChoice]);
+  }, [selection, focused, focusedSize, editing, selectBoundary, removeSelection, removeElements, deleteBoundary, pasteChoice, linkChoice]);
 
-  // Files dropped on the project canvas: a frame keeps request attachments, the empty canvas
-  // keeps reference pictures.
+  // Files dropped on the project canvas: a layer attaches them to its request, the empty
+  // canvas keeps reference pictures.
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false; let stop: (() => void) | undefined;
@@ -344,7 +369,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     setCamera(fitCamera({ x: left, y: top, width: right - left, height: bottom - top }, { width: box.width, height: box.height }));
   }
 
-  useImperativeHandle(ref, () => ({ fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection }));
+  useImperativeHandle(ref, () => ({ focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection }));
 
   /** Double-click editing is the all-sizes mode: a layer drawn then belongs to every size. */
   const editingAllSizes = (pageId: string): boolean =>
@@ -397,16 +422,139 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     return boundary ? { endpoint: { kind: 'boundary', pageId: boundary.pageId, sizeId: boundary.sizeId }, rect: boundary.rect } : null;
   }
 
+  /** The thing a Request-tool click picks: a layer, reference item, pointer line or boundary. */
+  function requestTargetAt(point: Point): RequestTarget | null {
+    const box = elementAt(requestBoxes(), point);
+    if (box) {
+      const page = project.pages.find(item => item.id === box.pageId);
+      return { kind: 'element', page: box.pageId, size: page && page.sizes.length > 1 ? box.sizeId : null, id: box.elementId };
+    }
+    const item = referenceItemAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems) })), point);
+    if (item) return { kind: 'reference', id: item.itemId };
+    const hits = pointerAt(pointerEntries(project.pointers ?? [], pointerWorldNow(), new Set(), viewportWorldRect(camera, viewSize)), point, POINTER_HIT_PX / camera.zoom);
+    if (hits) return { kind: 'pointer', id: hits.pointer.id };
+    const boundary = boundaryUnder(point);
+    return boundary ? { kind: 'boundary', page: boundary.pageId, size: boundary.sizeId } : null;
+  }
+
+  /** Screen pixels for the request box: beside the targets, never inside the transformed layer. */
+  function requestEditorScreen(targets: RequestTarget[], area: RequestArea | null): ScreenRect {
+    let rect: ScreenRect | null = null;
+    if (area) rect = screenRect(requestShapeBounds(area.shape), camera);
+    for (const target of rect ? [] : targets) {
+      if (target.kind === 'element') rect = elementScreenRect(target.id, target.size) ?? rect;
+      else if (target.kind === 'boundary') {
+        const boundary = boundaries.find(item => item.pageId === target.page && (!target.size || item.sizeId === target.size));
+        if (boundary) rect = screenRect(boundary.rect, camera);
+      } else if (target.kind === 'reference') {
+        const item = project.reference.find(row => row.id === target.id);
+        if (item) rect = screenRect(shownReference(item, movingItems), camera);
+      }
+    }
+    if (!rect) rect = { left: 24, top: 24, width: 0, height: 0 };
+    const width = Math.min(REQUEST_EDITOR_WIDTH, Math.max(180, viewSize.width - 16));
+    // Prefer the right side so the box never covers the layers it targets or the next click.
+    const right = rect.left + rect.width + 10;
+    const left = right + width <= viewSize.width - 8 ? right
+      : rect.left - width - 10 >= 8 ? rect.left - width - 10
+      : Math.max(8, Math.min(rect.left, viewSize.width - width - 8));
+    const above = rect.top - REQUEST_EDITOR_HEIGHT - 6;
+    const top = above >= 8 ? above : Math.min(viewSize.height - REQUEST_EDITOR_HEIGHT - 8, rect.top + rect.height + 6);
+    return { left, top: Math.max(8, top), width, height: REQUEST_EDITOR_HEIGHT };
+  }
+
+  /** Turn a drawn outline into a request area and its covered targets. */
+  function closeRequestArea(input: Rect | Point[], kind: 'rect' | 'ellipse' | 'polygon' | 'freehand') {
+    const shape: RequestShape = kind === 'polygon' || kind === 'freehand'
+      ? { kind, points: (input as Point[]).map(point => ({ x: point.x, y: point.y })) }
+      : { kind, rect: input as Rect };
+    const bounds = requestShapeBounds(shape);
+    const boundary = boundaryUnder({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 });
+    const page = boundary?.pageId ?? null;
+    const area: RequestArea = { page, size: boundary?.sizeId ?? null, shape };
+    const targets = coveredTargets(project, boundaries, area, movingItems);
+    setDraftArea(null);
+    setPolygonDraft(null);
+    setRequestDraft({ targets, area, screen: requestEditorScreen(targets, area) });
+    surface.current?.focus({ preventScroll: true });
+  }
+
+  function targetForSelection(): RequestTarget[] {
+    const targets: RequestTarget[] = [];
+    for (const target of selection) {
+      if (target.kind === 'element') targets.push({ kind: 'element', page: target.pageId, size: target.sizeId, id: target.elementId });
+      else if (target.kind === 'reference') targets.push({ kind: 'reference', id: target.itemId });
+      else if (target.kind === 'pointer') targets.push({ kind: 'pointer', id: target.pointerId });
+    }
+    if (!targets.length && focused) {
+      const boundary = boundaries.find(item => item.pageId === focused);
+      if (boundary) targets.push({ kind: 'boundary', page: focused, size: focusedSize ?? boundary.sizeId });
+    }
+    return dedupeTargets(targets);
+  }
+
+  /** F: with something selected, start a request on it; otherwise choose the Request tool. */
+  function startRequestOnSelection(): boolean {
+    const targets = targetForSelection();
+    if (!targets.length) return false;
+    setRequestDraft({ targets, area: null, screen: requestEditorScreen(targets, null) });
+    setPolygonDraft(null);
+    setDraftArea(null);
+    surface.current?.focus({ preventScroll: true });
+    return true;
+  }
+
+  /** Shift+F: use the selected shape's own outline as the request area; the shape stays. */
+  function startRequestFromShape(): boolean {
+    const target = selection.find(isElementTarget);
+    if (!target) return false;
+    const entry = elementEntries([target])[0];
+    if (!entry) return false;
+    const shape: RequestShape = entry.element.kind === 'ellipse'
+      ? { kind: 'ellipse', rect: entry.world }
+      : { kind: 'rect', rect: entry.world };
+    const page = project.pages.find(item => item.id === target.pageId);
+    const area: RequestArea = { page: target.pageId, size: target.sizeId ?? (page ? baseSizeId(page) : null), shape };
+    const targets = dedupeTargets([...coveredTargets(project, boundaries, area, movingItems),
+      { kind: 'element', page: target.pageId, size: target.sizeId, id: target.elementId }]);
+    setRequestDraft({ targets, area, screen: requestEditorScreen(targets, area) });
+    setPolygonDraft(null);
+    setDraftArea(null);
+    surface.current?.focus({ preventScroll: true });
+    return true;
+  }
+
+  /** Enter in the request box: queue it as a pending request on its targets. */
+  function submitRequestDraft(text: string) {
+    const draft = requestDraft;
+    setRequestDraft(null);
+    const trimmed = text.trim();
+    if (!draft || !trimmed) { surface.current?.focus({ preventScroll: true }); return; }
+    const request: PendingRequest = {
+      id: crypto.randomUUID(), text: trimmed, attachments: [], targets: draft.targets, area: draft.area,
+      requestedAt: new Date().toISOString(),
+    };
+    void addRequest(request).then(() => selectRequest(request.id)).catch(() => {})
+      .finally(() => surface.current?.focus({ preventScroll: true }));
+  }
+
+  function cancelRequestDraft() {
+    setRequestDraft(null);
+    setPolygonDraft(null);
+    setDraftArea(null);
+    surface.current?.focus({ preventScroll: true });
+  }
+
   function startPan(event: ReactPointerEvent<HTMLDivElement>, pageId: string | null) {
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    beginPointerSession(event);
     drag.current = { kind: 'pan', pointerId: event.pointerId, start: { x: event.clientX, y: event.clientY }, camera, moved: false, pageId };
     setPanning(true);
   }
 
   function beginMove(event: ReactPointerEvent, point: Point, targets: CanvasTarget[]): MoveSelectionDrag | null {
     const movable: MoveTarget[] = targets.flatMap((target): MoveTarget[] => {
-      if (target.kind === 'pointer' || target.kind === 'element') return [];
+      if (target.kind === 'pointer' || target.kind === 'element' || target.kind === 'request') return [];
       const item = project.reference.find(entry => entry.id === target.itemId);
       return item ? [{ kind: 'reference' as const, itemId: item.id, origin: item.rect }] : [];
     });
@@ -678,6 +826,13 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       if (!action) return;
       const elementTargets = selection.filter(isElementTarget);
       switch (action) {
+        case 'requestTool':
+          event.preventDefault();
+          if (!startRequestOnSelection()) onTool('request');
+          return;
+        case 'requestFromShape':
+          if (elementTargets.length === 1) { event.preventDefault(); startRequestFromShape(); }
+          return;
         case 'link': if (elementTargets.length) { event.preventDefault(); linkSelection(); } return;
         case 'unlink': if (elementTargets.length) { event.preventDefault(); unlinkSelection(); } return;
         case 'selectAll': event.preventDefault(); selectAllSiblings(); return;
@@ -752,7 +907,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (!boundary) return null;
     const { parentId, parentOrigin } = boxParentAt(project, boundary.pageId, boundary.sizeId, event.target);
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    beginPointerSession(event);
     const rect = { ...point, width: 0, height: line ? 0 : 0 };
     drag.current = { kind: 'draw-element', pointerId: event.pointerId, start: point, pageId: boundary.pageId, sizeId: boundary.sizeId, parentId, parentOrigin, boundary: boundary.rect, rect, elementKind: kind, line, rotation: 0, moved: false };
     setDraftElement({ rect, line, rotation: 0 });
@@ -768,8 +923,15 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     const grip = target.closest<HTMLElement>('[data-reference-corner]');
     const itemNode = target.closest<HTMLElement>('[data-reference]');
     const elementNode = target.closest<HTMLElement>('[data-element]');
+    const requestNode = target.closest<HTMLElement>('[data-request]');
     const point = worldPoint(event);
     lastPointer.current = point;
+    if (requestNode && !space.current) {
+      event.preventDefault();
+      selectRequest(requestNode.dataset.request!);
+      surface.current?.focus({ preventScroll: true });
+      return;
+    }
     if (playIsActive(latest.current.play) && !space.current) {
       // Play turns the boundary into a clickable surface: no selection, no dragging.
       event.preventDefault();
@@ -792,28 +954,53 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (event.button === 1 || (event.button === 0 && space.current) || (event.button === 0 && tool === 'pan')) { startPan(event, boundaryNode?.dataset.boundary ?? null); return; }
     if (event.button !== 0) return;
 
-    if (tool === 'frame') {
-      const boundary = boundaryUnder(point);
+    if (tool === 'request') {
       event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
-      if (boundary) {
-        drag.current = { kind: 'draw-frame', pointerId: event.pointerId, start: point, pageId: boundary.pageId, sizeId: boundary.sizeId, boundary: boundary.rect, rect: drawnFrameRect(point, point, boundary.rect) ?? boundary.rect, moved: false };
-        setDraftFrame({ pageId: boundary.pageId, sizeId: boundary.sizeId, rect: drag.current.rect });
+      if (requestShape === 'pick') {
+        const target = requestTargetAt(point);
+        if (!target) return;
+        const shift = event.shiftKey || event.ctrlKey || event.metaKey;
+        const existing = requestDraft?.targets ?? [];
+        const key = requestTargetKey(target);
+        const already = existing.some(item => requestTargetKey(item) === key);
+        const targets = shift
+          ? already ? existing.filter(item => requestTargetKey(item) !== key) : dedupeTargets([...existing, target])
+          : already ? existing.filter(item => requestTargetKey(item) !== key) : [target];
+        if (!targets.length) { setRequestDraft(null); return; }
+        setRequestDraft({ targets, area: requestDraft?.area ?? null, screen: requestEditorScreen(targets, requestDraft?.area ?? null) });
+        setPolygonDraft(null);
+        setDraftArea(null);
+        surface.current?.focus({ preventScroll: true });
+        return;
       }
+      if (requestShape === 'polygon') {
+        const current = polygonDraft ?? [];
+        const points = [...current, point];
+        setPolygonDraft(points);
+        setDraftArea({ kind: 'polygon', points });
+        surface.current?.focus({ preventScroll: true });
+        if (points.length >= 3 && Math.hypot(points[0].x - point.x, points[0].y - point.y) * camera.zoom < 12) closeRequestArea(points, 'polygon');
+        return;
+      }
+      beginPointerSession(event);
+      drag.current = { kind: 'draw-request-area', pointerId: event.pointerId, start: point, current: point, shape: requestShape, points: [point], moved: false };
+      setPolygonDraft(null);
+      setDraftArea(requestShape === 'ellipse' ? { kind: 'ellipse', rect: { ...point, width: 0, height: 0 } } : requestShape === 'freehand' ? { kind: 'freehand', points: [point] } : { kind: 'rect', rect: { ...point, width: 0, height: 0 } });
       return;
     }
     if (tool === 'note') {
       if (boundaryUnder(point)) return;
       event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
+      beginPointerSession(event);
       drag.current = { kind: 'draw-note', pointerId: event.pointerId, start: point, rect: referenceNoteRect(point, point), moved: false };
       setDraftNote(drag.current.rect);
       return;
     }
     if (tool === 'boundary') {
-      if (boundaryUnder(point)) return;
+      // Drawing over an existing boundary is allowed: the commit pushes neighbours apart, which
+      // keeps boundaries from overlapping and keeps the tool from silently refusing a press.
       event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
+      beginPointerSession(event);
       drag.current = { kind: 'draw-boundary', pointerId: event.pointerId, start: point, rect: drawnBoundaryRect(point, point), moved: false };
       setDraft(drag.current.rect);
       return;
@@ -822,7 +1009,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       const source = pointerSourceAt(point);
       if (!source) { startPan(event, null); return; }
       event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
+      beginPointerSession(event);
       drag.current = { kind: 'draw-pointer', pointerId: event.pointerId, start: point, source: source.endpoint, sourceRect: source.rect, current: point, moved: false };
       surface.current?.focus({ preventScroll: true });
       return;
@@ -874,7 +1061,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         const entries = elementEntries(next);
         if (!entries.length) return;
         event.preventDefault();
-        event.currentTarget.setPointerCapture(event.pointerId);
+        beginPointerSession(event);
         drag.current = { kind: 'move-elements', pointerId: event.pointerId, start: point, entries, rects: {}, moved: false, duplicate: event.altKey };
         surface.current?.focus({ preventScroll: true });
         return;
@@ -887,7 +1074,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       const active = beginMove(event, point, next);
       if (!active) return;
       event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
+      beginPointerSession(event);
       drag.current = active;
       surface.current?.focus({ preventScroll: true });
       return;
@@ -898,7 +1085,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       const boundary = boundaries.find(item => item.sizeId === sizeId);
       if (!boundary) return;
       event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
+      beginPointerSession(event);
       drag.current = { kind: 'move-boundary', pointerId: event.pointerId, start: point, pageId, sizeId, origin: boundary.rect, rect: boundary.rect, moved: false };
       selectBoundary(pageId, sizeId);
       surface.current?.focus({ preventScroll: true });
@@ -912,14 +1099,14 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         const active = beginMove(event, point, next);
         if (!active) return;
         event.preventDefault();
-        event.currentTarget.setPointerCapture(event.pointerId);
+        beginPointerSession(event);
         drag.current = active;
         surface.current?.focus({ preventScroll: true });
         return;
       }
       const boundary = boundaryUnder(point);
       event.preventDefault();
-      event.currentTarget.setPointerCapture(event.pointerId);
+      beginPointerSession(event);
       drag.current = { kind: 'marquee', pointerId: event.pointerId, start: point, current: point, pageId: boundary?.pageId ?? null, additive, moved: false };
       surface.current?.focus({ preventScroll: true });
       return;
@@ -927,7 +1114,45 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     startPan(event, null);
   }
 
-  function pointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+  /**
+   * Capture is best effort: the window listeners below carry the drag even when a platform
+   * declines or drops the capture (WebKitGTK on Wayland does both), so drawing never depends on
+   * one element keeping the pointer.
+   */
+  function beginPointerSession(event: { pointerId: number }) {
+    try { surface.current?.setPointerCapture(event.pointerId); } catch { /* The window keeps the drag. */ }
+    if (dragSession.current) return;
+    const move = (native: PointerEvent) => { if (drag.current?.pointerId === native.pointerId) dragHandlers.current?.move(native); };
+    const end = (native: PointerEvent) => { if (drag.current?.pointerId === native.pointerId) dragHandlers.current?.end(native); };
+    window.addEventListener('pointermove', move, true);
+    window.addEventListener('pointerup', end, true);
+    window.addEventListener('pointercancel', end, true);
+    window.addEventListener('blur', cancelDrag);
+    dragSession.current = { move, end };
+  }
+
+  function endPointerSession() {
+    const session = dragSession.current;
+    if (!session) return;
+    window.removeEventListener('pointermove', session.move, true);
+    window.removeEventListener('pointerup', session.end, true);
+    window.removeEventListener('pointercancel', session.end, true);
+    window.removeEventListener('blur', cancelDrag);
+    dragSession.current = null;
+  }
+
+  /** A drag that loses its window drops the draft instead of committing half a gesture. */
+  function cancelDrag() {
+    if (!drag.current) return;
+    drag.current = null;
+    endPointerSession();
+    setDraft(null); setDraftArea(null); setPolygonDraft(null); setDraftNote(null); setDraftElement(null); setMarquee(null);
+    setPointerDraft(null); setMoving(null); setMovingElements({}); setMovingItems({}); setPanning(false);
+  }
+
+  useEffect(() => endPointerSession, []);
+
+  function pointerMove(event: DragInput) {
     const active = drag.current;
     if (!active || active.pointerId !== event.pointerId) return;
     if (active.kind === 'pan') {
@@ -946,7 +1171,18 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       active.rect = { ...active.origin, x: Math.round(active.origin.x + point.x - active.start.x), y: Math.round(active.origin.y + point.y - active.start.y) };
       setMoving({ pageId: active.pageId, sizeId: active.sizeId, rect: active.rect });
     } else if (active.kind === 'draw-boundary') setDraft(active.rect = drawnBoundaryRect(active.start, point));
-    else if (active.kind === 'draw-frame') { const rect = drawnFrameRect(active.start, point, active.boundary); if (rect) { active.rect = rect; setDraftFrame({ pageId: active.pageId, sizeId: active.sizeId, rect }); } }
+    else if (active.kind === 'draw-request-area') {
+      active.current = point;
+      if (active.shape === 'freehand') {
+        const last = active.points[active.points.length - 1];
+        if (Math.hypot(point.x - last.x, point.y - last.y) * camera.zoom >= 2) active.points.push(point);
+        setDraftArea({ kind: 'freehand', points: [...active.points, point] });
+      } else if (active.shape === 'ellipse') {
+        setDraftArea({ kind: 'ellipse', rect: rectFromPoints(active.start, point) });
+      } else {
+        setDraftArea({ kind: 'rect', rect: rectFromPoints(active.start, point) });
+      }
+    }
     else if (active.kind === 'draw-note') setDraftNote(active.rect = referenceNoteRect(active.start, point));
     else if (active.kind === 'draw-element') {
       if (active.line) {
@@ -1116,10 +1352,11 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     return true;
   }
 
-  function pointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+  function pointerUp(event: DragInput) {
     const active = drag.current;
     if (!active || active.pointerId !== event.pointerId) return;
     drag.current = null;
+    endPointerSession();
     if (active.kind === 'pan') {
       setPanning(false);
       if (!active.moved && !active.pageId && event.button === 0) selectBoundary(null);
@@ -1128,24 +1365,18 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (active.kind === 'move-boundary') { setMoving(null); if (active.moved) void persistMove(active.sizeId, active.rect); return; }
     if (active.kind === 'draw-boundary') {
       setDraft(null);
-      if (!active.moved) { selectBoundary(null); return; }
+      // A click places the tool's default boundary, as a click does with every other draw tool.
+      if (!active.moved) { void persistDraw({ x: active.start.x, y: active.start.y, ...CLICK_BOUNDARY_SIZE }); return; }
       void persistDraw(active.rect);
       return;
     }
-    if (active.kind === 'draw-frame') {
-      setDraftFrame(null);
-      if (!active.moved) return;
-      const pageId = active.pageId, boundary = boundaryRect(active.sizeId);
-      if (!boundary) return;
-      const rect = pageRectFromCanvas(active.rect, boundary);
-      const element = createElement('box', rect);
-      element.meta.pending = { prompt: '', attachments: [], requestedAt: new Date().toISOString(), sizeId: active.sizeId };
-      busy.current = true;
-      created.current = element.id;
-      const page = project.pages.find(item => item.id === pageId);
-      const single = !!page && hasManySizes(page) && !editingAllSizes(pageId);
-      void insertElements(pageId, null, insertionPoint(pageId, null), [element], undefined, single ? active.sizeId : null)
-        .then(() => selectElement(pageId, element.id, single ? active.sizeId : null)).catch(() => {}).finally(() => { busy.current = false; });
+    if (active.kind === 'draw-request-area') {
+      setDraftArea(null);
+      const points = [...active.points, active.current];
+      if (active.shape === 'freehand') { if (points.length >= 3) closeRequestArea(points, 'freehand'); return; }
+      const rect = rectFromPoints(active.start, active.current);
+      if (rect.width < 4 || rect.height < 4) return;
+      closeRequestArea(rect, active.shape);
       return;
     }
     if (active.kind === 'draw-note') {
@@ -1275,7 +1506,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     const origin = { x: last.parentOrigin.x + rect.x, y: last.parentOrigin.y + rect.y };
     event.preventDefault();
     event.stopPropagation();
-    surface.current.setPointerCapture(event.pointerId);
+    beginPointerSession(event);
     drag.current = { kind: 'resize-element', pointerId: event.pointerId, start: worldPoint(event), corner, rect,
       entry: { id: elementId, element: last.element, pageId: target.pageId, sizeId: editSizeId, allSizes: target.sizeId === null, parentId: last.parentId, index: last.index, rect, parentOrigin: last.parentOrigin,
         boundaryOrigin: { x: boundary.x, y: boundary.y }, world: { x: boundary.x + origin.x, y: boundary.y + origin.y, width: rect.width, height: rect.height } }, moved: false };
@@ -1286,7 +1517,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (!surface.current) return;
     event.preventDefault();
     event.stopPropagation();
-    surface.current.setPointerCapture(event.pointerId);
+    beginPointerSession(event);
     drag.current = { kind: 'resize-reference', pointerId: event.pointerId, start: worldPoint(event), corner, itemId: item.id, origin: shownReference(item, movingItems), rect: shownReference(item, movingItems), moved: false };
     surface.current.focus({ preventScroll: true });
   }
@@ -1299,7 +1530,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (!route) return;
     event.preventDefault();
     event.stopPropagation();
-    surface.current.setPointerCapture(event.pointerId);
+    beginPointerSession(event);
     const point = worldPoint(event);
     drag.current = { kind: 'reattach-pointer', pointerId: event.pointerId, start: point, pointer: pointer.id, end,
       original: end === 'from' ? pointer.from : pointer.to, fixed: end === 'from' ? route.to : route.from, current: point, moved: false };
@@ -1407,12 +1638,19 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 
   function keyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (event.defaultPrevented) return;
+    if (event.key === 'Enter' && polygonDraft && polygonDraft.length >= 3) { event.preventDefault(); closeRequestArea(polygonDraft, 'polygon'); return; }
     if (event.key === 'Enter' && focused && !selection.length) { event.preventDefault(); openPage(focused); }
     else if (event.key === 'Escape') { event.preventDefault(); escapeCanvas(); }
   }
 
   /** Double click with Select edits the layer in every linked size, not just this one. */
   function doubleClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (tool === 'request' && requestShape === 'polygon' && polygonDraft && polygonDraft.length >= 3) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeRequestArea(polygonDraft, 'polygon');
+      return;
+    }
     if (tool !== 'select') return;
     const hit = elementTargetAt(project, selection, event.target);
     if (!hit) return;
@@ -1430,12 +1668,6 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   } : undefined;
   const selectedItem = soleReferenceItem();
   const selectedItemScreen = selectedItem ? screenRect(shownReference(selectedItem, movingItems), camera) : null;
-  const selectedRequestTarget = selection.length === 1 && selection[0].kind === 'element' ? selection[0] : null;
-  const selectedRequest = selectedRequestTarget
-    ? findElementIn(pageFor(selectedRequestTarget.pageId, selectedRequestTarget.sizeId)?.elements ?? [], selectedRequestTarget.elementId)
-    : null;
-  const selectedRequestPageId = selectedRequestTarget?.pageId ?? null;
-  const selectedRequestScreen = selectedRequest ? elementScreenRect(selectedRequest.id, selectedRequestTarget?.sizeId ?? undefined) : null;
   const inverse = 1 / camera.zoom;
   const pointers = project.pointers ?? [];
   const pointerWorldNowValue = pointerWorld(project, boundaries, moving, {}, movingItems);
@@ -1486,16 +1718,16 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 
   const previewBoundary = preview ? boundaries.find(item => item.pageId === preview.pageId) ?? null : null;
   const previewScreen = previewBoundary ? screenRect(previewBoundary.rect, camera) : null;
-  return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${playIsActive(play) ? ' playing' : ''}`} style={dotStyle} tabIndex={0}
-    onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
+  return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${playIsActive(play) ? ' playing' : ''}`} style={dotStyle} tabIndex={0}
+    onPointerDown={pointerDown} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { chooseImage(event.target.files?.[0]); event.target.value = ''; }} />
     <div className="project-canvas-layer" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}>
       <BoundaryLayer project={project} boundaries={boundaries} focused={focused} selection={selection}
         moving={moving} tool={tool} spaceHeld={spaceHeld} openPage={openPage} editingId={editing?.elementId ?? null}
         movingElements={movingElements} onPlaceholder={openPlaceholder} play={play} />
-      <FrameLayer project={project} boundaries={boundaries} moving={moving} selection={selection}
-        draftFrame={draftFrame} draft={draft} boundaryKind={boundaryKind} inverse={inverse} />
+      <RequestLayer project={project} boundaries={boundaries} selection={selection} draft={requestDraft}
+        draftArea={draftArea} inverse={inverse} selectRequest={selectRequest} />
       <ReferenceLayer project={project} movingItems={movingItems} selection={selection} draftNote={draftNote} />
       {draftElement && <div className={`element-draft${draftElement.line ? ' line' : ''}`} style={{ left: draftElement.rect.x, top: draftElement.rect.y, width: draftElement.rect.width, height: draftElement.rect.height, borderWidth: inverse, transform: draftElement.rotation ? `rotate(${draftElement.rotation}deg)` : undefined }} />}
       {marquee && <div className="element-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.width, height: marquee.height, borderWidth: inverse }} />}
@@ -1514,14 +1746,12 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     {placeholderChoice && <PlaceholderChoiceRow screen={placeholderChoice.screen}
       include={() => resolvePlaceholder(placeholderChoice, true)} dismiss={() => resolvePlaceholder(placeholderChoice, false)}
       close={() => { setPlaceholderChoice(null); surface.current?.focus({ preventScroll: true }); }} />}
-    {selectedRequest && selectedRequestPageId && selectedRequest.meta.pending && selectedRequestScreen && <FrameRequestEditor key={selectedRequest.id} page={project.pages.find(page => page.id === selectedRequestPageId)!} element={selectedRequest}
-      screen={selectedRequestScreen} autoFocus={created.current === selectedRequest.id}
-      change={patch => changeRequest(selectedRequestPageId, selectedRequest.id, patch)} close={() => { created.current = null; surface.current?.focus({ preventScroll: true }); }} />}
+    {requestDraft && <RequestBoxEditor screen={requestDraft.screen} text="" submit={submitRequestDraft} close={cancelRequestDraft} />}
     {selectedItem && selectedItemScreen && selectedItem.kind.kind === 'note' && <ReferenceNoteEditor key={selectedItem.id} item={selectedItem}
       kind={selectedItem.kind} screen={selectedItemScreen} autoFocus={createdItem.current === selectedItem.id}
       change={text => updateReference(selectedItem.id, { text })} close={() => { createdItem.current = null; surface.current?.focus({ preventScroll: true }); }} />}
     {selectedItem && selectedItemScreen && <>
-      {CORNERS.map(corner => <button key={corner} type="button" data-reference-corner={corner} className={`frame-grip reference-grip ${corner}`} aria-label={`Resize reference item ${corner}`} title="Drag to resize"
+      {CORNERS.map(corner => <button key={corner} type="button" data-reference-corner={corner} className={`canvas-grip reference-grip ${corner}`} aria-label={`Resize reference item ${corner}`} title="Drag to resize"
         style={{ left: selectedItemScreen.left + (corner === 'ne' || corner === 'se' ? selectedItemScreen.width : 0) - 5, top: selectedItemScreen.top + (corner === 'sw' || corner === 'se' ? selectedItemScreen.height : 0) - 5 }}
         onPointerDown={event => startReferenceResize(event, corner, selectedItem)} />)}
     </>}

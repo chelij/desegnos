@@ -8,7 +8,7 @@ export type ScreenRect = { left: number; top: number; width: number; height: num
 export type NativeFile = { name: string; mime: string; data: string };
 export type NativeDrag = { phase: string; id: string; position: { x: number; y: number } | null; picture: NativeFile | null; files: NativeFile[]; fileErrors: string[]; message: string | null };
 
-// A frame's identity on the canvas, shared by selection, drags and Layers.
+// A canvas target's identity, shared by selection, drags and Layers.
 export const centre = (rect: Rect): Point => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
 export const screenRect = (rect: Rect, camera: CanvasCamera): ScreenRect => ({
   left: rect.x * camera.zoom + camera.x, top: rect.y * camera.zoom + camera.y,

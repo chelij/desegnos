@@ -73,7 +73,7 @@ impl GenerationDossier {
                 .iter()
                 .filter(|request| request.status == crate::RequestStatus::Conflict)
                 .map(|request| DesignCriticism {
-                    element_id: Some(request.element_id),
+                    element_id: request.element_id,
                     message: request.explanation.clone(),
                     suggestion: "This request stays open. Update its details and generate again."
                         .into(),

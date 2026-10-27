@@ -1,4 +1,4 @@
-import type { Element, GenerationJobView, Page, Rect } from './types';
+import type { Element, GenerationJobView, Page, Project, Rect } from './types';
 import { generationError, outcomeReason, technicalReason } from './userErrors.js';
 
 /// A specific place that can resolve an outcome the AI itself declared.
@@ -6,6 +6,20 @@ export type OutcomeFix = 'aiSettings' | 'import' | 'brief';
 export type Outcome = { retryable: boolean; reason: string; fix?: OutcomeFix };
 export type JobOutcome = { retryable: string[]; blocked: { elementId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean; retryBatches: boolean };
 export type AreaProblem = { key: string; elementId: string; message: string; stale: boolean; retryable: boolean; fix?: OutcomeFix; rect: Rect };
+
+export function requestText(project: Project | null, elementId: string): string {
+  const request = (project?.requests ?? []).find(item => item.targets.some(target => target.kind === 'element' && target.id === elementId));
+  if (request) return request.text;
+  // Read a legacy per-layer request still present in an in-memory fixture.
+  const pending = (element: Element): string | null => {
+    const legacy = (element.meta as { pending?: { prompt?: string } }).pending;
+    if (legacy?.prompt) return legacy.prompt;
+    for (const child of element.children) { const found = pending(child); if (found) return found; }
+    return null;
+  };
+  for (const page of project?.pages ?? []) for (const element of page.elements) { const found = pending(element); if (found) return found; }
+  return '';
+}
 
 export const fixLabel = (fix: OutcomeFix) => fix === 'aiSettings' ? 'AI settings' : fix === 'import' ? 'Import…' : 'Project brief';
 
@@ -37,6 +51,12 @@ function sentPrompts(job: GenerationJobView): Map<string, string> {
     if (typeof block?.elementId === 'string' && typeof block.request === 'string') prompts.set(block.elementId, block.request);
     for (const request of Array.isArray(block?.requests) ? block.requests : []) {
       if (typeof request?.elementId === 'string' && typeof request.request === 'string') prompts.set(request.elementId, request.request);
+      // The current request packet names each request and lists its layer targets.
+      if (typeof request?.text === 'string' && Array.isArray(request.targets)) {
+        for (const target of request.targets) {
+          if (target?.kind === 'element' && typeof target.elementId === 'string') prompts.set(target.elementId, request.text);
+        }
+      }
     }
   }
   return prompts;
@@ -77,7 +97,7 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (elementId: 
   if (!job || !terminal.includes(job.status)) return { retryable: [], blocked: [], retryAll: false, retryBatches: false };
   const ids = new Set<string>();
   for (const area of job.areas) ids.add(area.elementId);
-  for (const outcome of job.candidate?.requests ?? []) ids.add(outcome.elementId);
+  for (const outcome of job.candidate?.requests ?? []) if (outcome.elementId) ids.add(outcome.elementId);
   const retryable: string[] = [];
   const blocked: JobOutcome['blocked'] = [];
   // A stale result was never applied, so even its finished areas are worth resending.
@@ -98,20 +118,21 @@ export function declaredConflict(job: GenerationJobView | null, elementId: strin
   return !!job?.candidate?.requests.some(request => request.elementId === elementId && request.status === 'conflict');
 }
 
-export function areaProblems(job: GenerationJobView | null, page: Page): AreaProblem[] {
+export function areaProblems(job: GenerationJobView | null, page: Page, project: Project | null = null): AreaProblem[] {
   if (!job || ['prepared', 'generating', 'ready', 'applying'].includes(job.status)) return [];
   const stale = staleResult(job);
   const elements: Element[] = page.elements.flatMap(function walk(element): Element[] { return [element, ...element.children.flatMap(walk)]; });
   return elements.flatMap((element): AreaProblem[] => {
     if (!job.areas.some(area => area.pageId === page.id && area.elementId === element.id)) return [];
     const outcome = job.candidate?.requests?.find(item => item.elementId === element.id);
-    const result = areaOutcome(job, element.id, element.meta.pending?.prompt);
+    const prompt = project ? requestText(project, element.id) : undefined;
+    const result = areaOutcome(job, element.id, prompt);
     // A stale result did nothing to the canvas; say so where the visible layer is.
-    if (stale && result.retryable && element.meta.pending) return [{ key: `${job.jobId}:${element.id}`, elementId: element.id,
+    if (stale && result.retryable && (project ? !!prompt?.trim() : true)) return [{ key: `${job.jobId}:${element.id}`, elementId: element.id,
       message: staleResultMessage, stale: true, retryable: true, rect: element.rect }];
     if (!outcome || outcome.status === 'implemented') return [];
     const reason = outcome.explanation || job.message;
-    const message = result.retryable ? generationError(reason, element.meta.pending?.prompt ?? '') : result.reason;
+    const message = result.retryable ? generationError(reason, prompt ?? '') : result.reason;
     return [{ key: `${job.jobId}:${element.id}`, elementId: element.id,
       message, stale: false, retryable: result.retryable, fix: result.fix, rect: element.rect }];
   });

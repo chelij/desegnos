@@ -2,9 +2,10 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormE
 import { Icon, type IconName } from './icons';
 import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
-import type { Appearance, BoundaryKind, ElementPatch, OutputType, Page, PageSize, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, SizePreset } from './types';
+import type { Appearance, BoundaryKind, ElementPatch, OutputType, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
 import { ElementLayers } from './projectCanvas/elementLayers';
 import { SIZE_PRESETS, resolveForSize, sizeLabel } from './projectCanvas/sizes';
+import { requestAreaLabel, requestTargetLabel } from './projectCanvas/requests';
 
 const DOCK_WIDTH_KEY = 'desegnos.dock-width';
 const DOCK_COLLAPSED_KEY = 'desegnos.dock-collapsed';
@@ -205,7 +206,7 @@ export function ChoiceRow<T extends string>({ label, value, choices, choose, dis
 }
 
 /** One boundary per linked size, each with its dimensions and kind; removing asks first. */
-export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, busy, setOutput, preview }: {
+export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy, setOutput, preview }: {
   page: Page;
   commit: (patch: { name?: string; path?: string; appearance?: Appearance; included?: boolean }) => void;
   setOutput: (output: OutputType) => void;
@@ -213,17 +214,20 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   updateSize: (sizeId: string, patch: { label?: string; width?: number; height?: number; kind?: BoundaryKind }) => void;
   addSize: (preset: SizePreset, width?: number, height?: number) => void;
   removeSize: (size: PageSize) => void;
+  remove: () => void;
   busy: boolean;
 }) {
   const [customWidth, setCustomWidth] = useState('1280');
   const [customHeight, setCustomHeight] = useState('800');
   const customValid = wholeSize(customWidth, 1, 32768) && wholeSize(customHeight, 1, 100000);
   return <div className="dock-form">
+    <div className="dock-layer-title"><strong>Boundary</strong></div>
     <PropertyField label="Name" value={page.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => commit({ name: name.trim() })} />
     <PropertyField label="Path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />
     <ChoiceRow label="Appearance" value={page.appearance} choices={[['light', 'Light'], ['dark', 'Dark']]} disabled={busy} choose={appearance => commit({ appearance })} />
     <ChoiceRow label="Output" value={page.output} choices={[['webpage', 'Webpage'], ['appScreen', 'App screen'], ['slide', 'Slide'], ['image', 'Image']]} disabled={busy} choose={setOutput} />
     <label className="check-label"><input type="checkbox" checked={page.included} disabled={busy} onChange={event => commit({ included: event.target.checked })} />Include in export</label>
+    <button type="button" className="dock-action danger" disabled={busy} onClick={remove}>Delete boundary</button>
     {page.output === 'webpage' || page.output === 'appScreen' ? <button type="button" className="dock-action" disabled={busy} onClick={preview}>Preview export</button> : <p className="dock-pointer-note">{page.output === 'slide' ? 'Slides export as one PDF deck in canvas order.' : 'Images export as PNG, and SVG when every layer is vector.'}</p>}
     <div className="dock-sizes" role="group" aria-label="Sizes">
       <span className="dock-field-label">Sizes</span>
@@ -357,6 +361,35 @@ export function UntitledSaveForm({ project, location, busy, chooseLocation, save
   </form>;
 }
 
+/** A pending request: its text, what it targets, its area and its attachments. */
+export function RequestProperties({ request, project, busy, update, remove, attach }: {
+  request: PendingRequest; project: Project; busy: boolean;
+  update: (request: PendingRequest) => void; remove: () => void; attach: (requestIds: string[], itemIds: string[]) => void;
+}) {
+  const [draft, changeDraft, flushDraft] = useDraftText(request.text, (_value, latest) => { update({ ...request, text: latest() }); return Promise.resolve(latest()); }, 400);
+  const attachable = project.reference.filter(item => !request.attachments.some(attachment => attachment.text && item.kind.kind === 'note' && attachment.text === item.kind.text));
+  return <div className="dock-form">
+    <div className="dock-layer-title"><strong>Request</strong></div>
+    <label className="dock-field">What to make or change
+      <textarea value={draft} rows={4} maxLength={16384} placeholder="Describe what should happen here"
+        onChange={event => changeDraft(event.target.value)} onBlur={flushDraft}
+        onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); flushDraft(); event.currentTarget.blur(); } }} />
+    </label>
+    <div className="dock-field"><span className="dock-field-label">Targets</span>
+      {request.targets.length ? <ul className="dock-request-targets">{request.targets.map((target, index) => <li key={`${target.kind}:${index}`}>{target.kind === 'element' ? 'Layer · ' : target.kind === 'boundary' ? 'Boundary · ' : target.kind === 'reference' ? 'Reference · ' : 'Pointer · '}{requestTargetLabel(project, target)}</li>)}</ul>
+        : <p className="dock-hint">No targets: this request makes new reference outside every boundary.</p>}
+    </div>
+    <p className="dock-hint">{requestAreaLabel(request.area)}</p>
+    {attachable.length > 0 && <div className="dock-field"><span className="dock-field-label">Attach reference</span>
+      <ul className="dock-request-targets">{attachable.map(item => <li key={item.id}><button type="button" className="dock-action" disabled={busy} onClick={() => attach([request.id], [item.id])}>Attach {requestTargetLabel(project, { kind: 'reference', id: item.id })}</button></li>)}</ul>
+    </div>}
+    {request.attachments.length > 0 && <div className="dock-field"><span className="dock-field-label">Attachments</span>
+      <ul className="dock-history-attachments">{request.attachments.map((attachment: RequestAttachment) => <li key={attachment.id}>{attachment.name}</li>)}</ul>
+    </div>}
+    <button type="button" className="dock-action danger" disabled={busy} onClick={remove}>Delete request</button>
+  </div>;
+}
+
 export function PointerProperties({ pointer, project, state, change, reattach, remove, keepComment, keepCode, keepThis, merge, connectAi, aiConnected, rewriting, busy }: {
   pointer: Pointer; project: Project; state: PointerStateView | null; change: (comment: string) => Promise<unknown>;
   reattach: () => void; remove: () => void; keepComment: () => void; keepCode: () => void; keepThis: () => void; merge: () => void;
@@ -403,14 +436,19 @@ export function PointerProperties({ pointer, project, state, change, reattach, r
 }
 
 // Boundaries read top-left first, each opening onto its layers; reference items and pointers follow.
-export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, updateElements, moveElement, removeLinked }: {
+export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectRequest, selectElement, updateElements, moveElement, removeLinked, removeElements, deleteBoundary, removeRequest, removeReference, removePointer }: {
   project: Project; boundaries: Boundary[]; selection: CanvasTarget[]; focused: string | null;
   selectBoundary: (pageId: string, sizeId?: string) => void;
-  selectReference: (itemId: string) => void; selectPointer: (pointerId: string) => void;
+  selectReference: (itemId: string) => void; selectPointer: (pointerId: string) => void; selectRequest: (requestId: string) => void;
   selectElement: (pageId: string, elementId: string, sizeId: string | null, additive: boolean) => void;
   updateElements: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
   moveElement: (pageId: string, sizeId: string, elementId: string, parentId: string | null, index: number) => void;
   removeLinked: (id: string) => void;
+  removeElements: (ids: string[]) => void;
+  deleteBoundary: (pageId: string, sizeId: string | null) => void;
+  removeRequest: (id: string) => void;
+  removeReference: (id: string) => void;
+  removePointer: (id: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const ordered = boundariesByPosition(boundaries);
@@ -427,7 +465,8 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   const referenceIcon = (item: ReferenceItem): IconName => item.kind.kind === 'link' ? 'link' : item.kind.kind === 'swatch' ? 'fill-color' : item.kind.kind === 'image' ? 'canvas' : 'text';
   const pointers = project.pointers ?? [];
   const linked = Object.values(project.linked ?? {}).sort((first, second) => first.name.localeCompare(second.name));
-  if (!ordered.length && !project.reference.length && !pointers.length && !linked.length) return null;
+  const requests = project.requests ?? [];
+  if (!ordered.length && !project.reference.length && !pointers.length && !linked.length && !requests.length) return null;
   return <ul className="dock-tree">
     {ordered.map(({ pageId, sizeId, label, kind }) => {
       const page = project.pages.find(item => item.id === pageId);
@@ -444,29 +483,42 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
               <Icon name="chevron-right" size={12} className={open ? 'expanded' : undefined} />
             </button>
             : <span className="dock-tree-spacer" aria-hidden="true" />}
-          <button type="button" className="dock-tree-select" aria-pressed={focused === pageId && !selection.some(target => target.kind === 'element' && target.pageId === pageId)} title={page.path} onClick={() => selectBoundary(pageId, sizeId)}>
+          <button type="button" className="dock-tree-select" data-boundary-row={sizeId} aria-pressed={focused === pageId && !selection.some(target => target.kind === 'element' && target.pageId === pageId)} title={page.path} onClick={() => selectBoundary(pageId, sizeId)}>
             <Icon name={kind === 'screen' ? 'monitor' : 'canvas'} size={14} /><span>{name}</span>
           </button>
         </div>
+        <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${name}`} title="Delete boundary" onClick={() => deleteBoundary(pageId, sizeId)}><Icon name="trash" size={13} /></button>
         {open && elements.length > 0 && <ElementLayers project={project} pageId={pageId} sizeId={sizeId} elements={elements} selection={selectedElements}
-          select={selectElement} update={updateElements} move={moveElement} />}
+          select={selectElement} update={updateElements} remove={(page, size, id) => removeElements([id])} move={moveElement} />}
       </li>;
     })}
+    {requests.length > 0 && <li className="dock-tree-group request-group">
+      <div className="dock-tree-row"><span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Requests</span></div>
+      <ul className="dock-tree-items">
+        {requests.map(request => <li key={request.id} className="dock-linked-row">
+          <button type="button" className="dock-tree-select" data-request-row={request.id} aria-pressed={selected.has(canvasTargetKey({ kind: 'request', requestId: request.id }))} onClick={() => selectRequest(request.id)}>
+            <Icon name="text" size={12} /><span>{request.text.trim().split('\n')[0] || 'Empty request'}</span>
+          </button>
+          <button type="button" className="icon-button sm dock-row-toggle" aria-label="Delete request" title="Delete request" onClick={() => removeRequest(request.id)}><Icon name="trash" size={13} /></button>
+        </li>)}
+      </ul>
+    </li>}
     {project.reference.length > 0 && <li className="dock-tree-group reference-group">
       <div className="dock-tree-row"><span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Reference</span></div>
-      <ul className="dock-tree-frames">
+      <ul className="dock-tree-items">
         {[...project.reference].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x).map(item => <li key={item.id}>
-          <button type="button" className="dock-tree-select frame" aria-pressed={selected.has(canvasTargetKey({ kind: 'reference', itemId: item.id }))} onClick={() => selectReference(item.id)}>
+          <button type="button" className="dock-tree-select dock-tree-item" aria-pressed={selected.has(canvasTargetKey({ kind: 'reference', itemId: item.id }))} onClick={() => selectReference(item.id)}>
             <Icon name={referenceIcon(item)} size={12} /><span>{referenceLabel(item)}</span>
           </button>
+          <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${referenceLabel(item)}`} title="Delete reference item" onClick={() => removeReference(item.id)}><Icon name="trash" size={13} /></button>
         </li>)}
       </ul>
     </li>}
     {linked.length > 0 && <li className="dock-tree-group linked-group">
       <div className="dock-tree-row"><span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Linked</span></div>
-      <ul className="dock-tree-frames">
+      <ul className="dock-tree-items">
         {linked.map(definition => <li key={definition.id} className="dock-linked-row">
-          <span className="dock-tree-select frame" title={`Linked element ${definition.name}`}><Icon name="link" size={12} /><span>{definition.name}</span></span>
+          <span className="dock-tree-select dock-tree-item" title={`Linked element ${definition.name}`}><Icon name="link" size={12} /><span>{definition.name}</span></span>
           <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete linked element ${definition.name}`} title="Delete linked element"
             onClick={() => removeLinked(definition.id)}><Icon name="trash" size={13} /></button>
         </li>)}
@@ -474,12 +526,13 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
     </li>}
     {pointers.length > 0 && <li className="dock-tree-group pointers-group">
       <div className="dock-tree-row"><span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Pointers</span></div>
-      <ul className="dock-tree-frames">
+      <ul className="dock-tree-items">
         {pointers.map(pointer => <li key={pointer.id}>
-          <button type="button" className={`dock-tree-select frame${pointerBroken(pointer, project) ? ' broken' : ''}`} aria-pressed={selected.has(canvasTargetKey({ kind: 'pointer', pointerId: pointer.id }))}
+          <button type="button" className={`dock-tree-select dock-tree-item${pointerBroken(pointer, project) ? ' broken' : ''}`} aria-pressed={selected.has(canvasTargetKey({ kind: 'pointer', pointerId: pointer.id }))}
             title={pointerLabel(pointer, project)} onClick={() => selectPointer(pointer.id)}>
             <Icon name="link" size={12} /><span>{pointerLabel(pointer, project)}</span>
           </button>
+          <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${pointerLabel(pointer, project)}`} title="Delete pointer" onClick={() => removePointer(pointer.id)}><Icon name="trash" size={13} /></button>
         </li>)}
       </ul>
     </li>}

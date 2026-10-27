@@ -1508,12 +1508,7 @@ fn collect_attachments(
     urls: &mut BTreeSet<String>,
 ) {
     for element in elements {
-        let attached = element
-            .meta
-            .pending
-            .iter()
-            .flat_map(|pending| pending.attachments.iter())
-            .chain(element.meta.context.iter());
+        let attached = element.meta.context.iter();
         for attachment in attached {
             if let Some(url) = &attachment.url {
                 urls.insert(url.clone());

@@ -1,7 +1,7 @@
 // One keymap for the canvas: tool strip tooltips, the menu and the keyboard help all read it,
 // so a binding can never be added in one place and forgotten in another.
 export type ShortcutAction =
-  | 'selectTool' | 'frameTool' | 'boundaryTool' | 'pointerTool' | 'textTool' | 'panTool'
+  | 'selectTool' | 'requestTool' | 'requestFromShape' | 'boundaryTool' | 'pointerTool' | 'textTool' | 'panTool'
   | 'rectTool' | 'ellipseTool' | 'lineTool' | 'imageTool' | 'noteTool' | 'insert'
   | 'copy' | 'cut' | 'paste' | 'pasteChoice' | 'duplicate'
   | 'undo' | 'redo' | 'link' | 'unlink' | 'group' | 'ungroup' | 'delete' | 'renameLayer'
@@ -75,17 +75,18 @@ export const KEYMAP: Binding[] = [
 
   // Tools
   { action: 'selectTool', label: 'Select tool', group: 'Tools', keys: [plain('v')], display: 'V' },
-  { action: 'frameTool', label: 'Frame tool', group: 'Tools', keys: [plain('f')], display: 'F' },
   { action: 'boundaryTool', label: 'Boundary tool', group: 'Tools', keys: [plain('b')], display: 'B' },
-  { action: 'pointerTool', label: 'Pointer tool', group: 'Tools', keys: [plain('p')], display: 'P' },
+  { action: 'requestTool', label: 'Request tool', group: 'Tools', keys: [plain('f')], display: 'F' },
+  { action: 'requestFromShape', label: 'Request from a shape outline', group: 'Tools', keys: [{ key: 'f', shift: true }], display: 'Shift+F' },
   { action: 'textTool', label: 'Text tool', group: 'Tools', keys: [plain('t')], display: 'T' },
-  { action: 'panTool', label: 'Pan tool', group: 'Tools', keys: [plain('h')], display: 'H' },
   { action: 'rectTool', label: 'Rectangle tool', group: 'Tools', keys: [plain('r')], display: 'R' },
   { action: 'ellipseTool', label: 'Ellipse tool', group: 'Tools', keys: [plain('o')], display: 'O' },
   { action: 'lineTool', label: 'Line tool', group: 'Tools', keys: [plain('l')], display: 'L' },
   { action: 'imageTool', label: 'Image tool', group: 'Tools', keys: [{ key: 'k', mod: true, shift: true, alt: false }], display: 'Shift+Ctrl/Cmd+K' },
-  { action: 'noteTool', label: 'Note tool', group: 'Tools', keys: [plain('n')], display: 'N' },
   { action: 'insert', label: 'Insert any element', group: 'Tools', keys: [mod('i')], display: 'Ctrl/Cmd+I' },
+  { action: 'pointerTool', label: 'Pointer tool', group: 'Tools', keys: [plain('p')], display: 'P' },
+  { action: 'noteTool', label: 'Note tool', group: 'Tools', keys: [plain('n')], display: 'N' },
+  { action: 'panTool', label: 'Pan tool', group: 'Tools', keys: [plain('h')], display: 'H' },
 
   // View
   { action: 'zoomIn', label: 'Zoom in', group: 'View', keys: [{ key: '=', mod: true }, { key: '+', mod: true }, { code: 'Equal', mod: true }, { code: 'NumpadAdd', mod: true }], display: 'Ctrl/Cmd+=' },
@@ -126,7 +127,7 @@ export const TOOL_SHORTCUTS: Record<string, string> = {
   zoomIn: shortcutLabel('zoomIn'), zoomOut: shortcutLabel('zoomOut'), zoomReset: shortcutLabel('zoomReset'), fit: shortcutLabel('fitAll'), fitSelection: shortcutLabel('fitSelection'),
   closeProject: shortcutLabel('closeProject'), closePage: shortcutLabel('closeProject'),
   editElement: shortcutLabel('renameLayer'), remove: shortcutLabel('delete'), askAI: shortcutLabel('askAI'),
-  selectTool: shortcutLabel('selectTool'), frameTool: shortcutLabel('frameTool'), boundaryTool: shortcutLabel('boundaryTool'), pointerTool: shortcutLabel('pointerTool'),
+  selectTool: shortcutLabel('selectTool'), requestTool: shortcutLabel('requestTool'), requestFromShape: shortcutLabel('requestFromShape'), boundaryTool: shortcutLabel('boundaryTool'), pointerTool: shortcutLabel('pointerTool'),
   textTool: shortcutLabel('textTool'), panTool: shortcutLabel('panTool'), rectTool: shortcutLabel('rectTool'), rectangleTool: shortcutLabel('rectTool'),
   ellipseTool: shortcutLabel('ellipseTool'), lineTool: shortcutLabel('lineTool'), imageTool: shortcutLabel('imageTool'), noteTool: shortcutLabel('noteTool'),
   insertTool: shortcutLabel('insert'), play: shortcutLabel('play'), preview: shortcutLabel('preview'), export: shortcutLabel('export'), help: shortcutLabel('help'),

@@ -1,8 +1,8 @@
 //! Generation reply validation and application.
 use desegnos_core::{
     Appearance, Command, Element, ElementKind, GenerationCandidate, PendingRequest, PlayAction,
-    Pointer, PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Session,
-    Viewport, apply_generation_output, empty_element,
+    Pointer, PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind,
+    RequestTarget, Session, Viewport, apply_generation_output, empty_element,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -58,14 +58,19 @@ fn setup() -> (Project, Uuid, Uuid, Uuid) {
     );
     let project = apply(
         &project,
-        Command::SetElementRequest {
-            element_id: target,
-            request: Some(PendingRequest {
-                prompt: "Fill this box with a headline".into(),
+        Command::AddRequest {
+            request: PendingRequest {
+                id: Uuid::new_v4(),
+                text: "Fill this box with a headline".into(),
                 attachments: vec![],
+                targets: vec![RequestTarget::Element {
+                    page,
+                    size: None,
+                    id: target,
+                }],
+                area: None,
                 requested_at: "2026-10-27T00:00:00Z".into(),
-                size_id: None,
-            }),
+            },
         },
     );
     let project = apply(
@@ -102,7 +107,12 @@ fn setup() -> (Project, Uuid, Uuid, Uuid) {
     (project, page, target, outsider)
 }
 
-fn candidate(snapshot: &desegnos_core::RequirementsSnapshot, target: Uuid, page: Uuid, pointer: Uuid) -> GenerationCandidate {
+fn candidate(
+    snapshot: &desegnos_core::RequirementsSnapshot,
+    target: Uuid,
+    page: Uuid,
+    pointer: Uuid,
+) -> GenerationCandidate {
     serde_json::from_value(json!({
         "jobId": snapshot.job_id,
         "requirementsSha256": snapshot.sha256,
@@ -146,8 +156,8 @@ fn apply_generation_assigns_ids_records_history_clears_pending_and_classifies_pl
     let reply = candidate(&snapshot, target, page, pointer);
     reply.validate(&snapshot, &project).unwrap();
 
-    let applied = apply_generation_output(&project, &snapshot, &reply, &[0], &BTreeMap::new())
-        .unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[0], &BTreeMap::new()).unwrap();
     let (_, target_element) = applied.element(target).unwrap();
     assert_eq!(target_element.children.len(), 1);
     let child = &target_element.children[0];
@@ -155,7 +165,7 @@ fn apply_generation_assigns_ids_records_history_clears_pending_and_classifies_pl
     assert_eq!(child.text, "Hello");
     assert_ne!(child.id, target);
     assert_ne!(child.id, project.pages[0].elements[1].id);
-    assert!(target_element.meta.pending.is_none());
+    assert!(!applied.element_has_pending_request(target));
     assert_eq!(target_element.meta.requests.len(), 1);
     assert_eq!(
         target_element.meta.requests[0].prompt,
@@ -173,8 +183,13 @@ fn apply_generation_assigns_ids_records_history_clears_pending_and_classifies_pl
     );
     assert!(!applied.element_has_pending_request(target));
     assert_eq!(applied.pending_request_count(), 0);
+    assert!(applied.requests.is_empty());
 
-    let pointer = applied.pointers.iter().find(|item| item.id == pointer).unwrap();
+    let pointer = applied
+        .pointers
+        .iter()
+        .find(|item| item.id == pointer)
+        .unwrap();
     assert_eq!(pointer.play, Some(PlayAction::GoTo { boundary: page }));
     assert_eq!(pointer.play_comment, "Reads the note");
     assert_eq!(applied.applied_job_ids, vec![reply.job_id]);
@@ -190,11 +205,13 @@ fn candidate_validation_rejects_scope_escape_duplicates_and_wrong_identity() {
     let snapshot = project.prepare_requirements().unwrap();
 
     let mut escaped = candidate(&snapshot, target, page, pointer);
-    escaped.requests[0].operations = vec![serde_json::from_value(json!({
-        "kind": "update",
-        "patches": [{"elementId": outsider, "text": "Hijacked"}]
-    }))
-    .unwrap()];
+    escaped.requests[0].operations = vec![
+        serde_json::from_value(json!({
+            "kind": "update",
+            "patches": [{"elementId": outsider, "text": "Hijacked"}]
+        }))
+        .unwrap(),
+    ];
     let error = escaped.validate(&snapshot, &project).unwrap_err();
     assert!(
         error.to_string().contains("outside its request"),
@@ -211,11 +228,7 @@ fn candidate_validation_rejects_scope_escape_duplicates_and_wrong_identity() {
 
     let mut unrequested_pointer = candidate(&snapshot, target, page, pointer);
     unrequested_pointer.pointer_classifications[0].pointer_id = Uuid::new_v4();
-    assert!(
-        unrequested_pointer
-            .validate(&snapshot, &project)
-            .is_err()
-    );
+    assert!(unrequested_pointer.validate(&snapshot, &project).is_err());
 
     let mut mismatched_comment = candidate(&snapshot, target, page, pointer);
     mismatched_comment.pointer_classifications[0].comment = "Something else".into();
@@ -230,16 +243,31 @@ fn applying_a_generation_reply_is_one_undo_step() {
     let mut session = Session::new(project).unwrap();
     let before = session.history().2;
     session
-        .apply_generation(&snapshot, &candidate(&snapshot, target, page, pointer), &[0], &BTreeMap::new(), |_| Ok(()))
+        .apply_generation(
+            &snapshot,
+            &candidate(&snapshot, target, page, pointer),
+            &[0],
+            &BTreeMap::new(),
+            |_| Ok(()),
+        )
         .unwrap();
     assert_eq!(session.history().2, before + 1);
     assert!(session.project().element(target).unwrap().1.children.len() == 1);
-    assert!(session.project().element(target).unwrap().1.meta.pending.is_none());
+    assert!(!session.project().element_has_pending_request(target));
     session.undo(|_| Ok(())).unwrap();
     let (_, undone) = session.project().element(target).unwrap();
     assert!(undone.children.is_empty());
-    assert!(undone.meta.pending.is_some());
+    let _ = undone;
+    assert!(session.project().element_has_pending_request(target));
     assert!(session.project().pointers[0].play.is_none());
     session.redo(|_| Ok(())).unwrap();
-    assert!(!session.project().element(target).unwrap().1.children.is_empty());
+    assert!(
+        !session
+            .project()
+            .element(target)
+            .unwrap()
+            .1
+            .children
+            .is_empty()
+    );
 }

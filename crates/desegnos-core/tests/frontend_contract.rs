@@ -5,7 +5,7 @@ use desegnos_core::{
     ElementOverride, ElementShadow, ElementStroke, ElementStyle, ElementTextStyle, ExportRecord,
     ExportedPage, InputType, LinkedDefinition, OutputType, PageSize, PendingRequest, Pointer,
     PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, RequestAttachment,
-    RequestRecord, TextAlign, empty_element,
+    RequestRecord, RequestTarget, TextAlign, empty_element,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -167,6 +167,7 @@ fn check_project(project: &Project) {
             "reference",
             "pointers",
             "linked",
+            "requests",
             "brief",
             "decisions",
             "exceptions",
@@ -174,6 +175,18 @@ fn check_project(project: &Project) {
             "extensions",
         ],
     );
+    for (index, request) in value["requests"]
+        .as_array()
+        .expect("requests array")
+        .iter()
+        .enumerate()
+    {
+        require(
+            request,
+            &format!("project.requests[{index}]"),
+            &["id", "text", "attachments", "targets", "requestedAt"],
+        );
+    }
     require(&value["viewport"], "project.viewport", &["width", "height"]);
     require(
         &value["gridSettings"],
@@ -380,12 +393,6 @@ fn populated(mut project: Project) -> Project {
                     job_id: None,
                 }],
                 context: vec![],
-                pending: Some(PendingRequest {
-                    prompt: "Make a card".into(),
-                    attachments: vec![],
-                    requested_at: "2026-10-27T00:00:00Z".into(),
-                    size_id: None,
-                }),
             };
             element.overrides.insert(
                 size_id,
@@ -424,6 +431,19 @@ fn populated(mut project: Project) -> Project {
         }
         project.pages[0].elements.push(element);
     }
+    let request_target = project.pages[0].elements[0].id;
+    project.requests.push(PendingRequest {
+        id: Uuid::new_v4(),
+        text: "Make a card".into(),
+        attachments: vec![],
+        targets: vec![RequestTarget::Element {
+            page: project.pages[0].id,
+            size: Some(size_id),
+            id: request_target,
+        }],
+        area: None,
+        requested_at: "2026-10-27T00:00:00Z".into(),
+    });
 
     let master = empty_element(ElementKind::Box, rect(0.0, 0.0, 80.0, 40.0));
     let linked_id = Uuid::new_v4();

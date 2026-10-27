@@ -226,7 +226,7 @@ export type ReferenceBox = { itemId: string; rect: Rect };
 export type ReferenceMove = { itemId: string; x: number; y: number };
 /** A selected layer names the size it was clicked in; `sizeId: null` means every linked size. */
 export type ElementTarget = { kind: 'element'; pageId: string; elementId: string; sizeId: string | null };
-export type CanvasTarget = { kind: 'reference'; itemId: string } | { kind: 'pointer'; pointerId: string } | ElementTarget;
+export type CanvasTarget = { kind: 'reference'; itemId: string } | { kind: 'pointer'; pointerId: string } | { kind: 'request'; requestId: string } | ElementTarget;
 
 export const MIN_REFERENCE_WIDTH = 160;
 export const MIN_REFERENCE_HEIGHT = 80;
@@ -336,9 +336,11 @@ export function referenceMoves(items: ReferenceBox[], previous: ReferenceBox[]):
 }
 
 export const canvasTargetKey = (target: CanvasTarget): string => target.kind === 'pointer' ? `pointer:${target.pointerId}`
+  : target.kind === 'request' ? `request:${target.requestId}`
   : target.kind === 'element' ? `element:${target.pageId}:${target.elementId}:${target.sizeId ?? 'all'}` : `reference:${target.itemId}`;
 
 export const selectedPointers = (selection: CanvasTarget[]): string[] => selection.flatMap(item => item.kind === 'pointer' ? [item.pointerId] : []);
+export const selectedRequests = (selection: CanvasTarget[]): string[] => selection.flatMap(item => item.kind === 'request' ? [item.requestId] : []);
 
 export function hasCanvasTarget(selection: CanvasTarget[], target: CanvasTarget): boolean {
   const key = canvasTargetKey(target);

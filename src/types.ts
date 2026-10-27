@@ -34,9 +34,21 @@ export type ElementLayout =
   | { kind: 'free' }
   | { kind: 'stack'; direction: StackDirection; gap: number; padding: number; align: StackAlign; justify: StackJustify; wrap: boolean }
   | { kind: 'grid'; columns: number; gap: number; padding: number };
-export type PendingRequest = { prompt: string; attachments: RequestAttachment[]; requestedAt: string; sizeId?: string | null };
+export type RequestPoint = { x: number; y: number };
+export type RequestTarget =
+  | { kind: 'element'; page: string; size?: string | null; id: string }
+  | { kind: 'boundary'; page: string; size?: string | null }
+  | { kind: 'reference'; id: string }
+  | { kind: 'pointer'; id: string };
+export type RequestShape =
+  | { kind: 'rect'; rect: Rect }
+  | { kind: 'ellipse'; rect: Rect }
+  | { kind: 'polygon'; points: RequestPoint[] }
+  | { kind: 'freehand'; points: RequestPoint[] };
+export type RequestArea = { page?: string | null; size?: string | null; shape: RequestShape };
+export type PendingRequest = { id: string; text: string; attachments: RequestAttachment[]; targets: RequestTarget[]; area: RequestArea | null; requestedAt: string };
 export type RequestRecord = { id: string; prompt: string; attachments: RequestAttachment[]; createdAt: string; outcome: string | null; jobId: string | null };
-export type ElementMeta = { requests: RequestRecord[]; context: RequestAttachment[]; pending?: PendingRequest | null };
+export type ElementMeta = { requests: RequestRecord[]; context: RequestAttachment[] };
 export type Element = {
   id: string; kind: ElementKind; name: string | null; link?: string | null; rect: Rect; rotation: number; visible: boolean; locked: boolean;
   style: ElementStyle; text: string; image: string | null; url: string | null; layout: ElementLayout;
@@ -69,7 +81,7 @@ export type Decision = { id: string; topic: string; value: string; scope: Scope;
 export type DesignException = { id: string; rule: string; reason: string; scope: Scope; acceptedAtRevision: number };
 export type Project = { pictures?: Record<string, string>; schemaVersion: number; id: string; name: string; revision: number; viewport: Viewport;
   importedIdentity?: ImportedIdentity;
-  appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; reference: ReferenceItem[]; pointers?: Pointer[]; linked?: Record<string, LinkedDefinition>; brief: Brief;
+  appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; reference: ReferenceItem[]; pointers?: Pointer[]; linked?: Record<string, LinkedDefinition>; requests?: PendingRequest[]; brief: Brief;
   lastExport?: ExportRecord | null;
   decisions: Decision[]; exceptions: DesignException[]; appliedJobIds: string[]; extensions: Record<string, { schemaVersion: number; data: unknown }> };
 export type RecoveryInfo = { projectId: string; name: string; revision: number; savedPath: string | null; editedAtMs: number };
@@ -124,11 +136,13 @@ export type ElementOperation =
   | { kind: 'replaceChildren'; children: ElementDraft[] }
   | { kind: 'update'; patches: ElementUpdate[] }
   | { kind: 'insert'; parentId: string; index?: number; element: ElementDraft }
-  | { kind: 'remove'; elementId: string };
+  | { kind: 'remove'; elementId: string }
+  | { kind: 'insertInBoundary'; pageId: string; sizeId?: string | null; element: ElementDraft }
+  | { kind: 'addReference'; item: { rect: Rect; kind: ReferenceKind } };
 export type ClassifiedAction = { kind: 'goTo'; boundary: string } | { kind: 'show' | 'hide' | 'toggle'; element: string } | { kind: 'swap'; element: string; withElement: string } | { kind: 'exportOnly' };
 export type GenerationCandidate = {
   jobId: string; requirementsSha256: string; summary: string;
-  requests: { elementId: string; status: 'implemented' | 'conflict'; explanation: string; operations: ElementOperation[] }[];
+  requests: { requestId?: string | null; elementId?: string | null; status: 'implemented' | 'conflict'; explanation: string; operations: ElementOperation[] }[];
   images?: { key: string; prompt: string; width: number; height: number }[];
   pointerClassifications?: { pointerId: string; comment: string; action: ClassifiedAction }[];
   decisionProposals: DecisionProposal[];
@@ -173,7 +187,7 @@ export type Command =
   | { type: 'resolve_pointer_clash'; keep: string; drop: string[]; merged_comment?: string }
   | { type: 'element_to_reference'; page_id: string; element_id: string; rect: Rect }
   | { type: 'reference_to_element'; item_id: string; page_id: string; rect: Rect }
-  | { type: 'attach_reference_context'; element_ids: string[]; item_ids: string[] }
+  | { type: 'attach_reference_context'; request_ids: string[]; item_ids: string[] }
   | { type: 'delete_page'; page_id: string }
   | { type: 'insert_elements'; page_id: string; parent_id: string | null; index: number; elements: Element[]; picture_data_uri?: string; size_id?: string | null }
   | { type: 'update_elements'; page_id: string; patches: ElementPatch[] }
@@ -183,9 +197,12 @@ export type Command =
   | { type: 'paste_linked_instances'; items: LinkedPasteInstance[] }
   | { type: 'move_elements'; moves: ElementMove[] }
   | { type: 'remove_elements'; page_id: string; ids: string[] }
+  | { type: 'delete_items'; elements?: [string, string][]; reference_ids?: string[]; pointer_ids?: string[]; request_ids?: string[]; page_ids?: string[]; size_ids?: [string, string][]; linked_ids?: string[] }
   | { type: 'group_elements'; page_id: string; ids: string[] }
   | { type: 'ungroup_elements'; page_id: string; id: string }
-  | { type: 'set_element_request'; element_id: string; request: PendingRequest | null }
+  | { type: 'add_request'; request: PendingRequest }
+  | { type: 'update_request'; request: PendingRequest }
+  | { type: 'remove_requests'; ids: string[] }
   | { type: 'update_element_context'; element_id: string; context: RequestAttachment[] }
   | { type: 'set_brief'; brief: Brief }
   | { type: 'set_decision'; topic: string; value: string; scope: Scope; protected: boolean }

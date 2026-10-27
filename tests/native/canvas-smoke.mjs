@@ -82,12 +82,14 @@ class Pointer {
     ] }] });
     await this.driver.command('DELETE', '/actions');
   }
-  async click(point) {
-    await this.driver.command('POST', '/actions', { actions: [{ type: 'pointer', id: 'mouse', parameters: { pointerType: 'mouse' }, actions: [
+  async click(point, modifiers = []) {
+    const keys = ['Control', 'Shift', 'Alt'].filter(key => modifiers.includes(key)).map(key => MODIFIERS[key]);
+    const actions = [
       { type: 'pointerMove', duration: 0, origin: 'viewport', x: Math.round(point.x), y: Math.round(point.y) },
       { type: 'pointerDown', button: 0 },
       { type: 'pointerUp', button: 0 },
-    ] }] });
+    ];
+    await this.driver.command('POST', '/actions', { actions: [{ type: 'pointer', id: 'mouse', parameters: { pointerType: 'mouse' }, actions }, ...(keys.length ? [{ type: 'key', id: 'keyboard', actions: keys.map(value => ({ type: 'keyDown', value })).concat(keys.slice().reverse().map(value => ({ type: 'keyUp', value }))) }] : [])] });
     await this.driver.command('DELETE', '/actions');
   }
   async move(point) {
@@ -160,7 +162,7 @@ class PhysicalPointer {
     assert.ok(this.origin, 'Calibrate the native window before physical pointer input');
     return { x: Math.round(this.origin.x + point.x * this.scale), y: Math.round(this.origin.y + point.y * this.scale) };
   }
-  click(point) { return this.raw({ action: 'click', point: this.root(point) }); }
+  click(point, modifiers = []) { return this.raw({ action: 'click', point: this.root(point), modifiers }); }
   move(point) { return this.raw({ action: 'move', point: this.root(point) }); }
   drag(from, to) { return this.raw({ action: 'drag', from: this.root(from), to: this.root(to) }); }
 }
@@ -296,12 +298,49 @@ async function runIsolated() {
       const rect = node.getBoundingClientRect();
       return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
     });
-    const boundary = () => driver.execute(() => {
-      const node = document.querySelector('[data-boundary]');
-      if (!node) return null;
+    const boundaries = () => driver.execute(() => [...document.querySelectorAll('.page-boundary[data-boundary]')].map(node => {
       const rect = node.getBoundingClientRect();
-      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, right: rect.right, bottom: rect.bottom };
-    });
+      return { left: rect.left, top: rect.top, width: rect.width, height: rect.height, right: rect.right, bottom: rect.bottom, screen: node.classList.contains('screen') };
+    }));
+    const boundary = async () => (await boundaries()).find(item => !item.screen) ?? null;
+    const stripButton = label => `[aria-label="Canvas tools"] button[aria-label="${label}"]`;
+    const activeTool = () => driver.execute(() => document.querySelector('[aria-label="Canvas tools"] [aria-pressed="true"]')?.getAttribute('aria-label') ?? null);
+    // Tools are chosen the way a person chooses them: by clicking the strip button.
+    const chooseTool = async label => {
+      await driver.click(stripButton(label));
+      await waitFor(async () => (await activeTool()) === label, `Clicking the ${label} button did not activate the tool`);
+    };
+    const chooseBoundaryKind = async label => {
+      await driver.click('[aria-label="Canvas tools"] [aria-label="Boundary kind"]');
+      await driver.click(`//ul[@role="menu" and @aria-label="Boundary kind"]/li/button[@aria-label=${xpathString(label)}]`, 'xpath');
+      await waitFor(async () => (await activeTool()) === 'Boundary', `Choosing ${label} in the Boundary flyout did not leave the Boundary tool active`);
+      await waitFor(() => driver.execute(() => ![...document.querySelectorAll('ul[role="menu"]')].some(menu => menu.matches(':popover-open'))),
+        'The Boundary kind flyout stayed open');
+    };
+    const chooseRequestShape = async label => {
+      await driver.click('[aria-label="Canvas tools"] [aria-label="Request area shape"]');
+      await driver.click(`//ul[@role="menu" and @aria-label="Request area shape"]/li/button[@aria-label=${xpathString(label)}]`, 'xpath');
+      await waitFor(async () => (await activeTool()) === 'Request', `Choosing ${label} in the Request flyout did not leave the Request tool active`);
+      await waitFor(() => driver.execute(() => ![...document.querySelectorAll('ul[role="menu"]')].some(menu => menu.matches(':popover-open'))),
+        'The Request area shape flyout stayed open');
+    };
+    // A corner of the canvas that overlaps no boundary and stays inside the surface.
+    const emptyCanvas = async (width, height) => {
+      const surface = await canvas();
+      const boxes = await boundaries();
+      const gap = 20;
+      const margin = 16;
+      const lefts = [surface.left + margin, surface.right - width - margin];
+      const tops = [surface.top + margin, surface.bottom - height - margin];
+      const overlaps = (a, b) => a.left < b.right + gap && a.left + a.width > b.left - gap && a.top < b.bottom + gap && a.top + a.height > b.top - gap;
+      for (const top of tops) for (const left of lefts) {
+        const spot = { left, top, width, height };
+        if (left < surface.left || top < surface.top || left + width > surface.right || top + height > surface.bottom) continue;
+        if (boxes.some(box => overlaps(spot, box))) continue;
+        return { from: { x: spot.left, y: spot.top }, to: { x: spot.left + width, y: spot.top + height } };
+      }
+      assert.fail(`No free canvas for a ${width}x${height} drag: ${JSON.stringify({ surface, boxes })}`);
+    };
     const elements = () => driver.execute(() => [...document.querySelectorAll('[data-element]')].map(node => {
       const rect = node.getBoundingClientRect();
       return { id: node.getAttribute('data-element'), kind: node.getAttribute('data-element-kind'), left: rect.left, top: rect.top, width: rect.width, height: rect.height };
@@ -357,50 +396,115 @@ async function runIsolated() {
       await waitFor(() => driver.execute(() => !!document.querySelector('#project-canvas')), 'Blank canvas did not open the editor');
     });
 
-    await step('Draw a boundary with B', async () => {
-      const surface = await waitFor(async () => {
+    await step('The tool strip lists tools in workflow order', async () => {
+      const order = await driver.execute(() => [...document.querySelectorAll('[aria-label="Canvas tools"] .tool-strip-group > .tool-strip-slot')]
+        .map(slot => slot.querySelector('button')?.getAttribute('aria-label') ?? null));
+      assert.deepEqual(order, ['Select', 'Boundary', 'Request', 'Text', 'Rectangle', 'Ellipse', 'Line', 'Image', 'Insert', 'Pointer', 'Note', 'Pan']);
+    });
+
+    await step('Draw a Page boundary by clicking the Boundary button and its Page flyout', async () => {
+      await waitFor(async () => {
         const rect = await canvas();
         return rect && rect.width > 500 && rect.height > 400 ? rect : false;
       }, 'The canvas did not lay out before drawing');
       await pointer.focusCanvas();
-      await pointer.key('b');
-      await mouse.drag({ x: surface.left + 100, y: surface.top + 90 }, { x: surface.left + 620, y: surface.top + 500 });
+      await chooseBoundaryKind('Page');
+      const spot = await emptyCanvas(480, 420);
+      await mouse.drag(spot.from, spot.to);
       try {
-        await waitFor(async () => !!(await boundary()), 'The B drag did not create a boundary');
+        await waitFor(async () => !!(await boundary()), 'The Boundary drag did not create a boundary');
       } catch (error) {
         error.message += `\nEvents: ${JSON.stringify(await driver.execute(() => window.__smokeEvents.slice(-20)))}`;
         throw error;
       }
       assert.equal(await driver.execute(() => document.querySelector('[aria-label="Canvas tools"] button[aria-label="Boundary"]')?.getAttribute('aria-pressed')), 'true');
+      assert.equal((await boundary()).screen, false, 'The Page boundary rendered as a Screen boundary');
     });
 
-    await step('Draw a rectangle with R inside the boundary', async () => {
-      const box = await boundary();
-      await pointer.focusCanvas();
-      await pointer.key('r');
-      await mouse.drag({ x: box.left + 35, y: box.top + 70 }, { x: box.left + Math.min(320, box.width - 40), y: box.top + 230 });
-      await waitFor(() => driver.execute(() => !!document.querySelector('[data-element-kind="box"]')), 'The R drag did not create a rectangle');
+    await step('Draw a Screen boundary from the Boundary flyout', async () => {
+      await chooseBoundaryKind('Screen');
+      const before = (await boundaries()).length;
+      const spot = await emptyCanvas(280, 140);
+      await mouse.drag(spot.from, spot.to);
+      await waitFor(async () => (await boundaries()).length === before + 1, 'The Screen boundary drag did not create a boundary');
+      assert.ok((await boundaries()).some(item => item.screen), 'The new boundary is not a Screen boundary');
     });
 
-    await step('Type text with T inside the boundary', async () => {
+    await step('Draw a rectangle by clicking the Rectangle button', async () => {
       const box = await boundary();
+      const before = await driver.execute(() => document.querySelectorAll('[data-element-kind="box"]').length);
+      await chooseTool('Rectangle');
+      await mouse.drag({ x: box.left + 40, y: box.top + 230 }, { x: box.left + Math.min(300, box.width - 40), y: box.top + 300 });
+      await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element-kind="box"]').length > previous, before), 'The Rectangle drag did not create a rectangle');
+    });
+
+    await step('Draw an ellipse by clicking the Ellipse button', async () => {
+      const box = await boundary();
+      await chooseTool('Ellipse');
+      await mouse.drag({ x: box.left + 330, y: box.top + 60 }, { x: box.left + Math.min(470, box.width - 30), y: box.top + 160 });
+      await waitFor(() => driver.execute(() => !!document.querySelector('[data-element-kind="ellipse"]')), 'The Ellipse drag did not create an ellipse');
+    });
+
+    await step('Draw a line by clicking the Line button', async () => {
+      const box = await boundary();
+      await chooseTool('Line');
+      await mouse.drag({ x: box.left + 330, y: box.top + 230 }, { x: box.left + Math.min(470, box.width - 30), y: box.top + 260 });
+      await waitFor(() => driver.execute(() => !!document.querySelector('[data-element-kind="line"]')), 'The Line drag did not create a line');
+    });
+
+    await step('Type text by clicking the Text button inside the boundary', async () => {
+      const box = await boundary();
+      await chooseTool('Text');
       await pointer.focusCanvas();
-      await pointer.key('t');
-      await mouse.click({ x: box.left + 50, y: box.top + Math.max(260, box.height - 80) });
+      await mouse.click({ x: box.left + 50, y: box.top + Math.max(340, box.height - 70) });
       await driver.ready('[aria-label="Edit text"]');
       await driver.fill('Edit text', 'Smoke text');
       await driver.press('[aria-label="Edit text"]', '\uE007');
       await waitFor(async () => (await driver.execute(() => document.querySelectorAll('[data-element-kind="text"]').length)) === 1, 'The text layer was not committed');
     });
 
-    await step('Select the text layer and move it with the pointer', async () => {
+    await step('Request picks two layers, takes typed text and queues a pending request', async () => {
+      const layers = await elements();
+      const first = layers.find(element => element.kind === 'box');
+      const second = layers.find(element => element.kind === 'text');
+      assert.ok(first && second, 'Two layers are needed for a request');
+      await chooseTool('Request');
+      assert.equal(await driver.execute(() => document.querySelector('[aria-label="Canvas tools"] [aria-label="Request"]')?.getAttribute('aria-pressed')), 'true');
+      await mouse.click({ x: first.left + first.width / 2, y: first.top + first.height / 2 });
+      await driver.ready('.request-box-editor textarea');
+      await mouse.click({ x: second.left + second.width / 2, y: second.top + second.height / 2 }, ['Shift']);
+      await waitFor(() => driver.execute(() => document.querySelectorAll('.request-target-highlight.draft').length >= 2), 'Shift-clicking a second layer did not add it to the request');
+      await driver.fill('Describe the request', 'Make these two layers one card');
+      await driver.press(driver.field('Describe the request'), '\uE007', 'xpath');
+      await waitFor(() => driver.execute(() => !document.querySelector('.request-box-editor')), 'Enter did not close the request box');
+      await driver.ready('[data-request-row]');
+      await waitFor(() => driver.execute(() => !!document.querySelector('.request-marker')), 'The request marker was not drawn');
+      const rows = await driver.execute(() => document.querySelectorAll('[data-request-row]').length);
+      assert.equal(rows, 1, 'The queued request is not listed under Requests');
+    });
+
+    await step('A request rectangle drawn over a layer targets it', async () => {
+      const ellipse = (await elements()).find(element => element.kind === 'ellipse');
+      assert.ok(ellipse, 'The ellipse layer is missing');
+      await chooseRequestShape('Rectangle');
+      const margin = 12;
+      await mouse.drag({ x: ellipse.left - margin, y: ellipse.top - margin }, { x: ellipse.left + ellipse.width + margin, y: ellipse.top + ellipse.height + margin });
+      await driver.ready('.request-box-editor textarea');
+      await driver.fill('Describe the request', 'Turn this ellipse into a badge');
+      await driver.press(driver.field('Describe the request'), '\uE007', 'xpath');
+      await waitFor(() => driver.execute(() => document.querySelectorAll('[data-request-row]').length === 2), 'The drawn request area did not queue a second request');
+      await driver.click('(//button[@data-request-row])[2]', 'xpath');
+      await waitFor(() => driver.execute(() => document.querySelectorAll('[data-request] .request-target-highlight').length >= 1), 'Selecting the request did not highlight the layer its area covers');
+    });
+
+    await step('Select the text layer by clicking the Select button and move it with the pointer', async () => {
       const before = (await elements()).find(element => element.kind === 'text');
       assert.ok(before, 'The text layer is missing');
+      await chooseTool('Select');
       await pointer.focusCanvas();
-      await pointer.key('v');
       await mouse.click({ x: before.left + before.width / 2, y: before.top + before.height / 2 });
       await waitFor(() => driver.execute(() => !!document.querySelector('.element-selection-box')), 'Clicking the text did not select it');
-      await mouse.drag({ x: before.left + before.width / 2, y: before.top + before.height / 2 }, { x: before.left + before.width / 2 + 70, y: before.top + before.height / 2 + 40 });
+      await mouse.drag({ x: before.left + before.width / 2, y: before.top + before.height / 2 }, { x: before.left + before.width / 2 + 60, y: before.top + before.height / 2 + 20 });
       const moved = await waitFor(async () => {
         const current = (await elements()).find(element => element.id === before.id);
         return current && (Math.abs(current.left - before.left) > 20 || Math.abs(current.top - before.top) > 20) && current;
@@ -418,8 +522,8 @@ async function runIsolated() {
     });
 
     await step('Select both layers, group and ungroup them', async () => {
+      await chooseTool('Select');
       await pointer.focusCanvas();
-      await pointer.key('v');
       await pointer.combo('Control', 'a');
       await waitFor(() => driver.execute(() => document.querySelectorAll('.element-selection-box').length >= 2), 'Ctrl+A did not select both layers');
       await pointer.combo('Control', 'g');
@@ -429,8 +533,8 @@ async function runIsolated() {
     });
 
     await step('Copy and paste through the paste choice', async () => {
+      await chooseTool('Select');
       await pointer.focusCanvas();
-      await pointer.key('v');
       await pointer.combo('Control', 'a');
       const count = await driver.execute(() => document.querySelectorAll('[data-element]').length);
       await pointer.combo('Control', 'c');
@@ -445,13 +549,41 @@ async function runIsolated() {
 
     await step('Add a Phone size to the boundary', async () => {
       const box = await boundary();
+      await chooseTool('Select');
       await pointer.focusCanvas();
-      await pointer.key('v');
       await mouse.click({ x: box.left + box.width - 24, y: box.top + box.height - 24 });
       await driver.ready('//div[@role="group" and @aria-label="Sizes"]', 'xpath');
       const before = await driver.execute(() => document.querySelectorAll('[data-size-row]').length);
       await driver.click(`//div[@role="group" and @aria-label="Sizes"]//button[normalize-space(.)=${xpathString('Add Phone')}]`, 'xpath');
       await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-size-row]').length > previous, before), 'The Phone size was not added');
+    });
+
+    await step('Delete removes a selected layer from Layers', async () => {
+      const before = await driver.execute(() => document.querySelectorAll('[data-element]').length);
+      const rows = await driver.execute(() => document.querySelectorAll('[data-element-row] .dock-tree-select.element').length);
+      assert.ok(rows > 0, 'Layers lists no layer rows');
+      await driver.click('[data-element-row] .dock-tree-select.element');
+      await waitFor(() => driver.execute(() => !!document.querySelector('.element-selection-box')), 'Clicking a Layers row did not select the layer');
+      await pointer.combo('Delete');
+      await driver.ready('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');
+      await driver.click('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');
+      await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element]').length < previous, before), 'Delete did not remove the selected layer');
+    });
+
+    await step('Delete removes a selected boundary from Layers', async () => {
+      const before = (await boundaries()).length;
+      const rows = await driver.execute(() => [...document.querySelectorAll('[data-boundary-row]')].map(node => node.getAttribute('data-boundary-row')));
+      const screenRow = await driver.execute(() => {
+        const row = [...document.querySelectorAll('[data-boundary-row]')].at(-1);
+        return row?.getAttribute('data-boundary-row') ?? null;
+      });
+      assert.ok(screenRow, 'Layers lists no boundary rows');
+      await driver.click(`//button[@data-boundary-row=${xpathString(screenRow)}]`, 'xpath');
+      await pointer.combo('Delete');
+      await driver.ready('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');
+      await driver.click('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');
+      await waitFor(async () => (await boundaries()).length === before - 1, 'Delete did not remove the selected boundary');
+      assert.ok(rows.length >= 1);
     });
 
     await step('Open History', async () => {
@@ -481,8 +613,8 @@ async function runIsolated() {
       await home();
       await driver.click(`//button[contains(@class,"start-recent-open")][.//span[normalize-space(.)=${xpathString('Smoke canvas')}]]`, 'xpath');
       await waitFor(() => driver.execute(() => !!document.querySelector('#project-canvas')), 'The saved project did not reopen');
-      const result = await driver.execute(() => ({ boundaries: document.querySelectorAll('[data-boundary]').length, elements: document.querySelectorAll('[data-element]').length, sizes: document.querySelectorAll('[data-size-row]').length }));
-      assert.ok(result.boundaries > 0 && result.elements >= 3, JSON.stringify(result));
+      const result = await driver.execute(() => ({ boundaries: document.querySelectorAll('[data-boundary]').length, elements: document.querySelectorAll('[data-element]').length, sizes: document.querySelectorAll('[data-size-row]').length, requests: document.querySelectorAll('[data-request-row]').length, markers: document.querySelectorAll('.request-marker').length }));
+      assert.ok(result.boundaries > 0 && result.elements >= 3 && result.requests >= 1 && result.markers >= 1, JSON.stringify(result));
     });
 
     const errors = await driver.execute(() => window.__desegnosSmokeErrors);

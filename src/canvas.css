@@ -73,7 +73,8 @@
 .project-canvas { --canvas-dot: color-mix(in srgb, var(--border-soft) 30%, transparent); --pointer-line: var(--grey-500); --pointer-auto-line: color-mix(in srgb, var(--grey-500) 34%, transparent); --pointer-broken: #b26a00; --annotation-focus: #0070b8; --annotation-border: #626262; --annotation-surface: #f5f5f5; --annotation-text: #242424; --annotation-muted: #4b4b4b; }
 :root[data-theme="dark"] .project-canvas { --canvas-dot: color-mix(in srgb, var(--border-soft) 45%, transparent); --pointer-line: var(--grey-250); --pointer-auto-line: color-mix(in srgb, var(--grey-250) 28%, transparent); --pointer-broken: #e0a040; --annotation-focus: #5291c4; --annotation-border: #aaaaaa; --annotation-surface: #202020; --annotation-text: #f2f2f2; --annotation-muted: #cbcbcb; }
 .project-canvas.tool-select { cursor: default; }
-.project-canvas.tool-frame { cursor: crosshair; }
+.project-canvas.tool-request.request-shape-pick { cursor: default; }
+.project-canvas.tool-request { cursor: crosshair; }
 .project-canvas.tool-boundary { cursor: crosshair; }
 .project-canvas.tool-pan { cursor: grab; }
 .project-canvas.tool-pointer { cursor: crosshair; }
@@ -102,41 +103,45 @@
 }
 .project-canvas .boundary-draft.screen { border-style: solid; }
 .project-canvas .page-boundary iframe.page-boundary-live.interactive { pointer-events: auto; }
-.project-canvas .frame-layer { position: absolute; left: 0; top: 0; pointer-events: none; }
-.project-canvas .frame-label-only { position: absolute; pointer-events: none; }
-.project-canvas .frame-label {
-  position: absolute; left: 0; top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--text); line-height: 1.35; border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--canvas-bed) 84%, transparent);
+.project-canvas .request-layer { position: absolute; left: 0; top: 0; pointer-events: none; }
+.project-canvas .request-item { position: absolute; left: 0; top: 0; pointer-events: none; }
+.project-canvas .request-marker {
+  position: absolute; display: block; max-width: 320px; overflow: hidden; padding: 2px 6px;
+  border: 1px dashed var(--annotation-border); border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--canvas-bed) 88%, transparent); color: var(--annotation-text);
+  line-height: 1.3; text-align: left; text-overflow: ellipsis; white-space: nowrap; pointer-events: auto; cursor: pointer;
 }
-.project-canvas .frame-draft {
-  position: absolute; pointer-events: none; border-style: dashed; border-color: var(--annotation-focus);
-  background: color-mix(in srgb, var(--annotation-focus) 10%, transparent);
+.project-canvas .request-item.selected .request-marker { border-style: solid; border-color: var(--annotation-focus); color: var(--text); }
+.project-canvas .request-marker:hover { border-color: var(--annotation-focus); }
+.project-canvas .request-area { position: absolute; overflow: visible; pointer-events: none; }
+.project-canvas .request-area path { fill: color-mix(in srgb, var(--annotation-focus) 6%, transparent); stroke: var(--annotation-focus); stroke-dasharray: 6 4; }
+.project-canvas .request-area.draft path { fill: color-mix(in srgb, var(--annotation-focus) 12%, transparent); stroke-dasharray: 4 3; }
+.project-canvas .request-target-highlight {
+  position: absolute; pointer-events: none; border: 1px dashed var(--annotation-focus); border-radius: 2px;
+  background: color-mix(in srgb, var(--annotation-focus) 7%, transparent); box-sizing: border-box;
 }
-.project-canvas .frame-request-editor {
-  position: absolute; z-index: 6; display: flex; align-items: flex-start; gap: var(--space-1); padding: 3px;
+.project-canvas .request-target-highlight.draft { background: color-mix(in srgb, var(--annotation-focus) 12%, transparent); }
+/* The request box is a native control in screen pixels, never inside the transformed layer. */
+.project-canvas .request-box-editor {
+  position: absolute; z-index: 6; display: flex; flex-direction: column; gap: var(--space-1); padding: 4px;
   border: 1px solid var(--annotation-focus); border-radius: var(--radius-sm);
   background: var(--surface-raised); box-shadow: var(--shadow-2); pointer-events: auto;
 }
-.project-canvas .frame-request-editor textarea {
-  flex: 1; min-width: 0; height: 100%; padding: var(--space-1) var(--space-2); resize: none;
-  border: 0; background: transparent; color: var(--text); font-family: inherit; line-height: 1.4;
+.project-canvas .request-box-editor textarea {
+  flex: 1; min-width: 0; min-height: 44px; padding: var(--space-1) var(--space-2); resize: none;
+  border: 0; background: transparent; color: var(--text); font-family: inherit; font-size: 12px; line-height: 1.4;
 }
-.project-canvas .frame-request-editor textarea:focus-visible { outline: none; }
-.project-canvas .frame-request-editor:focus-within { box-shadow: var(--shadow-2), 0 0 0 2px var(--focus); }
-.project-canvas .frame-request-move {
-  display: grid; flex: none; place-items: center; width: 18px; height: 18px; min-height: 18px; padding: 0;
-  border: 0; background: transparent; color: var(--muted); cursor: move;
-}
-.project-canvas .frame-request-move svg { width: 12px; height: 12px; fill: currentColor; stroke: none; }
-.project-canvas .frame-request-move:hover { background: var(--surface-muted); }
-.project-canvas .frame-grip {
+.project-canvas .request-box-editor textarea:focus-visible { outline: none; }
+.project-canvas .request-box-editor:focus-within { box-shadow: var(--shadow-2), 0 0 0 2px var(--focus); }
+.project-canvas .request-box-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.project-canvas .request-box-hint { color: var(--muted); font-size: var(--text-xs); }
+.project-canvas .canvas-grip {
   position: absolute; z-index: 7; width: 10px; height: 10px; min-height: 10px; padding: 0;
   border: 1px solid var(--annotation-focus); border-radius: 2px; background: var(--surface-raised);
 }
-.project-canvas .frame-grip.nw, .project-canvas .frame-grip.se { cursor: nwse-resize; }
-.project-canvas .frame-grip.ne, .project-canvas .frame-grip.sw { cursor: nesw-resize; }
-.project-canvas .frame-grip:hover { background: var(--annotation-focus); }
+.project-canvas .canvas-grip.nw, .project-canvas .canvas-grip.se { cursor: nwse-resize; }
+.project-canvas .canvas-grip.ne, .project-canvas .canvas-grip.sw { cursor: nesw-resize; }
+.project-canvas .canvas-grip:hover { background: var(--annotation-focus); }
 .dock-field textarea { width: 100%; resize: vertical; }
 .dock-action { align-self: flex-start; }
 .dock-attachments { display: flex; flex-direction: column; gap: var(--space-2); }
@@ -317,7 +322,7 @@
 .project-canvas.playing .page-boundary.selected,
 .project-canvas.playing .page-boundary.focused { box-shadow: none; }
 .project-canvas.playing .element-handle,
-.project-canvas.playing .frame-grip,
+.project-canvas.playing .canvas-grip,
 .project-canvas.playing .element-placeholder { display: none; }
 
 /* Preview export: the real result runs in an opaque sandbox over the boundary. */
