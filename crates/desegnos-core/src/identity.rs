@@ -393,7 +393,6 @@ impl Project {
                 }),
             }
         }
-        let page_contexts = next.import_source_pages(&context)?;
         let identity = match next.imported_identity.take() {
             Some(mut existing) => {
                 for asset in context.assets {
@@ -423,29 +422,6 @@ impl Project {
                     }
                     existing.content.push(item);
                 }
-                for page in page_contexts.clone() {
-                    if let Some(old) = existing.pages.iter_mut().find(|old| {
-                        old.page_id == page.page_id && old.source.path == page.source.path
-                    }) {
-                        for id in page.photo_ids {
-                            if !old.photo_ids.contains(&id) {
-                                old.photo_ids.push(id);
-                            }
-                        }
-                        for item in page.content {
-                            old.content.retain(|existing| {
-                                !(existing.title.eq_ignore_ascii_case(&item.title)
-                                    && existing.url == item.url)
-                            });
-                            if old.content.len() == MAX_IMPORTED_ITEMS {
-                                old.content.remove(0);
-                            }
-                            old.content.push(item);
-                        }
-                    } else {
-                        existing.pages.push(page);
-                    }
-                }
                 existing.source_name = context.source_name;
                 existing.source_sha256 = context.source_sha256;
                 let summary = format!("{}\n{}", existing.summary, context.summary);
@@ -466,80 +442,12 @@ impl Project {
                 assets: context.assets,
                 photos: context.photos,
                 content: context.content,
-                pages: page_contexts,
+                pages: vec![],
             },
         };
         next.imported_identity = Some(identity);
         next.validate()?;
         Ok(next)
-    }
-
-    pub fn import_source_pages(
-        &mut self,
-        context: &ImportedContext,
-    ) -> Result<Vec<ImportedPageContext>> {
-        let mut seen = BTreeSet::new();
-        let mut result = Vec::new();
-        for source in &context.pages {
-            crate::validate_source_page_ref(&source.reference())?;
-            ensure(
-                seen.insert(&source.path),
-                "Choose each source page only once.",
-            )?;
-            let matching = self.pages.iter().position(|page| page.path == source.path);
-            let index = if let Some(index) =
-                matching.filter(|_| context.attach_matching_pages || source.path == "/")
-            {
-                index
-            } else {
-                let mut path = source.path.clone();
-                let mut suffix = 2;
-                while self.pages.iter().any(|page| page.path == path) {
-                    path = format!("{}-{suffix}", source.path);
-                    suffix += 1;
-                }
-                self.pages.push(crate::Page {
-                    id: Uuid::new_v4(),
-                    name: source.title.chars().take(120).collect(),
-                    path,
-                    included: true,
-                    viewport: self.viewport,
-                    appearance: self.appearance,
-                    regions: vec![],
-                    content: None,
-                });
-                self.pages.len() - 1
-            };
-            if self.pages[index].id == self.home_page_id && self.revision == 0 {
-                self.pages[index].name = source.title.chars().take(120).collect();
-            }
-            result.push(ImportedPageContext {
-                page_id: self.pages[index].id,
-                source: source.clone(),
-                photo_ids: context
-                    .photos
-                    .iter()
-                    .filter(|photo| {
-                        photo
-                            .source_pages
-                            .iter()
-                            .any(|page| page.path == source.path)
-                    })
-                    .map(|photo| photo.id)
-                    .collect(),
-                content: context
-                    .content
-                    .iter()
-                    .filter(|item| {
-                        item.source_pages
-                            .iter()
-                            .any(|page| page.path == source.path)
-                    })
-                    .cloned()
-                    .collect(),
-            });
-        }
-        Ok(result)
     }
 
     pub fn set_initial_identity(&self, identity: ImportedIdentity) -> Result<Self> {
@@ -549,8 +457,7 @@ impl Project {
             self.revision == 0
                 && self.imported_identity.is_none()
                 && self.pages.len() == 1
-                && self.pages[0].content.is_none()
-                && self.pages[0].regions.is_empty()
+                && self.pages[0].elements.is_empty()
                 && self.latest_generation.is_none()
                 && self.applied_job_ids.is_empty()
                 && self.appearance == Appearance::Light

@@ -1,4 +1,5 @@
 //! Launcher-order checks use only fake executables in an isolated directory.
+#[allow(dead_code)]
 #[path = "../src/system_open.rs"]
 mod system_open;
 

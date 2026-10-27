@@ -1,11 +1,11 @@
-import type { GenerationJobView, Page, Rect } from './types';
+import type { Element, GenerationJobView, Page, Rect } from './types';
 import { generationError, outcomeReason, technicalReason } from './userErrors.js';
 
 /// A specific place that can resolve an outcome the AI itself declared.
 export type OutcomeFix = 'aiSettings' | 'import' | 'brief';
 export type Outcome = { retryable: boolean; reason: string; fix?: OutcomeFix };
-export type JobOutcome = { retryable: string[]; blocked: { regionId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean; retryBatches: boolean };
-export type AreaProblem = { key: string; regionId: string; draftId?: string; message: string; stale: boolean; retryable: boolean; fix?: OutcomeFix; rect: Rect };
+export type JobOutcome = { retryable: string[]; blocked: { elementId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean; retryBatches: boolean };
+export type AreaProblem = { key: string; elementId: string; message: string; stale: boolean; retryable: boolean; fix?: OutcomeFix; rect: Rect };
 
 export const fixLabel = (fix: OutcomeFix) => fix === 'aiSettings' ? 'AI settings' : fix === 'import' ? 'Import…' : 'Project brief';
 
@@ -32,14 +32,19 @@ export function jsonBlocks(markdown: string): any[] {
 function sentPrompts(job: GenerationJobView): Map<string, string> {
   const prompts = new Map<string, string>();
   for (const block of jsonBlocks(job.requirements?.markdown ?? '')) {
-    if (typeof block?.regionId === 'string' && typeof block.prompt === 'string') prompts.set(block.regionId, block.prompt);
+    // The current requirements packet wraps requests in one object; older saved jobs carried
+    // one object per request. Read both so a restored job still detects an edited prompt.
+    if (typeof block?.elementId === 'string' && typeof block.request === 'string') prompts.set(block.elementId, block.request);
+    for (const request of Array.isArray(block?.requests) ? block.requests : []) {
+      if (typeof request?.elementId === 'string' && typeof request.request === 'string') prompts.set(request.elementId, request.request);
+    }
   }
   return prompts;
 }
 
 /// The request text was changed after this job sent its frozen requirements.
-export function requestEdited(job: GenerationJobView | null, regionId: string, prompt?: string): boolean {
-  const sent = job && sentPrompts(job).get(regionId);
+export function requestEdited(job: GenerationJobView | null, elementId: string, prompt?: string): boolean {
+  const sent = job && sentPrompts(job).get(elementId);
   return typeof sent === 'string' && typeof prompt === 'string' && sent.trim() !== prompt.trim();
 }
 
@@ -53,40 +58,35 @@ export function resolutionAction(reason: string): OutcomeFix | undefined {
 }
 
 /// Classify one unfinished area: only an AI-declared gap is not worth resending unchanged.
-export function areaOutcome(job: GenerationJobView | null, regionId: string, prompt?: string): Outcome {
+export function areaOutcome(job: GenerationJobView | null, elementId: string, prompt?: string): Outcome {
   const retry = (reason = ''): Outcome => ({ retryable: true, reason });
   if (!job || !terminal.includes(job.status)) return retry();
-  if (requestEdited(job, regionId, prompt)) return retry();
-  const outcome = job.candidate?.regions?.find(item => item.regionId === regionId);
-  const unavailable = job.candidate?.componentRequests?.find(item => item.regionId === regionId && item.resolution === 'unavailable');
+  if (requestEdited(job, elementId, prompt)) return retry();
+  const outcome = job.candidate?.requests?.find(item => item.elementId === elementId);
   // Only an explained, plainly worded conflict is the AI's own request for input.
   const explanation = outcome?.status === 'conflict' ? outcome.explanation?.trim() ?? '' : '';
   const declared = !!explanation && !technicalReason(explanation);
-  if (declared || unavailable) {
-    const reason = declared ? explanation : '';
-    const message = reason || unavailable?.reason || job.message || '';
-    return { retryable: false, reason: outcomeReason(message, prompt ?? ''), fix: resolutionAction(`${reason} ${unavailable?.reason ?? ''}`) };
+  if (declared) {
+    return { retryable: false, reason: outcomeReason(explanation, prompt ?? ''), fix: resolutionAction(explanation) };
   }
   return retry();
 }
 
 /// Classify a whole job, keeping the retryable areas separate from the declared gaps.
-export function jobOutcome(job: GenerationJobView | null, promptOf: (regionId: string) => string | undefined = () => undefined): JobOutcome {
+export function jobOutcome(job: GenerationJobView | null, promptOf: (elementId: string) => string | undefined = () => undefined): JobOutcome {
   if (!job || !terminal.includes(job.status)) return { retryable: [], blocked: [], retryAll: false, retryBatches: false };
   const ids = new Set<string>();
-  for (const area of job.areas) ids.add(area.regionId);
-  for (const draft of job.drafts ?? []) for (const id of draft.regionIds) ids.add(id);
-  for (const outcome of job.candidate?.regions ?? []) ids.add(outcome.regionId);
+  for (const area of job.areas) ids.add(area.elementId);
+  for (const outcome of job.candidate?.requests ?? []) ids.add(outcome.elementId);
   const retryable: string[] = [];
   const blocked: JobOutcome['blocked'] = [];
   // A stale result was never applied, so even its finished areas are worth resending.
   const stale = staleResult(job);
-  for (const regionId of ids) {
-    const outcome = areaOutcome(job, regionId, promptOf(regionId));
-    if (!outcome.retryable) { blocked.push({ regionId, reason: outcome.reason, fix: outcome.fix }); continue; }
-    const latest = job.drafts?.filter(draft => draft.regionIds.includes(regionId)).at(-1);
-    const implemented = job.candidate?.regions?.some(region => region.regionId === regionId && region.status === 'implemented');
-    if (stale || (!implemented && !latest?.applied)) retryable.push(regionId);
+  for (const elementId of ids) {
+    const outcome = areaOutcome(job, elementId, promptOf(elementId));
+    if (!outcome.retryable) { blocked.push({ elementId, reason: outcome.reason, fix: outcome.fix }); continue; }
+    const implemented = job.candidate?.requests?.some(request => request.elementId === elementId && request.status === 'implemented');
+    if (stale || !implemented) retryable.push(elementId);
   }
   // A batched job keeps its finished parts; a failed part is retried on its own.
   const retryBatches = (job.batches ?? []).some(batch => ['failed', 'unknown', 'cancelled', 'blocked'].includes(batch.status));
@@ -94,34 +94,26 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (regionId: s
 }
 
 /// The AI declared a scope conflict for this request: its fix belongs outside the area.
-export function declaredConflict(job: GenerationJobView | null, regionId: string): boolean {
-  return !!job?.candidate?.regions.some(region => region.regionId === regionId && region.status === 'conflict');
+export function declaredConflict(job: GenerationJobView | null, elementId: string): boolean {
+  return !!job?.candidate?.requests.some(request => request.elementId === elementId && request.status === 'conflict');
 }
 
 export function areaProblems(job: GenerationJobView | null, page: Page): AreaProblem[] {
   if (!job || ['prepared', 'generating', 'ready', 'applying'].includes(job.status)) return [];
   const stale = staleResult(job);
-  return page.regions.flatMap((region): AreaProblem[] => {
-    if (!job.areas.some(area => area.pageId === page.id && area.regionId === region.id)) return [];
-    const drafts = job.drafts?.filter(draft => draft.pageId === page.id && draft.regionIds.includes(region.id)) ?? [];
-    const latest = drafts.at(-1);
-    if (latest?.applied || latest?.dismissed) return [];
-    const outcome = job.candidate?.regions?.find(item => item.regionId === region.id);
-    const result = areaOutcome(job, region.id, region.prompt);
-    // A stale result did nothing to the page; say so where the visible box is.
-    if (stale && result.retryable && !region.completed) return [{ key: `${job.jobId}:${region.id}`, regionId: region.id,
-      message: staleResultMessage, stale: true, retryable: true, rect: region.rect }];
-    if (!latest && (!outcome || outcome.status === 'implemented')) return [];
-    if (region.completed && (!latest || outcome?.status === 'implemented')) return [];
-    const oldBase = !!latest?.baseContent && JSON.stringify(latest.baseContent) !== JSON.stringify(page.content);
-    let reason = latest?.reason || outcome?.explanation || job.message;
-    // Resolve a validator's area identity to the user's visible box number.
-    const affected = page.regions.findIndex(item => item.id !== region.id && reason.includes(item.id));
-    const message = result.retryable
-      ? generationError(oldBase ? 'stale revision' : reason, region.prompt, affected >= 0 ? `Box ${affected + 1}` : undefined)
-      : result.reason;
-    return [{ key: `${job.jobId}:${region.id}`, regionId: region.id, draftId: latest?.id,
-      message, stale: oldBase, retryable: result.retryable, fix: result.fix, rect: region.rect }];
+  const elements: Element[] = page.elements.flatMap(function walk(element): Element[] { return [element, ...element.children.flatMap(walk)]; });
+  return elements.flatMap((element): AreaProblem[] => {
+    if (!job.areas.some(area => area.pageId === page.id && area.elementId === element.id)) return [];
+    const outcome = job.candidate?.requests?.find(item => item.elementId === element.id);
+    const result = areaOutcome(job, element.id, element.meta.pending?.prompt);
+    // A stale result did nothing to the canvas; say so where the visible layer is.
+    if (stale && result.retryable && element.meta.pending) return [{ key: `${job.jobId}:${element.id}`, elementId: element.id,
+      message: staleResultMessage, stale: true, retryable: true, rect: element.rect }];
+    if (!outcome || outcome.status === 'implemented') return [];
+    const reason = outcome.explanation || job.message;
+    const message = result.retryable ? generationError(reason, element.meta.pending?.prompt ?? '') : result.reason;
+    return [{ key: `${job.jobId}:${element.id}`, elementId: element.id,
+      message, stale: false, retryable: result.retryable, fix: result.fix, rect: element.rect }];
   });
 }
 

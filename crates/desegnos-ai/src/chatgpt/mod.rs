@@ -952,7 +952,12 @@ impl ChatgptManager {
             self.inner.state.lock().await.storage_error = Some(error.message().into());
             return Err(error);
         }
-        self.inner.state.lock().await.message = Some(if confirmed { "Signed out." } else { "Signed out locally. Remote session revocation was not confirmed. Disconnect this app in ChatGPT Settings to end remote access." }.into());
+        let message = if confirmed {
+            "Signed out. Remote access was revoked."
+        } else {
+            "Signed out locally. Remote session revocation was not confirmed. Disconnect this app in ChatGPT Settings to end remote access."
+        };
+        self.inner.state.lock().await.message = Some(message.into());
         drop(_lease);
         drop(_gate);
         Ok(self.view().await)

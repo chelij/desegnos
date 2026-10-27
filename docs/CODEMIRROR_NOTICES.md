@@ -1,6 +1,6 @@
 # CodeMirror editor dependency notices
 
-These exact packages are used only by the Desegnos source editor. The lockfile fixes their versions and integrity hashes. All are MIT licensed.
+These exact packages are used only by the Code block element's editor. Desegnos has no page source editor; code is produced at export. The lockfile fixes their versions and integrity hashes. All are MIT licensed.
 
 ## @codemirror/autocomplete@6.20.3
 

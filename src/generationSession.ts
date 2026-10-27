@@ -1,5 +1,4 @@
 import type { GenerationJobView } from './types';
-import { pendingDrafts } from './generationDraftState.js';
 
 // Automatic notices describe a generation this app session started. A job restored from the
 // saved latest generation (opening or switching to a project) stays silent; it is still in the
@@ -15,10 +14,11 @@ const statusNotices = ['prepared', 'blocked', 'failed', 'unknown', 'cancelled'];
 /// Whether the editor banner should describe this job automatically.
 export function announcesStatus(job: GenerationJobView | null, state: { owns: boolean; stopped: boolean; working: boolean }): boolean {
   if (!state.owns) return false;
-  return state.stopped || state.working || !!job && (statusNotices.includes(job.status) || !!job.candidate?.regions.some(item => item.status === 'conflict'));
+  return state.stopped || state.working || !!job && (statusNotices.includes(job.status) || !!job.candidate?.requests.some(item => item.status === 'conflict'));
 }
 
 /// Draft count for the automatic notice; a restored job's drafts stay in the AI conversation.
 export function announcedDraftCount(job: GenerationJobView | null, owns: boolean): number {
-  return owns ? pendingDrafts(job).length : 0;
+  void job; void owns;
+  return 0;
 }

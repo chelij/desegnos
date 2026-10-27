@@ -1,12 +1,8 @@
 //! Bounded Image API fulfilment, gated by frozen account capabilities.
-use crate::{
-    ApiKey, AuthenticationMethod, CancellationToken, OpenAiClient, ProviderResponse,
-    ProviderSettings,
-};
+use crate::{ApiKey, CancellationToken, OpenAiClient};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_core::{
-    GenerationCandidate, ImageGenerationRequest, MAX_DOWNLOADED_IMAGE_BYTES, Project,
-    RequirementsSnapshot,
+    ImageGenerationRequest, MAX_DOWNLOADED_IMAGE_BYTES,
 };
 use image::{ImageFormat, ImageReader, Limits};
 use serde_json::{Value, json};
@@ -24,6 +20,7 @@ fn image_body(request: &ImageGenerationRequest, edit: bool) -> Value {
 }
 
 // Only fixed field names and native-resolved data URIs enter this multipart body.
+#[cfg(test)]
 fn edit_body(
     request: &ImageGenerationRequest,
     reference: &str,
@@ -110,167 +107,56 @@ fn generated_png(response: &Value) -> Option<String> {
 }
 
 impl OpenAiClient {
-    async fn generate_image(
+    /// Generate one bounded PNG per requested picture, keyed by the caller's image key.
+    /// Failures are skipped so the apply step can place a Box placeholder instead.
+    pub async fn generate_requested_images(
         &self,
-        request: &ImageGenerationRequest,
-        reference: Option<&str>,
-        mask: Option<&str>,
-        key: &ApiKey,
-    ) -> std::result::Result<Option<String>, ()> {
-        let (path, content_type, bytes) = if let Some(reference) = reference {
-            let Some((content_type, bytes)) = edit_body(request, reference, mask) else {
-                return Ok(None);
-            };
-            ("images/edits", content_type, bytes)
-        } else {
-            let Ok(bytes) = serde_json::to_vec(&image_body(request, false)) else {
-                return Ok(None);
-            };
-            ("images/generations", "application/json".into(), bytes)
-        };
-        if bytes.len() > crate::MAX_REQUEST_BYTES {
-            return Ok(None);
-        }
-        let Ok(builder) = self.image_api_request(path, key, &content_type, bytes) else {
-            return Ok(None);
-        };
-        let Ok(mut response) = builder.send().await else {
-            return Ok(None);
-        };
-        let status = response.status().as_u16();
-        let value = crate::image_access::bounded_json(&mut response, MAX_IMAGE_REPLY)
-            .await
-            .unwrap_or(Value::Null);
-        if !(200..300).contains(&status) {
-            return if crate::image_access::image_api_rejected(status, &value) {
-                Err(())
-            } else {
-                Ok(None)
-            };
-        }
-        Ok(generated_png(&value))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn generate_images(
-        &self,
-        response: ProviderResponse,
-        auth: AuthenticationMethod,
-        settings: &ProviderSettings,
-        snapshot: &RequirementsSnapshot,
-        project: &Project,
+        requests: &[(String, String)],
         key: &ApiKey,
         cancellation: &CancellationToken,
-    ) -> ProviderResponse {
-        self.generate_images_with_status(
-            response,
-            auth,
-            settings,
-            snapshot,
-            project,
-            key,
-            cancellation,
-        )
-        .await
-        .0
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn generate_images_with_status(
-        &self,
-        mut response: ProviderResponse,
-        auth: AuthenticationMethod,
-        settings: &ProviderSettings,
-        snapshot: &RequirementsSnapshot,
-        project: &Project,
-        key: &ApiKey,
-        cancellation: &CancellationToken,
-    ) -> (ProviderResponse, bool) {
-        if cancellation.is_cancelled() || !settings.image_generation {
-            return (response, false);
-        }
-        let Some(capability) = snapshot
-            .capabilities
-            .as_ref()
-            .and_then(|c| c.image_generation.as_ref())
-        else {
-            return (response, false);
-        };
-        let Ok(mut candidate) = GenerationCandidate::from_reply(&response.text, snapshot, project)
-        else {
-            return (response, false);
-        };
-        if candidate.validate(snapshot, project).is_err() {
-            return (response, false);
-        }
-        let Ok(requests) = candidate.image_generation_requests() else {
-            return (response, false);
-        };
-        if requests.is_empty() {
-            return (response, false);
-        }
-        let budget_ok = crate::estimate_for_auth(
-            auth,
-            snapshot,
-            project.generation_mode,
-            &desegnos_core::result_schema(snapshot),
-            settings,
-        )
-        .is_ok();
-        let mut images = BTreeMap::new();
-        let mut unavailable = false;
-        for request in requests
-            .into_iter()
-            .take(usize::from(capability.max_images))
-        {
+    ) -> BTreeMap<String, String> {
+        let mut generated = BTreeMap::new();
+        for (key_name, prompt) in requests {
             if cancellation.is_cancelled() {
-                return (response, false);
-            }
-            if !budget_ok {
                 break;
             }
-            let Ok(reference) = request.reference_image(snapshot, project) else {
+            let request = ImageGenerationRequest {
+                prompt: prompt.clone(),
+                source: None,
+                mask: None,
+                size: "1024x1024".into(),
+                transparent: false,
+            };
+            let body = image_body(&request, false);
+            let Ok(bytes) = serde_json::to_vec(&body) else {
                 continue;
             };
-            let Ok(mask) = request.mask_image(snapshot, project) else {
+            let Ok(request_builder) =
+                self.image_api_request("images/generations", key, "application/json", bytes)
+            else {
                 continue;
             };
-            let result = tokio::select! {
+            let response = tokio::select! {
                 biased;
-                _ = cancellation.cancelled() => return (response, false),
-                result = tokio::time::timeout(Duration::from_secs(180), self.generate_image(&request, reference.as_deref(), mask.as_deref(), key)) => result.ok(),
+                _ = cancellation.cancelled() => break,
+                _ = tokio::time::sleep(Duration::from_secs(180)) => continue,
+                result = request_builder.send() => result,
             };
-            match result {
-                Some(Ok(Some(image))) => {
-                    images.insert(request, image);
-                }
-                Some(Err(())) => {
-                    unavailable = true;
-                    images.clear();
-                    break;
-                }
-                _ => {}
+            let Ok(mut response) = response else {
+                continue;
+            };
+            if !response.status().is_success() {
+                continue;
+            }
+            let Some(value) = crate::image_access::bounded_json(&mut response, MAX_IMAGE_REPLY).await
+            else {
+                continue;
+            };
+            if let Some(uri) = generated_png(&value) {
+                generated.insert(key_name.to_lowercase(), uri);
             }
         }
-        if cancellation.is_cancelled() {
-            return (response, unavailable);
-        }
-        // If insertion would exceed a source budget, fall back to placeholders for this request.
-        let original = candidate.clone();
-        if candidate.embed_generated_images(&images).is_err()
-            || candidate.validate(snapshot, project).is_err()
-        {
-            candidate = original;
-            if candidate.embed_generated_images(&BTreeMap::new()).is_err() {
-                return (response, unavailable);
-            }
-        }
-        if candidate.validate(snapshot, project).is_ok()
-            && let Ok(text) = serde_json::to_string(&candidate)
-        {
-            response.text = text;
-        }
-        (response, unavailable)
+        generated
     }
 }
 
@@ -331,309 +217,5 @@ mod tests {
         let mut invalid = value;
         invalid["data"][0]["b64_json"] = json!(STANDARD.encode(b"<svg/>"));
         assert!(generated_png(&invalid).is_none());
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod adapter_tests {
-    use super::*;
-    use crate::ProviderId;
-    use desegnos_core::*;
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
-    use tokio::{
-        io::{AsyncReadExt, AsyncWriteExt},
-        net::TcpListener,
-    };
-
-    pub(crate) fn fixture() -> (Project, RequirementsSnapshot, ProviderResponse) {
-        let mut project: Project = serde_json::from_str(include_str!(
-            "../../desegnos-core/tests/fixtures/current-project.json"
-        ))
-        .unwrap();
-        project.schema_version = SCHEMA_VERSION;
-        project.pages[0].content = None;
-        let snapshot = project
-            .prepare_requirements_with_capabilities(GenerationCapabilities {
-                image_generation: Some(ImageGenerationCapability::default()),
-                ..Default::default()
-            })
-            .unwrap();
-        let id = project.pages[0].regions[0].id;
-        let candidate=GenerationCandidate{
-            job_id:snapshot.job_id,requirements_sha256:snapshot.sha256.clone(),summary:"Three requested pictures".into(),
-            regions:vec![RegionOutcome{region_id:id,status:RegionStatus::Implemented,explanation:"Native image requests.".into()}],
-            pages:vec![GeneratedPage{page_id:project.home_page_id,content:SiteContent {
-                html:format!("<section data-desegnos-region='{id}'><p>Keep this copy</p>{}</section>",["A","B","C"].map(|prompt|format!("<img data-desegnos-generate='{prompt}' src='#' alt='Picture {prompt}'>")).join("")),
-                css:String::new(),javascript:String::new()
-            }}],documents:vec![],outside_changes:vec![],component_requests:vec![],decision_proposals:vec![],criticism:vec![]
-        };
-        candidate.validate(&snapshot, &project).unwrap();
-        let response = ProviderResponse {
-            text: serde_json::to_string(&candidate).unwrap(),
-            response_id: "resp_main".into(),
-            usage: None,
-        };
-        (project, snapshot, response)
-    }
-
-    #[tokio::test]
-    async fn bounded_native_calls_keep_success_and_failures_without_blocking() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
-        let count = Arc::new(AtomicUsize::new(0));
-        let seen = count.clone();
-        let mut png = Cursor::new(Vec::new());
-        image::DynamicImage::new_rgba8(1024, 1024)
-            .write_to(&mut png, ImageFormat::Png)
-            .unwrap();
-        let generated = json!({"data":[{"b64_json":STANDARD.encode(png.get_ref())}]}).to_string();
-        let task = tokio::spawn(async move {
-            loop {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut request = Vec::new();
-                let (header_end, length) = loop {
-                    let mut part = [0; 4096];
-                    let n = socket.read(&mut part).await.unwrap();
-                    assert!(n > 0);
-                    request.extend_from_slice(&part[..n]);
-                    if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
-                        let headers = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
-                        assert!(headers.starts_with("post /v1/images/generations "));
-                        assert!(headers.contains("authorization: bearer "));
-                        let length: usize = headers
-                            .lines()
-                            .find_map(|line| line.strip_prefix("content-length: "))
-                            .unwrap()
-                            .parse()
-                            .unwrap();
-                        break (end + 4, length);
-                    }
-                };
-                while request.len() < header_end + length {
-                    let mut part = [0; 4096];
-                    let n = socket.read(&mut part).await.unwrap();
-                    assert!(n > 0);
-                    request.extend_from_slice(&part[..n]);
-                }
-                let body: Value =
-                    serde_json::from_slice(&request[header_end..header_end + length]).unwrap();
-                assert_eq!(body["model"], IMAGE_MODELS[0]);
-                assert!(body.get("tools").is_none());
-                let ordinal = seen.fetch_add(1, Ordering::SeqCst);
-                let (status, body) = if ordinal == 0 {
-                    (200, generated.as_str())
-                } else {
-                    (500, "{}")
-                };
-                socket.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
-            }
-        });
-        let client = OpenAiClient::for_loopback(&endpoint).unwrap();
-        let key = ApiKey::new("sk-test-image-generation".into()).unwrap();
-        let settings = ProviderSettings {
-            spending_limit_usd: 10000.,
-            ..Default::default()
-        };
-        let (project, snapshot, response) = fixture();
-        let resolved = client
-            .generate_images(
-                response.clone(),
-                AuthenticationMethod::ApiKey,
-                &settings,
-                &snapshot,
-                &project,
-                &key,
-                &CancellationToken::new(),
-            )
-            .await;
-        assert_eq!(
-            count.load(Ordering::SeqCst),
-            2,
-            "excess image placements cannot authorize extra spending"
-        );
-        let candidate = GenerationCandidate::from_json(&resolved.text).unwrap();
-        candidate.validate(&snapshot, &project).unwrap();
-        assert!(candidate.pages[0].content.html.contains("Keep this copy"));
-        assert!(candidate.image_generation_requests().unwrap().is_empty());
-        assert_eq!(
-            candidate.pages[0]
-                .content
-                .placeholder_metrics()
-                .unwrap()
-                .marked_slots,
-            2
-        );
-        let applied = project
-            .apply_generation(&snapshot, &candidate, &[])
-            .unwrap();
-        assert_eq!(applied.pending_count(), 0);
-        assert!(
-            applied.pages[0]
-                .content
-                .as_ref()
-                .unwrap()
-                .html
-                .contains("desegnos-asset:")
-        );
-        for (auth, enabled, cancelled) in [
-            (AuthenticationMethod::ApiKey, false, false),
-            (AuthenticationMethod::ApiKey, true, true),
-        ] {
-            let cancel = CancellationToken::new();
-            if cancelled {
-                cancel.cancel();
-            }
-            let settings = ProviderSettings {
-                image_generation: enabled,
-                ..settings.clone()
-            };
-            let skipped = client
-                .generate_images(
-                    response.clone(),
-                    auth,
-                    &settings,
-                    &snapshot,
-                    &project,
-                    &key,
-                    &cancel,
-                )
-                .await;
-            assert_eq!(skipped, response);
-        }
-        assert_eq!(count.load(Ordering::SeqCst), 2);
-        task.abort();
-    }
-
-    #[tokio::test]
-    async fn cancellation_interrupts_an_in_flight_image_call() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
-        let cancel = CancellationToken::new();
-        let server_cancel = cancel.clone();
-        let calls = Arc::new(AtomicUsize::new(0));
-        let observed = calls.clone();
-        let task = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut part = [0; 4096];
-            assert!(socket.read(&mut part).await.unwrap() > 0);
-            observed.fetch_add(1, Ordering::SeqCst);
-            server_cancel.cancel();
-            // Keep the response pending to prove cancellation, rather than a transport error, wins.
-            std::future::pending::<()>().await;
-            drop(socket);
-        });
-        let client = OpenAiClient::for_loopback(&endpoint).unwrap();
-        let key = ApiKey::new("sk-test-image-generation".into()).unwrap();
-        let settings = ProviderSettings {
-            spending_limit_usd: 10000.,
-            ..Default::default()
-        };
-        let (project, snapshot, response) = fixture();
-        let original = project.clone();
-        let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            client.generate_images(
-                response.clone(),
-                AuthenticationMethod::ApiKey,
-                &settings,
-                &snapshot,
-                &project,
-                &key,
-                &cancel,
-            ),
-        )
-        .await
-        .unwrap();
-        assert!(cancel.is_cancelled());
-        assert_eq!(
-            calls.load(Ordering::SeqCst),
-            1,
-            "Stop prevents subsequent image calls"
-        );
-        assert_eq!(project, original);
-        assert_eq!(
-            result, response,
-            "late image output cannot become an applicable result"
-        );
-        task.abort();
-    }
-
-    #[test]
-    fn capability_and_settings_and_spending_reserve_follow_authentication() {
-        let (project, snapshot, _) = fixture();
-        let settings = ProviderSettings {
-            spending_limit_usd: 10000.,
-            ..Default::default()
-        };
-        let on = ProviderId::Openai.capabilities_for(
-            AuthenticationMethod::ApiKey,
-            &settings,
-            Some(&crate::ImageAccess::new(
-                crate::ImageAvailability::Yes,
-                "test",
-            )),
-        );
-        assert!(on.image_generation.is_some());
-        assert!(
-            ProviderId::Openai
-                .capabilities_for(AuthenticationMethod::Chatgpt, &settings, None)
-                .image_generation
-                .is_none()
-        );
-        assert!(
-            ProviderId::Google
-                .capabilities_for(
-                    AuthenticationMethod::ApiKey,
-                    &settings,
-                    Some(&crate::ImageAccess::new(
-                        crate::ImageAvailability::Yes,
-                        "test"
-                    ))
-                )
-                .image_generation
-                .is_none()
-        );
-        let schema = result_schema(&snapshot);
-        let enabled = crate::estimate_for_auth(
-            AuthenticationMethod::ApiKey,
-            &snapshot,
-            project.generation_mode,
-            &schema,
-            &settings,
-        )
-        .unwrap();
-        let plain = project.prepare_requirements().unwrap();
-        // Check the image reserve directly; other frozen capabilities change the text token estimate.
-        assert_eq!(
-            crate::settings::image_generation_reserve(AuthenticationMethod::ApiKey, &snapshot),
-            1.
-        );
-        assert_eq!(
-            crate::settings::image_generation_reserve(AuthenticationMethod::Chatgpt, &snapshot),
-            1.
-        );
-        assert_eq!(
-            crate::settings::image_generation_reserve(AuthenticationMethod::ApiKey, &plain),
-            0.
-        );
-        let limited = ProviderSettings {
-            spending_limit_usd: enabled.estimate_usd - 0.01,
-            ..settings.clone()
-        };
-        assert_eq!(
-            crate::estimate_for_auth(
-                AuthenticationMethod::ApiKey,
-                &snapshot,
-                project.generation_mode,
-                &schema,
-                &limited
-            )
-            .unwrap_err()
-            .kind,
-            crate::ErrorKind::SpendingLimit
-        );
     }
 }

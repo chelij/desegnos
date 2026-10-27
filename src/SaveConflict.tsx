@@ -2,7 +2,7 @@ import { ProblemBanner } from './ProblemBanner.js';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import type { WorkspaceView } from './types';
 
-export type FileStamp = { projectId: string; revision: number; manifestSha256: string };
+export type FileStamp = { projectId: string; version: number };
 export type SaveConflict = { token: string; kind: 'changed' | 'differentProject' | 'unreadable'; path: string; fileName: string; message: string; defaultChoice: 'copy' | 'cancel'; canReplace: boolean; details: { expected: FileStamp | null; actual: FileStamp | null } };
 export type SaveOutcome = { status: 'saved'; workspace: WorkspaceView } | { status: 'cancelled' } | { status: 'conflict'; conflict: SaveConflict };
 export type SaveChoice = 'copy' | 'replace' | 'cancel';

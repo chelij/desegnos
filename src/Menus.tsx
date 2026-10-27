@@ -13,8 +13,8 @@ export type MenuItem = {
   separator?: boolean;
 };
 
-export function MenuButton({ label, items, ariaLabel, title, className = '', showChevron = true, align = 'start', reserveSpace = false }: {
-  label: ReactNode; items: MenuItem[]; ariaLabel?: string; title?: string; className?: string; showChevron?: boolean; align?: 'start' | 'end'; reserveSpace?: boolean;
+export function MenuButton({ label, items, ariaLabel, title, className = '', showChevron = true, align = 'start', reserveSpace = false, openSignal }: {
+  label: ReactNode; items: MenuItem[]; ariaLabel?: string; title?: string; className?: string; showChevron?: boolean; align?: 'start' | 'end'; reserveSpace?: boolean; openSignal?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [menuHeight, setMenuHeight] = useState(0);
@@ -26,6 +26,11 @@ export function MenuButton({ label, items, ariaLabel, title, className = '', sho
     setOpen(false);
     if (restore) trigger.current?.focus({ preventScroll: true });
   }
+  useEffect(() => {
+    if (!openSignal) return;
+    setStartAtEnd(false);
+    setOpen(true);
+  }, [openSignal]);
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent | FocusEvent) => {

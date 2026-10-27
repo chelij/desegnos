@@ -1,23 +1,25 @@
 {
   "identifier": "editor",
-  "description": "The trusted editor can use explicit project commands. Website content and remote origins receive no native permissions.",
+  "description": "The trusted editor can use explicit project commands.",
   "windows": ["editor"],
   "permissions": [
     "allow-get-project-location", "allow-pick-project-location", "allow-set-project-location", "allow-move-into-project-folder",
-    "allow-unpack-request-zip", "allow-export-website", "allow-open-export-folder",
-    "allow-pick-website-folder", "allow-website-build", "allow-edit-website-folder", "allow-prepare-website-import", "allow-apply-website-import", "allow-project-site-import-source", "allow-overwrite-project-site", "allow-website-brand-source",
-    "allow-pick-identity-source", "allow-fetch-identity-source", "allow-prepare-identity-selection", "allow-close-project", "allow-switch-project", "allow-import-context", "allow-analyze-identity", "allow-get-identity-analysis", "allow-cancel-identity-analysis",
+    "allow-unpack-request-zip", "allow-open-export-folder",
+    "allow-prepare-export", "allow-start-export", "allow-cancel-export", "allow-get-export-job",
+    "allow-recheck-export", "allow-keep-pointer-code", "allow-open-in-browser",
+    "allow-pick-export-destination", "allow-close-preview",
+    "allow-pick-identity-source", "allow-fetch-identity-source", "allow-prepare-identity-selection", "allow-prepare-website-import-url", "allow-pick-website-import-source", "allow-cancel-website-import", "allow-import-website-pages", "allow-close-project", "allow-switch-project", "allow-import-context", "allow-analyze-identity", "allow-get-identity-analysis", "allow-cancel-identity-analysis",
     "core:default", "core:window:allow-destroy", "allow-get-workspace", "allow-get-recent-projects", "allow-forget-recent-project", "allow-open-recent-project", "allow-create-project", "allow-edit-project",
-    "allow-inspect-element", "allow-edit-element", "allow-undo-element", "allow-edit-page-source", "allow-get-page-source-map", "allow-open-found-source", "allow-copy-layer", "allow-cut-layer", "allow-paste-layer", "allow-refresh-element-bounds", "allow-refresh-element-target-bounds",
     "allow-undo-project", "allow-redo-project", "allow-end-history-step", "allow-open-project", "allow-save-project", "allow-save-project-checked", "allow-resolve-save-conflict",
+    "allow-save-project-copy", "allow-compact-history", "allow-autosave-project", "allow-get-project-history", "allow-restore-version",
+    "allow-switch-alternative", "allow-create-alternative", "allow-rename-alternative", "allow-delete-alternative",
     "allow-prepare-requirements", "allow-save-requirements", "allow-recover-project", "allow-dismiss-recovery", "allow-get-project-notes", "dialog:allow-confirm",
     "allow-get-ai-settings", "allow-save-ai-settings", "allow-set-ai-provider", "allow-set-ai-key", "allow-remove-ai-key", "allow-test-ai-access",
     "allow-set-ai-authentication", "allow-begin-chatgpt-sign-in", "allow-cancel-chatgpt-sign-in", "allow-select-chatgpt-account",
     "allow-sign-out-chatgpt", "allow-acknowledge-chatgpt-welcome", "allow-open-chatgpt-usage", "allow-retry-chatgpt-secure-storage",
     "allow-prepare-generation", "allow-get-generation", "allow-list-generations", "allow-record-usage", "allow-open-preview-link", "allow-get-past-generation", "allow-start-generation", "allow-retry-generation", "allow-cancel-generation",
-    "allow-discard-generation", "allow-apply-generation", "allow-generation-draft", "allow-create-preview", "allow-release-preview", "allow-editor-heartbeat", "allow-reload-workspace",
-    "allow-copy-elements", "allow-copy-text", "allow-edit-element-across-pages", "allow-edit-elements", "allow-element-matches", "allow-ensure-element-id", "allow-get-frame-documents", "allow-get-frame-targets", "allow-open-in-browser",
+    "allow-discard-generation", "allow-apply-generation",
+    "allow-copy-text",
     "allow-pending-crash-report", "allow-open-crash-report", "allow-dismiss-crash-report", "allow-record-frontend-crash", "allow-check-for-updates"
   ]
 }
-

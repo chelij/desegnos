@@ -1,4 +1,4 @@
-import type { Rect, RegionShape, Viewport } from './types';
+import type { Rect, Viewport } from './types';
 
 export type Point = { x: number; y: number };
 export type GeometryGesture = { kind: 'new' | 'move' | 'resize'; start: Point; initial: Rect; proportional?: boolean };
@@ -62,65 +62,6 @@ export function pointInPolygon(point: Point, polygon: Point[]): boolean {
     if ((a.y > point.y) !== (b.y > point.y) && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
   }
   return inside;
-}
-
-export function absolutePoints(points: [number, number][], rect: Rect): Point[] {
-  return points.map(([x, y]) => ({ x: rect.x + x * rect.width, y: rect.y + y * rect.height }));
-}
-
-export function relativePoints(points: Point[], rect: Rect): [number, number][] {
-  return points.map(point => [clamp((point.x - rect.x) / rect.width, 0, 1), clamp((point.y - rect.y) / rect.height, 0, 1)]);
-}
-
-export function pointInRegion(point: Point, rect: Rect, shape?: RegionShape): boolean {
-  if (shape?.kind === 'ellipse') return pointInEllipse(point, rect);
-  if (shape?.kind === 'freehand') return pointInPolygon(point, absolutePoints(shape.points, rect));
-  return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
-}
-
-// Iterative RDP avoids a deep call stack for long, noisy pen strokes.
-function simplifyLine(points: Point[], tolerance: number): Point[] {
-  if (points.length <= 2) return points;
-  const keep = new Set([0, points.length - 1]), stack = [[0, points.length - 1]];
-  while (stack.length) {
-    const [start, end] = stack.pop()!, a = points[start], b = points[end];
-    let maximum = tolerance * tolerance, at = -1;
-    const dx = b.x - a.x, dy = b.y - a.y, length = dx * dx + dy * dy;
-    for (let i = start + 1; i < end; i++) {
-      const p = points[i], t = length ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / length, 0, 1) : 0;
-      const distance = (p.x - a.x - t * dx) ** 2 + (p.y - a.y - t * dy) ** 2;
-      if (distance > maximum) { maximum = distance; at = i; }
-    }
-    if (at >= 0) { keep.add(at); stack.push([start, at], [at, end]); }
-  }
-  return [...keep].sort((a, b) => a - b).map(i => points[i]);
-}
-
-export function simplifyFreehand(input: Point[], tolerance = 1.5, limit = 200): Point[] {
-  const points = input.filter((p, i) => Number.isFinite(p.x) && Number.isFinite(p.y) && (!i || p.x !== input[i - 1].x || p.y !== input[i - 1].y));
-  if (points.length > 1 && points[0].x === points.at(-1)!.x && points[0].y === points.at(-1)!.y) points.pop();
-  if (points.length <= 3) return points;
-  const first = points[0];
-  const split = points.reduce((best, point, i) => Math.hypot(point.x - first.x, point.y - first.y) > Math.hypot(points[best].x - first.x, points[best].y - first.y) ? i : best, 1);
-  const simplify = (epsilon: number) => [...simplifyLine(points.slice(0, split + 1), epsilon).slice(0, -1), ...simplifyLine([...points.slice(split), first], epsilon).slice(0, -1)];
-  let epsilon = Math.max(0, tolerance), result = simplify(epsilon);
-  while (result.length > Math.max(3, limit)) { epsilon = Math.max(0.01, epsilon * 1.5); result = simplify(epsilon); }
-  // Keep a third vertex for small but valid loops that RDP collapses into a line.
-  if (result.length < 3) {
-    const a = points[split];
-    const third = points.reduce((best, p, i) => Math.abs((a.x-first.x)*(p.y-first.y)-(a.y-first.y)*(p.x-first.x)) > Math.abs((a.x-first.x)*(points[best].y-first.y)-(a.y-first.y)*(points[best].x-first.x)) ? i : best, 0);
-    return [0, split, third].sort((a,b) => a-b).map(i => points[i]);
-  }
-  return result;
-}
-
-export function freehandArea(input: Point[], tolerance = 1.5): { rect: Rect; shape: Extract<RegionShape, { kind: 'freehand' }> } | null {
-  const points = simplifyFreehand(input, tolerance);
-  if (points.length < 3) return null;
-  const x = Math.min(...points.map(p => p.x)), y = Math.min(...points.map(p => p.y));
-  const rect = { x, y, width: Math.max(...points.map(p => p.x)) - x, height: Math.max(...points.map(p => p.y)) - y };
-  if (rect.width < 1 || rect.height < 1 || !points.some(p => Math.abs((points[1].x-points[0].x)*(p.y-points[0].y)-(points[1].y-points[0].y)*(p.x-points[0].x)) > 1e-8)) return null;
-  return { rect, shape: { kind: 'freehand', points: relativePoints(points, rect) } };
 }
 
 export function rectDelta(delta: Point, guide: Viewport, resize = false, minimum: Point = { x: 1, y: 1 }): (current: Rect) => Rect {

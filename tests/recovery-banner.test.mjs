@@ -106,12 +106,12 @@ try {
       setZoom() {}, initialZoom: () => 1, refreshRecent: async () => {},
     };
     env.requestProjectOpen = handler('requestProjectOpen', env);
-    return { state, env, open: handler('open', env), openRecent: handler('openRecent', env), editWebsite: handler('editWebsite', env), recover: handler('recover', env) };
+    return { state, env, open: handler('open', env), openRecent: handler('openRecent', env), recover: handler('recover', env) };
   }
-  for (const source of ['dialog', 'recent', 'website']) {
+  for (const source of ['dialog', 'recent']) {
     await test(`${source} opening offers recovery inline and retries the exact saved file`, async () => {
-      const { state, open, openRecent, editWebsite } = setup();
-      await (source === 'dialog' ? open() : source === 'recent' ? openRecent(pending.path) : editWebsite('folder-id'));
+      const { state, open, openRecent } = setup();
+      await (source === 'dialog' ? open() : openRecent(pending.path));
       assert.deepEqual(state.pending, pending);
       assert.equal(state.error, '');
       assert.deepEqual(state.accepted, []);

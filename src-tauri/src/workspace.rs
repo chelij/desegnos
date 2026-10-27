@@ -1,19 +1,17 @@
 use desegnos_core::{
-    Appearance, Command, DecodedProject, GenerationCandidate, Project, RequirementsSnapshot,
-    Session, Viewport,
+    Appearance, Command, GenerationCandidate, Project, RequirementsSnapshot, Session, Viewport,
 };
 use desegnos_storage::{
-    FileStamp, Journal, ProjectFile, SaveFailure, SaveFailureKind, write_markdown,
+    AutosaveProject, FileStamp, LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure,
+    SaveFailureKind, write_markdown,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeSet,
+    collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::Read,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Mutex,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -22,65 +20,21 @@ use uuid::Uuid;
 type NativeResult<T> = Result<T, String>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 
-/// A discarded recovery is no longer offered, so its pointer and journal can go after a month.
-const DISCARDED_RECOVERY_GRACE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+/// Unsaved edits reach the autosave branch at most this often while the project is dirty.
+const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(3);
 
-fn valid_journal_file(journal_file: &str) -> bool {
-    journal_file.ends_with(".journal")
-        && !journal_file.contains(['/', '\\', ':'])
-        && !journal_file.starts_with('.')
-}
-
-fn older_than(entry: &fs::DirEntry, grace: Duration) -> bool {
-    entry
-        .metadata()
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok())
-        .is_some_and(|age| age > grace)
-}
-
-/// Hash what framed documents are made of: page code and the HTML site files a frame can
-/// show. Request prompts, rectangles and other editor-only state stay out of it.
+/// A fingerprint of the canvas documents; canvases never read page code.
 fn documents_key(project: Option<&Project>) -> String {
     let Some(project) = project else {
         return String::new();
     };
-    fn feed(hash: &mut Sha256, value: &str) {
-        hash.update((value.len() as u64).to_le_bytes());
-        hash.update(value.as_bytes());
-    }
+    use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();
     for page in &project.pages {
-        feed(&mut hash, &page.id.to_string());
-        feed(&mut hash, &page.path);
-        hash.update([u8::from(page.included)]);
-        if let Some(content) = &page.content {
-            feed(&mut hash, &content.html);
-            feed(&mut hash, &content.css);
-            feed(&mut hash, &content.javascript);
-        }
+        hash.update(page.id.as_bytes());
+        hash.update(page.path.as_bytes());
     }
-    if let Some(site) = &project.website {
-        for (path, encoded) in &site.files {
-            if !matches!(
-                path.rsplit('.')
-                    .next()
-                    .unwrap_or("")
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "html" | "htm"
-            ) {
-                continue;
-            }
-            feed(&mut hash, path);
-            feed(&mut hash, encoded);
-        }
-        for (page_id, path) in &site.page_files {
-            feed(&mut hash, &page_id.to_string());
-            feed(&mut hash, path);
-        }
-    }
+    hash.update(project.revision.to_le_bytes());
     format!("{:x}", hash.finalize())
 }
 
@@ -126,13 +80,12 @@ fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+/// Remembers which project file a session had open, so its autosave can be offered after a
+/// crash. The unsaved work itself lives inside the project database.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RecoveryPointer {
-    journal_file: String,
-    saved_revision: Option<u64>,
-    saved_sha256: Option<String>,
-    project_path: Option<PathBuf>,
+struct SessionPointer {
+    project_path: PathBuf,
 }
 
 #[derive(Clone, Serialize)]
@@ -153,10 +106,6 @@ struct RecoveryCandidate {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceView {
-    /// The webview reads only the site framework and skipped files; its own type never declares
-    /// the imported files, which outweigh everything else in a large project. Cloning is cheap
-    /// because the files are `Arc`, and in-process readers still see the full project.
-    #[serde(serialize_with = "without_site_files")]
     project: Option<Project>,
     path: Option<String>,
     dirty: bool,
@@ -168,26 +117,11 @@ pub struct WorkspaceView {
     recovery_error: Option<String>,
     open_projects: Vec<OpenProjectSummary>,
     any_dirty: bool,
-    site_warnings: Vec<String>,
-    outside_edits: desegnos_storage::project_folder::OutsideEdits,
-    project_folder: bool,
     /// A fingerprint of the code and framed documents, so editors can re-read them after a
     /// document change without waking on every request prompt keystroke.
     documents_key: String,
-}
-
-fn without_site_files<S: serde::Serializer>(
-    project: &Option<Project>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    let mut project = project.clone();
-    if let Some(site) = project
-        .as_mut()
-        .and_then(|project| project.website.as_mut())
-    {
-        site.files.clear();
-    }
-    project.serialize(serializer)
+    /// Pointer clashes and pending wiring, derived from the project on every published view.
+    pointer_states: Vec<desegnos_core::PointerStateView>,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -236,9 +170,13 @@ pub enum SaveConflictChoice {
     Cancel,
 }
 
+#[derive(Clone)]
 enum SaveDestination {
     Current,
-    Chosen(ProjectFile),
+    /// A project file that does not exist yet.
+    New(PathBuf),
+    /// A project file that already exists: saving it may conflict.
+    Existing(PathBuf),
 }
 
 struct PendingSaveConflict {
@@ -249,35 +187,36 @@ struct PendingSaveConflict {
     actual: Option<FileStamp>,
     can_replace: bool,
     save_as: bool,
+    labels: Vec<String>,
+    label: Option<String>,
 }
 
 pub struct Workspace {
     directory: PathBuf,
     system_project_location: PathBuf,
     session: Option<Session>,
-    file: Option<ProjectFile>,
-    journal: Option<Journal>,
+    file: Option<ProjectDatabase>,
+    /// What the file held when we opened it or last saved, for conflict checks.
+    stamp: Option<FileStamp>,
     ownership: Option<File>,
     saved_revision: Option<u64>,
+    last_autosave: Option<Instant>,
     recoveries: Vec<RecoveryCandidate>,
     recovery_error: Option<String>,
     prepared: Option<RequirementsSnapshot>,
     recent_error: Option<String>,
     pending_save: Option<PendingSaveConflict>,
-    website_import: Option<WebsiteImportSnapshot>,
-    /// Other open projects, each with its own undo history, file and recovery journal.
+    /// Other open projects, each with its own undo history, file and autosave.
     parked: Vec<OpenProject>,
     /// Open projects in tab order.
     order: Vec<Uuid>,
-    /// Reports the active project revision to the browser site server.
-    site: Option<crate::local_site::RevisionWatch>,
 }
 
 /// A project kept open in the background while another one is active.
 struct OpenProject {
     session: Session,
-    file: Option<ProjectFile>,
-    journal: Option<Journal>,
+    file: Option<ProjectDatabase>,
+    stamp: Option<FileStamp>,
     ownership: Option<File>,
     saved_revision: Option<u64>,
 }
@@ -322,49 +261,85 @@ impl Workspace {
             .ok_or_else(|| "Create or open a project first.".into())
     }
 
-    /// A request drawn before framed editing existed still needs its framed document.
-    pub(super) fn adopt_frame_targets(&mut self) -> NativeResult<()> {
-        let journal = self.journal.as_ref().ok_or("Open a project first.")?;
-        self.session
-            .as_mut()
-            .ok_or("Create or open a project first.")?
-            .adopt_frame_targets(|next| journal.append(next))
+    /// The newest saved version, recorded with an export.
+    pub(super) fn head_version(&mut self) -> NativeResult<i64> {
+        self.file
+            .as_ref()
+            .ok_or("Save this project before exporting it.")?
+            .head_version()
             .map_err(message)
     }
 
-    pub(super) fn apply_generated(
-        &mut self,
-        snapshot: &RequirementsSnapshot,
-        candidate: &GenerationCandidate,
-        accepted_decision_indices: &[usize],
-    ) -> NativeResult<()> {
-        let journal = self
-            .journal
-            .as_ref()
-            .ok_or("Recovery is unavailable. Nothing was applied.")?;
-        self.session
+    /// Record a completed export as one undoable change, so clashes compare against it.
+    pub(super) fn record_export(&mut self, record: desegnos_core::ExportRecord) -> NativeResult<()> {
+        let session = self
+            .session
             .as_mut()
-            .ok_or("Create or open a project first.")?
-            .apply_generation(snapshot, candidate, accepted_decision_indices, |project| {
-                journal.append(project)
-            })
-            .map_err(message)
+            .ok_or("Create or open a project first.")?;
+        let revision = session.project().revision;
+        session
+            .execute(revision, Command::RecordExport { record }, |_| Ok(()))
+            .map_err(message)?;
+        self.autosave_if_due();
+        Ok(())
     }
 
-    pub(super) fn apply_draft(
+    /// Add a rendered website as one undo step and return the updated workspace.
+    pub(super) fn import_website(
         &mut self,
-        snapshot: &RequirementsSnapshot,
-        draft: &desegnos_core::GenerationDraft,
-    ) -> NativeResult<()> {
-        let journal = self
-            .journal
-            .as_ref()
-            .ok_or("Recovery is unavailable. Nothing was applied.")?;
-        self.session
+        imported: desegnos_core::ImportedWebsite,
+        pictures: BTreeMap<Uuid, String>,
+    ) -> NativeResult<WorkspaceView> {
+        let session = self
+            .session
             .as_mut()
-            .ok_or("Create or open a project first.")?
-            .apply_generation_draft(snapshot, draft, |project| journal.append(project))
-            .map_err(message)
+            .ok_or("Create or open a project first.")?;
+        let revision = session.project().revision;
+        session
+            .execute(
+                revision,
+                Command::ImportWebsite {
+                    pages: imported.pages,
+                    reference: imported.reference,
+                    pointers: imported.pointers,
+                    pictures,
+                },
+                |_| Ok(()),
+            )
+            .map_err(message)?;
+        self.autosave_if_due();
+        Ok(self.view())
+    }
+
+    /// Keep code: replace one pointer's comment with what its marked code now does.
+    pub(super) fn rewrite_pointer_comment(
+        &mut self,
+        pointer_id: Uuid,
+        comment: &str,
+        fingerprint: &str,
+    ) -> NativeResult<()> {
+        let session = self
+            .session
+            .as_mut()
+            .ok_or("Create or open a project first.")?;
+        let revision = session.project().revision;
+        let wiring = desegnos_core::PointerWiring {
+            fingerprint: fingerprint.to_owned(),
+            generated_comment: comment.to_owned(),
+        };
+        session
+            .execute(
+                revision,
+                Command::SetPointerWiring {
+                    pointer_id,
+                    wiring: Some(wiring),
+                    comment: Some(comment.to_owned()),
+                },
+                |_| Ok(()),
+            )
+            .map_err(message)?;
+        self.autosave_if_due();
+        Ok(())
     }
 
     pub(super) fn record_generated(
@@ -373,17 +348,36 @@ impl Workspace {
         candidate: &GenerationCandidate,
         attempt_ordinal: usize,
     ) -> NativeResult<()> {
-        let journal = self
-            .journal
-            .as_ref()
-            .ok_or("Project recovery is unavailable. The generated result is preserved.")?;
         self.session
             .as_mut()
             .ok_or("Create or open a project first.")?
-            .record_generation(snapshot, candidate, attempt_ordinal, |project| {
-                journal.append(project)
-            })
-            .map_err(message)
+            .record_generation(snapshot, candidate, attempt_ordinal, |_| Ok(()))
+            .map_err(message)?;
+        self.autosave_if_due();
+        Ok(())
+    }
+
+    /// Apply one validated reply and its generated pictures as one undo step.
+    pub(super) fn apply_generated(
+        &mut self,
+        snapshot: &RequirementsSnapshot,
+        candidate: &GenerationCandidate,
+        accepted_decision_indices: &[usize],
+        generated_pictures: &std::collections::BTreeMap<String, String>,
+    ) -> NativeResult<()> {
+        self.session
+            .as_mut()
+            .ok_or("Create or open a project first.")?
+            .apply_generation(
+                snapshot,
+                candidate,
+                accepted_decision_indices,
+                generated_pictures,
+                |_| Ok(()),
+            )
+            .map_err(message)?;
+        self.autosave_if_due();
+        Ok(())
     }
 
     pub fn initialize(
@@ -391,11 +385,6 @@ impl Workspace {
         directory: PathBuf,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut workspace = Self::from_directory(directory)?;
-        workspace.site = app
-            .state::<Mutex<crate::local_site::LocalSite>>()
-            .lock()
-            .ok()
-            .map(|site| site.watch());
         if let Ok(documents) = app.path().document_dir() {
             workspace.system_project_location =
                 crate::project_location::default_from_documents(&documents);
@@ -412,21 +401,19 @@ impl Workspace {
             directory,
             session: None,
             file: None,
-            journal: None,
+            stamp: None,
             ownership: None,
             saved_revision: None,
+            last_autosave: None,
             recoveries: vec![],
             recovery_error: None,
             prepared: None,
             recent_error: None,
             pending_save: None,
-            website_import: None,
             parked: vec![],
             order: vec![],
-            site: None,
         };
         state.refresh_recoveries();
-        state.clean_journals();
         Ok(state)
     }
 
@@ -451,109 +438,49 @@ impl Workspace {
         }
     }
 
-    fn read_recovery(
-        &self,
-        project_id: Uuid,
-    ) -> NativeResult<Option<(DecodedProject, RecoveryPointer)>> {
-        let file = File::open(self.pointer_path(project_id)).map_err(message)?;
-        if file.metadata().map_err(message)?.len() > 65_536 {
-            return Err("The recovery pointer is too large. The original remains on disk.".into());
-        }
-        let mut bytes = Vec::new();
-        file.take(65_537).read_to_end(&mut bytes).map_err(message)?;
+    fn read_pointer(&self, project_id: Uuid) -> NativeResult<SessionPointer> {
+        let bytes = fs::read(self.pointer_path(project_id)).map_err(message)?;
         if bytes.len() > 65_536 {
-            return Err("The recovery pointer is too large. The original remains on disk.".into());
+            return Err("The session record is too large. The original remains on disk.".into());
         }
-        let pointer: RecoveryPointer = serde_json::from_slice(&bytes).map_err(message)?;
-        if !valid_journal_file(&pointer.journal_file) {
-            return Err("The recovery pointer contains an invalid journal path.".into());
-        }
-        let document = Journal::recover_document(&self.directory.join(&pointer.journal_file))
-            .map_err(message)?;
-        if let Some(document) = &document
-            && (document.project.id != project_id
-                || pointer
-                    .saved_revision
-                    .is_some_and(|revision| revision > document.project.revision))
-        {
-            return Err("The recovery pointer and project identity or revision disagree. The originals remain on disk.".into());
-        }
-        let Some(document) = document else {
-            return Ok(None);
-        };
-        if Some(document.project.revision) == pointer.saved_revision
-            && pointer.saved_sha256.as_ref() == Some(&document.source_sha256)
-        {
-            return Ok(None);
-        }
-        Ok(Some((document, pointer)))
+        serde_json::from_slice(&bytes)
+            .map_err(|error| format!("The session record cannot be read: {error}"))
     }
 
-    /// Journals of sessions that are no longer open, and site files no journal references,
-    /// accumulate with every crash and every discarded recovery. Cleanup must never prevent
-    /// the editor from starting, so failures are only reported.
-    fn clean_journals(&self) {
-        let mut keep = BTreeSet::new();
-        let mut discarded = Vec::new();
-        let entries = match fs::read_dir(&self.directory) {
-            Ok(entries) => entries,
-            Err(error) => {
-                eprintln!("Could not clean recovery journals: {error}");
-                return;
-            }
+    fn write_pointer(&self, project_id: Uuid, path: &Path) -> NativeResult<()> {
+        let pointer = SessionPointer {
+            project_path: path.to_owned(),
         };
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            let is_discarded = name.ends_with(".recovery.discarded.json");
-            if !is_discarded && !name.ends_with(".recovery.json") {
-                continue;
-            }
-            // Recovery reads promise that unreadable originals stay on disk, so one pointer that
-            // cannot be understood cancels cleanup for the whole run: it may name any journal.
-            let pointer = fs::read(entry.path())
-                .map_err(|error| error.to_string())
-                .and_then(|bytes| {
-                    serde_json::from_slice::<RecoveryPointer>(&bytes)
-                        .map_err(|error| error.to_string())
-                });
-            let pointer = match pointer {
-                Ok(pointer) if valid_journal_file(&pointer.journal_file) => pointer,
-                Ok(_) => {
-                    eprintln!(
-                        "Could not clean recovery journals: {} has an invalid journal path.",
-                        entry.path().display()
-                    );
-                    return;
-                }
-                Err(error) => {
-                    eprintln!(
-                        "Could not clean recovery journals: {} could not be read: {error}",
-                        entry.path().display()
-                    );
-                    return;
-                }
-            };
-            keep.insert(pointer.journal_file);
-            if is_discarded && older_than(&entry, DISCARDED_RECOVERY_GRACE) {
-                discarded.push(entry.path());
-            }
+        write_markdown(
+            &self.pointer_path(project_id),
+            &serde_json::to_string(&pointer).map_err(message)?,
+        )
+        .map_err(message)
+    }
+
+    fn remove_pointer(&self, project_id: Uuid) {
+        let _ = fs::remove_file(self.pointer_path(project_id));
+    }
+
+    /// The unsaved work a crashed or closed session left in this project file.
+    fn read_recovery(&self, project_id: Uuid) -> NativeResult<Option<(AutosaveProject, PathBuf)>> {
+        let pointer = self.read_pointer(project_id)?;
+        if !pointer.project_path.exists() {
+            // The project moved or was deleted; its unsaved work went with it.
+            self.remove_pointer(project_id);
+            return Ok(None);
         }
-        for path in discarded {
-            // The journal becomes unreferenced, so cleanup can remove it too.
-            if let Err(error) = fs::remove_file(&path) {
-                eprintln!("Could not remove {}: {error}", path.display());
-            }
-        }
-        let is_closed = |project_id: Uuid| {
-            self.acquire_ownership(project_id)
-                .is_ok_and(|ownership| ownership.is_some())
+        let Some(work) = desegnos_storage::read_autosave(&pointer.project_path).map_err(message)?
+        else {
+            return Ok(None);
         };
-        if let Err(error) = desegnos_storage::clean_journals(&self.directory, &keep, is_closed) {
-            eprintln!("Could not clean recovery journals: {error}");
+        if work.project.id != project_id {
+            return Err(
+                "The session record and project identity disagree. The originals remain on disk."
+                    .into(),
+            );
         }
+        Ok(Some((work, pointer.project_path)))
     }
 
     fn refresh_recoveries(&mut self) {
@@ -596,23 +523,19 @@ impl Workspace {
                 }
             };
             match self.read_recovery(project_id) {
-                Ok(Some((document, pointer))) => {
-                    let modified = fs::metadata(self.directory.join(pointer.journal_file))
+                Ok(Some((work, path))) => {
+                    let modified = fs::metadata(&path)
                         .and_then(|metadata| metadata.modified())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
                     candidates.push(RecoveryCandidate {
                         info: RecoveryInfo {
                             project_id,
-                            name: document.project.name,
-                            revision: document.project.revision,
-                            saved_path: pointer
-                                .project_path
-                                .as_ref()
-                                .map(|path| path.to_string_lossy().into_owned()),
-                            edited_at_ms: modified
-                                .duration_since(SystemTime::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis()
+                            name: work.project.name,
+                            revision: work.project.revision,
+                            saved_path: Some(path.to_string_lossy().into_owned()),
+                            edited_at_ms: work
+                                .created_at
+                                .max(0)
                                 .try_into()
                                 .unwrap_or(u64::MAX),
                         },
@@ -638,17 +561,13 @@ impl Workspace {
     }
 
     pub(super) fn view(&self) -> WorkspaceView {
-        // Every published view reports the active revision, which is how the browser
-        // site server learns that the served project changed.
-        if let Some(site) = &self.site {
-            site.observe(
-                self.session
-                    .as_ref()
-                    .map(|session| (session.project().id, session.project().revision)),
-            );
-        }
         WorkspaceView {
             documents_key: documents_key(self.session.as_ref().map(Session::project)),
+            pointer_states: self
+                .session
+                .as_ref()
+                .map(|session| session.project().pointer_states())
+                .unwrap_or_default(),
             project: self.session.as_ref().map(|s| s.project().clone()),
             path: self
                 .file
@@ -682,20 +601,6 @@ impl Workspace {
             recovery_error: self.recovery_error.clone(),
             open_projects: self.open_projects(),
             any_dirty: self.parked.iter().any(OpenProject::dirty) || self.active_dirty(),
-            outside_edits: self
-                .file
-                .as_ref()
-                .map(ProjectFile::outside_edits)
-                .unwrap_or_default(),
-            site_warnings: self
-                .file
-                .as_ref()
-                .map(ProjectFile::site_warnings)
-                .unwrap_or_default(),
-            project_folder: self
-                .file
-                .as_ref()
-                .is_some_and(ProjectFile::is_project_folder),
         }
     }
 
@@ -714,26 +619,17 @@ impl Workspace {
             .is_some_and(|session| Some(session.project().revision) != self.saved_revision)
     }
 
-    /// Back to the start screen. The project lock is released; its recovery journal stays,
-    /// exactly as when another project replaces it.
-    /// "Discard and continue": the unsaved work is no longer offered for recovery and no longer
-    /// blocks opening the saved file. Its journal stays on disk; only the pointer moves aside.
+    /// "Discard and continue": the unsaved work is gone, so it is no longer offered for
+    /// recovery and no longer blocks opening the saved file.
     fn set_aside_recovery(&mut self) -> NativeResult<()> {
         let Some(id) = self.session.as_ref().map(|session| session.project().id) else {
             return Ok(());
         };
-        self.discard_recovery_pointer(id)
-    }
-
-    fn discard_recovery_pointer(&self, id: Uuid) -> NativeResult<()> {
-        let pointer = self.pointer_path(id);
-        if pointer.exists() {
-            fs::rename(
-                &pointer,
-                self.directory.join(format!("{id}.recovery.discarded.json")),
-            )
-            .map_err(message)?;
+        if let Some(file) = self.file.as_ref() {
+            file.discard_autosave().map_err(message)?;
         }
+        self.remove_pointer(id);
+        self.last_autosave = None;
         Ok(())
     }
 
@@ -750,9 +646,10 @@ impl Workspace {
         }
         self.session = None;
         self.file = None;
-        self.journal = None;
+        self.stamp = None;
         self.ownership = None;
         self.saved_revision = None;
+        self.last_autosave = None;
         self.prepared = None;
         self.pending_save = None;
         // The tab that followed the closed one, or the one before it when it was last.
@@ -774,8 +671,8 @@ impl Workspace {
         self.refresh_recoveries();
     }
 
-    /// Close one open project tab. Unsaved changes need an explicit discard; discarding keeps
-    /// the recovery journal on disk and only stops offering it, as closing the active project does.
+    /// Close one open project tab. Unsaved changes need an explicit discard; discarding drops
+    /// the autosave so the edits are no longer offered for recovery.
     fn close_tab(&mut self, project_id: Option<Uuid>, discard: bool) -> NativeResult<()> {
         let Some(target) = project_id.or_else(|| self.session.as_ref().map(|s| s.project().id))
         else {
@@ -806,12 +703,15 @@ impl Workspace {
                     "Save this project or explicitly discard its unsaved changes first.".into(),
                 );
             }
-            if let Err(error) = self.discard_recovery_pointer(target) {
+            if let Some(file) = project.file.as_ref()
+                && let Err(error) = file.discard_autosave()
+            {
                 self.parked.insert(index, project);
-                return Err(error);
+                return Err(message(error));
             }
+            self.remove_pointer(target);
         }
-        // Dropping the entry releases its lock; its recovery journal stays on disk.
+        // Dropping the entry releases its lock and leaves the saved project on disk.
         drop(project);
         self.order.retain(|other| *other != target);
         self.refresh_recoveries();
@@ -850,27 +750,32 @@ impl Workspace {
 
     /// Keep the active project open in the background so another one can become active.
     fn park_active(&mut self) {
+        if self.session.is_some() {
+            self.autosave_if_due();
+        }
         if let Some(session) = self.session.take() {
             self.parked.push(OpenProject {
                 session,
                 file: self.file.take(),
-                journal: self.journal.take(),
+                stamp: self.stamp.take(),
                 ownership: self.ownership.take(),
                 saved_revision: self.saved_revision.take(),
             });
         }
         self.prepared = None;
         self.pending_save = None;
+        self.last_autosave = None;
     }
 
     fn unpark(&mut self, project: OpenProject) {
         self.session = Some(project.session);
         self.file = project.file;
-        self.journal = project.journal;
+        self.stamp = project.stamp;
         self.ownership = project.ownership;
         self.saved_revision = project.saved_revision;
         self.prepared = None;
         self.pending_save = None;
+        self.last_autosave = None;
     }
 
     fn switch_to(&mut self, project_id: Uuid) -> NativeResult<()> {
@@ -917,17 +822,12 @@ impl Workspace {
 
     fn open_document(
         &mut self,
-        file: ProjectFile,
-        document: DecodedProject,
+        file: Option<ProjectDatabase>,
+        loaded: LoadedProject,
         discard_recovery: bool,
     ) -> OpenResult<()> {
-        let revision = document.project.revision;
-        self.start_with_recovery(
-            document.project,
-            Some(file),
-            Some(revision),
-            discard_recovery,
-        )?;
+        let revision = loaded.project.revision;
+        self.start_with_recovery(loaded.project, file, Some(revision), discard_recovery)?;
         self.remember_recent();
         Ok(())
     }
@@ -935,24 +835,10 @@ impl Workspace {
     /// Opens a project file in its own tab. Choosing the active project's own file again reloads
     /// it from disk with fresh history, unless it has unsaved edits, which are kept as they are.
     fn open_file_tab(&mut self, path: &std::path::Path, discard_recovery: bool) -> OpenResult<()> {
-        if path.is_dir() {
-            if let Some(file_path) = desegnos_storage::project_in_folder(path).map_err(message)? {
-                let document =
-                    desegnos_storage::load_project_document(&file_path).map_err(message)?;
-                if !path.join(".desegnos-site.json").exists() {
-                    desegnos_storage::manage_project_folder(
-                        &file_path,
-                        document.project.id,
-                        Default::default(),
-                    )
-                    .map_err(message)?;
-                }
-                return self.open_file_tab(&file_path, discard_recovery);
-            }
-            let file = desegnos_storage::import_detected_website(path, &self.project_location()?)
-                .map_err(message)?;
-            let document = file.load_document().map_err(message)?;
-            return self.open_tab(|state| state.open_document(file, document, discard_recovery));
+        if path.is_dir()
+            && let Some(file_path) = desegnos_storage::project_in_folder(path).map_err(message)?
+        {
+            return self.open_file_tab(&file_path, discard_recovery);
         }
         let active = self.file.as_ref().is_some_and(|file| {
             file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
@@ -976,16 +862,17 @@ impl Workspace {
             self.unpark(project);
             return Ok(());
         }
-        let (file, document) = if let Some(current) = self.file.as_ref().filter(|file| {
+        let (file, loaded) = if let Some(current) = self.file.as_ref().filter(|file| {
             file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
         }) {
-            current.reopen().map_err(message)?
+            // Reload through the handle this tab already holds.
+            (None, current.load().map_err(message)?)
         } else {
-            let file = ProjectFile::acquire(path).map_err(message)?;
-            let document = file.load_document().map_err(message)?;
-            (file, document)
+            let file = ProjectDatabase::open(path).map_err(message)?;
+            let loaded = file.load().map_err(message)?;
+            (Some(file), loaded)
         };
-        self.open_document(file, document, discard_recovery)
+        self.open_document(file, loaded, discard_recovery)
     }
 
     fn remember_recent(&mut self) {
@@ -999,7 +886,7 @@ impl Workspace {
     fn start(
         &mut self,
         project: Project,
-        file: Option<ProjectFile>,
+        file: Option<ProjectDatabase>,
         saved_revision: Option<u64>,
     ) -> NativeResult<()> {
         self.start_with_recovery(project, file, saved_revision, false)
@@ -1009,7 +896,7 @@ impl Workspace {
     fn start_with_recovery(
         &mut self,
         project: Project,
-        file: Option<ProjectFile>,
+        file: Option<ProjectDatabase>,
         saved_revision: Option<u64>,
         discard_recovery: bool,
     ) -> OpenResult<()> {
@@ -1033,105 +920,72 @@ impl Workspace {
             let ownership = self
                 .acquire_ownership(project.id)?
                 .ok_or("This project is already active in another Desegnos window.")?;
-            if self.pointer_path(project.id).exists() {
-                match self.read_recovery(project.id) {
-                    Ok(Some((recovered, _))) if recovered.project != project => {
+            // A reload keeps the tab's own file handle, so look at that one too.
+            let checked = file.as_ref().or_else(|| self.file.as_ref().filter(|_| same_project));
+            if let Some(file) = checked {
+                match file.autosave_work() {
+                    Ok(Some(work)) if work.project != project => {
                         if !discard_recovery {
                             return Err(ProjectOpenError::Recovery {
                                 code: "pendingRecovery",
                                 project_id: project.id,
-                                path: file
-                                    .as_ref()
-                                    .map(|file| file.path().to_path_buf())
-                                    .ok_or("This project has no saved file to open.")?,
+                                path: file.path().to_path_buf(),
                             });
                         }
-                        // Ownership stays held across dismissal and activation. Use the same
-                        // non-destructive pointer archival as dismiss_recovery.
-                        self.discard_recovery_pointer(project.id)?;
+                        // Ownership stays held across dismissal and activation.
+                        file.discard_autosave().map_err(message)?;
+                        self.remove_pointer(project.id);
                         self.refresh_recoveries();
                     }
                     Ok(_) => {}
                     Err(error) => {
                         return Err(format!(
-                            "This project's recovery record needs attention before it can be replaced: {error}"
-                        ).into());
+                            "This project's unsaved work needs attention before it can be replaced: {error}"
+                        )
+                        .into());
                     }
                 }
             }
             Some(ownership)
         };
-        self.activate(project, file, saved_revision, ownership, None)
+        self.activate(project, file, saved_revision, ownership)
             .map_err(Into::into)
     }
 
     fn activate(
         &mut self,
         project: Project,
-        file: Option<ProjectFile>,
+        file: Option<ProjectDatabase>,
         saved_revision: Option<u64>,
         ownership: Option<File>,
-        last_saved_path: Option<PathBuf>,
     ) -> NativeResult<()> {
         let session = Session::new(project).map_err(message)?;
-        let journal = Journal::new(&self.directory, session.project().id).map_err(message)?;
-        journal.append(session.project()).map_err(message)?;
-        self.write_pointer(
-            session.project().id,
-            &journal,
-            file.as_ref(),
-            saved_revision,
-            last_saved_path,
-        )?;
+        let id = session.project().id;
+        let stamp = match file.as_ref() {
+            Some(file) => Some(file.stamp().map_err(message)?),
+            // A reload keeps the handle and stamp the tab already holds.
+            None => None,
+        };
+        if let Some(file) = file.as_ref() {
+            self.write_pointer(id, file.path())?;
+        }
         self.pending_save = None;
-        if !self.order.contains(&session.project().id) {
-            self.order.push(session.project().id);
+        if !self.order.contains(&id) {
+            self.order.push(id);
         }
         self.session = Some(session);
-        self.file = file;
-        self.journal = Some(journal);
+        if let Some(file) = file {
+            self.file = Some(file);
+            self.stamp = stamp;
+        }
         if let Some(ownership) = ownership {
             self.ownership = Some(ownership);
         }
         self.saved_revision = saved_revision;
+        self.last_autosave = None;
         self.prepared = None;
         self.refresh_recoveries();
         Ok(())
-    }
-
-    fn write_pointer(
-        &self,
-        project_id: Uuid,
-        journal: &Journal,
-        file: Option<&ProjectFile>,
-        saved_revision: Option<u64>,
-        last_saved_path: Option<PathBuf>,
-    ) -> NativeResult<()> {
-        let saved = file
-            .map(|file| -> NativeResult<DecodedProject> {
-                let saved = file.saved_document().map_err(message)?;
-                if saved.project.id != project_id || Some(saved.project.revision) != saved_revision {
-                    return Err("The saved file changed before its recovery state could be recorded. The project remains unsaved.".into());
-                }
-                Ok(saved)
-            })
-            .transpose()?;
-        let pointer = RecoveryPointer {
-            journal_file: journal
-                .path()
-                .file_name()
-                .ok_or("Invalid recovery filename.")?
-                .to_string_lossy()
-                .into_owned(),
-            saved_revision,
-            saved_sha256: saved.map(|saved| saved.source_sha256),
-            project_path: file.map(|f| f.path().to_owned()).or(last_saved_path),
-        };
-        write_markdown(
-            &self.pointer_path(project_id),
-            &serde_json::to_string(&pointer).map_err(message)?,
-        )
-        .map_err(message)
     }
 
     fn check_snapshot(&self, project: &Project) -> NativeResult<()> {
@@ -1146,6 +1000,27 @@ impl Workspace {
         Ok(())
     }
 
+    /// Keep unsaved in-memory edits on the hidden autosave branch every few seconds.
+    fn autosave_if_due(&mut self) {
+        if !self.active_dirty() || self.last_autosave.is_some_and(|at| at.elapsed() < AUTOSAVE_INTERVAL) {
+            return;
+        }
+        let (Some(session), Some(file)) = (self.session.as_ref(), self.file.as_ref()) else {
+            return;
+        };
+        match file.autosave(session.project(), desegnos_storage::project_db::now_millis()) {
+            Ok(()) => self.last_autosave = Some(Instant::now()),
+            Err(error) => eprintln!("Could not keep unsaved work: {error}"),
+        }
+    }
+
+    fn take_version_labels(&mut self) -> Vec<String> {
+        self.session
+            .as_mut()
+            .map(Session::take_version_labels)
+            .unwrap_or_default()
+    }
+
     fn save_destination(&self, path: Option<PathBuf>) -> NativeResult<SaveDestination> {
         let Some(path) = path else {
             return if self.file.is_some() {
@@ -1158,9 +1033,7 @@ impl Workspace {
                     project.id,
                 )
                 .map_err(message)?;
-                Ok(SaveDestination::Chosen(
-                    ProjectFile::acquire(&path).map_err(message)?,
-                ))
+                Ok(SaveDestination::New(path))
             };
         };
         let path = if path.extension().is_none() {
@@ -1173,48 +1046,117 @@ impl Workspace {
         });
         if current {
             Ok(SaveDestination::Current)
+        } else if path.exists() {
+            Ok(SaveDestination::Existing(path))
         } else {
-            Ok(SaveDestination::Chosen(
-                ProjectFile::acquire(&path).map_err(message)?,
-            ))
+            Ok(SaveDestination::New(path))
         }
     }
 
-    fn destination_file<'a>(
-        &'a self,
-        destination: &'a SaveDestination,
-    ) -> NativeResult<&'a ProjectFile> {
+    fn destination_path(&self, destination: &SaveDestination) -> NativeResult<PathBuf> {
         match destination {
             SaveDestination::Current => self
                 .file
                 .as_ref()
+                .map(|file| file.path().to_path_buf())
                 .ok_or_else(|| "Choose a project file first.".into()),
-            SaveDestination::Chosen(file) => Ok(file),
+            SaveDestination::New(path) | SaveDestination::Existing(path) => Ok(path.clone()),
         }
     }
 
-    fn finish_save(&mut self, project: &Project, destination: SaveDestination) -> NativeResult<()> {
-        self.write_pointer(
-            project.id,
-            self.journal.as_ref().ok_or("Recovery is unavailable.")?,
-            Some(self.destination_file(&destination)?),
-            Some(project.revision),
-            None,
-        )?;
-        if let SaveDestination::Chosen(file) = destination {
-            self.file = Some(file);
+    fn finish_save(&mut self, project: &Project) -> NativeResult<()> {
+        self.stamp = self
+            .file
+            .as_ref()
+            .map(|file| file.stamp().map_err(message))
+            .transpose()?;
+        if let Some(file) = self.file.as_ref() {
+            self.write_pointer(project.id, file.path())?;
         }
         self.saved_revision = Some(project.revision);
+        self.last_autosave = None;
         self.remember_recent();
         Ok(())
+    }
+
+    /// Write the project to its destination. A new path becomes the file this tab saves to.
+    fn write_destination(
+        &mut self,
+        destination: SaveDestination,
+        project: &Project,
+        labels: &[String],
+        label: Option<&str>,
+    ) -> NativeResult<()> {
+        let now = desegnos_storage::project_db::now_millis();
+        match destination {
+            SaveDestination::Current => {
+                let file = self
+                    .file
+                    .as_ref()
+                    .ok_or("Choose a project file first.")?;
+                let stamp = self.stamp.clone();
+                file.save_checked(project, stamp.as_ref(), labels, label)
+                    .map_err(|failure| failure.message)?;
+            }
+            SaveDestination::New(path) => {
+                let file = ProjectDatabase::create(&path, project, now).map_err(message)?;
+                self.file = Some(file);
+            }
+            SaveDestination::Existing(path) => {
+                let file = ProjectDatabase::open(&path).map_err(message)?;
+                file.save(project, labels, label).map_err(message)?;
+                self.file = Some(file);
+            }
+        }
+        self.finish_save(project)
+    }
+
+    /// The checked write used by the editor's Save: conflicts keep their established choices.
+    fn write_destination_checked(
+        &mut self,
+        destination: SaveDestination,
+        project: &Project,
+        labels: &[String],
+        label: Option<&str>,
+    ) -> std::result::Result<(), Box<SaveFailure>> {
+        let now = desegnos_storage::project_db::now_millis();
+        match destination {
+            SaveDestination::Current => {
+                let file = self.file.as_ref().ok_or_else(|| {
+                    SaveFailure::new(SaveFailureKind::Io, "Choose a project file first.")
+                })?;
+                let stamp = self.stamp.clone();
+                file.save_checked(project, stamp.as_ref(), labels, label)?;
+            }
+            SaveDestination::New(path) => {
+                let file = ProjectDatabase::create(&path, project, now)
+                    .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))?;
+                self.file = Some(file);
+            }
+            SaveDestination::Existing(path) => {
+                let file = ProjectDatabase::open(&path)
+                    .map_err(|error| SaveFailure::new(SaveFailureKind::Unreadable, error.to_string()))?;
+                let saved = file.save_checked(project, None, labels, label);
+                if saved.is_ok() {
+                    self.file = Some(file);
+                }
+                saved?;
+            }
+        }
+        self.finish_save(project)
+            .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error))
     }
 
     fn create_in_folder(&mut self, project: Project, parent: Option<PathBuf>) -> NativeResult<()> {
         let parent = parent.map(Ok).unwrap_or_else(|| self.project_location())?;
         let path = desegnos_storage::create_project_folder(&parent, &project.name, project.id)
             .map_err(message)?;
-        let file = ProjectFile::acquire(&path).map_err(message)?;
-        file.save(&project).map_err(message)?;
+        let file = ProjectDatabase::create(
+            &path,
+            &project,
+            desegnos_storage::project_db::now_millis(),
+        )
+        .map_err(message)?;
         let revision = project.revision;
         self.open_tab(|state| state.start(project, Some(file), Some(revision)))?;
         self.remember_recent();
@@ -1224,19 +1166,33 @@ impl Workspace {
     fn save_snapshot(&mut self, project: &Project, path: Option<PathBuf>) -> NativeResult<()> {
         self.check_snapshot(project)?;
         self.pending_save = None;
+        let labels = self.take_version_labels();
         let destination = self.save_destination(path)?;
-        self.destination_file(&destination)?
-            .save(project)
-            .map_err(message)?;
-        self.finish_save(project, destination)
+        self.write_destination(destination, project, &labels, None)
     }
 
+    /// Write a new project file holding only the current version.
+    fn save_copy(&mut self, project: &Project, path: PathBuf) -> NativeResult<()> {
+        self.check_snapshot(project)?;
+        let path = if path.extension().is_none() {
+            path.with_extension("desegnos")
+        } else {
+            path
+        };
+        ProjectDatabase::create(&path, project, desegnos_storage::project_db::now_millis())
+            .map_err(message)?;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn save_conflict(
         &mut self,
         project: &Project,
         destination: SaveDestination,
         failure: SaveFailure,
         save_as: bool,
+        labels: Vec<String>,
+        label: Option<String>,
     ) -> NativeResult<SaveProjectOutcome> {
         if !matches!(
             failure.kind,
@@ -1246,10 +1202,9 @@ impl Workspace {
         ) {
             return Err(failure.message);
         }
-        let file = self.destination_file(&destination)?;
-        let path = file.path().to_string_lossy().into_owned();
-        let file_name = file
-            .path()
+        let path = self.destination_path(&destination)?;
+        let path = path.to_string_lossy().into_owned();
+        let file_name = Path::new(&path)
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "website.desegnos".into());
@@ -1289,6 +1244,8 @@ impl Workspace {
             actual: failure.actual,
             can_replace,
             save_as,
+            labels,
+            label,
         });
         Ok(SaveProjectOutcome::Conflict { conflict })
     }
@@ -1298,18 +1255,24 @@ impl Workspace {
         project: &Project,
         path: Option<PathBuf>,
         save_as: bool,
+        label: Option<String>,
     ) -> NativeResult<SaveProjectOutcome> {
         self.check_snapshot(project)?;
         self.pending_save = None;
+        let labels = self.take_version_labels();
         let destination = self.save_destination(path)?;
-        match self.destination_file(&destination)?.save_checked(project) {
-            Ok(()) => {
-                self.finish_save(project, destination)?;
-                Ok(SaveProjectOutcome::Saved {
-                    workspace: Box::new(self.view()),
-                })
+        match self.write_destination_checked(
+            destination.clone(),
+            project,
+            &labels,
+            label.as_deref(),
+        ) {
+            Ok(()) => Ok(SaveProjectOutcome::Saved {
+                workspace: Box::new(self.view()),
+            }),
+            Err(failure) => {
+                self.save_conflict(project, destination, *failure, save_as, labels, label)
             }
-            Err(failure) => self.save_conflict(project, destination, *failure, save_as),
         }
     }
 
@@ -1348,21 +1311,65 @@ impl Workspace {
         let project = self.project()?.clone();
         let observed = pending
             .actual
-            .as_ref()
+            .clone()
             .ok_or("This file cannot be replaced. Save a copy with a new name.")?;
-        match self.destination_file(&pending.destination)?.save_replacing(
-            &project,
-            observed,
-            pending.save_as,
-        ) {
+        let now = desegnos_storage::project_db::now_millis();
+        let result: NativeResult<()> = (|| {
+            match &pending.destination {
+                SaveDestination::Current => {
+                    let file = self.file.as_ref().ok_or("Choose a project file first.")?;
+                    file.save_replacing(
+                        &project,
+                        &observed,
+                        pending.save_as,
+                        &pending.labels,
+                        pending.label.as_deref(),
+                    )
+                    .map(|_| ())
+                    .map_err(|failure| failure.message)?;
+                }
+                SaveDestination::New(path) => {
+                    let file = ProjectDatabase::create(path, &project, now).map_err(message)?;
+                    self.file = Some(file);
+                }
+                SaveDestination::Existing(path) => {
+                    let file = ProjectDatabase::open(path).map_err(message)?;
+                    file.save_replacing(
+                        &project,
+                        &observed,
+                        true,
+                        &pending.labels,
+                        pending.label.as_deref(),
+                    )
+                    .map(|_| ())
+                    .map_err(|failure| failure.message)?;
+                    self.file = Some(file);
+                }
+            }
+            Ok(())
+        })();
+        match result {
             Ok(()) => {
-                self.finish_save(&project, pending.destination)?;
+                self.finish_save(&project)?;
                 Ok(SaveProjectOutcome::Saved {
                     workspace: Box::new(self.view()),
                 })
             }
-            Err(failure) => {
-                self.save_conflict(&project, pending.destination, *failure, pending.save_as)
+            Err(error) => {
+                let failure = SaveFailure {
+                    kind: SaveFailureKind::Io,
+                    message: error,
+                    expected: pending.actual.clone(),
+                    actual: None,
+                };
+                self.save_conflict(
+                    &project,
+                    pending.destination,
+                    failure,
+                    pending.save_as,
+                    pending.labels,
+                    pending.label,
+                )
             }
         }
     }
@@ -1378,9 +1385,14 @@ impl Workspace {
         let _ownership = self
             .acquire_ownership(project_id)?
             .ok_or("This project is already active in another Desegnos window.")?;
-        self.read_recovery(project_id)?
+        let (_, path) = self
+            .read_recovery(project_id)?
             .ok_or("There are no unsaved changes to recover for this project.")?;
-        self.discard_recovery_pointer(project_id)?;
+        ProjectDatabase::open(&path)
+            .map_err(message)?
+            .discard_autosave()
+            .map_err(message)?;
+        self.remove_pointer(project_id);
         self.refresh_recoveries();
         Ok(())
     }
@@ -1412,26 +1424,12 @@ impl Workspace {
         let ownership = self
             .acquire_ownership(project_id)?
             .ok_or("This project is already active in another Desegnos window.")?;
-        let (document, pointer) = self
+        let (work, path) = self
             .read_recovery(project_id)?
             .ok_or("There are no unsaved changes to recover for this project.")?;
-        let project = document.project;
-        let file = pointer.project_path.as_ref().and_then(|path| {
-            let file = ProjectFile::acquire(path).ok()?;
-            let saved = file.load_document().ok()?;
-            let matches = saved.project.id == project.id
-                && Some(saved.project.revision) == pointer.saved_revision
-                && Some(&saved.source_sha256) == pointer.saved_sha256.as_ref();
-            matches.then_some(file)
-        });
-        let saved_revision = file.as_ref().and(pointer.saved_revision);
-        self.activate(
-            project,
-            file,
-            saved_revision,
-            Some(ownership),
-            pointer.project_path,
-        )?;
+        let file = ProjectDatabase::open(&path).map_err(message)?;
+        let saved_revision = file.load().map(|loaded| loaded.project.revision).ok();
+        self.activate(work.project, Some(file), saved_revision, Some(ownership))?;
         Ok(())
     }
 }
@@ -1572,17 +1570,92 @@ pub fn import_context(
         )?;
     context.attach_matching_pages = attach_matching_pages.unwrap_or(true);
     let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let journal = journal.as_ref().ok_or("Create or open a project first.")?;
-    session
+    state
+        .session
         .as_mut()
         .ok_or("Create or open a project first.")?
-        .import_context(revision, context, |project| journal.append(project))
+        .import_context(revision, context, |_| Ok(()))
         .map_err(message)?;
     state.prepared = None;
+    state.autosave_if_due();
     Ok(state.view())
+}
+
+impl Workspace {
+    /// Save first, so switching alternatives never loses work on the current one.
+    fn save_before_switch(&mut self) -> NativeResult<()> {
+        if !self.active_dirty() {
+            return Ok(());
+        }
+        let project = self
+            .session
+            .as_ref()
+            .ok_or("Create or open a project first.")?
+            .project()
+            .clone();
+        self.save_snapshot(&project, None)
+    }
+
+    fn switch_alternative(&mut self, name: &str) -> NativeResult<()> {
+        self.save_before_switch()?;
+        let file = self.file.as_ref().ok_or("Save this project first.")?;
+        let loaded = file.switch_branch(name).map_err(message)?;
+        let saved_revision = loaded.project.revision;
+        let session = Session::new(loaded.project).map_err(message)?;
+        self.session = Some(session);
+        self.saved_revision = Some(saved_revision);
+        self.stamp = Some(file.stamp().map_err(message)?);
+        self.last_autosave = None;
+        self.prepared = None;
+        self.pending_save = None;
+        self.refresh_recoveries();
+        Ok(())
+    }
+
+    fn create_alternative(&mut self, name: &str) -> NativeResult<()> {
+        self.save_before_switch()?;
+        let file = self.file.as_ref().ok_or("Save this project first.")?;
+        file.create_branch(name).map_err(message)?;
+        self.stamp = Some(file.stamp().map_err(message)?);
+        self.saved_revision = self.session.as_ref().map(|session| session.project().revision);
+        Ok(())
+    }
+
+    fn rename_alternative(&mut self, from: &str, to: &str) -> NativeResult<()> {
+        let file = self.file.as_ref().ok_or("Create or open a project first.")?;
+        file.rename_branch(from, to).map_err(message)?;
+        Ok(())
+    }
+
+    fn delete_alternative(&mut self, name: &str) -> NativeResult<()> {
+        let file = self.file.as_ref().ok_or("Create or open a project first.")?;
+        let history = file.history().map_err(message)?;
+        if history.branch == name {
+            // Leave the alternative before deleting it; switching saves first.
+            self.switch_alternative(&history.primary_branch)?;
+        }
+        let file = self.file.as_ref().ok_or("Create or open a project first.")?;
+        file.delete_branch(name).map_err(message)?;
+        self.stamp = Some(file.stamp().map_err(message)?);
+        Ok(())
+    }
+
+    /// The saved version becomes the current state as one undo step.
+    fn restore_version(&mut self, version: i64) -> NativeResult<()> {
+        let file = self.file.as_ref().ok_or("Create or open a project first.")?;
+        let restored = file.restore(version).map_err(message)?;
+        let stamp = file.stamp().map_err(message)?;
+        let session = self
+            .session
+            .as_mut()
+            .ok_or("Create or open a project first.")?;
+        session.restore(restored, |_| Ok(())).map_err(message)?;
+        self.saved_revision = Some(session.project().revision);
+        self.stamp = Some(stamp);
+        self.last_autosave = None;
+        self.pending_save = None;
+        Ok(())
+    }
 }
 
 #[tauri::command(async)]
@@ -1592,95 +1665,14 @@ pub fn edit_project(
     command: Command,
 ) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let journal = journal.as_ref().ok_or("Create or open a project first.")?;
-    session
+    state
+        .session
         .as_mut()
         .ok_or("Create or open a project first.")?
-        .execute(revision, command, |p| journal.append(p))
+        .execute(revision, command, |_| Ok(()))
         .map_err(message)?;
+    state.autosave_if_due();
     Ok(state.view())
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ElementEditView {
-    workspace: WorkspaceView,
-    element: Option<desegnos_core::ElementTarget>,
-}
-
-#[tauri::command(async)]
-pub fn edit_page_source(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    html: Option<String>,
-    css: Option<String>,
-    javascript: Option<String>,
-) -> desegnos_core::SourceEditResult<WorkspaceView> {
-    let mut state = state.lock().map_err(|_| {
-        desegnos_core::SourceEditError::general(
-            "The workspace is busy. Keep your text and try again.",
-        )
-    })?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session
-        .as_mut()
-        .ok_or_else(|| desegnos_core::SourceEditError::general("Open a project first."))?;
-    if session.project().id != project_id {
-        return Err(desegnos_core::SourceEditError::general(
-            "Return to the project that owns this page.",
-        ));
-    }
-    let journal = journal.as_ref().ok_or_else(|| {
-        desegnos_core::SourceEditError::general(
-            "Recovery is unavailable. Keep your text; nothing was changed.",
-        )
-    })?;
-    session.edit_page_source(
-        revision,
-        page_id,
-        &desegnos_core::PageSourceEdit {
-            html,
-            css,
-            javascript,
-        },
-        |project| journal.append(project),
-    )?;
-    state.prepared = None;
-    Ok(state.view())
-}
-
-#[tauri::command]
-pub fn open_found_source(
-    window: tauri::WebviewWindow,
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    target: desegnos_core::ElementTarget,
-) -> NativeResult<()> {
-    if window.label() != "editor" {
-        return Err("Only the editor can open found-content sources.".into());
-    }
-    let url = {
-        let state = state.lock().map_err(message)?;
-        let project = state.project()?;
-        if project.id != project_id {
-            return Err("Return to the project that owns this item.".into());
-        }
-        project
-            .found_source(page_id, &target)
-            .map_err(message)?
-            .ok_or("This item has no online source.")?
-    };
-    crate::system_open::open(url).map_err(|_| {
-        "Couldn't open a browser. Copy the source address and open it manually.".into()
-    })
 }
 
 /// A web link the user clicked in a preview, opened in their browser after they confirm it.
@@ -1708,559 +1700,29 @@ fn preview_link(url: &str) -> NativeResult<desegnos_ai::WebUrl> {
     Ok(parsed)
 }
 
-#[tauri::command]
-pub fn get_page_source_map(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-) -> desegnos_core::SourceEditResult<desegnos_core::PageSourceMap> {
-    let state = state
-        .lock()
-        .map_err(|_| desegnos_core::SourceEditError::general("The workspace is unavailable."))?;
-    let project = state
-        .project()
-        .map_err(desegnos_core::SourceEditError::general)?;
-    if project.id != project_id {
-        return Err(desegnos_core::SourceEditError::general(
-            "Return to the project that owns this page.",
-        ));
-    }
-    project.page_source_map(page_id)
-}
-
-/// Every iframe on a page, with its editor ID and resolved target document.
-#[tauri::command]
-pub fn get_frame_targets(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-) -> NativeResult<Vec<desegnos_core::PageFrameTarget>> {
-    let state = state.lock().map_err(message)?;
-    let project = state.project()?;
-    if project.id != project_id {
-        return Err("Return to the project that owns this page.".into());
-    }
-    project.frame_targets(page_id).map_err(message)
-}
-
-#[tauri::command]
-pub fn inspect_element(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    target: desegnos_core::ElementTarget,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<desegnos_core::ElementDetails> {
-    let state = state.lock().map_err(message)?;
-    let project = state
-        .session
-        .as_ref()
-        .ok_or("Open a project first.")?
-        .project();
-    if project.id != project_id {
-        return Err("Return to the project that owns this element.".into());
-    }
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    project
-        .inspect_element_in(&document, &target)
-        .map_err(message)
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FrameDocumentView {
-    iframe_id: String,
-    src: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
-    document: desegnos_core::DocumentTarget,
-    source_sha256: String,
-    content: desegnos_core::SiteContent,
-}
-
-/// Framed documents rendered statically and edited on the canvas.
-#[tauri::command]
-pub fn get_frame_documents(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-) -> NativeResult<Vec<FrameDocumentView>> {
-    let state = state.lock().map_err(message)?;
-    let project = state.project()?;
-    if project.id != project_id {
-        return Err("Return to the project that owns this page.".into());
-    }
-    let targets = project.frame_targets(page_id).map_err(message)?;
-    let mut documents = Vec::new();
-    for target in targets {
-        let Some(document) = target.document else {
-            continue;
-        };
-        // A page that frames itself has no editable inner document.
-        if document == desegnos_core::DocumentTarget::page(page_id) {
-            continue;
-        }
-        let Ok(content) = project.document_content(&document) else {
-            continue;
-        };
-        let Ok(content) = project.resolve_site_content(&content) else {
-            continue;
-        };
-        let Some(source_sha256) = target.source_sha256 else {
-            continue;
-        };
-        let path = match &document {
-            desegnos_core::DocumentTarget::SiteFile { path } => Some(path.clone()),
-            desegnos_core::DocumentTarget::Page { page_id } => project
-                .website
-                .as_ref()
-                .and_then(|site| site.page_files.get(page_id).cloned()),
-        };
-        documents.push(FrameDocumentView {
-            iframe_id: target.iframe_id,
-            src: target.src,
-            path,
-            document,
-            source_sha256,
-            content,
-        });
-    }
-    Ok(documents)
-}
-
-/// Give one element its editor ID, so a framed request can name its host iframe.
-#[tauri::command]
-pub fn ensure_element_id(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    target: desegnos_core::ElementTarget,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<ElementEditView> {
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project that owns this element.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let element = session
-        .ensure_element_id_document(revision, &document, &target, |next| journal.append(next))
-        .map_err(message)?;
-    Ok(ElementEditView {
-        workspace: state.view(),
-        element,
-    })
-}
-
-#[tauri::command(async)]
-pub fn edit_element(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    target: desegnos_core::ElementTarget,
-    change: desegnos_core::ElementEdit,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<ElementEditView> {
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project that owns this element.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let element = session
-        .edit_element_document(revision, &document, &target, &change, |next| {
-            journal.append(next)
-        })
-        .map_err(message)?;
-    Ok(ElementEditView {
-        workspace: state.view(),
-        element,
-    })
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ElementBatchEditView {
-    workspace: WorkspaceView,
-    elements: Vec<Option<desegnos_core::ElementTarget>>,
-}
-
-/// Apply several element changes to one document as one revision and one history step.
-#[tauri::command(async)]
-pub fn edit_elements(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    edits: Vec<desegnos_core::ElementBatchEdit>,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<ElementBatchEditView> {
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project that owns these elements.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let elements = session
-        .edit_elements_document(revision, &document, &edits, |next| journal.append(next))
-        .map_err(message)?;
-    Ok(ElementBatchEditView {
-        workspace: state.view(),
-        elements,
-    })
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AcrossPagesView {
-    workspace: WorkspaceView,
-    changes: Vec<desegnos_core::AcrossPagesChange>,
-}
-
-/// The other pages and framed site files that contain this element.
-#[tauri::command]
-pub fn element_matches(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    target: desegnos_core::ElementTarget,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<Vec<desegnos_core::AcrossPagesMatch>> {
-    let state = state.lock().map_err(message)?;
-    let session = state.session.as_ref().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project that owns these elements.".into());
-    }
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    session
-        .project()
-        .element_matches(&document, &target)
-        .map_err(message)
-}
-
-/// Apply one element change to the same element on the chosen pages as one history step.
-#[tauri::command(async)]
-pub fn edit_element_across_pages(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    target: desegnos_core::ElementTarget,
-    change: desegnos_core::ElementEdit,
-    documents: Vec<desegnos_core::DocumentTarget>,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<AcrossPagesView> {
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project that owns these elements.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let request = desegnos_core::AcrossPagesEdit {
-        document,
-        target,
-        edit: change,
-        documents,
-    };
-    let changes = session
-        .edit_element_across_documents(revision, &request, |next| journal.append(next))
-        .map_err(message)?;
-    Ok(AcrossPagesView {
-        workspace: state.view(),
-        changes,
-    })
-}
-
-/// Steps the selected element back to its previous version; other changes stay.
-#[tauri::command(async)]
-pub fn undo_element(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    target: desegnos_core::ElementTarget,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<ElementEditView> {
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project that owns this element.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let element = session
-        .undo_element_document(revision, &document, &target, |next| journal.append(next))
-        .map_err(message)?;
-    Ok(ElementEditView {
-        workspace: state.view(),
-        element,
-    })
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LayerPasteView {
-    workspace: WorkspaceView,
-    selection: desegnos_core::LayerPasteSelection,
-}
-
-#[tauri::command]
-pub async fn copy_layer(
-    app: AppHandle,
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    target: desegnos_core::LayerTarget,
-    visual_styles: Vec<desegnos_core::ElementStyleEdit>,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<()> {
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let packet = {
-        let state = state.lock().map_err(message)?;
-        let project = state
-            .session
-            .as_ref()
-            .ok_or("Open a project first.")?
-            .project();
-        if project.id != project_id || project.revision != revision {
-            return Err("The project changed before the layer was copied. Select it again.".into());
-        }
-        project
-            .copy_layer_in(&document, &target, &visual_styles)
-            .map_err(message)?
-            .to_json()
-            .map_err(message)?
-    };
-    // OS clipboard owners can need their GUI thread to answer a transfer.
-    // Never hold the workspace lock or use the GUI thread while waiting.
-    tauri::async_runtime::spawn_blocking(move || crate::clipboard::write(&app, packet))
-        .await
-        .map_err(message)?
-}
-
-/// Copy several elements from one document into the OS clipboard as one packet.
-#[tauri::command]
-pub async fn copy_elements(
-    app: AppHandle,
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    targets: Vec<desegnos_core::ElementTarget>,
-    visual_styles: Vec<Vec<desegnos_core::ElementStyleEdit>>,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<()> {
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let packet = {
-        let state = state.lock().map_err(message)?;
-        let project = state
-            .session
-            .as_ref()
-            .ok_or("Open a project first.")?
-            .project();
-        if project.id != project_id || project.revision != revision {
-            return Err(
-                "The project changed before the elements were copied. Select them again.".into(),
-            );
-        }
-        project
-            .copy_elements_in(&document, &targets, &visual_styles)
-            .map_err(message)?
-            .to_json()
-            .map_err(message)?
-    };
-    tauri::async_runtime::spawn_blocking(move || crate::clipboard::write(&app, packet))
-        .await
-        .map_err(message)?
-}
-
-#[tauri::command]
-pub async fn cut_layer(
-    app: AppHandle,
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    target: desegnos_core::LayerTarget,
-    visual_styles: Vec<desegnos_core::ElementStyleEdit>,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<WorkspaceView> {
-    // Keep the original unless the OS has accepted the complete clipboard
-    // packet. A concurrent edit while the transfer runs must never be cut.
-    copy_layer(
-        app,
-        state.clone(),
-        project_id,
-        page_id,
-        revision,
-        target.clone(),
-        visual_styles,
-        document.clone(),
-    )
-    .await?;
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id || session.project().revision != revision {
-        return Err("The project changed while copying. The layer was copied, but nothing was removed. Select it again to cut.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    match target {
-        desegnos_core::LayerTarget::Request { region_id } => session
-            .execute(
-                revision,
-                desegnos_core::Command::RemoveRegion { page_id, region_id },
-                |next| journal.append(next),
-            )
-            .map_err(message)?,
-        desegnos_core::LayerTarget::Element { target } => {
-            session
-                .edit_element_document(
-                    revision,
-                    &document,
-                    &target,
-                    &desegnos_core::ElementEdit::Remove,
-                    |next| journal.append(next),
-                )
-                .map_err(message)?;
-        }
-    }
-    Ok(state.view())
-}
-
-#[tauri::command]
-pub async fn paste_layer(
-    app: AppHandle,
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    revision: u64,
-    after: Option<desegnos_core::ElementTarget>,
-    document: Option<desegnos_core::DocumentTarget>,
-) -> NativeResult<LayerPasteView> {
-    let text = tauri::async_runtime::spawn_blocking(move || crate::clipboard::read(&app))
-        .await
-        .map_err(message)??;
-    let packet = desegnos_core::LayerClipboard::from_json(&text).map_err(message)?;
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project where you want to paste this layer.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    let document = document.unwrap_or(desegnos_core::DocumentTarget::Page { page_id });
-    let selection = session
-        .paste_layer_document(revision, &document, &packet, after.as_ref(), |next| {
-            journal.append(next)
-        })
-        .map_err(message)?;
-    Ok(LayerPasteView {
-        workspace: state.view(),
-        selection,
-    })
-}
-
-#[tauri::command]
-pub fn refresh_element_bounds(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    viewport: Viewport,
-    bounds: Vec<desegnos_core::ElementBounds>,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project that owns these requests.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    session
-        .refresh_element_bounds(page_id, viewport, &bounds, |next| journal.append(next))
-        .map_err(message)?;
-    Ok(state.view())
-}
-
-#[tauri::command(async)]
-pub fn refresh_element_target_bounds(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    page_id: Uuid,
-    viewport: Viewport,
-    bounds: Vec<desegnos_core::ElementTargetBounds>,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let session = session.as_mut().ok_or("Open a project first.")?;
-    if session.project().id != project_id {
-        return Err("Return to the project that owns these requests.".into());
-    }
-    let journal = journal.as_ref().ok_or("Open a project first.")?;
-    session
-        .refresh_element_target_bounds(page_id, viewport, &bounds, |next| journal.append(next))
-        .map_err(message)?;
-    Ok(state.view())
-}
-
 #[tauri::command(async)]
 pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let journal = journal.as_ref().ok_or("Create or open a project first.")?;
-    session
+    state
+        .session
         .as_mut()
         .ok_or("Create or open a project first.")?
-        .undo(|p| journal.append(p))
+        .undo(|_| Ok(()))
         .map_err(message)?;
+    state.autosave_if_due();
     Ok(state.view())
 }
 
 #[tauri::command(async)]
 pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    let Workspace {
-        session, journal, ..
-    } = &mut *state;
-    let journal = journal.as_ref().ok_or("Create or open a project first.")?;
-    session
+    state
+        .session
         .as_mut()
         .ok_or("Create or open a project first.")?
-        .redo(|p| journal.append(p))
+        .redo(|_| Ok(()))
         .map_err(message)?;
+    state.autosave_if_due();
     Ok(state.view())
 }
 
@@ -2278,37 +1740,6 @@ pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
 #[serde(untagged)]
 pub enum OpenProjectResult {
     Workspace(Box<WorkspaceView>),
-    Website {
-        website: Box<crate::website_import::FolderSelection>,
-    },
-}
-#[tauri::command]
-pub async fn edit_website_folder(
-    app: AppHandle,
-    generation: State<'_, Mutex<crate::generation::GenerationService>>,
-    imports: State<'_, Mutex<crate::website_import::WebsiteImports>>,
-    folder_id: Uuid,
-    discard_recovery: Option<bool>,
-) -> OpenResult<WorkspaceView> {
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
-    let path = imports.lock().map_err(message)?.path(folder_id)?;
-    // Snapshotting pictures and writing the initial archive can take seconds. Keep the UI
-    // event loop responsive while the worker owns the workspace transaction.
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<Mutex<Workspace>>();
-        let mut state = state.lock().map_err(message)?;
-        app.state::<Mutex<crate::generation::GenerationService>>()
-            .lock()
-            .map_err(message)?
-            .ensure_switch_allowed()?;
-        state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
-        Ok(state.view())
-    })
-    .await
-    .map_err(message)?
 }
 #[tauri::command]
 pub async fn open_project(
@@ -2319,7 +1750,6 @@ pub async fn open_project(
     folder: Option<bool>,
     path: Option<PathBuf>,
     discard_recovery: Option<bool>,
-    imports: State<'_, Mutex<crate::website_import::WebsiteImports>>,
 ) -> OpenResult<Option<OpenProjectResult>> {
     generation
         .lock()
@@ -2358,16 +1788,6 @@ pub async fn open_project(
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
-    if path.is_dir()
-        && desegnos_storage::project_in_folder(&path)
-            .map_err(message)?
-            .is_none()
-    {
-        let website = imports.lock().map_err(message)?.select(path)?;
-        return Ok(Some(OpenProjectResult::Website {
-            website: Box::new(website),
-        }));
-    }
     state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
     Ok(Some(OpenProjectResult::Workspace(Box::new(state.view()))))
 }
@@ -2476,11 +1896,13 @@ pub fn move_into_project_folder(state: WorkspaceState<'_>) -> NativeResult<Works
     let mut state = state.lock().map_err(message)?;
     let project = state.project()?.clone();
     let former = state.file.as_ref().map(|file| file.path().to_owned());
-    if state
-        .file
-        .as_ref()
-        .is_some_and(ProjectFile::is_project_folder)
-    {
+    let folder_name = desegnos_storage::sanitize_project_name(&project.name);
+    if state.file.as_ref().is_some_and(|file| {
+        file.path()
+            .parent()
+            .and_then(|parent| parent.file_name())
+            .is_some_and(|name| name == folder_name.as_str())
+    }) {
         return Ok(state.view());
     }
     let path = desegnos_storage::create_project_folder(
@@ -2489,7 +1911,8 @@ pub fn move_into_project_folder(state: WorkspaceState<'_>) -> NativeResult<Works
         project.id,
     )
     .map_err(message)?;
-    // Keep the old archive as a fallback. Only the active save/recovery/recent destination moves.
+    // The old file stays as a fallback. The project's current state moves into the managed
+    // folder as a new file; only the active save/recovery/recent destination changes.
     state.save_snapshot(&project, Some(path))?;
     if let (Some(former), Some(file)) = (former, state.file.as_ref()) {
         state.recent_error =
@@ -2503,6 +1926,7 @@ pub async fn save_project_checked(
     app: AppHandle,
     state: WorkspaceState<'_>,
     save_as: bool,
+    label: Option<String>,
 ) -> NativeResult<SaveProjectOutcome> {
     let (project, choose_path) = {
         let mut state = state.lock().map_err(message)?;
@@ -2527,7 +1951,7 @@ pub async fn save_project_checked(
     }
     state.check_snapshot(&project)?;
     let picked = copy_destination(picked, &project)?;
-    state.save_snapshot_checked(&project, picked, choose_path)
+    state.save_snapshot_checked(&project, picked, choose_path, label)
 }
 
 #[tauri::command]
@@ -2544,16 +1968,19 @@ pub async fn resolve_save_conflict(
             Ok(SaveProjectOutcome::Cancelled)
         }
         SaveConflictChoice::Copy => {
-            let (project, suggested) = {
+            let (project, suggested, label) = {
                 let mut state = state.lock().map_err(message)?;
                 let pending = state.take_save_conflict(token)?;
-                let file = state.destination_file(&pending.destination)?;
-                let stem = file
-                    .path()
+                let stem = state
+                    .destination_path(&pending.destination)?
                     .file_stem()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "website".into());
-                (state.project()?.clone(), format!("{stem}-copy.desegnos"))
+                (
+                    state.project()?.clone(),
+                    format!("{stem}-copy.desegnos"),
+                    pending.label,
+                )
             };
             let Some(path) = choose_save_path(app, suggested).await? else {
                 return Ok(SaveProjectOutcome::Cancelled);
@@ -2561,7 +1988,7 @@ pub async fn resolve_save_conflict(
             let mut state = state.lock().map_err(message)?;
             state.check_snapshot(&project)?;
             let path = copy_destination(Some(path), &project)?;
-            state.save_snapshot_checked(&project, path, true)
+            state.save_snapshot_checked(&project, path, true, label)
         }
     }
 }
@@ -2664,1512 +2091,6 @@ pub fn get_project_notes(state: WorkspaceState<'_>) -> NativeResult<String> {
         .map_err(message)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    struct Temp(PathBuf);
-    impl Temp {
-        fn new() -> Self {
-            let path =
-                std::env::temp_dir().join(format!("desegnos-workspace-{}", uuid::Uuid::new_v4()));
-            fs::create_dir(&path).unwrap();
-            Self(path)
-        }
-    }
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-    fn project(name: &str) -> Project {
-        Project::new(
-            name.into(),
-            Viewport {
-                width: 390,
-                height: 844,
-            },
-            Appearance::Dark,
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn documents_key_ignores_request_prompts_but_tracks_page_code() {
-        let mut project = project("Key");
-        let page_id = project.pages[0].id;
-        project.pages[0].content = Some(desegnos_core::SiteContent {
-            html: "<h1>Home</h1>".into(),
-            css: String::new(),
-            javascript: String::new(),
-        });
-        let rect = desegnos_core::Rect {
-            x: 0.0,
-            y: 0.0,
-            width: 100.0,
-            height: 100.0,
-        };
-        let added = project
-            .apply(project.revision, Command::AddRegion { page_id, rect })
-            .unwrap();
-        let region_id = added.pages[0].regions[0].id;
-        let typed = added
-            .apply(
-                added.revision,
-                Command::UpdateRegion {
-                    page_id,
-                    region_id,
-                    rect,
-                    prompt: "First".into(),
-                },
-            )
-            .unwrap();
-        let retyped = typed
-            .apply(
-                typed.revision,
-                Command::UpdateRegion {
-                    page_id,
-                    region_id,
-                    rect,
-                    prompt: "A much longer prompt typed by hand".into(),
-                },
-            )
-            .unwrap();
-        assert_ne!(
-            typed.revision, retyped.revision,
-            "the save still advances the project revision"
-        );
-        assert_eq!(
-            documents_key(Some(&typed)),
-            documents_key(Some(&retyped)),
-            "typing must not change framed-document revisions"
-        );
-        let mut edited = retyped.clone();
-        edited.pages[0]
-            .content
-            .as_mut()
-            .unwrap()
-            .html
-            .push_str("<p>More</p>");
-        assert_ne!(documents_key(Some(&typed)), documents_key(Some(&edited)));
-        assert_eq!(documents_key(None), "");
-    }
-
-    #[test]
-    fn a_workspace_view_serializes_without_the_imported_site_files() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        let mut project = project("Site");
-        let page_id = project.pages[0].id;
-        project.website = Some(desegnos_core::ImportedWebsite {
-            page_files: std::collections::BTreeMap::from([(page_id, "index.html".into())]),
-            files: std::collections::BTreeMap::from([(
-                "index.html".into(),
-                std::sync::Arc::from("<h1>Home</h1>"),
-            )]),
-            framework: Some("Vite".into()),
-            skipped: vec!["photo.psd".into()],
-        });
-        workspace.start(project, None, None).unwrap();
-        let view = serde_json::to_value(workspace.view()).unwrap();
-        let website = &view["project"]["website"];
-        assert_eq!(
-            website["files"],
-            serde_json::json!({}),
-            "the view must not ship the site files"
-        );
-        assert_eq!(website["framework"], "Vite");
-        assert_eq!(website["skipped"], serde_json::json!(["photo.psd"]));
-        assert_eq!(website["pageFiles"][page_id.to_string()], "index.html");
-        assert_eq!(
-            workspace
-                .view()
-                .project
-                .unwrap()
-                .website
-                .unwrap()
-                .files
-                .len(),
-            1,
-            "the in-process view keeps every site file"
-        );
-    }
-
-    #[test]
-    fn creating_a_project_immediately_saves_a_numbered_folder_and_live_site() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        let first = project("New: website");
-        workspace.create_in_folder(first.clone(), None).unwrap();
-        let path = temp.0.join("Projects/New_ website/New_ website.desegnos");
-        assert_eq!(workspace.file.as_ref().unwrap().path(), path);
-        assert_eq!(desegnos_storage::load_project(&path).unwrap(), first);
-        assert!(path.parent().unwrap().join("index.html").is_file());
-        assert!(!workspace.view().dirty);
-        assert!(workspace.view().project_folder);
-        assert_eq!(crate::recent::read(&temp.0).unwrap()[0].path, path);
-        workspace
-            .create_in_folder(project("New: website"), None)
-            .unwrap();
-        assert_eq!(
-            workspace.file.as_ref().unwrap().path(),
-            temp.0
-                .join("Projects/New_ website 2/New_ website 2.desegnos")
-        );
-        let chosen = temp.0.join("Chosen parent");
-        workspace
-            .create_in_folder(project("Different parent"), Some(chosen.clone()))
-            .unwrap();
-        assert!(workspace.file.as_ref().unwrap().path().starts_with(chosen));
-    }
-
-    #[test]
-    fn opening_a_project_folder_reloads_the_full_document_with_fresh_history() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.join("app-data")).unwrap();
-        let mut original = project("Folder with context");
-        original.brief.purpose = "Retain this brief, page content and decisions".into();
-        original.pages[0].content = Some(desegnos_core::SiteContent {
-            html: "<h1>Existing page</h1>".into(),
-            css: String::new(),
-            javascript: String::new(),
-        });
-        workspace
-            .create_in_folder(original.clone(), Some(temp.0.clone()))
-            .unwrap();
-        let folder = workspace
-            .file
-            .as_ref()
-            .unwrap()
-            .path()
-            .parent()
-            .unwrap()
-            .to_owned();
-        change_grid(&mut workspace);
-        let edited = workspace.project().unwrap().clone();
-        workspace.save_snapshot(&edited, None).unwrap();
-        assert!(workspace.view().can_undo);
-        workspace.open_file_tab(&folder, false).unwrap();
-        assert_eq!(workspace.project().unwrap(), &edited);
-        assert!(!workspace.view().can_undo);
-        assert!(!workspace.view().dirty);
-        assert_eq!(
-            workspace.project().unwrap().brief.purpose,
-            original.brief.purpose
-        );
-    }
-
-    #[test]
-    fn opening_a_plain_folder_imports_once_and_keeps_its_destination_through_recovery() {
-        let temp = Temp::new();
-        let folder = temp.0.join("Existing site");
-        fs::create_dir(&folder).unwrap();
-        let html = "<!doctype html><html><head><title>Original</title></head><body><h1>Website</h1></body></html>";
-        fs::write(folder.join("index.html"), html).unwrap();
-        fs::write(folder.join("style.css"), "body { margin: 0 }").unwrap();
-        let directory = temp.0.join("app-data");
-        let mut workspace = Workspace::from_directory(directory.clone()).unwrap();
-        workspace.open_file_tab(&folder, false).unwrap();
-        let path = folder.join("Existing site.desegnos");
-        assert_eq!(workspace.file.as_ref().unwrap().path(), path);
-        assert_eq!(fs::read_to_string(folder.join("index.html")).unwrap(), html);
-        assert_eq!(
-            fs::read_to_string(folder.join(".desegnos-original/index.html")).unwrap(),
-            html
-        );
-        assert!(
-            workspace.project().unwrap().pages[0]
-                .content
-                .as_ref()
-                .unwrap()
-                .html
-                .contains("data-desegnos-id")
-        );
-        change_grid(&mut workspace);
-        let edited = workspace.project().unwrap().clone();
-        // The imported site files are the bulk of the project; recovery must not repeat them.
-        let journal = workspace.journal.as_ref().unwrap();
-        let entry: serde_json::Value = serde_json::from_slice(
-            fs::read(journal.path())
-                .unwrap()
-                .strip_suffix(b"\n")
-                .unwrap(),
-        )
-        .unwrap();
-        assert!(
-            !entry["files"].as_object().unwrap().is_empty(),
-            "imported site files must be stored out of line"
-        );
-        assert_eq!(entry["project"]["website"]["files"], serde_json::json!({}));
-        drop(workspace);
-        let mut restarted = Workspace::from_directory(directory).unwrap();
-        restarted.recover(Some(edited.id), false).unwrap();
-        assert_eq!(restarted.project().unwrap(), &edited);
-        assert_eq!(
-            restarted.project().unwrap().website.as_ref().unwrap().files,
-            edited.website.as_ref().unwrap().files
-        );
-        assert_eq!(restarted.file.as_ref().unwrap().path(), path);
-        restarted.save_snapshot(&edited, None).unwrap();
-        assert!(!restarted.view().dirty);
-        assert_eq!(
-            fs::read_to_string(folder.join(".desegnos-original/index.html")).unwrap(),
-            html
-        );
-    }
-
-    #[test]
-    fn fresh_initialization_offers_committed_unsaved_changes() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace
-            .start(project("Recover this project"), None, None)
-            .unwrap();
-        let Workspace {
-            session, journal, ..
-        } = &mut workspace;
-        session
-            .as_mut()
-            .unwrap()
-            .execute(
-                0,
-                Command::SetDecision {
-                    topic: "Brand color".into(),
-                    value: "#185F48".into(),
-                    scope: desegnos_core::Scope::Project,
-                    protected: true,
-                },
-                |p| journal.as_ref().unwrap().append(p),
-            )
-            .unwrap();
-        drop(workspace);
-        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        let candidate = restarted.recoveries.first().unwrap();
-        let (recovered, _) = restarted
-            .read_recovery(candidate.info.project_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(recovered.project.revision, 1);
-        assert_eq!(recovered.project.decisions[0].value, "#185F48");
-        assert!(restarted.session.is_none());
-        assert!(restarted.recovery_error.is_none());
-    }
-
-    fn region() -> &'static str {
-        "a41bd1d5-0a1e-4f0e-9e2f-8a3c1d6b7e90"
-    }
-    fn imported_site_project() -> Project {
-        let files = std::collections::BTreeMap::from([
-            (
-                "index.html".into(),
-                format!(
-                    "<!doctype html><html><head><title>Imported site</title></head><body><main><h1>Home</h1></main><script type=\"application/x-desegnos-region\" data-desegnos-script=\"{}\">document.title = 'Region';</script></body></html>",
-                    region()
-                )
-                .into_bytes(),
-            ),
-            ("styles.css".into(), b"h1 { color: blue; }".to_vec()),
-        ]);
-        desegnos_core::import_website_files("Imported site", &files).unwrap()
-    }
-    fn saved_site(temp: &Temp) -> (Workspace, std::path::PathBuf) {
-        let mut workspace = Workspace::from_directory(temp.0.join("profile")).unwrap();
-        let project = imported_site_project();
-        let path =
-            desegnos_storage::create_project_folder(&temp.0, &project.name, project.id).unwrap();
-        let file = ProjectFile::acquire(&path).unwrap();
-        file.save(&project).unwrap();
-        workspace.start(project, Some(file), Some(0)).unwrap();
-        let root = path.parent().unwrap().to_path_buf();
-        (workspace, root)
-    }
-
-    #[test]
-    fn own_site_export_stays_readable_so_import_changes_can_run() {
-        let temp = Temp::new();
-        let (mut workspace, root) = saved_site(&temp);
-        // The region runtime script must live inside the document, not after `</html>`.
-        let html = fs::read_to_string(root.join("index.html")).unwrap();
-        assert!(html.contains("<script defer src=\"desegnos-regions-"));
-        assert!(html.trim_end().ends_with("</body></html>"));
-        let files = desegnos_storage::project_folder::read_website_files(&root)
-            .unwrap()
-            .files;
-        let selection = workspace.prepare_site_import(files).unwrap().unwrap();
-        assert_eq!(selection.review.updated, ["/"]);
-    }
-
-    #[test]
-    fn importing_the_changed_own_site_is_not_an_outside_edit_but_plain_save_still_is() {
-        let temp = Temp::new();
-        let (mut workspace, root) = saved_site(&temp);
-        let edited = format!(
-            "<!doctype html><html><head><title>Imported site</title></head><body><main><h1>Outside home</h1></main><script type=\"application/x-desegnos-region\" data-desegnos-script=\"{}\">document.title = 'Outside';</script></body></html>",
-            region()
-        );
-        fs::write(root.join("index.html"), &edited).unwrap();
-        let current = workspace.project().unwrap().clone();
-        workspace
-            .save_snapshot_checked(&current, None, false)
-            .unwrap();
-        assert_eq!(workspace.view().outside_edits.changed_paths, ["index.html"]);
-        assert_eq!(fs::read_to_string(root.join("index.html")).unwrap(), edited);
-        // "Import changes" reads the project's own site and adopts exactly those bytes.
-        let files = desegnos_storage::project_folder::read_website_files(&root)
-            .unwrap()
-            .files;
-        let selection = workspace.prepare_site_import(files).unwrap().unwrap();
-        workspace.apply_site_import(selection.token, &[]).unwrap();
-        assert!(workspace.project().unwrap().pages.iter().any(|page| {
-            page.content
-                .as_ref()
-                .is_some_and(|content| content.html.contains("Outside home"))
-        }));
-        let current = workspace.project().unwrap().clone();
-        workspace
-            .save_snapshot_checked(&current, None, false)
-            .unwrap();
-        let outside = workspace.view().outside_edits;
-        assert_eq!(outside.changed_paths, Vec::<String>::new(), "{outside:?}");
-        assert_eq!(outside.kept_stale_paths, Vec::<String>::new());
-        assert!(
-            fs::read_to_string(root.join("index.html"))
-                .unwrap()
-                .contains("desegnos-regions-")
-        );
-    }
-
-    #[test]
-    fn successful_save_clears_recovery_offer_and_preserves_actual_archive() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        let project = project("Saved native project");
-        workspace.start(project.clone(), None, None).unwrap();
-        workspace
-            .save_snapshot(&project, Some(temp.0.join("site.desegnos")))
-            .unwrap();
-        assert!(!workspace.view().dirty);
-        drop(workspace);
-        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert!(restarted.recoveries.is_empty());
-        assert_eq!(
-            desegnos_storage::load_project(&temp.0.join("site.desegnos")).unwrap(),
-            project
-        );
-    }
-
-    #[test]
-    fn another_project_with_the_same_revision_cannot_be_saved_from_an_old_dialog() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        let original = project("Original");
-        workspace.start(original.clone(), None, None).unwrap();
-        workspace.start(project("New project"), None, None).unwrap();
-        let path = temp.0.join("must-not-be-created.desegnos");
-        assert!(
-            workspace
-                .save_snapshot(&original, Some(path.clone()))
-                .is_err()
-        );
-        assert!(!path.exists());
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project().name,
-            "New project"
-        );
-    }
-
-    #[test]
-    fn unsafe_recovery_pointer_is_reported_without_blocking_new_work() {
-        let temp = Temp::new();
-        let damaged_id = Uuid::new_v4();
-        write_markdown(
-            &temp.0.join(format!("{damaged_id}.recovery.json")),
-            "{\"journalFile\":\"../outside.journal\",\"savedRevision\":null,\"projectPath\":null}",
-        )
-        .unwrap();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert!(
-            workspace
-                .recovery_error
-                .as_ref()
-                .unwrap()
-                .contains("invalid journal path")
-        );
-        workspace
-            .start(project("New safe project"), None, None)
-            .unwrap();
-        assert!(workspace.recovery_error.is_some());
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project().name,
-            "New safe project"
-        );
-    }
-
-    #[test]
-    fn switching_away_from_dirty_work_requires_a_deliberate_choice() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(project("Unsaved"), None, None).unwrap();
-        assert!(workspace.check_replace(false).is_err());
-        workspace.check_replace(true).unwrap();
-    }
-
-    #[test]
-    fn only_ordinary_web_links_open_from_a_preview() {
-        assert!(preview_link("https://chelib.com/projects/desegnos").is_ok());
-        for url in [
-            "file:///etc/passwd",
-            "javascript:alert(1)",
-            "https://user:secret@example.com/",
-            "mailto:someone@example.com",
-            "not a link",
-        ] {
-            assert!(preview_link(url).is_err(), "{url}");
-        }
-    }
-
-    #[test]
-    fn discarding_on_close_stops_offering_the_work_but_keeps_its_journal() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(project("Discard me"), None, None).unwrap();
-        change_grid(&mut workspace);
-        let id = workspace.session.as_ref().unwrap().project().id;
-        assert!(workspace.view().dirty);
-        workspace.set_aside_recovery().unwrap();
-        workspace.close();
-        assert!(workspace.recoveries.is_empty());
-        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert!(restarted.recoveries.is_empty());
-        assert!(
-            temp.0
-                .join(format!("{id}.recovery.discarded.json"))
-                .exists()
-        );
-        assert!(
-            fs::read_dir(&temp.0)
-                .unwrap()
-                .flatten()
-                .any(|entry| entry.file_name().to_string_lossy().ends_with(".journal"))
-        );
-    }
-
-    #[test]
-    fn an_unreadable_recovery_pointer_cancels_journal_cleanup() {
-        for contents in [
-            "{ not a pointer".to_owned(),
-            r#"{"journalFile":"../escape.journal","savedRevision":null,"savedSha256":null,"projectPath":null}"#
-                .to_owned(),
-        ] {
-            let temp = Temp::new();
-            let directory = temp.0.clone();
-            let journal = directory.join(format!("{}-{}.journal", Uuid::new_v4(), Uuid::new_v4()));
-            fs::write(&journal, b"{\"not\":\"a journal\"}\n").unwrap();
-            let blobs = directory.join("blobs");
-            fs::create_dir(&blobs).unwrap();
-            let blob = blobs.join("0".repeat(64));
-            fs::write(&blob, b"unreferenced").unwrap();
-            let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
-            for path in [&journal, &blob] {
-                File::options()
-                    .write(true)
-                    .open(path)
-                    .unwrap()
-                    .set_modified(two_hours_ago)
-                    .unwrap();
-            }
-            let pointer = directory.join(format!("{}.recovery.json", Uuid::new_v4()));
-            fs::write(&pointer, &contents).unwrap();
-
-            // The pointer may name any journal, so this run removes neither journal nor blob.
-            Workspace::from_directory(directory.clone()).unwrap();
-            assert!(journal.exists(), "{contents}");
-            assert!(blob.exists(), "{contents}");
-
-            // Without it the same directory is cleaned, so the assertions above are not empty.
-            fs::remove_file(&pointer).unwrap();
-            Workspace::from_directory(directory).unwrap();
-            assert!(!journal.exists());
-            assert!(!blob.exists());
-        }
-    }
-
-    #[test]
-    fn closing_a_clean_parked_project_releases_its_lock_and_keeps_the_rest_open() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        let first = project("Active project");
-        let second = project("Clean parked project");
-        workspace
-            .start(first.clone(), None, Some(first.revision))
-            .unwrap();
-        workspace
-            .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
-            .unwrap();
-        workspace.close_tab(Some(first.id), false).unwrap();
-        assert_eq!(workspace.session.as_ref().unwrap().project().id, second.id);
-        assert_eq!(
-            workspace
-                .view()
-                .open_projects
-                .iter()
-                .map(|tab| tab.id)
-                .collect::<Vec<_>>(),
-            [second.id]
-        );
-        // The closed tab released its lock, so another window could open the project.
-        assert!(workspace.acquire_ownership(first.id).unwrap().is_some());
-    }
-
-    #[test]
-    fn closing_the_active_project_activates_the_next_open_one_then_the_start_screen() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        let first = project("First project");
-        let second = project("Second project");
-        let third = project("Third project");
-        workspace
-            .start(first.clone(), None, Some(first.revision))
-            .unwrap();
-        workspace
-            .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
-            .unwrap();
-        workspace
-            .open_tab(|state| state.start(third.clone(), None, Some(third.revision)))
-            .unwrap();
-        assert_eq!(workspace.session.as_ref().unwrap().project().id, third.id);
-        // The third tab was last, so closing it falls back to the tab before it.
-        workspace.close_tab(None, false).unwrap();
-        assert_eq!(workspace.session.as_ref().unwrap().project().id, second.id);
-        // With the second project parked behind the first, closing the first activates the
-        // next tab in order rather than the most recently parked one.
-        workspace.switch_to(first.id).unwrap();
-        assert_eq!(workspace.session.as_ref().unwrap().project().id, first.id);
-        workspace.close_tab(None, false).unwrap();
-        assert_eq!(workspace.session.as_ref().unwrap().project().id, second.id);
-        workspace.close_tab(None, false).unwrap();
-        assert!(workspace.view().project.is_none());
-        assert!(workspace.view().open_projects.is_empty());
-    }
-
-    #[test]
-    fn closing_a_dirty_parked_project_needs_a_choice_and_discarding_keeps_its_journal() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        let first = project("Stays open");
-        let second = project("Dirty parked project");
-        workspace
-            .start(first.clone(), None, Some(first.revision))
-            .unwrap();
-        workspace
-            .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
-            .unwrap();
-        change_grid(&mut workspace);
-        assert!(workspace.view().dirty);
-        workspace.switch_to(first.id).unwrap();
-        assert!(!workspace.view().dirty);
-        let pointer: RecoveryPointer =
-            serde_json::from_slice(&fs::read(workspace.pointer_path(second.id)).unwrap()).unwrap();
-        let journal = temp.0.join(pointer.journal_file);
-        assert!(journal.exists());
-        assert!(workspace.close_tab(Some(second.id), false).is_err());
-        assert!(
-            workspace
-                .view()
-                .open_projects
-                .iter()
-                .any(|tab| tab.id == second.id),
-            "a project with unsaved changes must stay open until the choice is explicit"
-        );
-        workspace.close_tab(Some(second.id), true).unwrap();
-        assert_eq!(
-            workspace
-                .view()
-                .open_projects
-                .iter()
-                .map(|tab| tab.id)
-                .collect::<Vec<_>>(),
-            [first.id]
-        );
-        assert!(
-            workspace
-                .recoveries
-                .iter()
-                .all(|item| item.info.project_id != second.id),
-            "discarded work is no longer offered for recovery"
-        );
-        assert!(journal.exists(), "the discarded journal stays on disk");
-        assert!(
-            temp.0
-                .join(format!("{}.recovery.discarded.json", second.id))
-                .exists()
-        );
-        drop(workspace);
-        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert!(
-            restarted
-                .view()
-                .recoveries
-                .iter()
-                .all(|item| item.project_id != second.id),
-            "discarded work is no longer offered, but its journal stays on disk"
-        );
-    }
-
-    #[test]
-    fn saving_a_dirty_parked_project_first_lets_it_close_cleanly() {
-        let temp = Temp::new();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        let first = project("Stays open too");
-        let second = project("Saved before closing");
-        let path = temp.0.join("saved-before-closing.desegnos");
-        workspace
-            .start(first.clone(), None, Some(first.revision))
-            .unwrap();
-        workspace
-            .open_tab(|state| state.start(second.clone(), None, Some(second.revision)))
-            .unwrap();
-        change_grid(&mut workspace);
-        let saved = workspace.session.as_ref().unwrap().project().clone();
-        workspace.save_snapshot(&saved, Some(path.clone())).unwrap();
-        workspace.switch_to(first.id).unwrap();
-        workspace.close_tab(Some(second.id), false).unwrap();
-        assert_eq!(
-            workspace
-                .view()
-                .open_projects
-                .iter()
-                .map(|tab| tab.id)
-                .collect::<Vec<_>>(),
-            [first.id]
-        );
-        assert!(desegnos_storage::load_project(&path).unwrap().show_grid);
-    }
-
-    #[test]
-    fn dismiss_recovery_preserves_journal_and_saved_file_and_refuses_open_projects() {
-        for saved in [false, true] {
-            let temp = Temp::new();
-            let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-            let original = project("Dismiss recovery");
-            let id = original.id;
-            let path = temp.0.join("saved.desegnos");
-            workspace.start(original.clone(), None, None).unwrap();
-            if saved {
-                workspace
-                    .save_snapshot(&original, Some(path.clone()))
-                    .unwrap();
-            }
-            change_grid(&mut workspace);
-            let saved_bytes = fs::read(&path).ok();
-            let pointer_bytes = fs::read(workspace.pointer_path(id)).unwrap();
-            let pointer: RecoveryPointer = serde_json::from_slice(&pointer_bytes).unwrap();
-            let journal = temp.0.join(pointer.journal_file);
-            let journal_bytes = fs::read(&journal).unwrap();
-
-            assert!(workspace.dismiss_recovery(id).is_err());
-            workspace
-                .open_tab(|state| state.start(project("Other open project"), None, None))
-                .unwrap();
-            assert!(workspace.dismiss_recovery(id).is_err());
-            let mut other_window = Workspace::from_directory(temp.0.clone()).unwrap();
-            assert!(other_window.dismiss_recovery(id).is_err());
-            assert_eq!(fs::read(workspace.pointer_path(id)).unwrap(), pointer_bytes);
-            drop(other_window);
-            drop(workspace);
-
-            let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-            assert!(
-                restarted
-                    .view()
-                    .recoveries
-                    .iter()
-                    .any(|item| item.project_id == id)
-            );
-            restarted.dismiss_recovery(id).unwrap();
-            assert!(
-                !restarted
-                    .view()
-                    .recoveries
-                    .iter()
-                    .any(|item| item.project_id == id)
-            );
-            assert!(!restarted.pointer_path(id).exists());
-            assert_eq!(
-                fs::read(temp.0.join(format!("{id}.recovery.discarded.json"))).unwrap(),
-                pointer_bytes
-            );
-            assert_eq!(fs::read(&journal).unwrap(), journal_bytes);
-            assert_eq!(fs::read(&path).ok(), saved_bytes);
-            drop(restarted);
-            let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-            assert!(
-                !restarted
-                    .view()
-                    .recoveries
-                    .iter()
-                    .any(|item| item.project_id == id)
-            );
-        }
-    }
-
-    fn change_grid(workspace: &mut Workspace) {
-        let Workspace {
-            session, journal, ..
-        } = workspace;
-        let session = session.as_mut().unwrap();
-        session
-            .execute(
-                session.project().revision,
-                Command::SetGrid { enabled: true },
-                |project| journal.as_ref().unwrap().append(project),
-            )
-            .unwrap();
-    }
-
-    #[test]
-    fn independent_live_projects_keep_separate_recovery_records() {
-        let temp = Temp::new();
-        let first_project = project("First independent project");
-        let second_project = project("Second independent project");
-        let mut first = Workspace::from_directory(temp.0.clone()).unwrap();
-        first.start(first_project.clone(), None, None).unwrap();
-        change_grid(&mut first);
-        let mut second = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert!(second.recoveries.is_empty());
-        second.start(second_project.clone(), None, None).unwrap();
-        change_grid(&mut second);
-        assert!(
-            temp.0
-                .join(format!("{}.recovery.json", first_project.id))
-                .exists()
-        );
-        assert!(
-            temp.0
-                .join(format!("{}.recovery.json", second_project.id))
-                .exists()
-        );
-        drop(second);
-        let while_first_active = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(while_first_active.recoveries.len(), 1);
-        assert_eq!(
-            while_first_active.recoveries[0].info.project_id,
-            second_project.id
-        );
-        drop(while_first_active);
-        drop(first);
-        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(restarted.view().recoveries.len(), 2);
-        restarted.recover(Some(first_project.id), false).unwrap();
-        assert_eq!(
-            restarted.session.as_ref().unwrap().project().id,
-            first_project.id
-        );
-        assert!(restarted.session.as_ref().unwrap().project().show_grid);
-        assert_eq!(restarted.recoveries.len(), 1);
-        assert_eq!(restarted.recoveries[0].info.project_id, second_project.id);
-    }
-
-    #[test]
-    fn new_and_open_projects_do_not_supersede_inactive_recovery() {
-        let temp = Temp::new();
-        let original = project("Keep this unsaved work");
-        let mut previous = Workspace::from_directory(temp.0.clone()).unwrap();
-        previous.start(original.clone(), None, None).unwrap();
-        change_grid(&mut previous);
-        drop(previous);
-        let record = temp.0.join(format!("{}.recovery.json", original.id));
-        let before = fs::read(&record).unwrap();
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(project("New project"), None, None).unwrap();
-        assert!(
-            workspace
-                .recoveries
-                .iter()
-                .any(|candidate| candidate.info.project_id == original.id)
-        );
-        let opened = project("Another saved project");
-        let file = ProjectFile::acquire(&temp.0.join("another.desegnos")).unwrap();
-        file.save(&opened).unwrap();
-        workspace
-            .start(opened.clone(), Some(file), Some(opened.revision))
-            .unwrap();
-        assert_eq!(fs::read(&record).unwrap(), before);
-        assert!(
-            workspace
-                .recoveries
-                .iter()
-                .any(|candidate| candidate.info.project_id == original.id)
-        );
-        drop(workspace);
-        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(restarted.recoveries.len(), 2);
-        assert!(
-            restarted
-                .recoveries
-                .iter()
-                .any(|candidate| candidate.info.project_id == original.id)
-        );
-    }
-
-    #[test]
-    fn project_ownership_excludes_another_window_and_stale_recovery_choice() {
-        let temp = Temp::new();
-        let original = project("One active owner");
-        let mut first = Workspace::from_directory(temp.0.clone()).unwrap();
-        first.start(original.clone(), None, None).unwrap();
-        let mut second = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert!(second.start(original.clone(), None, None).is_err());
-        assert!(second.recover(Some(original.id), false).is_err());
-        drop(first);
-        second.refresh_recoveries();
-        assert_eq!(second.recoveries.len(), 1);
-        let mut third = Workspace::from_directory(temp.0.clone()).unwrap();
-        third.recover(Some(original.id), false).unwrap();
-        assert!(second.recover(Some(original.id), false).is_err());
-        assert!(second.session.is_none());
-        assert_eq!(third.session.as_ref().unwrap().project().id, original.id);
-    }
-
-    #[test]
-    fn a_failed_save_as_pointer_write_preserves_the_previous_file_and_lock() {
-        let temp = Temp::new();
-        let original = project("Preserve file ownership");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        let old_path = temp.0.join("original.desegnos");
-        workspace
-            .save_snapshot(&original, Some(old_path.clone()))
-            .unwrap();
-        change_grid(&mut workspace);
-        let candidate = workspace.session.as_ref().unwrap().project().clone();
-        let pointer = workspace.pointer_path(original.id);
-        let before = fs::read(&pointer).unwrap();
-        let backup = pointer.with_file_name(format!(
-            "{}.previous",
-            pointer.file_name().unwrap().to_string_lossy()
-        ));
-        fs::remove_file(&backup).unwrap();
-        fs::create_dir(&backup).unwrap();
-        let new_path = temp.0.join("new.desegnos");
-        assert!(
-            workspace
-                .save_snapshot(&candidate, Some(new_path.clone()))
-                .is_err()
-        );
-        assert_eq!(
-            workspace.file.as_ref().unwrap().path(),
-            old_path.canonicalize().unwrap()
-        );
-        assert_eq!(workspace.saved_revision, Some(original.revision));
-        assert!(workspace.view().dirty);
-        assert!(ProjectFile::acquire(&old_path).is_err());
-        ProjectFile::acquire(&new_path).unwrap();
-        assert_eq!(fs::read(pointer).unwrap(), before);
-        assert_eq!(desegnos_storage::load_project(&old_path).unwrap(), original);
-        assert_eq!(
-            desegnos_storage::load_project(&new_path).unwrap(),
-            candidate
-        );
-    }
-
-    #[test]
-    fn reopening_the_current_file_resets_history_without_releasing_its_lock() {
-        let temp = Temp::new();
-        let original = project("Reopen my saved site");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        let path = temp.0.join("site.desegnos");
-        workspace
-            .save_snapshot(&original, Some(path.clone()))
-            .unwrap();
-        change_grid(&mut workspace);
-        let edited = workspace.session.as_ref().unwrap().project().clone();
-        workspace.save_snapshot(&edited, None).unwrap();
-        let previous_session = workspace.view().history.unwrap().session_id;
-        workspace.open_path(&path, false).unwrap();
-        assert_eq!(workspace.session.as_ref().unwrap().project(), &edited);
-        let history = workspace.view().history.unwrap();
-        assert_ne!(history.session_id, previous_session);
-        assert_eq!((history.position, history.end), (0, 0));
-        assert!(!workspace.view().dirty);
-        assert!(ProjectFile::acquire(&path).is_err());
-        drop(workspace);
-        ProjectFile::acquire(&path).unwrap();
-    }
-
-    #[test]
-    fn a_failed_reopen_keeps_the_active_session_lock_and_original_save_baseline() {
-        let temp = Temp::new();
-        let original = project("Preserve a failed reopen");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        let path = temp.0.join("site.desegnos");
-        workspace
-            .save_snapshot(&original, Some(path.clone()))
-            .unwrap();
-        let previous_history = workspace.view().history;
-        let stamp = workspace.file.as_ref().unwrap().stamp().unwrap();
-        let bytes = fs::read(&path).unwrap();
-        fs::write(&path, b"Unreadable external changes").unwrap();
-        assert!(workspace.open_path(&path, false).is_err());
-        assert_eq!(workspace.session.as_ref().unwrap().project(), &original);
-        assert_eq!(workspace.view().history, previous_history);
-        assert_eq!(workspace.file.as_ref().unwrap().stamp().unwrap(), stamp);
-        assert!(ProjectFile::acquire(&path).is_err());
-        fs::write(&path, bytes).unwrap();
-        let pointer = workspace.pointer_path(original.id);
-        let backup = pointer.with_file_name(format!(
-            "{}.previous",
-            pointer.file_name().unwrap().to_string_lossy()
-        ));
-        if backup.exists() {
-            fs::remove_file(&backup).unwrap();
-        }
-        fs::create_dir(&backup).unwrap();
-        assert!(workspace.open_path(&path, false).is_err());
-        assert_eq!(workspace.view().history, previous_history);
-        assert_eq!(workspace.file.as_ref().unwrap().stamp().unwrap(), stamp);
-        assert!(ProjectFile::acquire(&path).is_err());
-    }
-
-    #[test]
-    fn pending_recovery_is_structured_and_saved_version_retry_preserves_original_data() {
-        for folder in [false, true] {
-            let temp = Temp::new();
-            let original = project("Saved version");
-            let path = temp.0.join("site.desegnos");
-            let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-            workspace.start(original.clone(), None, None).unwrap();
-            workspace
-                .save_snapshot(&original, Some(path.clone()))
-                .unwrap();
-            change_grid(&mut workspace);
-            let pointer_bytes = fs::read(workspace.pointer_path(original.id)).unwrap();
-            let pointer: RecoveryPointer = serde_json::from_slice(&pointer_bytes).unwrap();
-            let journal = temp.0.join(pointer.journal_file);
-            let journal_bytes = fs::read(&journal).unwrap();
-            let saved_bytes = fs::read(&path).unwrap();
-            drop(workspace);
-
-            let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-            let other = project("Keep this tab");
-            restarted.start(other.clone(), None, None).unwrap();
-            let source = if folder {
-                temp.0.as_path()
-            } else {
-                path.as_path()
-            };
-            let error = restarted.open_file_tab(source, false).unwrap_err();
-            assert_eq!(
-                serde_json::to_value(&error).unwrap(),
-                serde_json::json!({
-                    "code": "pendingRecovery", "projectId": original.id, "path": path.canonicalize().unwrap(),
-                })
-            );
-            assert_eq!(restarted.session.as_ref().unwrap().project(), &other);
-            assert_eq!(
-                fs::read(restarted.pointer_path(original.id)).unwrap(),
-                pointer_bytes
-            );
-            assert_eq!(fs::read(&journal).unwrap(), journal_bytes);
-
-            restarted.open_file_tab(source, true).unwrap();
-            assert_eq!(restarted.session.as_ref().unwrap().project(), &original);
-            assert!(!restarted.view().dirty);
-            assert!(
-                restarted
-                    .parked
-                    .iter()
-                    .any(|open| open.session.project() == &other)
-            );
-            assert!(
-                !restarted
-                    .view()
-                    .recoveries
-                    .iter()
-                    .any(|item| item.project_id == original.id)
-            );
-            assert_eq!(
-                fs::read(
-                    temp.0
-                        .join(format!("{}.recovery.discarded.json", original.id))
-                )
-                .unwrap(),
-                pointer_bytes
-            );
-            assert_eq!(fs::read(&journal).unwrap(), journal_bytes);
-            assert_eq!(fs::read(&path).unwrap(), saved_bytes);
-            drop(restarted);
-            let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-            restarted.open_file_tab(&path, false).unwrap();
-            assert_eq!(restarted.session.as_ref().unwrap().project(), &original);
-        }
-    }
-
-    #[test]
-    fn discard_and_open_still_rejects_live_ownership_and_damaged_recovery() {
-        let temp = Temp::new();
-        let original = project("Protected recovery");
-        let path = temp.0.join("site.desegnos");
-        let mut first = Workspace::from_directory(temp.0.clone()).unwrap();
-        first.start(original.clone(), None, None).unwrap();
-        first.save_snapshot(&original, Some(path.clone())).unwrap();
-        change_grid(&mut first);
-        let mut second = Workspace::from_directory(temp.0.clone()).unwrap();
-        // A second file with the same project ID reaches the ownership guard.
-        let copy = temp.0.join("copy.desegnos");
-        fs::copy(&path, &copy).unwrap();
-        let error = second.open_file_tab(&copy, true).unwrap_err();
-        assert_eq!(
-            String::from(error),
-            "This project is already active in another Desegnos window."
-        );
-        drop(first);
-        let pointer = second.pointer_path(original.id);
-        fs::write(&pointer, b"damaged recovery").unwrap();
-        let error = second.open_file_tab(&path, true).unwrap_err();
-        assert!(String::from(error).starts_with(
-            "This project's recovery record needs attention before it can be replaced:"
-        ));
-        assert_eq!(fs::read(pointer).unwrap(), b"damaged recovery");
-        assert!(second.session.is_none());
-        assert!(
-            !temp
-                .0
-                .join(format!("{}.recovery.discarded.json", original.id))
-                .exists()
-        );
-    }
-
-    #[test]
-    fn an_older_saved_file_cannot_replace_a_pending_recovery_record() {
-        let temp = Temp::new();
-        let original = project("Recover before opening an older copy");
-        let path = temp.0.join("site.desegnos");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        workspace
-            .save_snapshot(&original, Some(path.clone()))
-            .unwrap();
-        change_grid(&mut workspace);
-        drop(workspace);
-        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        let file = ProjectFile::acquire(&path).unwrap();
-        assert!(
-            restarted
-                .start(original.clone(), Some(file), Some(original.revision))
-                .is_err()
-        );
-        assert!(restarted.session.is_none());
-        restarted.recover(Some(original.id), false).unwrap();
-        assert!(restarted.session.as_ref().unwrap().project().show_grid);
-        assert!(restarted.file.is_some());
-    }
-
-    #[test]
-    fn recovery_detaches_from_missing_corrupt_different_and_changed_archives() {
-        for condition in ["missing", "corrupt", "different", "changed", "diverged"] {
-            let temp = Temp::new();
-            let original = project("Recover without overwriting external changes");
-            let path = temp.0.join("site.desegnos");
-            let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-            workspace.start(original.clone(), None, None).unwrap();
-            workspace
-                .save_snapshot(&original, Some(path.clone()))
-                .unwrap();
-            change_grid(&mut workspace);
-            let expected = workspace.session.as_ref().unwrap().project().clone();
-            drop(workspace);
-            match condition {
-                "missing" => fs::remove_file(&path).unwrap(),
-                "corrupt" => fs::write(&path, b"Keep the damaged original").unwrap(),
-                "different" => {
-                    let file = ProjectFile::acquire(&path).unwrap();
-                    let observed = {
-                        file.load_document().unwrap();
-                        file.stamp().unwrap().unwrap()
-                    };
-                    file.save_replacing(&project("An unrelated actual project"), &observed, true)
-                        .unwrap();
-                }
-                "changed" => {
-                    let file = ProjectFile::acquire(&path).unwrap();
-                    let external = original
-                        .apply(
-                            0,
-                            Command::RenameProject {
-                                name: "Externally changed".into(),
-                            },
-                        )
-                        .unwrap();
-                    file.load_document().unwrap();
-                    file.save(&external).unwrap();
-                }
-                "diverged" => {
-                    let file = ProjectFile::acquire(&path).unwrap();
-                    let mut external = original.clone();
-                    external.name = "A divergent copy at the same revision".into();
-                    file.load_document().unwrap();
-                    file.save(&external).unwrap();
-                }
-                _ => unreachable!(),
-            }
-            let before = fs::read(&path).ok();
-            let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-            restarted.recover(Some(original.id), false).unwrap();
-            assert_eq!(
-                restarted.session.as_ref().unwrap().project(),
-                &expected,
-                "{condition}"
-            );
-            assert!(restarted.file.is_none(), "{condition}");
-            assert!(restarted.view().dirty, "{condition}");
-            restarted.save_snapshot(&expected, None).unwrap();
-            let recovered_path = restarted.file.as_ref().unwrap().path();
-            assert_ne!(recovered_path, path, "{condition}");
-            assert!(recovered_path.starts_with(temp.0.join("Projects")));
-            assert!(!restarted.view().dirty);
-            assert_eq!(fs::read(&path).ok(), before, "{condition}");
-        }
-    }
-
-    #[test]
-    fn recovering_another_project_requires_a_choice_and_preserves_current_recovery() {
-        let temp = Temp::new();
-        let original = project("Previously interrupted project");
-        let mut previous = Workspace::from_directory(temp.0.clone()).unwrap();
-        previous.start(original.clone(), None, None).unwrap();
-        drop(previous);
-        let current = project("Current unsaved project");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(current.clone(), None, None).unwrap();
-        change_grid(&mut workspace);
-        // Recovery opens in its own tab group; the unsaved current project stays open behind it.
-        workspace.recover(Some(original.id), false).unwrap();
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project().id,
-            original.id
-        );
-        let parked = workspace
-            .parked
-            .iter()
-            .find(|open| open.session.project().id == current.id)
-            .unwrap();
-        assert!(parked.dirty() && parked.session.project().show_grid);
-        let tabs = workspace.view().open_projects;
-        assert_eq!(
-            tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
-            [current.id, original.id]
-        );
-        assert!(workspace.view().any_dirty);
-        let (retained, _) = workspace.read_recovery(current.id).unwrap().unwrap();
-        assert!(retained.project.show_grid);
-        // Switching back keeps each project's own state.
-        workspace.switch_to(current.id).unwrap();
-        assert!(workspace.session.as_ref().unwrap().project().show_grid);
-        workspace.close();
-        assert_eq!(
-            workspace.session.as_ref().unwrap().project().id,
-            original.id
-        );
-        drop(workspace);
-        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(restarted.recoveries.len(), 2);
-    }
-
-    #[test]
-    fn one_damaged_record_does_not_hide_valid_recoveries_or_change_its_original() {
-        let temp = Temp::new();
-        let original = project("A valid independently recoverable project");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        drop(workspace);
-        let damaged_id = Uuid::new_v4();
-        let damaged_path = temp.0.join(format!("{damaged_id}.recovery.json"));
-        fs::write(&damaged_path, b"An incomplete recovery pointer").unwrap();
-        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(restarted.recoveries.len(), 1);
-        assert_eq!(restarted.recoveries[0].info.project_id, original.id);
-        assert!(restarted.recovery_error.is_some());
-        restarted.recover(Some(original.id), false).unwrap();
-        assert_eq!(
-            fs::read(&damaged_path).unwrap(),
-            b"An incomplete recovery pointer"
-        );
-        assert!(restarted.recovery_error.is_some());
-    }
-
-    #[test]
-    fn a_pointer_cannot_hide_unsaved_data_by_claiming_a_clean_revision() {
-        let temp = Temp::new();
-        let original = project("Verify the actual clean snapshot");
-        let path = temp.0.join("site.desegnos");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        workspace
-            .save_snapshot(&original, Some(path.clone()))
-            .unwrap();
-        change_grid(&mut workspace);
-        let revision = workspace.session.as_ref().unwrap().project().revision;
-        let pointer = workspace.pointer_path(original.id);
-        drop(workspace);
-        let mut record: serde_json::Value =
-            serde_json::from_slice(&fs::read(&pointer).unwrap()).unwrap();
-        record["savedRevision"] = revision.into();
-        fs::write(&pointer, serde_json::to_vec(&record).unwrap()).unwrap();
-        let before = fs::read(&path).unwrap();
-        let mut restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(restarted.recoveries.len(), 1);
-        restarted.recover(Some(original.id), false).unwrap();
-        assert!(restarted.session.as_ref().unwrap().project().show_grid);
-        assert!(restarted.file.is_none());
-        assert_eq!(fs::read(path).unwrap(), before);
-    }
-
-    fn external_project_file(
-        directory: &std::path::Path,
-        path: &std::path::Path,
-        project: &Project,
-    ) {
-        let source = directory.join(format!("external-{}.desegnos", Uuid::new_v4()));
-        let file = ProjectFile::acquire(&source).unwrap();
-        file.save(project).unwrap();
-        fs::copy(&source, path).unwrap();
-    }
-
-    fn conflict(outcome: SaveProjectOutcome) -> SaveConflict {
-        match outcome {
-            SaveProjectOutcome::Conflict { conflict } => conflict,
-            _ => panic!("expected a save conflict"),
-        }
-    }
-
-    #[test]
-    fn checked_save_requires_a_bound_choice_and_replaces_with_an_exact_backup() {
-        let temp = Temp::new();
-        let path = temp.0.join("site.desegnos");
-        let original = project("Original");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        workspace
-            .save_snapshot(&original, Some(path.clone()))
-            .unwrap();
-        change_grid(&mut workspace);
-        let local = workspace.project().unwrap().clone();
-        let mut external = original.clone();
-        external.name = "External edit at the same revision".into();
-        external_project_file(&temp.0, &path, &external);
-        let bytes = fs::read(&path).unwrap();
-        let journal_bytes = fs::read(workspace.journal.as_ref().unwrap().path()).unwrap();
-        let choice = conflict(
-            workspace
-                .save_snapshot_checked(&local, None, false)
-                .unwrap(),
-        );
-        assert_eq!(choice.kind, SaveFailureKind::Changed);
-        assert_eq!(choice.default_choice, "copy");
-        assert!(choice.can_replace);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-        assert_eq!(
-            fs::read(workspace.journal.as_ref().unwrap().path()).unwrap(),
-            journal_bytes
-        );
-        let shape = serde_json::to_value(&choice).unwrap();
-        assert_eq!(shape["fileName"], "site.desegnos");
-        assert!(shape["details"]["actual"]["manifestSha256"].is_string());
-        assert!(matches!(
-            workspace.replace_save_conflict(choice.token).unwrap(),
-            SaveProjectOutcome::Saved { .. }
-        ));
-        assert_eq!(desegnos_storage::load_project(&path).unwrap(), local);
-        assert_eq!(
-            fs::read(path.with_file_name("site.desegnos.previous")).unwrap(),
-            bytes
-        );
-        assert!(!workspace.view().dirty);
-        assert!(workspace.replace_save_conflict(choice.token).is_err());
-    }
-
-    #[test]
-    fn changing_the_file_again_invalidates_the_replace_token_and_offers_a_new_choice() {
-        let temp = Temp::new();
-        let path = temp.0.join("site.desegnos");
-        let original = project("Original");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        workspace
-            .save_snapshot(&original, Some(path.clone()))
-            .unwrap();
-        let mut external = original.clone();
-        external.name = "First external change".into();
-        external_project_file(&temp.0, &path, &external);
-        let first = conflict(
-            workspace
-                .save_snapshot_checked(&original, None, false)
-                .unwrap(),
-        );
-        external.name = "Second external change".into();
-        external_project_file(&temp.0, &path, &external);
-        let bytes = fs::read(&path).unwrap();
-        let second = conflict(workspace.replace_save_conflict(first.token).unwrap());
-        assert_ne!(first.token, second.token);
-        assert_ne!(first.details.actual, second.details.actual);
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-        assert!(workspace.replace_save_conflict(first.token).is_err());
-        workspace.cancel_save_conflict(second.token).unwrap();
-        assert_eq!(fs::read(&path).unwrap(), bytes);
-    }
-
-    #[test]
-    fn save_as_into_a_different_project_requires_an_in_app_confirmation_but_save_never_allows_it() {
-        let temp = Temp::new();
-        let target = temp.0.join("someone-elses.desegnos");
-        let other = project("Different project");
-        external_project_file(&temp.0, &target, &other);
-        let bytes = fs::read(&target).unwrap();
-        let original = project("My project");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        assert!(
-            workspace
-                .save_snapshot(&original, Some(target.clone()))
-                .is_err()
-        );
-        let choice = conflict(
-            workspace
-                .save_snapshot_checked(&original, Some(target.clone()), true)
-                .unwrap(),
-        );
-        assert_eq!(choice.kind, SaveFailureKind::DifferentProject);
-        assert_eq!(choice.default_choice, "cancel");
-        assert!(choice.can_replace);
-        assert_eq!(
-            choice.message,
-            "someone-elses.desegnos is a different project. Replace it?"
-        );
-        assert_eq!(fs::read(&target).unwrap(), bytes);
-        workspace.replace_save_conflict(choice.token).unwrap();
-        assert_eq!(workspace.file.as_ref().unwrap().path(), target);
-        assert_eq!(
-            fs::read(target.with_file_name("someone-elses.desegnos.previous")).unwrap(),
-            bytes
-        );
-        external_project_file(&temp.0, &target, &other);
-        let blocked = conflict(
-            workspace
-                .save_snapshot_checked(&original, None, false)
-                .unwrap(),
-        );
-        assert!(!blocked.can_replace);
-        assert!(workspace.replace_save_conflict(blocked.token).is_err());
-        assert_eq!(desegnos_storage::load_project(&target).unwrap(), other);
-    }
-
-    #[test]
-    fn a_local_edit_expires_replace_but_cancel_and_copy_cancellation_preserve_recovery() {
-        let temp = Temp::new();
-        let path = temp.0.join("site.desegnos");
-        let original = project("Original");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        workspace
-            .save_snapshot(&original, Some(path.clone()))
-            .unwrap();
-        change_grid(&mut workspace);
-        let local = workspace.project().unwrap().clone();
-        let mut external = original.clone();
-        external.name = "External change".into();
-        external_project_file(&temp.0, &path, &external);
-        let choice = conflict(
-            workspace
-                .save_snapshot_checked(&local, None, false)
-                .unwrap(),
-        );
-        change_grid(&mut workspace);
-        assert!(workspace.replace_save_conflict(choice.token).is_err());
-        workspace.cancel_save_conflict(choice.token).unwrap();
-        let current = workspace.project().unwrap().clone();
-        let choice = conflict(
-            workspace
-                .save_snapshot_checked(&current, None, false)
-                .unwrap(),
-        );
-        let journal_path = workspace.journal.as_ref().unwrap().path().to_owned();
-        let journal_bytes = fs::read(&journal_path).unwrap();
-        let pointer_bytes = fs::read(workspace.pointer_path(original.id)).unwrap();
-        // Copy consumes the pending choice, then a dismissed file dialog does nothing further.
-        workspace.take_save_conflict(choice.token).unwrap();
-        assert_eq!(fs::read(&journal_path).unwrap(), journal_bytes);
-        assert_eq!(
-            fs::read(workspace.pointer_path(original.id)).unwrap(),
-            pointer_bytes
-        );
-        assert!(workspace.view().dirty);
-        drop(workspace);
-        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(restarted.recoveries.len(), 1);
-        assert_eq!(
-            restarted.recoveries[0].info.saved_path.as_deref(),
-            path.to_str()
-        );
-        assert!(restarted.recoveries[0].info.edited_at_ms > 0);
-        assert_eq!(
-            restarted
-                .read_recovery(original.id)
-                .unwrap()
-                .unwrap()
-                .0
-                .project,
-            current
-        );
-        let mut recovered = restarted;
-        recovered.recover(Some(original.id), false).unwrap();
-        assert!(recovered.file.is_none());
-        drop(recovered);
-        let restarted = Workspace::from_directory(temp.0.clone()).unwrap();
-        assert_eq!(
-            restarted.recoveries[0].info.saved_path.as_deref(),
-            path.to_str()
-        );
-    }
-
-    #[test]
-    fn unreadable_destinations_are_not_replaceable_and_successful_copy_keeps_the_external_file() {
-        let temp = Temp::new();
-        let path = temp.0.join("not-a-project.desegnos");
-        fs::write(&path, b"Keep this original document").unwrap();
-        let original = project("My unsaved project");
-        let mut workspace = Workspace::from_directory(temp.0.clone()).unwrap();
-        workspace.start(original.clone(), None, None).unwrap();
-        let choice = conflict(
-            workspace
-                .save_snapshot_checked(&original, Some(path.clone()), true)
-                .unwrap(),
-        );
-        assert_eq!(choice.kind, SaveFailureKind::Unreadable);
-        assert!(!choice.can_replace);
-        assert_eq!(choice.default_choice, "copy");
-        workspace.take_save_conflict(choice.token).unwrap();
-        let copy = temp.0.join("my-copy.desegnos");
-        assert!(matches!(
-            workspace
-                .save_snapshot_checked(&original, Some(copy.clone()), true)
-                .unwrap(),
-            SaveProjectOutcome::Saved { .. }
-        ));
-        assert_eq!(fs::read(path).unwrap(), b"Keep this original document");
-        assert_eq!(desegnos_storage::load_project(&copy).unwrap(), original);
-        assert!(!workspace.view().dirty);
-        drop(workspace);
-        assert!(
-            Workspace::from_directory(temp.0.clone())
-                .unwrap()
-                .recoveries
-                .is_empty()
-        );
-    }
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -4273,151 +2194,114 @@ pub fn open_recent_project(
     })
 }
 
-struct WebsiteImportSnapshot {
-    token: Uuid,
-    project_id: Uuid,
-    revision: u64,
-    files: std::collections::BTreeMap<String, Vec<u8>>,
+/// Write unsaved in-memory edits to the hidden autosave branch, at most every few seconds.
+#[tauri::command(async)]
+pub fn autosave_project(state: WorkspaceState<'_>) -> NativeResult<()> {
+    state.lock().map_err(message)?.autosave_if_due();
+    Ok(())
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WebsiteImportSelection {
-    token: Uuid,
-    review: desegnos_core::WebsiteImportReview,
-}
-
-#[tauri::command]
-pub fn project_site_import_source(
+#[tauri::command(async)]
+pub fn get_project_history(
     state: WorkspaceState<'_>,
-    identity: State<'_, Mutex<crate::identity::IdentityService>>,
-) -> NativeResult<crate::identity::IdentitySourceManifest> {
+) -> NativeResult<Option<ProjectHistoryView>> {
+    let state = state.lock().map_err(message)?;
+    match state.file.as_ref() {
+        Some(file) => file.history().map(Some).map_err(message),
+        None => Ok(None),
+    }
+}
+
+/// Restore a saved version. History is never rewritten: the restore is a new version, and it
+/// becomes the current state as one undo step.
+#[tauri::command(async)]
+pub fn restore_version(state: WorkspaceState<'_>, version: i64) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    state.restore_version(version)?;
+    state.autosave_if_due();
+    Ok(state.view())
+}
+
+/// Switch alternatives. The current alternative is saved first.
+#[tauri::command(async)]
+pub fn switch_alternative(
+    state: WorkspaceState<'_>,
+    branch: String,
+) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    state.switch_alternative(&branch)?;
+    Ok(state.view())
+}
+
+/// Start an alternative at the current version and make it the one being edited.
+#[tauri::command(async)]
+pub fn create_alternative(
+    state: WorkspaceState<'_>,
+    name: String,
+) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    state.create_alternative(&name)?;
+    Ok(state.view())
+}
+
+#[tauri::command(async)]
+pub fn rename_alternative(
+    state: WorkspaceState<'_>,
+    from: String,
+    to: String,
+) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    state.rename_alternative(&from, &to)?;
+    Ok(state.view())
+}
+
+#[tauri::command(async)]
+pub fn delete_alternative(
+    state: WorkspaceState<'_>,
+    name: String,
+) -> NativeResult<WorkspaceView> {
+    let mut state = state.lock().map_err(message)?;
+    state.delete_alternative(&name)?;
+    Ok(state.view())
+}
+
+/// Save a copy of the project without its history: one version on one branch.
+#[tauri::command(async)]
+pub async fn save_project_copy(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+) -> NativeResult<Option<WorkspaceView>> {
+    let (project, suggested) = {
+        let state = state.lock().map_err(message)?;
+        let project = state.project()?.clone();
+        let suggested = format!(
+            "{}-copy.desegnos",
+            desegnos_storage::sanitize_project_name(&project.name)
+        );
+        (project, suggested)
+    };
+    let Some(path) = choose_save_path(app, suggested).await? else {
+        return Ok(None);
+    };
+    let path = copy_destination(Some(path), &project)?;
+    let mut state = state.lock().map_err(message)?;
+    state.check_snapshot(&project)?;
+    if let Some(path) = path {
+        state.save_copy(&project, path)?;
+    }
+    Ok(Some(state.view()))
+}
+
+/// Keep recent versions in full, thin out older ones, drop unreferenced blobs and shrink.
+#[tauri::command(async)]
+pub fn compact_history(
+    state: WorkspaceState<'_>,
+) -> NativeResult<desegnos_storage::CompactReport> {
     let state = state.lock().map_err(message)?;
     let file = state
         .file
         .as_ref()
-        .filter(|f| f.is_project_folder())
-        .ok_or("Save in a project folder first.")?;
-    let root = file
-        .path()
-        .parent()
-        .ok_or("Missing project folder.")?
-        .canonicalize()
-        .map_err(message)?;
-    let files = desegnos_storage::project_folder::read_website_files(&root)
-        .map_err(message)?
-        .files;
-    identity
-        .lock()
-        .map_err(message)?
-        .retain_project_site(&state.project()?.name, files)
-}
-
-#[tauri::command]
-pub fn overwrite_project_site(
-    state: WorkspaceState<'_>,
-    project_id: Uuid,
-    revision: u64,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    let project = state.project()?.clone();
-    if project.id != project_id || project.revision != revision {
-        return Err("The project changed. Save again.".into());
-    }
-    let file = state
-        .file
-        .as_ref()
-        .filter(|f| f.is_project_folder())
-        .ok_or("Save in a project folder first.")?;
-    file.save_checked(&project).map_err(message)?;
-    file.overwrite_site(&project).map_err(message)?;
-    state.finish_save(&project, SaveDestination::Current)?;
-    Ok(state.view())
-}
-
-#[tauri::command]
-pub async fn prepare_website_import(
-    state: WorkspaceState<'_>,
-    identity: State<'_, Mutex<crate::identity::IdentityService>>,
-    source_id: Uuid,
-) -> NativeResult<Option<WebsiteImportSelection>> {
-    let files = {
-        let identity = identity.lock().map_err(message)?;
-        identity.website_files(source_id)?
-    };
-    state.lock().map_err(message)?.prepare_site_import(files)
-}
-
-impl Workspace {
-    fn prepare_site_import(
-        &mut self,
-        files: std::collections::BTreeMap<String, Vec<u8>>,
-    ) -> NativeResult<Option<WebsiteImportSelection>> {
-        if !files.keys().any(|name| {
-            name.to_ascii_lowercase().ends_with(".html")
-                || name.to_ascii_lowercase().ends_with(".htm")
-        }) {
-            return Ok(None);
-        }
-        let project = self
-            .session
-            .as_ref()
-            .ok_or("Open a project first.")?
-            .project();
-        let (project_id, revision) = (project.id, project.revision);
-        let review = project.review_website_import(&files).map_err(message)?;
-        let token = Uuid::new_v4();
-        self.website_import = Some(WebsiteImportSnapshot {
-            token,
-            project_id,
-            revision,
-            files,
-        });
-        Ok(Some(WebsiteImportSelection { token, review }))
-    }
-}
-
-#[tauri::command]
-pub fn apply_website_import(
-    state: WorkspaceState<'_>,
-    token: Uuid,
-    remove: Vec<Uuid>,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.apply_site_import(token, &remove)
-}
-
-impl Workspace {
-    fn apply_site_import(&mut self, token: Uuid, remove: &[Uuid]) -> NativeResult<WorkspaceView> {
-        let Workspace {
-            session,
-            journal,
-            website_import,
-            file,
-            ..
-        } = self;
-        let snapshot = website_import
-            .as_ref()
-            .filter(|s| s.token == token)
-            .ok_or("Choose the website again.")?;
-        let session = session.as_mut().ok_or("Open a project first.")?;
-        if session.project().id != snapshot.project_id {
-            return Err("Choose the website again for this project.".into());
-        }
-        let journal = journal.as_ref().ok_or("Recovery is unavailable.")?;
-        session
-            .import_website(snapshot.revision, &snapshot.files, remove, |p| {
-                journal.append(p)
-            })
-            .map_err(message)?;
-        // Adopt only the bytes this import captured. The manifest check hashes the folder first,
-        // so a source that merely resembles the project stays foreign.
-        if let Some(file) = file.as_ref().filter(|f| f.is_project_folder()) {
-            file.mark_imported_site_owned(&snapshot.files)
-                .map_err(message)?;
-        }
-        *website_import = None;
-        self.prepared = None;
-        Ok(self.view())
-    }
+        .ok_or("Create or open a project first.")?;
+    file.compact(desegnos_storage::project_db::now_millis())
+        .map_err(message)
 }

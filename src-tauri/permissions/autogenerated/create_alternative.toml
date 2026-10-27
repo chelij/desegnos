@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-alternative"
+description = "Enables the create_alternative command without any pre-configured scope."
+commands.allow = ["create_alternative"]
+
+[[permission]]
+identifier = "deny-create-alternative"
+description = "Denies the create_alternative command without any pre-configured scope."
+commands.deny = ["create_alternative"]

@@ -34,45 +34,58 @@ try {
     assert.deepEqual(placeCallouts([item], [rect], { x: 0, y: 0 }, 1, [item.key]), []);
     assert.equal(placeCallouts([{ ...item, key: 'job-two:area' }], [rect], { x: 0, y: 0 }, 1, [item.key]).length, 1);
   });
-  const page = { id: 'page', content: { html: 'now', css: '', javascript: '' }, regions: [{ id: 'a', rect, prompt: 'Add scrolling chat' }, { id: 'b', rect: other, prompt: 'Keep heading' }] };
-  const job = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', regionId: 'a' }], drafts: [{ id: 'old', pageId: 'page', regionIds: ['a'], reason: 'old reason' }, { id: 'new', pageId: 'page', regionIds: ['a'], reason: 'Region script also affects b' }], candidate: { regions: [{ regionId: 'a', status: 'conflict' }] } };
-  await test('only latest rejected area result appears and uses request and affected box', () => {
+
+  const element = (id, prompt, elementRect) => ({ id, kind: 'box', name: null, rect: elementRect, rotation: 0, visible: true, locked: false,
+    style: {}, text: '', image: null, url: null, layout: { kind: 'free' }, children: [], meta: { requests: [], context: [], pending: { prompt, attachments: [], requestedAt: 'now' } } });
+  const page = { id: 'page', name: 'Home', path: '/', included: true, output: 'webpage', sizes: [], elements: [element('a', 'Add scrolling chat', rect), element('b', 'Keep heading', other)] };
+  const frozen = (requests) => '```json\n' + JSON.stringify({ pages: [{ pageId: 'page' }], requests }) + '\n```';
+  const requirement = (elementId, request) => ({ elementId, request, sizeId: null });
+  const job = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', elementId: 'a' }], requirements: { markdown: frozen([requirement('a', 'Add scrolling chat')]) },
+    candidate: { summary: 'Chat needs a service', requests: [{ elementId: 'a', status: 'conflict', explanation: 'Which chat service should this use?' }] } };
+
+  await test('a declared conflict shows one callout at the layer', () => {
     const problems = areaProblems(job, page);
-    assert.equal(problems.length, 1); assert.equal(problems[0].draftId, 'new');
-    assert.equal(problems[0].message, '“Add scrolling chat” would also change Box 2.');
-    for (const flag of ['applied', 'dismissed']) assert.deepEqual(areaProblems({ ...job, drafts: [...job.drafts.slice(0, 1), { ...job.drafts[1], [flag]: true }] }, page), []);
+    assert.equal(problems.length, 1);
+    assert.equal(problems[0].elementId, 'a');
+    assert.equal(problems[0].fix, 'aiSettings');
+    assert.equal(problems[0].retryable, false);
+    assert.deepEqual(problems[0].rect, rect);
     assert.deepEqual(areaProblems({ ...job, status: 'generating' }, page), []);
   });
-  await test('an undecodable whole reply has no area callouts', () => {
-    assert.deepEqual(areaProblems({ ...job, candidate: null, status: 'failed', drafts: [{ id: 'reply', pageId: null, regionIds: ['a'], reason: 'reply could not be decoded' }] }, page), []);
+  await test('no layer conflict has no callout', () => {
+    assert.deepEqual(areaProblems({ ...job, candidate: { summary: 'Failed', requests: [] }, areas: [] }, page), []);
   });
-  await test('stale area uses one plain sentence without losing saved validator reason', () => {
-    const stale = { ...job, drafts: [{ ...job.drafts[1], baseContent: { ...page.content, html: 'before' } }] };
+
+  await test('stale result uses one plain sentence and stays retryable', () => {
+    const stale = { ...job, message: 'The generated result is stale: Existing page source changed.', candidate: { summary: 'Done', requests: [{ elementId: 'a', status: 'implemented', explanation: '' }] } };
     const problem = areaProblems(stale, page)[0];
     assert.equal(problem.stale, true);
-    assert.equal(problem.message, 'The page was edited after the AI made this draft.');
-    assert.equal(stale.drafts[0].reason, job.drafts[1].reason);
+    assert.equal(problem.message, staleResultMessage);
+    assert.equal(problem.retryable, true);
+    assert.equal(staleResult(stale), true);
+    assert.equal(staleResult({ ...stale, status: 'failed' }), false);
+    assert.equal(staleResult(null), false);
   });
-  const frozen = (prompt) => '```json\n' + JSON.stringify({ pageId: 'page', regionId: 'a', prompt, placementHint: rect }) + '\n```';
-  const declared = { ...job, requirements: { markdown: frozen('Add scrolling chat') }, validationEvents: [], candidate: { regions: [{ regionId: 'a', status: 'conflict', explanation: `Area 12345678-1234-1234-1234-123456789abc: Which chat service should this use?` }] } };
-  await test('an explained AI conflict is not retried and offers the resolving surface', () => {
-    const outcome = areaOutcome(declared, 'a', 'Add scrolling chat');
+
+  await test('an explained AI conflict is not retried and offers a fix', () => {
+    const outcome = areaOutcome(job, 'a', 'Add scrolling chat');
     assert.deepEqual(outcome, { retryable: false, reason: 'Which chat service should this use?', fix: 'aiSettings' });
-    assert.deepEqual(areaOutcome(declared, 'a', 'Add a support chat'), { retryable: true, reason: '' });
-    const review = jobOutcome(declared, id => id === 'a' ? 'Add scrolling chat' : undefined);
+    const review = jobOutcome(job, id => id === 'a' ? 'Add scrolling chat' : undefined);
     assert.deepEqual(review.retryable, []);
-    assert.equal(review.blocked.length, 1); assert.equal(review.blocked[0].fix, 'aiSettings');
+    assert.equal(review.blocked.length, 1);
+    assert.equal(review.blocked[0].fix, 'aiSettings');
   });
-  await test('an app rejection stays retryable even beside a declared conflict', () => {
-    const rejected = { ...declared, candidate: { regions: [{ regionId: 'a', status: 'conflict', explanation: `Area 12345678-1234-1234-1234-123456789abc: Region script also affects another area.` }] } };
+  await test('an app rejection and a technical explanation stay retryable', () => {
+    const rejected = { ...job, candidate: { summary: 'Rejected', requests: [{ elementId: 'a', status: 'conflict', explanation: 'The generation result omitted a requested layer.' }] } };
     assert.equal(areaOutcome(rejected, 'a', 'Add scrolling chat').retryable, true);
-    const review = jobOutcome(rejected, () => 'Add scrolling chat');
-    assert.deepEqual(review.retryable, ['a']); assert.deepEqual(review.blocked, []);
+    assert.deepEqual(jobOutcome(rejected, () => 'Add scrolling chat').retryable, ['a']);
+    assert.deepEqual(jobOutcome(rejected, () => 'Add scrolling chat').blocked, []);
   });
-  await test('retry returns after the request text is edited', () => {
-    assert.equal(areaOutcome(declared, 'a', 'Add a support chat').retryable, true);
-    const edited = jobOutcome(declared, () => 'Add a support chat');
-    assert.deepEqual(edited.retryable, ['a']); assert.deepEqual(edited.blocked, []);
+  await test('editing the request restores Try again', () => {
+    assert.equal(areaOutcome(job, 'a', 'Add a support chat').retryable, true);
+    const edited = jobOutcome(job, () => 'Add a support chat');
+    assert.deepEqual(edited.retryable, ['a']);
+    assert.deepEqual(edited.blocked, []);
   });
   await test('declared reasons map to plain routes', () => {
     assert.equal(resolutionAction('Which direction should the photo point?'), 'brief');
@@ -80,38 +93,12 @@ try {
     assert.equal(resolutionAction('This needs a payment provider.'), 'aiSettings');
     assert.equal(resolutionAction('Make it feel calmer.'), undefined);
   });
-  await test('a rejected reply is recognised from its app text while repair limits do not retry', () => {
-    const whole = { ...declared, candidate: { regions: [{ regionId: 'a', status: 'conflict', explanation: `Area 12345678-1234-1234-1234-123456789abc: The generation result omitted a requested area.` }] } };
-    assert.equal(areaOutcome(whole, 'a', 'Add scrolling chat').retryable, true);
-    const limited = { ...declared, validationEvents: [{ kind: 'repairLimit', disposition: 'conflicted', regionId: null, message: 'Skipped the repair because it would exceed the spending limit.' }] };
-    assert.equal(areaOutcome(limited, 'a', 'Add scrolling chat').retryable, false);
-  });
-  await test('a stale result is retryable even when every area is implemented', () => {
-    const implemented = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', regionId: 'a' }], drafts: [], candidate: { regions: [{ regionId: 'a', status: 'implemented' }] } };
-    for (const message of [
-      'The generated result is stale: Existing page source changed. Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements.',
-      'This candidate is stale: Existing page source changed. Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements.',
-    ]) assert.equal(staleResult({ ...implemented, message }), true);
-    assert.equal(staleResult({ ...implemented, message: 'Some requests need a choice.' }), false);
-    assert.equal(staleResult({ ...implemented, status: 'failed' }), false);
-    assert.equal(staleResult(null), false);
-    assert.deepEqual(jobOutcome({ ...implemented, message: 'Some requests need a choice.' }).retryable, []);
-    const review = jobOutcome({ ...implemented, message: 'The generated result is stale: Existing page source changed.' });
-    assert.deepEqual(review.retryable, ['a']); assert.deepEqual(review.blocked, []);
-    const [problem] = areaProblems({ ...implemented, message: 'The generated result is stale: Existing page source changed.' }, page);
-    assert.equal(problem.message, staleResultMessage); assert.equal(problem.retryable, true); assert.equal(problem.stale, true);
-  });
-  await test('an implemented result that is not stale still offers nothing', () => {
-    const applied = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', regionId: 'a' }], drafts: [], message: 'Some requests need a choice.', candidate: { regions: [{ regionId: 'a', status: 'implemented' }] } };
-    assert.deepEqual(jobOutcome(applied).retryable, []);
-    assert.deepEqual(areaProblems(applied, page), []);
-  });
-  await test('unavailable capabilities and missing areas keep their classification', () => {
-    const capability = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', regionId: 'a' }], drafts: [], candidate: { regions: [{ regionId: 'a', status: 'implemented', explanation: 'Done' }], componentRequests: [{ regionId: 'a', capability: 'Video player', resolution: 'unavailable', reason: 'No video service is connected.' }] } };
-    const outcome = areaOutcome(capability, 'a', 'Add a video');
-    assert.equal(outcome.retryable, false); assert.equal(outcome.fix, 'aiSettings');
-    assert.equal(jobOutcome(capability, () => 'Add a video').retryable.length, 0);
-    const failed = { jobId: 'job', status: 'failed', areas: [], drafts: [], candidate: null };
-    assert.equal(jobOutcome(failed).retryAll, true);
+  await test('a stale result retries even an implemented request, and a fresh one does not', () => {
+    const implemented = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', elementId: 'a' }], candidate: { summary: 'Done', requests: [{ elementId: 'a', status: 'implemented', explanation: 'Added the chat' }] } };
+    assert.deepEqual(jobOutcome(implemented).retryable, []);
+    const stale = { ...implemented, message: 'The generated result is stale: Existing page source changed.' };
+    assert.deepEqual(jobOutcome(stale).retryable, ['a']);
+    assert.equal(jobOutcome({ jobId: 'failed', status: 'failed', areas: [], candidate: null }).retryAll, true);
+    assert.deepEqual(jobOutcome({ jobId: 'working', status: 'generating', areas: [], candidate: null }), { retryable: [], blocked: [], retryAll: false, retryBatches: false });
   });
 } finally { await rm(temporary, { recursive: true, force: true }); }

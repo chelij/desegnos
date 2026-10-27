@@ -73,6 +73,117 @@ pub fn website_links(html: &str) -> WebsiteLinks {
     links
 }
 
+
+/// Every asset a rendered page needs, in document order: stylesheets, pictures, scripts,
+/// media, frames and inline-style URLs. The website importer downloads these so the page can
+/// be rendered from the local static server with scripts disabled.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WebsiteAssets {
+    pub stylesheets: Vec<String>,
+    pub images: Vec<String>,
+    pub scripts: Vec<String>,
+    pub media: Vec<String>,
+    pub frames: Vec<String>,
+    pub inline_styles: Vec<String>,
+}
+
+pub fn website_assets(html: &str) -> WebsiteAssets {
+    let doc = Document::from(html);
+    let mut assets = WebsiteAssets::default();
+    let push = |list: &mut Vec<String>, value: Option<&str>| {
+        if let Some(value) = value
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !value.starts_with("data:") && !value.starts_with('#'))
+            && !list.iter().any(|existing| existing == value)
+        {
+            list.push(value.to_owned());
+        }
+    };
+    for node in doc.select("link[href]").nodes() {
+        let rel = node.attr("rel").map(|value| value.to_ascii_lowercase()).unwrap_or_default();
+        let as_value = node.attr("as").map(|value| value.to_ascii_lowercase()).unwrap_or_default();
+        if rel.split_whitespace().any(|part| part == "stylesheet") {
+            push(&mut assets.stylesheets, node.attr("href").as_deref());
+        } else if rel.split_whitespace().any(|part| part == "preload") {
+            match as_value.as_str() {
+                "style" => push(&mut assets.stylesheets, node.attr("href").as_deref()),
+                "script" => push(&mut assets.scripts, node.attr("href").as_deref()),
+                "image" => push(&mut assets.images, node.attr("href").as_deref()),
+                "font" => push(&mut assets.media, node.attr("href").as_deref()),
+                _ => {}
+            }
+        }
+    }
+    for node in doc.select("img[src], img[srcset]").nodes() {
+        push(&mut assets.images, node.attr("src").as_deref());
+        for candidate in node.attr("srcset").as_deref().unwrap_or("").split(',') {
+            push(&mut assets.images, candidate.split_whitespace().next());
+        }
+    }
+    for node in doc.select("script[src]").nodes() {
+        push(&mut assets.scripts, node.attr("src").as_deref());
+    }
+    for node in doc.select("video[src], video[poster], audio[src], source[src], source[srcset]").nodes() {
+        let tag = node.node_name().map(|name| name.to_ascii_lowercase()).unwrap_or_default();
+        if node.attr("poster").is_some() {
+            push(&mut assets.images, node.attr("poster").as_deref());
+        }
+        if let Some(value) = node.attr("src").as_deref() {
+            if tag == "source" && node.attr("type").is_some_and(|value| value.starts_with("image/")) {
+                push(&mut assets.images, Some(value));
+            } else {
+                push(&mut assets.media, Some(value));
+            }
+        }
+        for candidate in node.attr("srcset").as_deref().unwrap_or("").split(',') {
+            push(&mut assets.images, candidate.split_whitespace().next());
+        }
+    }
+    for node in doc.select("iframe[src], embed[src], object[data]").nodes() {
+        push(&mut assets.frames, node.attr("src").or(node.attr("data")).as_deref());
+    }
+    for node in doc.select("style").nodes() {
+        for url in css_urls(node.text().as_ref()) {
+            push(&mut assets.inline_styles, Some(url.as_str()));
+        }
+    }
+    assets
+}
+
+/// The raw `url(...)` targets in a stylesheet, including `@import` strings. Data URIs are kept
+/// out; callers resolve them against the stylesheet URL and fetch only same-site ones.
+pub fn css_urls(css: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    let mut rest = css;
+    while let Some(index) = rest.find("url(") {
+        rest = &rest[index + 4..];
+        let Some(end) = rest.find(')') else { break };
+        let value = rest[..end].trim().trim_matches(['\'', '"']).trim();
+        if !value.is_empty()
+            && !value.starts_with("data:")
+            && !value.starts_with('#')
+            && !urls.iter().any(|existing| existing == value)
+        {
+            urls.push(value.to_owned());
+        }
+        rest = &rest[end + 1..];
+    }
+    let mut rest = css;
+    while let Some(index) = rest.find("@import") {
+        rest = &rest[index + 7..];
+        let rest_trimmed = rest.trim_start();
+        let Some(quote) = rest_trimmed.chars().next().filter(|value| *value == '\'' || *value == '"') else { continue };
+        let quoted = &rest_trimmed[1..];
+        let Some(end) = quoted.find(quote) else { break };
+        let value = quoted[..end].trim();
+        if !value.is_empty() && !urls.iter().any(|existing| existing == value) {
+            urls.push(value.to_owned());
+        }
+        rest = &quoted[end + 1..];
+    }
+    urls
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

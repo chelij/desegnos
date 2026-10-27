@@ -1,6 +1,6 @@
 use crate::{
     DecisionProposal, DesignCriticism, Error, GenerationCandidate, MAX_DECISION_PROPOSALS,
-    MAX_DESIGN_CRITICISMS, MAX_GENERATION_REGIONS, Project, RequirementsSnapshot, Result, Scope,
+    MAX_DESIGN_CRITICISMS, MAX_GENERATION_REQUESTS, Project, RequirementsSnapshot, Result, Scope,
     digest, ensure, model::validate_text,
 };
 use serde::{Deserialize, Serialize};
@@ -19,7 +19,7 @@ pub enum GenerationApplicationStatus {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DossierTarget {
     pub page_id: Uuid,
-    pub region_id: Uuid,
+    pub element_id: Uuid,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,12 +69,12 @@ impl GenerationDossier {
         let criticism = {
             // Conflict explanations survive partial apply even when advisory feedback fills its budget.
             let mut notes: Vec<DesignCriticism> = candidate
-                .regions
+                .requests
                 .iter()
-                .filter(|region| region.status == crate::RegionStatus::Conflict)
-                .map(|region| DesignCriticism {
-                    region_id: Some(region.region_id),
-                    message: region.explanation.clone(),
+                .filter(|request| request.status == crate::RequestStatus::Conflict)
+                .map(|request| DesignCriticism {
+                    element_id: Some(request.element_id),
+                    message: request.explanation.clone(),
                     suggestion: "This request stays open. Update its details and generate again."
                         .into(),
                 })
@@ -82,7 +82,7 @@ impl GenerationDossier {
             for note in &candidate.criticism {
                 if notes.len() < MAX_DESIGN_CRITICISMS
                     && !notes.iter().any(|existing| {
-                        existing.region_id == note.region_id && existing.message == note.message
+                        existing.element_id == note.element_id && existing.message == note.message
                     })
                 {
                     notes.push(note.clone());
@@ -101,7 +101,7 @@ impl GenerationDossier {
             targets: snapshot
                 .target_ids()?
                 .into_iter()
-                .map(|(page_id, region_id)| DossierTarget { page_id, region_id })
+                .map(|(page_id, element_id)| DossierTarget { page_id, element_id })
                 .collect(),
             decision_proposals: candidate.decision_proposals.clone(),
             criticism,
@@ -130,19 +130,19 @@ impl GenerationDossier {
         }
         validate_text(&self.summary, "Generation summary", 16_384, true)?;
         ensure(
-            !self.targets.is_empty() && self.targets.len() <= MAX_GENERATION_REGIONS,
-            "The generation notes must identify between 1 and 512 requested areas.",
+            !self.targets.is_empty() && self.targets.len() <= MAX_GENERATION_REQUESTS,
+            "The generation notes must identify between 1 and 512 requested layers.",
         )?;
         let mut targets = BTreeSet::new();
-        let mut regions = BTreeSet::new();
+        let mut elements = BTreeSet::new();
         let mut pages = BTreeSet::new();
         for target in &self.targets {
             ensure(
                 !target.page_id.is_nil()
-                    && !target.region_id.is_nil()
-                    && targets.insert((target.page_id, target.region_id))
-                    && regions.insert(target.region_id),
-                "The generation notes contain an invalid or repeated area.",
+                    && !target.element_id.is_nil()
+                    && targets.insert((target.page_id, target.element_id))
+                    && elements.insert(target.element_id),
+                "The generation notes contain an invalid or repeated layer.",
             )?;
             pages.insert(target.page_id);
         }
@@ -160,7 +160,7 @@ impl GenerationDossier {
                 match &proposal.scope {
                     Scope::Project => true,
                     Scope::Page(id) => pages.contains(id),
-                    Scope::Region(id) => regions.contains(id),
+                    Scope::Element(id) => elements.contains(id),
                 },
                 "A generation note proposes a decision outside its recorded scope.",
             )?;
@@ -177,7 +177,7 @@ impl GenerationDossier {
             validate_text(&criticism.message, "Design feedback", 4096, true)?;
             validate_text(&criticism.suggestion, "Design suggestion", 4096, true)?;
             ensure(
-                criticism.region_id.is_none_or(|id| regions.contains(&id)),
+                criticism.element_id.is_none_or(|id| elements.contains(&id)),
                 "Design feedback refers outside its recorded scope.",
             )?;
         }
@@ -208,13 +208,13 @@ impl GenerationDossier {
         let included: Vec<_> = self
             .targets
             .iter()
-            .filter(|target| targets.contains(&(target.page_id, target.region_id)))
+            .filter(|target| targets.contains(&(target.page_id, target.element_id)))
             .cloned()
             .collect();
         let relevant = |scope: &Scope| match scope {
             Scope::Project => true,
             Scope::Page(id) => targets.iter().any(|(page, _)| page == id),
-            Scope::Region(id) => targets.iter().any(|(_, region)| region == id),
+            Scope::Element(id) => targets.iter().any(|(_, element)| element == id),
         };
         let mut proposals = Vec::new();
         let mut accepted = Vec::new();
@@ -231,8 +231,8 @@ impl GenerationDossier {
             .criticism
             .iter()
             .filter(|criticism| {
-                criticism.region_id.map_or(complete_scope, |id| {
-                    targets.iter().any(|(_, region)| *region == id)
+                criticism.element_id.map_or(complete_scope, |id| {
+                    targets.iter().any(|(_, element)| *element == id)
                 })
             })
             .cloned()
@@ -299,10 +299,7 @@ impl Project {
             !self.applied_job_ids.contains(&candidate.job_id),
             "This generation job has already been applied.",
         )?;
-        // Edits made while the request was running are merged; the dossier records the reply
-        // itself, so its fingerprint stays the one this attempt produced.
-        let resolved = crate::resolve_edits_during_generation(snapshot, candidate, self)?;
-        candidate.validate(snapshot, &resolved.base)?;
+        candidate.validate(snapshot, self)?;
         let mut next = self.clone();
         next.revision = self
             .revision

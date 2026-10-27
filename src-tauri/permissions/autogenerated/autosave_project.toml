@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-autosave-project"
+description = "Enables the autosave_project command without any pre-configured scope."
+commands.allow = ["autosave_project"]
+
+[[permission]]
+identifier = "deny-autosave-project"
+description = "Denies the autosave_project command without any pre-configured scope."
+commands.deny = ["autosave_project"]

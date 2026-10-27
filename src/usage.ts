@@ -6,7 +6,7 @@ type UsageEvent = { t: number; kind: 'click' | 'key' | 'typing' | 'command' | 's
 
 const queue: UsageEvent[] = [];
 // Reads and polling say nothing about what the user did.
-const QUIET = /^(get_|list_|refresh_|inspect_|record_usage$|test_ai_access$)/;
+const QUIET = /^(get_|list_|refresh_|inspect_|autosave_project$|record_usage$|test_ai_access$)/;
 let typing: { name: string; detail?: string; count: number; started: number } | null = null;
 
 function clean(value: string | null | undefined, limit: number) {
@@ -35,7 +35,6 @@ function flush() {
 }
 
 function area(element: Element) {
-  if (element.closest('.page-strip')) return 'page tabs';
   if (element.closest('.recovery-list')) return 'recovery';
   const owner = element.closest('[role="dialog"], [aria-label], [data-testid="canvas"], header, footer, aside');
   if (!owner || owner === element) return undefined;
@@ -45,7 +44,6 @@ function area(element: Element) {
 
 // Names that may hold the user's own words (project and page names) are replaced by their role.
 function controlName(element: Element) {
-  if (element.closest('.page-tabs')) return element.matches('[role="tab"]') ? 'page tab' : clean(element.getAttribute('aria-label') ?? element.textContent, 60);
   if (element.closest('.recovery-list, .recent-projects')) return clean(element.textContent, 40);
   return clean(element.getAttribute('aria-label') ?? element.getAttribute('title') ?? element.textContent, 60);
 }

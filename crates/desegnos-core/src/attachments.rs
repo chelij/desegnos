@@ -4,9 +4,6 @@
 use crate::{Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use uuid::Uuid;
 
 pub const ATTACHMENT_ATTRIBUTE: &str = "data-desegnos-attachment";
 
@@ -121,64 +118,4 @@ impl RequestAttachment {
             ),
         }
     }
-}
-
-/// Swap attached pictures into generated HTML: `<img data-desegnos-attachment="ID">` gets a
-/// project picture reference, and the marker is removed. Each picture is scaled to its widest
-/// placement (its `width` attribute, else the page width) and only that copy is kept.
-/// Unknown identifiers are left as they are.
-pub(crate) fn insert_attached_images(
-    html: &str,
-    attachments: &[&RequestAttachment],
-    page_width: u32,
-    pictures: &mut BTreeMap<Uuid, Arc<str>>,
-) -> Result<Option<String>> {
-    if !html.contains(ATTACHMENT_ATTRIBUTE) {
-        return Ok(None);
-    }
-    let doc = crate::editing::parse(html)?;
-    let selection = doc.select(&format!("img[{ATTACHMENT_ATTRIBUTE}]"));
-    let nodes = selection.nodes();
-    let mut widths = BTreeMap::<String, u32>::new();
-    for node in nodes {
-        let id = node
-            .attr(ATTACHMENT_ATTRIBUTE)
-            .unwrap_or_default()
-            .to_string();
-        let width = node
-            .attr("width")
-            .and_then(|value| value.trim().trim_end_matches("px").parse::<u32>().ok())
-            .filter(|value| *value > 0)
-            .unwrap_or(page_width)
-            .min(page_width.max(1));
-        let widest = widths.entry(id).or_default();
-        *widest = (*widest).max(width);
-    }
-    let mut sources = BTreeMap::new();
-    for (id, width) in widths {
-        if let Some(data) = attachments
-            .iter()
-            .find(|item| item.id == id && item.kind == AttachmentKind::Image)
-            .and_then(|item| item.data_uri.as_ref())
-        {
-            let uri: Arc<str> = crate::scaled_for_display(data, width)
-                .map(Arc::from)
-                .unwrap_or_else(|| data.clone());
-            let picture = crate::project_assets::inline_image_id(&uri);
-            pictures.entry(picture).or_insert(uri);
-            sources.insert(id, crate::project_asset_reference(picture));
-        }
-    }
-    for node in nodes {
-        let id = node
-            .attr(ATTACHMENT_ATTRIBUTE)
-            .unwrap_or_default()
-            .to_string();
-        if let Some(source) = sources.get(&id) {
-            node.set_attr("src", source);
-            node.remove_attr("srcset");
-        }
-        node.remove_attr(ATTACHMENT_ATTRIBUTE);
-    }
-    crate::editing::serialized(&doc).map(Some)
 }

@@ -1,1421 +1,1267 @@
-//! Turn a bounded website snapshot into editable pages, using the normal picture store and IDs.
-use crate::{Appearance, Error, Page, Project, Result, SiteContent, Viewport, ensure};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use cssparser::{Parser, ParserInput, Token};
+//! Turn rendered website pages into canvas elements.
+//!
+//! The browser capture is the only source of truth about layout and computed styles; this file
+//! is a pure conversion from that compact tree in the browser to the project's element model.
+//! It never fetches, writes or runs page code. Images arrive as picture ids resolved by the
+//! native layer through the ordinary project picture store.
+use crate::{
+    BoundaryKind, Element, ElementKind, ElementLayout, ElementMeta, ElementOverride, ElementShadow,
+    ElementStroke, ElementStyle, ElementTextStyle, InputType, OutputType, Page, PageSize, Pointer,
+    PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Result, StackAlign,
+    StackDirection, StackJustify, TextAlign, ensure,
+};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::{Arc, OnceLock};
-use url::Url;
 use uuid::Uuid;
 
-/// How a rendered document refers to the site's own files.
-enum Assets<'a> {
-    /// Embedded as data URIs, so the document stands alone.
-    Inline,
-    /// Site-root URLs under `prefix`. The preview session serves them at its origin root, so
-    /// its prefix is empty; the loopback browser server serves them under its token prefix.
-    Linked(&'a str),
+/// A page rendered at one width. `url` is the absolute local-static-server URL the browser
+/// loaded, so image sources are already absolute and can be mapped back to snapshot files.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebCapture {
+    pub url: String,
+    /// The site name shown to the user; page paths are built from it instead of the loopback host.
+    #[serde(default)]
+    pub site: String,
+    /// The original site route (`/about`), not the loopback server path that carries a token.
+    #[serde(default)]
+    pub route: String,
+    pub title: String,
+    pub width: f64,
+    pub height: f64,
+    pub nodes: Vec<WebNode>,
+    #[serde(default)]
+    pub scripts: Vec<WebScript>,
 }
 
-struct Importer<'a> {
-    keep_scripts: bool,
-    /// How rewritten site resources are referenced; see [`Assets`].
-    assets: Assets<'a>,
-    files: &'a BTreeMap<String, Vec<u8>>,
-    routes: BTreeMap<String, String>,
-    pictures: BTreeMap<String, (Uuid, std::sync::Arc<str>)>,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebScript {
+    #[serde(default)]
+    pub src: Option<String>,
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
-fn image_mime(path: &str) -> Option<&'static str> {
-    match path.rsplit('.').next()?.to_ascii_lowercase().as_str() {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "webp" => Some("image/webp"),
-        "gif" => Some("image/gif"),
-        "svg" => Some("image/svg+xml"),
-        "ico" => Some("image/x-icon"),
-        "avif" => Some("image/avif"),
-        _ => None,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebNode {
+    pub tag: String,
+    pub rect: Rect,
+    #[serde(default)]
+    pub text: Option<String>,
+    #[serde(default)]
+    pub src: Option<String>,
+    #[serde(default)]
+    pub poster: Option<String>,
+    #[serde(default)]
+    pub href: Option<String>,
+    #[serde(default)]
+    pub input_type: Option<String>,
+    #[serde(default)]
+    pub placeholder: Option<String>,
+    #[serde(default)]
+    pub value: Option<String>,
+    #[serde(default)]
+    pub alt: Option<String>,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub attributes: WebAttributes,
+    pub styles: WebStyles,
+    #[serde(default)]
+    pub children: Vec<WebNode>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebAttributes {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub class_name: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub aria_expanded: Option<String>,
+    #[serde(default)]
+    pub aria_controls: Option<String>,
+    #[serde(default)]
+    pub data_toggle: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
+}
+
+fn one() -> f64 {
+    1.0
+}
+fn font_size() -> f64 {
+    16.0
+}
+fn font_weight() -> f64 {
+    400.0
+}
+fn line_height() -> f64 {
+    1.4
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WebStyles {
+    #[serde(default)]
+    pub background: String,
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub border_color: String,
+    #[serde(default)]
+    pub border_width: f64,
+    #[serde(default)]
+    pub radius: f64,
+    #[serde(default = "one")]
+    pub opacity: f64,
+    #[serde(default)]
+    pub shadow_x: f64,
+    #[serde(default)]
+    pub shadow_y: f64,
+    #[serde(default)]
+    pub shadow_blur: f64,
+    #[serde(default)]
+    pub shadow_color: String,
+    #[serde(default)]
+    pub font_family: String,
+    #[serde(default = "font_size")]
+    pub font_size: f64,
+    #[serde(default = "font_weight")]
+    pub font_weight: f64,
+    #[serde(default)]
+    pub italic: bool,
+    #[serde(default = "line_height")]
+    pub line_height: f64,
+    #[serde(default)]
+    pub letter_spacing: f64,
+    #[serde(default)]
+    pub align: String,
+    #[serde(default)]
+    pub display: String,
+    #[serde(default)]
+    pub direction: String,
+    #[serde(default)]
+    pub row_gap: f64,
+    #[serde(default)]
+    pub column_gap: f64,
+    #[serde(default)]
+    pub padding: f64,
+    #[serde(default)]
+    pub columns: u32,
+    #[serde(default)]
+    pub align_items: String,
+    #[serde(default)]
+    pub justify_content: String,
+    #[serde(default)]
+    pub wrap: bool,
+}
+
+impl Default for WebStyles {
+    fn default() -> Self {
+        Self {
+            background: String::new(),
+            color: String::new(),
+            border_color: String::new(),
+            border_width: 0.0,
+            radius: 0.0,
+            opacity: 1.0,
+            shadow_x: 0.0,
+            shadow_y: 0.0,
+            shadow_blur: 0.0,
+            shadow_color: String::new(),
+            font_family: String::new(),
+            font_size: 16.0,
+            font_weight: 400.0,
+            italic: false,
+            line_height: 1.4,
+            letter_spacing: 0.0,
+            align: String::new(),
+            display: String::new(),
+            direction: String::new(),
+            row_gap: 0.0,
+            column_gap: 0.0,
+            padding: 0.0,
+            columns: 1,
+            align_items: String::new(),
+            justify_content: String::new(),
+            wrap: false,
+        }
     }
 }
 
-fn text(bytes: &[u8]) -> Result<&str> {
-    std::str::from_utf8(bytes).map_err(|_| {
-        Error("Website source must be UTF-8. The originals were left unchanged.".into())
-    })
+/// Everything one import adds to a project. The caller applies it as a single undo step.
+#[derive(Debug, Clone, Default)]
+pub struct ImportedWebsite {
+    pub pages: Vec<Page>,
+    pub reference: Vec<ReferenceItem>,
+    pub pointers: Vec<Pointer>,
+    pub warnings: Vec<String>,
 }
 
-impl Importer<'_> {
-    fn local(&self, value: &str, source: &str) -> Option<(String, String)> {
-        let base = Url::parse(source)
-            .or_else(|_| Url::parse(&format!("https://desegnos.invalid/{source}")))
-            .ok()?;
-        let url = base.join(value.trim()).ok()?;
-        if url.origin() != Url::parse("https://desegnos.invalid/").ok()?.origin() {
-            return None;
-        }
-        let path = url.path().strip_prefix('/')?;
-        // URL paths are percent encoded; decode without accepting encoded traversal/separators.
-        let mut bytes = Vec::new();
-        let mut chars = path.bytes();
-        while let Some(b) = chars.next() {
-            bytes.push(if b == b'%' {
-                let a = (chars.next()? as char).to_digit(16)?;
-                let b = (chars.next()? as char).to_digit(16)?;
-                (a * 16 + b) as u8
-            } else {
-                b
-            });
-        }
-        let path = String::from_utf8(bytes).ok()?;
-        if path
-            .split('/')
-            .any(|p| p == ".." || p == "." || p.starts_with('.'))
-            || path.contains('\\')
+/// The unique image, video-poster and background sources the native layer must resolve into
+/// project pictures before conversion.
+pub fn web_capture_image_sources(captures: &[WebCapture]) -> Vec<String> {
+    let mut sources = BTreeSet::new();
+    for capture in captures {
+        collect_sources(&capture.nodes, &mut sources);
+    }
+    sources.into_iter().collect()
+}
+
+fn collect_sources(nodes: &[WebNode], sources: &mut BTreeSet<String>) {
+    for node in nodes {
+        let tag = node.tag.trim().to_ascii_lowercase();
+        if tag == "img"
+            && let Some(src) = node.src.as_deref().filter(|value| !value.trim().is_empty())
         {
-            return None;
+            sources.insert(src.to_owned());
         }
-        let suffix = format!(
-            "{}{}",
-            url.query().map(|s| format!("?{s}")).unwrap_or_default(),
-            url.fragment().map(|s| format!("#{s}")).unwrap_or_default()
-        );
-        Some((path, suffix))
+        if tag == "video"
+            && let Some(poster) = node
+                .poster
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+        {
+            sources.insert(poster.to_owned());
+        }
+        collect_sources(&node.children, sources);
     }
+}
 
-    fn resource(&self, value: &str, source: &str, stack: &mut BTreeSet<String>) -> Result<String> {
-        let Some((path, suffix)) = self.local(value, source) else {
-            return Ok(Url::parse(source)
-                .ok()
-                .filter(|u| u.host_str() != Some("desegnos.invalid"))
-                .and_then(|u| u.join(value).ok())
-                .map_or_else(|| value.into(), |u| u.to_string()));
-        };
-        let Some(bytes) = self.files.get(&path) else {
-            return Ok(value.into());
-        };
-        let fragment = suffix.find('#').map(|i| &suffix[i..]).unwrap_or("");
-        if let Some((id, _)) = self.pictures.get(&path) {
-            return Ok(format!("{}{fragment}", crate::project_asset_reference(*id)));
-        }
-        let extension = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        let mime = match extension.as_str() {
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "webp" => "image/webp",
-            "gif" => "image/gif",
-            "svg" => "image/svg+xml",
-            "ico" => "image/x-icon",
-            "avif" => "image/avif",
-            "woff" => "font/woff",
-            "woff2" => "font/woff2",
-            "ttf" => "font/ttf",
-            "otf" => "font/otf",
-            "css" => "text/css",
-            _ => return Ok(value.into()),
-        };
-        if let Assets::Linked(prefix) = self.assets {
-            return Ok(format!("{prefix}/{path}{suffix}"));
-        }
-        let transformed;
-        let bytes = if extension == "css" {
-            ensure(
-                stack.len() < 16 && stack.insert(path.clone()),
-                "A stylesheet import is circular or nested too deeply.",
-            )?;
-            transformed = self.css(text(bytes)?, &path, stack)?.into_bytes();
-            stack.remove(&path);
-            &transformed
+/// A page plan: the desktop capture is the base, the phone capture becomes linked-size overrides.
+struct PagePlan<'a> {
+    url: String,
+    desktop: &'a WebCapture,
+    phone: Option<&'a WebCapture>,
+    path: String,
+    name: String,
+    page_id: Uuid,
+    size_id: Uuid,
+    phone_size_id: Uuid,
+}
+
+/// A stable identifier from a string. Importing the same page twice therefore gives the same
+/// layer ids, which lets the phone pass target the desktop pass's layers.
+fn stable_uuid(seed: &str) -> Uuid {
+    let hash = crate::digest(seed.as_bytes());
+    let mut bytes = [0_u8; 16];
+    for (index, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&hash[index * 2..index * 2 + 2], 16).unwrap_or(0);
+    }
+    bytes[6] = (bytes[6] & 0x0f) | 0x50;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    Uuid::from_bytes(bytes)
+}
+
+fn normalize_url(value: &str) -> String {
+    let mut value = value.trim().to_owned();
+    if let Some(index) = value.find(['#', '?']) {
+        value.truncate(index);
+    }
+    while value.len() > 1 && value.ends_with('/') {
+        value.pop();
+    }
+    value
+}
+
+fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, String>) -> Option<String> {
+    let target = normalize_url(href);
+    let page = normalize_url(page_url);
+    if target.is_empty() || target == page {
+        return None;
+    }
+    page_paths.get(&target).cloned()
+}
+
+fn remote_href(href: &str) -> Option<String> {
+    let href = href.trim();
+    if href.len() > 2048 {
+        return None;
+    }
+    let parsed = url::Url::parse(href).ok()?;
+    (matches!(parsed.scheme(), "http" | "https")
+        && parsed.host_str().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none())
+    .then(|| href.to_owned())
+}
+
+fn parse_colour(value: &str) -> Option<String> {
+    let value = value.trim().to_ascii_lowercase();
+    if value.is_empty() || value == "transparent" {
+        return None;
+    }
+    if let Some(hex) = value.strip_prefix('#') {
+        let valid = matches!(hex.len(), 3 | 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
+        return valid.then(|| format!("#{hex}"));
+    }
+    let start = value.find('(')?;
+    if !value.starts_with("rgb") || !value.ends_with(')') {
+        return None;
+    }
+    let parts: Vec<f64> = value[start + 1..value.len() - 1]
+        .split(|character: char| character == ',' || character.is_whitespace() || character == '/')
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| {
+            let part = part.trim();
+            if let Some(percent) = part.strip_suffix('%') {
+                percent.parse::<f64>().ok().map(|value| value * 2.55)
+            } else {
+                part.parse::<f64>().ok()
+            }
+        })
+        .collect();
+    if parts.len() < 3 {
+        return None;
+    }
+    let channel = |value: f64| value.clamp(0.0, 255.0).round() as u8;
+    let alpha = parts.get(3).copied().unwrap_or(1.0);
+    if alpha <= 0.001 {
+        return None;
+    }
+    let (r, g, b) = (channel(parts[0]), channel(parts[1]), channel(parts[2]));
+    if alpha >= 0.999 {
+        Some(format!("#{r:02x}{g:02x}{b:02x}"))
+    } else {
+        Some(format!("#{r:02x}{g:02x}{b:02x}{:02x}", (alpha * 255.0).round() as u8))
+    }
+}
+
+fn text_align(value: &str) -> TextAlign {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "center" => TextAlign::Center,
+        "right" | "end" => TextAlign::Right,
+        _ => TextAlign::Left,
+    }
+}
+
+fn font_family(value: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        "system-ui".into()
+    } else {
+        value.chars().take(240).collect()
+    }
+}
+
+fn text_style(styles: &WebStyles) -> ElementTextStyle {
+    ElementTextStyle {
+        font_family: font_family(&styles.font_family),
+        size: styles.font_size.clamp(1.0, 400.0),
+        weight: styles.font_weight.clamp(100.0, 900.0).round() as u16,
+        italic: styles.italic,
+        line_height: styles.line_height.clamp(0.5, 4.0),
+        letter_spacing: styles.letter_spacing.clamp(-20.0, 100.0),
+        color: parse_colour(&styles.color).unwrap_or_else(|| "#1a1a1a".into()),
+        align: text_align(&styles.align),
+    }
+}
+
+fn element_style(styles: &WebStyles, text: bool) -> ElementStyle {
+    let radius = styles.radius.clamp(0.0, 4096.0);
+    ElementStyle {
+        fill: if text { None } else { parse_colour(&styles.background) },
+        stroke: if text {
+            ElementStroke {
+                color: None,
+                width: 0.0,
+            }
         } else {
-            bytes
+            ElementStroke {
+                color: parse_colour(&styles.border_color).filter(|_| styles.border_width >= 0.5),
+                width: styles.border_width.clamp(0.0, 128.0),
+            }
+        },
+        radius,
+        opacity: styles.opacity.clamp(0.0, 1.0),
+        shadow: ElementShadow {
+            x: styles.shadow_x.clamp(-512.0, 512.0),
+            y: styles.shadow_y.clamp(-512.0, 512.0),
+            blur: styles.shadow_blur.clamp(0.0, 512.0),
+            color: parse_colour(&styles.shadow_color),
+        },
+        text_style: text_style(styles),
+    }
+}
+
+fn layout_for(styles: &WebStyles) -> ElementLayout {
+    let display = styles.display.trim().to_ascii_lowercase();
+    if display.contains("flex") {
+        let direction = if styles.direction.trim().eq_ignore_ascii_case("row") {
+            StackDirection::Row
+        } else if styles.direction.trim().eq_ignore_ascii_case("column") {
+            StackDirection::Column
+        } else {
+            StackDirection::Row
         };
-        // Queries do not apply to embedded bytes; SVG fragments still do.
-        Ok(format!(
-            "data:{mime};base64,{}{fragment}",
-            STANDARD.encode(bytes)
+        let gap = if direction == StackDirection::Row {
+            styles.column_gap.max(styles.row_gap)
+        } else {
+            styles.row_gap.max(styles.column_gap)
+        };
+        let align = match styles.align_items.trim().to_ascii_lowercase().as_str() {
+            "center" => StackAlign::Center,
+            "end" | "flex-end" => StackAlign::End,
+            "stretch" => StackAlign::Stretch,
+            _ => StackAlign::Start,
+        };
+        let justify = match styles.justify_content.trim().to_ascii_lowercase().as_str() {
+            "center" => StackJustify::Center,
+            "end" | "flex-end" | "right" => StackJustify::End,
+            "space-between" | "space-around" | "space-evenly" => StackJustify::SpaceBetween,
+            _ => StackJustify::Start,
+        };
+        return ElementLayout::Stack {
+            direction,
+            gap: gap.clamp(0.0, 4096.0),
+            padding: styles.padding.clamp(0.0, 4096.0),
+            align,
+            justify,
+            wrap: styles.wrap,
+        };
+    }
+    if display.contains("grid") {
+        return ElementLayout::Grid {
+            columns: styles.columns.clamp(1, 64),
+            gap: styles.row_gap.max(styles.column_gap).clamp(0.0, 4096.0),
+            padding: styles.padding.clamp(0.0, 4096.0),
+        };
+    }
+    ElementLayout::Free
+}
+
+fn visual(styles: &WebStyles) -> bool {
+    parse_colour(&styles.background).is_some()
+        || (styles.border_width >= 0.5 && parse_colour(&styles.border_color).is_some())
+        || styles.shadow_blur > 0.0 && parse_colour(&styles.shadow_color).is_some()
+        || styles.radius > 0.0
+        || styles.opacity < 0.999
+}
+
+fn rect_local(rect: Rect, origin: (f64, f64)) -> Rect {
+    Rect {
+        x: rect.x - origin.0,
+        y: rect.y - origin.1,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn is_text_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "span" | "strong" | "em" | "b" | "i"
+            | "u" | "small" | "li" | "blockquote" | "figcaption" | "label" | "legend" | "th"
+            | "td" | "dt" | "dd" | "cite" | "q" | "code" | "pre" | "summary" | "address"
+    )
+}
+
+fn is_skipped(tag: &str) -> bool {
+    matches!(
+        tag,
+        "script" | "style" | "link" | "meta" | "head" | "title" | "noscript" | "template"
+            | "br" | "option" | "optgroup" | "col" | "colgroup" | "source" | "track" | "wbr"
+    )
+}
+
+fn input_type(value: Option<&str>) -> InputType {
+    match value.unwrap_or("text").trim().to_ascii_lowercase().as_str() {
+        "email" => InputType::Email,
+        "password" => InputType::Password,
+        "number" => InputType::Number,
+        "search" => InputType::Search,
+        "tel" => InputType::Tel,
+        "url" => InputType::Url,
+        "date" => InputType::Date,
+        "time" => InputType::Time,
+        "color" => InputType::Color,
+        "range" => InputType::Range,
+        "file" => InputType::File,
+        _ => InputType::Text,
+    }
+}
+
+fn clip_text(value: &str) -> String {
+    value
+        .split('\0')
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(crate::MAX_PROMPT_CHARS)
+        .collect()
+}
+
+fn trimmed_text(value: Option<&str>) -> Option<String> {
+    let value = value?;
+    let value = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!value.is_empty()).then_some(value)
+}
+
+fn descendant_text(nodes: &[WebNode]) -> Option<String> {
+    for node in nodes {
+        if let Some(text) = trimmed_text(node.text.as_deref()) {
+            return Some(text);
+        }
+        if let Some(text) = descendant_text(&node.children) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+struct Converter<'a> {
+    page: &'a PagePlan<'a>,
+    picture_ids: &'a BTreeMap<String, Uuid>,
+    page_paths: &'a BTreeMap<String, String>,
+    element_count: usize,
+    warnings: Vec<String>,
+}
+
+impl Converter<'_> {
+    fn element_id(&self, path: &[usize], tag: &str) -> Uuid {
+        stable_uuid(&format!(
+            "website:{}:{}:{}",
+            normalize_url(&self.page.url),
+            tag,
+            path.iter().map(usize::to_string).collect::<Vec<_>>().join(".")
         ))
     }
 
-    fn css(&self, source: &str, file: &str, stack: &mut BTreeSet<String>) -> Result<String> {
-        let mut input = ParserInput::new(source);
-        let mut parser = Parser::new(&mut input);
-        let mut edits = Vec::new();
-        self.css_tokens(&mut parser, file, stack, &mut edits, false)?;
-        let mut output = source.to_owned();
-        for (start, end, value) in edits.into_iter().rev() {
-            output.replace_range(start..end, &value);
+    fn map_link(&self, href: Option<&str>) -> Option<String> {
+        let href = href?.trim();
+        if href.is_empty() {
+            return None;
         }
-        Ok(output)
-    }
-
-    fn css_tokens(
-        &self,
-        parser: &mut Parser<'_, '_>,
-        file: &str,
-        stack: &mut BTreeSet<String>,
-        edits: &mut Vec<(usize, usize, String)>,
-        images: bool,
-    ) -> Result<()> {
-        let mut import = false;
-        loop {
-            let start = parser.position().byte_index();
-            let token = match parser.next_including_whitespace_and_comments() {
-                Ok(t) => t.clone(),
-                Err(_) => break,
-            };
-            let quote = |s: &str| {
-                let mut out = String::new();
-                cssparser::serialize_string(s, &mut out).expect("String write");
-                out
-            };
-            match token {
-                Token::UnquotedUrl(value) => {
-                    let value = self.resource(&value, file, stack)?;
-                    edits.push((
-                        start,
-                        parser.position().byte_index(),
-                        format!("url({})", quote(&value)),
-                    ));
-                    import = false;
-                }
-                Token::QuotedString(value) if import || images => {
-                    edits.push((
-                        start,
-                        parser.position().byte_index(),
-                        quote(&self.resource(&value, file, stack)?),
-                    ));
-                    import = false;
-                }
-                Token::AtKeyword(name) if name.eq_ignore_ascii_case("import") => {
-                    let url = parser
-                        .expect_url_or_string()
-                        .map_err(|_| Error("A stylesheet import URL is malformed.".into()))?
-                        .to_string();
-                    let tail_start = parser.position();
-                    let mut tail_end = tail_start;
-                    while !parser.is_exhausted() {
-                        tail_end = parser.position();
-                        if matches!(
-                            parser.next_including_whitespace_and_comments(),
-                            Ok(Token::Semicolon)
-                        ) {
-                            break;
-                        }
-                        tail_end = parser.position();
-                    }
-                    if let Some((path, _)) = self.local(&url, file)
-                        && let Some(bytes) = self.files.get(&path)
-                    {
-                        ensure(
-                            stack.len() < 16 && stack.insert(path.clone()),
-                            "A stylesheet import is circular or nested too deeply.",
-                        )?;
-                        let css = self.css(text(bytes)?, &path, stack)?;
-                        stack.remove(&path);
-                        let media = parser.slice(tail_start..tail_end).trim();
-                        // Leave advanced import qualifiers to the browser rather than changing their meaning.
-                        if !media.starts_with("layer") && !media.starts_with("supports") {
-                            let css = if media.is_empty() {
-                                css
-                            } else {
-                                format!("@media {media} {{\n{css}\n}}")
-                            };
-                            edits.push((start, parser.position().byte_index(), css));
-                        }
-                    }
-                    import = false;
-                }
-                Token::Function(name) if name.eq_ignore_ascii_case("url") => {
-                    let value = parser
-                        .parse_nested_block(|inner| {
-                            inner
-                                .expect_string_cloned()
-                                .map_err(Into::<cssparser::ParseError<'_, ()>>::into)
-                        })
-                        .map_err(|_| Error("An imported CSS URL is malformed.".into()))?;
-                    edits.push((
-                        start,
-                        parser.position().byte_index(),
-                        format!("url({})", quote(&self.resource(&value, file, stack)?)),
-                    ));
-                    import = false;
-                }
-                Token::Function(_)
-                | Token::ParenthesisBlock
-                | Token::SquareBracketBlock
-                | Token::CurlyBracketBlock => {
-                    let nested_images = matches!(&token, Token::Function(name) if name.eq_ignore_ascii_case("image-set") || name.eq_ignore_ascii_case("-webkit-image-set"));
-                    let result: std::result::Result<(), cssparser::ParseError<'_, ()>> = parser
-                        .parse_nested_block(|inner| {
-                            self.css_tokens(inner, file, stack, edits, nested_images)
-                                .map_err(|_| inner.new_custom_error(()))
-                        });
-                    result.map_err(|_| Error("An imported CSS resource is invalid.".into()))?;
-                    import = false;
-                }
-                Token::WhiteSpace(_) | Token::Comment(_) => {}
-                _ => import = false,
-            }
+        if let Some(path) = internal_href(href, &self.page.url, self.page_paths) {
+            return Some(path);
         }
-        Ok(())
-    }
-
-    fn page(&self, source: &str) -> Result<(String, SiteContent)> {
-        let doc = crate::editing::parse_document(text(&self.files[source])?, true)?;
-        let page_base =
-            Url::parse(&format!("https://desegnos.invalid/{source}")).expect("site base");
-        let base = doc
-            .select("base[href]")
-            .nodes()
-            .first()
-            .and_then(|n| n.attr("href"))
-            .and_then(|href| page_base.join(&href).ok())
-            .unwrap_or(page_base);
-        let source = base.as_str();
-        if !self.keep_scripts {
-            for node in doc.select("base").nodes() {
-                node.remove_from_parent();
-            }
-        }
-        let title = doc
-            .select_single("title")
-            .text()
-            .trim()
-            .chars()
-            .take(120)
-            .collect::<String>();
-        let mut javascript = String::new();
-        for node in doc.select("link[href]").nodes() {
-            if !node.attr("rel").is_some_and(|r| {
-                r.split_whitespace()
-                    .any(|s| s.eq_ignore_ascii_case("stylesheet"))
-            }) {
-                continue;
-            }
-            if let Some((path, _)) = self.local(&node.attr("href").unwrap_or_default(), source)
-                && let Some(bytes) = self.files.get(&path)
-            {
-                let css = self.css(text(bytes)?, &path, &mut BTreeSet::from([path.clone()]))?;
-                node.rename("style");
-                node.remove_attrs(&["href", "rel", "integrity", "crossorigin"]);
-                node.set_text(css.replace("</style", "<\\/style"));
-            }
-        }
-        for node in doc.select("script[src]").nodes() {
-            if self.keep_scripts {
-                if self
-                    .local(&node.attr("src").unwrap_or_default(), source)
-                    .is_some()
-                {
-                    node.set_attr("crossorigin", "anonymous");
-                }
-                continue;
-            }
-            if let Some((path, _)) = self.local(&node.attr("src").unwrap_or_default(), source)
-                && let Some(bytes) = self.files.get(&path)
-            {
-                let script = text(bytes)?;
-                if node.has_attr("defer")
-                    && node
-                        .attr("type")
-                        .is_none_or(|t| !t.eq_ignore_ascii_case("module"))
-                {
-                    javascript.push_str(script);
-                    javascript.push_str("\n;\n");
-                    node.remove_from_parent();
-                } else {
-                    node.remove_attrs(&["src", "integrity", "crossorigin", "async", "defer"]);
-                    node.set_text(script.replace("</script", "<\\/script"));
-                }
-            }
-        }
-        for node in doc.select("*").nodes() {
-            // Imported editor identities are rebuilt with the normal stable-target allocator.
-            // Keep the stable IDs of the original editable source.
-            for attr in ["src", "href", "poster", "xlink:href", "data"] {
-                if let Some(value) = node.attr(attr) {
-                    if node
-                        .node_name()
-                        .is_some_and(|n| matches!(n.as_ref(), "a" | "area" | "iframe"))
-                        && (attr == "href" || attr == "src")
-                    {
-                        if self.keep_scripts {
-                            continue;
-                        }
-                        if let Some((path, suffix)) = self.local(&value, source) {
-                            let route = self.routes.get(&path).or_else(|| {
-                                self.routes.get(&format!(
-                                    "{}index.html",
-                                    if path.ends_with('/') || path.is_empty() {
-                                        path.clone()
-                                    } else {
-                                        format!("{path}/")
-                                    }
-                                ))
-                            });
-                            if let Some(route) = route {
-                                node.set_attr(attr, &format!("{route}{suffix}"));
-                            }
-                        }
-                    } else {
-                        node.set_attr(attr, &self.resource(&value, source, &mut BTreeSet::new())?);
-                    }
-                }
-            }
-            if let Some(value) = node.attr("style") {
-                node.set_attr("style", &self.css(&value, source, &mut BTreeSet::new())?);
-            }
-            if let Some(value) = node.attr("srcset") {
-                // Native file references cannot contain unescaped commas or whitespace.
-                let items = value
-                    .split(',')
-                    .map(|item| {
-                        let mut parts = item.split_whitespace();
-                        let url = self.resource(
-                            parts.next().unwrap_or(""),
-                            source,
-                            &mut BTreeSet::new(),
-                        )?;
-                        Ok(format!("{} {}", url, parts.collect::<Vec<_>>().join(" "))
-                            .trim_end()
-                            .to_owned())
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                if !value.trim_start().starts_with("data:") {
-                    node.set_attr("srcset", &items.join(", "));
-                }
-            }
-            if node
-                .node_name()
-                .is_some_and(|name| name.as_ref() == "style")
-            {
-                node.set_text(self.css(&node.text(), source, &mut BTreeSet::new())?);
-            }
-        }
-        crate::stable_targets::assign_document_ids(&doc)?;
-        let content = SiteContent {
-            html: format!("<!doctype html>\n{}", doc.html_root().html()),
-            css: String::new(),
-            javascript,
-        };
-        Ok((title, content))
-    }
-}
-
-pub fn import_website_files(name: &str, files: &BTreeMap<String, Vec<u8>>) -> Result<Project> {
-    let pages: Vec<_> = files
-        .keys()
-        .filter(|p| {
-            (p.to_lowercase().ends_with(".html") || p.to_lowercase().ends_with(".htm"))
-                && crate::identity_source_page(p, std::str::from_utf8(&files[*p]).unwrap_or(""))
-                    .is_some()
-        })
-        .filter(|p| {
-            files[*p].len() <= crate::MAX_SITE_SOURCE_BYTES
-                && std::str::from_utf8(&files[*p]).is_ok()
-        })
-        .take(100)
-        .cloned()
-        .collect();
-    import_website_pages(name, files, pages)
-}
-
-pub(crate) fn import_website_pages(
-    name: &str,
-    files: &BTreeMap<String, Vec<u8>>,
-    pages: Vec<String>,
-) -> Result<Project> {
-    ensure(
-        !pages.is_empty() && pages.len() <= 100,
-        "Choose a website folder containing between 1 and 100 HTML pages.",
-    )?;
-    let home = pages
-        .iter()
-        .find(|p| p.eq_ignore_ascii_case("index.html") || p.eq_ignore_ascii_case("index.htm"))
-        .unwrap_or(&pages[0]);
-    let mut routes = BTreeMap::from([(home.clone(), "/".to_string())]);
-    let mut used = BTreeSet::from(["/".to_string()]);
-    for (index, source) in pages.iter().enumerate().filter(|(_, p)| *p != home) {
-        let mut route = crate::source_page_path(source);
-        if crate::model::validate_path(&route).is_err() {
-            route = format!("/page-{}", index + 1);
-        }
-        let base = route.clone();
-        let mut suffix = 2;
-        while !used.insert(route.to_lowercase()) {
-            route = format!("{}-{suffix}", base.trim_end_matches('/'));
-            suffix += 1;
-        }
-        routes.insert(source.clone(), route);
-    }
-    // Encode each picture once, rather than expanding the same bytes into every page.
-    let pictures = files
-        .iter()
-        .filter_map(|(path, bytes)| {
-            let mime = image_mime(path)?;
-            if bytes.is_empty() {
-                return None;
-            }
-            let uri = format!("data:{mime};base64,{}", STANDARD.encode(bytes));
-            Some((
-                path.clone(),
-                (
-                    crate::project_assets::inline_image_id(&uri),
-                    std::sync::Arc::from(uri),
-                ),
-            ))
-        })
-        .collect();
-    let importer = Importer {
-        keep_scripts: false,
-        assets: Assets::Inline,
-        files,
-        routes,
-        pictures,
-    };
-    let viewport = Viewport {
-        width: 1440,
-        height: 900,
-    };
-    let mut project = Project::new(
-        name.chars().take(120).collect(),
-        viewport,
-        Appearance::Light,
-    )?;
-    project.pages.clear();
-    let mut page_files = BTreeMap::new();
-    for source in &pages {
-        let original = text(&files[source])?;
-        let title = dom_query::Document::from(original)
-            .select_single("title")
-            .text()
-            .trim()
-            .chars()
-            .take(120)
-            .collect::<String>();
-        let content = SiteContent {
-            html: crate::source::assign_editor_ids(&crate::source::strip_editor_ids(original))?,
-            css: String::new(),
-            javascript: String::new(),
-        };
-        let id = Uuid::new_v4();
-        if source == home {
-            project.home_page_id = id;
-        }
-        page_files.insert(id, source.clone());
-        project.pages.push(Page {
-            id,
-            name: if title.is_empty() {
-                source.chars().take(120).collect()
-            } else {
-                title
-            },
-            path: importer.routes[source].clone(),
-            included: true,
-            viewport,
-            appearance: Appearance::Light,
-            regions: vec![],
-            content: Some(content),
-        });
-    }
-    project.pictures = importer.pictures.values().cloned().collect();
-    project.website = Some(ImportedWebsite {
-        page_files,
-        files: files
-            .iter()
-            .filter(|(p, _)| !pages.contains(p))
-            .map(|(p, bytes)| {
-                let value = importer
-                    .pictures
-                    .get(p)
-                    .map(|(id, _)| crate::project_asset_reference(*id))
-                    .unwrap_or_else(|| STANDARD.encode(bytes));
-                (p.clone(), value.into())
-            })
-            .collect(),
-        framework: None,
-        skipped: files
-            .keys()
-            .filter(|p| (p.ends_with(".html") || p.ends_with(".htm")) && !pages.contains(p))
-            .take(256)
-            .cloned()
-            .collect(),
-    });
-    project.store_inline_images()?;
-    project.validate()?;
-    Ok(project)
-}
-
-/// Byte threshold above which a binary preview file stays a reference, not a copy.
-pub const PREVIEW_INLINE_BYTES: usize = 1024 * 1024;
-/// Preview-only route for pictures that have no file of their own in the imported site.
-const PREVIEW_ASSET_DIRECTORY: &str = "__desegnos_assets__";
-
-/// One preview resource. Inline bytes are copied into a session; encoded and picture values
-/// point at bytes the project already shares, and a rendered page builds its bytes on first use.
-#[derive(Clone)]
-pub enum PreviewFile {
-    Inline(Arc<[u8]>),
-    Encoded(Arc<str>),
-    Picture(Arc<str>),
-    /// A live page that renders the first time it is served, not when the package is built.
-    Rendered(Arc<LivePage>),
-}
-
-/// One page of a live package, rendered against the package's shared inline sources on demand.
-pub struct LivePage {
-    source: String,
-    /// Site-root URL prefix for the assets this page references.
-    prefix: Arc<str>,
-    render: Arc<BTreeMap<String, Vec<u8>>>,
-    text_limit: usize,
-    rendered: OnceLock<std::result::Result<Arc<[u8]>, String>>,
-}
-
-impl LivePage {
-    pub fn bytes(&self) -> Result<Arc<[u8]>> {
-        match self
-            .rendered
-            .get_or_init(|| self.render().map_err(|error| error.0))
+        // A local server address that is not an imported page would export as localhost.
+        if let (Ok(page), Ok(target)) = (url::Url::parse(&self.page.url), url::Url::parse(href))
+            && page.origin() == target.origin()
         {
-            Ok(bytes) => Ok(bytes.clone()),
-            Err(error) => Err(Error(error.clone())),
+            return None;
         }
+        remote_href(href)
     }
 
-    fn render(&self) -> Result<Arc<[u8]>> {
-        let importer = Importer {
-            keep_scripts: true,
-            assets: Assets::Linked(&self.prefix),
-            files: &self.render,
-            routes: BTreeMap::new(),
-            pictures: BTreeMap::new(),
-        };
-        let (_, content) = importer.page(&self.source)?;
-        let bytes = content.html.into_bytes();
-        ensure(
-            bytes.len() <= self.text_limit,
-            preview_too_large(&self.source, bytes.len()),
-        )?;
-        Ok(bytes.into())
+    fn picture(&self, source: Option<&str>) -> Option<Uuid> {
+        self.picture_ids.get(source?.trim()).copied()
     }
 
-    #[cfg(test)]
-    fn is_rendered(&self) -> bool {
-        self.rendered.get().is_some()
-    }
-}
-
-impl PreviewFile {
-    /// Byte length of an inline file; referenced files have no session copy.
-    pub fn inline_len(&self) -> Option<usize> {
-        match self {
-            Self::Inline(bytes) => Some(bytes.len()),
-            Self::Rendered(page) => page.bytes().ok().map(|bytes| bytes.len()),
-            Self::Encoded(_) | Self::Picture(_) => None,
+    fn node_style(&self, node: &WebNode, text: bool) -> ElementStyle {
+        let mut style = element_style(&node.styles, text);
+        let limit = node.rect.width.min(node.rect.height) / 2.0;
+        if limit.is_finite() {
+            style.radius = style.radius.min(limit.max(0.0));
         }
+        style
     }
 
-    /// Decoded length of the full resource, without decoding its bytes.
-    pub fn decoded_len(&self) -> Option<usize> {
-        match self {
-            Self::Inline(bytes) => Some(bytes.len()),
-            Self::Rendered(page) => page.bytes().ok().map(|bytes| bytes.len()),
-            Self::Encoded(encoded) => base64_decoded_len(encoded),
-            Self::Picture(uri) => base64_decoded_len(base64_body(uri)),
-        }
-    }
-
-    /// Bytes for an inclusive range, decoding only the base64 groups that cover it.
-    pub fn read_range(&self, start: usize, end: usize) -> Result<Vec<u8>> {
-        let body = match self {
-            Self::Inline(bytes) => return inline_range(bytes, start, end),
-            Self::Rendered(page) => {
-                let bytes = page.bytes()?;
-                return inline_range(&bytes, start, end);
-            }
-            Self::Encoded(encoded) => encoded,
-            Self::Picture(uri) => base64_body(uri),
-        };
-        decode_base64_range(body, start, end)
-    }
-}
-
-fn inline_range(bytes: &[u8], start: usize, end: usize) -> Result<Vec<u8>> {
-    bytes
-        .get(start..=end)
-        .map(<[u8]>::to_vec)
-        .ok_or_else(|| Error("The preview resource is unavailable.".into()))
-}
-
-fn base64_body(value: &str) -> &str {
-    value.split_once(";base64,").map_or(value, |(_, body)| body)
-}
-
-fn base64_decoded_len(value: &str) -> Option<usize> {
-    let body = value.trim_end();
-    if !body.len().is_multiple_of(4) {
-        return None;
-    }
-    let padding = body
-        .as_bytes()
-        .iter()
-        .rev()
-        .take_while(|byte| **byte == b'=')
-        .count()
-        .min(2);
-    (body.len() / 4 * 3).checked_sub(padding)
-}
-
-fn decode_base64_range(body: &str, start: usize, end: usize) -> Result<Vec<u8>> {
-    let invalid = || Error("The preview resource is unavailable.".into());
-    let decoded_len = base64_decoded_len(body).ok_or_else(invalid)?;
-    if start > end || end >= decoded_len {
-        return Err(invalid());
-    }
-    // Base64 stores three bytes per four characters, so one group covers a whole range.
-    let first = start / 3;
-    let last = end / 3;
-    let chars = &body.as_bytes()[first * 4..((last + 1) * 4).min(body.len())];
-    let decoded = STANDARD.decode(chars).map_err(|_| invalid())?;
-    let offset = start - first * 3;
-    decoded
-        .get(offset..offset + end - start + 1)
-        .map(<[u8]>::to_vec)
-        .ok_or_else(invalid)
-}
-
-fn preview_text_path(path: &str) -> bool {
-    matches!(
-        path.rsplit('.')
-            .next()
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str(),
-        "html" | "htm" | "css" | "js" | "mjs"
-    )
-}
-
-fn preview_too_large(path: &str, bytes: usize) -> String {
-    format!(
-        "{path} is too large to preview ({} MB).",
-        bytes.div_ceil(1024 * 1024)
-    )
-}
-
-fn check_preview_text(files: &BTreeMap<String, PreviewFile>, text_limit: usize) -> Result<()> {
-    let mut text_bytes = 0usize;
-    let mut largest: Option<(String, usize)> = None;
-    for (path, file) in files {
-        let Some(len) = file.inline_len().filter(|_| preview_text_path(path)) else {
-            continue;
-        };
-        text_bytes = text_bytes.saturating_add(len);
-        if largest.as_ref().is_none_or(|(_, size)| *size < len) {
-            largest = Some((path.clone(), len));
-        }
-    }
-    if text_bytes > text_limit {
-        let (path, len) = largest.expect("text bytes are attributed to a file");
-        return Err(Error(preview_too_large(&path, len)));
-    }
-    Ok(())
-}
-
-/// Original file layout and bounded local resources, retained across saves and recovery.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ImportedWebsite {
-    pub page_files: BTreeMap<Uuid, String>,
-    pub files: BTreeMap<String, Arc<str>>,
-    pub framework: Option<String>,
-    pub skipped: Vec<String>,
-}
-/// Page scripts stay inside the document. Appending them after `</html>` produced pages that
-/// browsers render but that no HTML parser, including this importer, accepts.
-fn insert_page_script(html: &mut String, tag: &str) {
-    let lower = html.to_ascii_lowercase();
-    let at = lower
-        .rfind("</body>")
-        .or_else(|| lower.rfind("</html>"))
-        .unwrap_or(html.len());
-    html.insert_str(at, tag);
-}
-
-impl Project {
-    pub fn website_files(&self) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
-        self.website_source_files(|_, encoded| self.decode_site_file(encoded))
-    }
-
-    /// Canvas documents only read HTML, CSS, and scripts as text; other files just need a path.
-    fn website_canvas_files(&self) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
-        self.website_source_files(|path, encoded| {
-            if preview_text_path(path) {
-                self.decode_site_file(encoded)
-            } else {
-                Ok(Vec::new())
-            }
-        })
-    }
-
-    fn decode_site_file(&self, encoded: &str) -> Result<Vec<u8>> {
-        let value = self
-            .resolve_site_content(&SiteContent {
-                html: encoded.to_string(),
-                css: String::new(),
-                javascript: String::new(),
-            })?
-            .html;
-        let value = value
-            .strip_prefix("data:")
-            .and_then(|v| v.split_once(";base64,"))
-            .map_or(value.as_str(), |(_, v)| v);
-        STANDARD
-            .decode(value)
-            .map_err(|_| Error("Invalid imported website resource.".into()))
-    }
-
-    fn website_source_files(
-        &self,
-        decode: impl Fn(&str, &str) -> Result<Vec<u8>>,
-    ) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
-        let Some(site) = &self.website else {
-            return Ok(None);
-        };
-        let mut files = BTreeMap::new();
-        for (path, encoded) in &site.files {
-            files.insert(path.clone(), decode(path, encoded)?);
-        }
-        for page in self.pages.iter().filter(|p| p.included) {
-            if let Some(content) = &page.content {
-                let path = site
-                    .page_files
-                    .get(&page.id)
-                    .cloned()
-                    .unwrap_or_else(|| crate::export::output_path(&page.path));
-                let resolved = self.resolve_site_content(content)?;
-                let mut html = resolved.html.clone();
-                if !resolved.css.is_empty() {
-                    let style = format!(
-                        "<style>{}</style>",
-                        resolved.css.replace("</style", "<\\/style")
-                    );
-                    if let Some(at) = html.to_ascii_lowercase().rfind("</head>") {
-                        html.insert_str(at, &style);
-                    } else {
-                        html.insert_str(0, &style);
-                    }
-                }
-                if !resolved.javascript.is_empty() {
-                    insert_page_script(
-                        &mut html,
-                        &format!(
-                            "<script>{}</script>",
-                            resolved.javascript.replace("</script", "<\\/script")
-                        ),
-                    );
-                }
-                let runtime = crate::region_script_runtime(&resolved.html)?;
-                if !runtime.is_empty() {
-                    let name = format!("desegnos-regions-{}.js", crate::digest(runtime.as_bytes()));
-                    // Resolve the resource beside the page, including nested imported routes.
-                    let resource = path
-                        .rsplit_once('/')
-                        .map_or(name.clone(), |(directory, _)| format!("{directory}/{name}"));
-                    insert_page_script(
-                        &mut html,
-                        &format!("<script defer src=\"{name}\"></script>"),
-                    );
-                    files.insert(resource, runtime.into_bytes());
-                }
-                files.insert(path, html.into_bytes());
-            }
-        }
-        Ok(Some(files))
-    }
-    pub fn website_live_files(&self) -> Result<Option<BTreeMap<String, Vec<u8>>>> {
-        let Some(mut files) = self.website_files()? else {
-            return Ok(None);
-        };
-        let importer = Importer {
-            keep_scripts: true,
-            assets: Assets::Inline,
-            files: &files,
-            routes: BTreeMap::new(),
-            pictures: BTreeMap::new(),
-        };
-        let mut rendered = BTreeMap::new();
-        for source in self
-            .website
-            .as_ref()
-            .expect("website")
-            .page_files
-            .values()
-            .filter(|source| files.contains_key(*source))
-        {
-            let (_, content) = importer.page(source)?;
-            rendered.insert(source.clone(), content.html.into_bytes());
-        }
-        files.extend(rendered);
-        Ok(Some(files))
-    }
-    /// Preview resources keep text and small files as inline bytes, while larger binary files
-    /// stay references to bytes the project already holds. No whole-site copy is made.
-    ///
-    /// `prefix` roots the site URLs inside the package: empty for the preview session, whose
-    /// pages live at its origin root, or `/<token>` for the loopback browser server.
-    pub fn website_preview_files(
-        &self,
-        run_scripts: bool,
-        text_limit: usize,
-        prefix: &str,
-    ) -> Result<Option<BTreeMap<String, PreviewFile>>> {
-        let Some(mut files) = self.website_preview_package(run_scripts, text_limit, prefix)? else {
-            return Ok(None);
-        };
-        for file in files.values_mut() {
-            let PreviewFile::Rendered(page) = file else {
-                continue;
-            };
-            *file = PreviewFile::Inline(page.bytes()?);
-        }
-        check_preview_text(&files, text_limit)?;
-        Ok(Some(files))
-    }
-
-    /// The same package with live pages deferred: each page renders only when it is served.
-    pub fn website_preview_package(
-        &self,
-        run_scripts: bool,
-        text_limit: usize,
-        prefix: &str,
-    ) -> Result<Option<BTreeMap<String, PreviewFile>>> {
-        let Some(site) = &self.website else {
-            return Ok(None);
-        };
-        let pictures = self.preview_pictures();
-        let mut paths_by_picture = BTreeMap::new();
-        let mut files = BTreeMap::new();
-        for (path, encoded) in &site.files {
-            let reference = encoded
-                .strip_prefix(crate::PROJECT_ASSET_SCHEME)
-                .and_then(|value| Uuid::parse_str(value).ok());
-            if let Some(id) = reference {
-                let uri = pictures
-                    .get(&id)
-                    .cloned()
-                    .ok_or_else(|| Error("An imported website picture is missing.".into()))?;
-                paths_by_picture.insert(id, path.clone());
-                files.insert(path.clone(), PreviewFile::Picture(uri));
-            } else if !preview_text_path(path) && encoded.len() > PREVIEW_INLINE_BYTES {
-                files.insert(path.clone(), PreviewFile::Encoded(encoded.clone()));
-            } else {
-                let bytes = STANDARD
-                    .decode(encoded.as_bytes())
-                    .map_err(|_| Error("Invalid imported website resource.".into()))?;
-                files.insert(path.clone(), PreviewFile::Inline(bytes.into()));
-            }
-        }
-        for page in self.pages.iter().filter(|page| page.included) {
-            let Some(content) = &page.content else {
-                continue;
-            };
-            let path = site
-                .page_files
-                .get(&page.id)
-                .cloned()
-                .unwrap_or_else(|| crate::export::output_path(&page.path));
-            let html = self.preview_source(
-                &content.html,
-                &pictures,
-                &paths_by_picture,
-                &mut files,
-                prefix,
-            )?;
-            let css = self.preview_source(
-                &content.css,
-                &pictures,
-                &paths_by_picture,
-                &mut files,
-                prefix,
-            )?;
-            let javascript = self.preview_source(
-                &content.javascript,
-                &pictures,
-                &paths_by_picture,
-                &mut files,
-                prefix,
-            )?;
-            let mut document = html;
-            if !css.is_empty() {
-                let style = format!("<style>{}</style>", css.replace("</style", "<\\/style"));
-                if let Some(at) = document.to_ascii_lowercase().rfind("</head>") {
-                    document.insert_str(at, &style);
-                } else {
-                    document.insert_str(0, &style);
-                }
-            }
-            if !javascript.is_empty() {
-                insert_page_script(
-                    &mut document,
-                    &format!(
-                        "<script>{}</script>",
-                        javascript.replace("</script", "<\\/script")
-                    ),
-                );
-            }
-            let runtime = crate::region_script_runtime(&document)?;
-            if !runtime.is_empty() {
-                let name = format!("desegnos-regions-{}.js", crate::digest(runtime.as_bytes()));
-                let resource = path
-                    .rsplit_once('/')
-                    .map_or(name.clone(), |(directory, _)| format!("{directory}/{name}"));
-                insert_page_script(
-                    &mut document,
-                    &format!("<script defer src=\"{name}\"></script>"),
-                );
-                files.insert(resource, PreviewFile::Inline(runtime.into_bytes().into()));
-            }
-            ensure(
-                document.len() <= text_limit,
-                preview_too_large(&path, document.len()),
-            )?;
-            files.insert(path, PreviewFile::Inline(document.into_bytes().into()));
-        }
-        // A rendered page is measured when it renders, so live packages are sized by their
-        // static text only; the eager caller checks the forced result again.
-        check_preview_text(&files, text_limit)?;
-        if run_scripts {
-            // Render scripts against inline sources only; larger files stay referenceable URLs.
-            let render: Arc<BTreeMap<String, Vec<u8>>> = Arc::new(
-                files
-                    .iter()
-                    .map(|(path, file)| {
-                        (
-                            path.clone(),
-                            match file {
-                                PreviewFile::Inline(bytes) => bytes.to_vec(),
-                                // Path presence is enough to resolve referenced assets; their
-                                // bytes remain shared in the package and are never inlined.
-                                _ => Vec::new(),
-                            },
-                        )
-                    })
-                    .collect(),
-            );
-            for source in site
-                .page_files
-                .values()
-                .filter(|source| render.contains_key(*source))
-            {
-                files.insert(
-                    source.clone(),
-                    PreviewFile::Rendered(Arc::new(LivePage {
-                        source: source.clone(),
-                        prefix: prefix.into(),
-                        render: render.clone(),
-                        text_limit,
-                        rendered: OnceLock::new(),
-                    })),
-                );
-            }
-        }
-        Ok(Some(files))
-    }
-    /// Point image references at preview URLs, keeping the session text free of picture bytes.
-    fn preview_source(
-        &self,
-        source: &str,
-        pictures: &BTreeMap<Uuid, Arc<str>>,
-        paths_by_picture: &BTreeMap<Uuid, String>,
-        files: &mut BTreeMap<String, PreviewFile>,
-        prefix: &str,
-    ) -> Result<String> {
-        let mut output = String::with_capacity(source.len());
-        let mut rest = source;
-        while let Some(index) = rest.find(crate::PROJECT_ASSET_SCHEME) {
-            output.push_str(&rest[..index]);
-            rest = &rest[index + crate::PROJECT_ASSET_SCHEME.len()..];
-            let id = rest
-                .get(..36)
-                .and_then(|value| Uuid::parse_str(value).ok())
-                .ok_or_else(|| Error("An image reference is invalid.".into()))?;
-            let uri = pictures.get(&id).ok_or_else(|| {
-                Error("An image reference is not in this project. Your page is unchanged.".into())
-            })?;
-            let url = if let Some(path) = paths_by_picture.get(&id) {
-                format!("{prefix}/{path}")
-            } else {
-                let path = format!("{PREVIEW_ASSET_DIRECTORY}/{id}");
-                files
-                    .entry(path.clone())
-                    .or_insert_with(|| PreviewFile::Picture(uri.clone()));
-                format!("{prefix}/{path}")
-            };
-            output.push_str(&url);
-            rest = &rest[36..];
-        }
-        output.push_str(rest);
-        Ok(output)
-    }
-    fn preview_pictures(&self) -> BTreeMap<Uuid, Arc<str>> {
-        let mut pictures = self.pictures.clone();
-        if let Some(identity) = &self.imported_identity {
-            for asset in &identity.assets {
-                pictures
-                    .entry(asset.id)
-                    .or_insert_with(|| Arc::from(asset.data_uri.as_str()));
-            }
-            for photo in &identity.photos {
-                pictures
-                    .entry(photo.id)
-                    .or_insert_with(|| photo.data_uri.clone());
-            }
-        }
-        for page in &self.pages {
-            let Some(content) = &page.content else {
-                continue;
-            };
-            for source in [&content.html, &content.css, &content.javascript] {
-                for uri in crate::project_assets::inline_images(source) {
-                    pictures
-                        .entry(crate::project_assets::inline_image_id(uri))
-                        .or_insert_with(|| Arc::from(uri));
-                }
-            }
-        }
-        pictures
-    }
-    /// Rendering changes are disposable; the editor source and saved resources remain intact.
-    pub fn website_canvas_content(&self, page: &Page) -> Result<Option<SiteContent>> {
-        let Some(files) = self.website_canvas_files()? else {
-            return Ok(None);
-        };
-        let site = self.website.as_ref().expect("website files");
-        let Some(source) = site.page_files.get(&page.id) else {
-            return Ok(None);
-        };
-        let routes = self
-            .pages
-            .iter()
-            .filter_map(|p| {
-                site.page_files
-                    .get(&p.id)
-                    .map(|f| (f.clone(), p.path.clone()))
-            })
-            .collect();
-        let importer = Importer {
-            keep_scripts: false,
-            assets: Assets::Linked(""),
-            files: &files,
-            routes,
-            pictures: BTreeMap::new(),
-        };
-        let (_, mut content) = importer.page(source)?;
-        if let Some(authored) = &page.content {
-            content.css.clone_from(&authored.css);
-        }
-        Ok(Some(content))
-    }
-}
-
-impl ImportedWebsite {
-    pub(crate) fn validate(&self, project: &Project) -> Result<()> {
-        let valid = |path: &str| {
-            !path.is_empty()
-                && path.len() <= 4096
-                && !path.contains(['\\', ':', '\0'])
-                && path.split('/').all(|part| {
-                    !part.is_empty() && !part.starts_with('.') && !part.ends_with(['.', ' '])
-                })
-        };
-        ensure(
-            self.files.len() <= 10_000 && self.page_files.len() <= 100 && self.skipped.len() <= 512,
-            "The imported website exceeds its file limits.",
-        )?;
-        ensure(
-            self.files
-                .keys()
-                .chain(self.page_files.values())
-                .all(|p| valid(p)),
-            "An imported website path is invalid.",
-        )?;
-        let mut bytes = 0usize;
-        for value in self.files.values() {
-            bytes = bytes.saturating_add(value.len());
-            ensure(
-                bytes <= 128 * 1024 * 1024,
-                "The imported website exceeds its resource limit.",
-            )?;
-            if let Some(id) = value.strip_prefix(crate::PROJECT_ASSET_SCHEME) {
-                ensure(
-                    Uuid::parse_str(id)
-                        .ok()
-                        .is_some_and(|id| project.pictures.contains_key(&id)),
-                    "An imported website picture is missing.",
-                )?;
-            }
-        }
-        ensure(
-            self.framework
-                .as_ref()
-                .is_none_or(|s| !s.is_empty() && s.len() <= 80),
-            "The imported framework name is invalid.",
-        )?;
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::Project;
-
-    const LIMIT: usize = 16 * 1024 * 1024;
-
-    fn site() -> Project {
-        let files = BTreeMap::from([
-            ("index.html".into(), b"<!doctype html><html><head><link rel='stylesheet' href='/site.css'></head><body><h1>Home</h1><a href='about.html'>About</a><script type='module' src='main.js'></script></body></html>".to_vec()),
-            ("about.html".into(), b"<!doctype html><html><body><h1>About</h1><script>document.body.dataset.ready='yes';</script></body></html>".to_vec()),
-            ("contact.html".into(), b"<!doctype html><html><body><h1>Contact</h1></body></html>".to_vec()),
-            ("site.css".into(), b"h1{color:red}".to_vec()),
-            ("main.js".into(), b"import './module.js'; document.body.dataset.home='yes';".to_vec()),
-            ("module.js".into(), b"document.body.dataset.loaded='yes';".to_vec()),
-        ]);
-        crate::import_website_files("Website", &files).unwrap()
-    }
-
-    fn body(file: &PreviewFile) -> Vec<u8> {
-        let len = file.decoded_len().expect("inline resource");
-        if len == 0 {
+    /// One DOM node becomes zero or more elements positioned relative to `origin`.
+    fn elements(&self, node: &WebNode, origin: (f64, f64), path: &mut Vec<usize>, depth: usize) -> Vec<Element> {
+        if depth > 28 || self.element_count >= crate::MAX_ELEMENTS {
             return vec![];
         }
-        file.read_range(0, len - 1).expect("range")
-    }
+        let tag = node.tag.trim().to_ascii_lowercase();
+        if is_skipped(&tag) || node.styles.opacity <= 0.001 {
+            return vec![];
+        }
+        if !node.rect.width.is_finite()
+            || !node.rect.height.is_finite()
+            || node.rect.width < 1.0
+            || node.rect.height < 1.0
+        {
+            return vec![];
+        }
+        let local = rect_local(node.rect, origin);
+        let text = trimmed_text(node.text.as_deref());
+        let mut children = Vec::new();
+        for (index, child) in node.children.iter().enumerate() {
+            path.push(index);
+            children.extend(self.elements(child, (node.rect.x, node.rect.y), path, depth + 1));
+            path.pop();
+        }
 
-    fn inline_files(files: &BTreeMap<String, PreviewFile>) -> BTreeMap<String, Vec<u8>> {
-        files
-            .iter()
-            .map(|(path, file)| {
-                (
-                    path.clone(),
-                    match file {
-                        PreviewFile::Inline(bytes) => bytes.to_vec(),
-                        _ => Vec::new(),
-                    },
-                )
-            })
-            .collect()
-    }
-
-    #[test]
-    fn live_pages_render_on_request_and_match_the_eager_package() {
-        let project = site();
-        let eager = project
-            .website_preview_files(true, LIMIT, "")
-            .unwrap()
-            .unwrap();
-        let mut lazy = project
-            .website_preview_package(true, LIMIT, "")
-            .unwrap()
-            .unwrap();
-        let pages: BTreeSet<String> = project
-            .website
-            .as_ref()
-            .unwrap()
-            .page_files
-            .values()
-            .cloned()
-            .collect();
-        assert!(pages.len() > 1);
-        for path in &pages {
-            match &lazy[path] {
-                PreviewFile::Rendered(page) => {
-                    assert!(!page.is_rendered(), "{path} rendered eagerly");
+        if tag == "img" {
+            let Some(image) = self.picture(node.src.as_deref()) else {
+                return vec![];
+            };
+            return [Element {
+                id: self.element_id(path, &tag),
+                kind: ElementKind::Image,
+                name: None,
+                link: None,
+                rect: local,
+                rotation: 0.0,
+                visible: true,
+                locked: false,
+                style: self.node_style(node, false),
+                text: clip_text(node.alt.as_deref().unwrap_or_default()),
+                image: Some(image),
+                url: None,
+                layout: ElementLayout::Free,
+                overrides: BTreeMap::new(),
+                children: vec![],
+                meta: ElementMeta::default(),
+            }]
+            .into();
+        }
+        if tag == "video" {
+            if let Some(url) = self.map_link(node.src.as_deref()) {
+                return [self.base_element(&tag, path, local, node, ElementKind::Video, &text, Some(url), children)]
+                    .into();
+            }
+            let Some(image) = self.picture(node.poster.as_deref()) else { return vec![] };
+            let mut element = self.base_element(&tag, path, local, node, ElementKind::Image, &text, None, vec![]);
+            element.image = Some(image);
+            return [element].into();
+        }
+        if tag == "audio" {
+            let Some(url) = self.map_link(node.src.as_deref()) else { return vec![] };
+            return [self.base_element(&tag, path, local, node, ElementKind::Audio, &text, Some(url), children)]
+                .into();
+        }
+        if tag == "iframe" || tag == "embed" || tag == "object" {
+            let Some(url) = self.map_link(node.src.as_deref()) else { return vec![] };
+            return [self.base_element(&tag, path, local, node, ElementKind::Embed, &text, Some(url), children)]
+                .into();
+        }
+        if tag == "input" {
+            let kind = node.input_type.as_deref().unwrap_or("text").trim().to_ascii_lowercase();
+            if kind == "hidden" {
+                return vec![];
+            }
+            let value = if matches!(kind.as_str(), "checkbox" | "radio") {
+                trimmed_text(node.alt.as_deref()).or_else(|| trimmed_text(node.attributes.name.as_deref()))
+            } else {
+                trimmed_text(node.value.as_deref()).or_else(|| trimmed_text(node.placeholder.as_deref()))
+            };
+            let element_kind = match kind.as_str() {
+                "checkbox" => ElementKind::Checkbox,
+                "radio" => ElementKind::Radio,
+                "submit" | "button" | "reset" | "image" => ElementKind::Button,
+                _ => ElementKind::Input {
+                    input_type: input_type(Some(&kind)),
+                },
+            };
+            return [self.base_element(&tag, path, local, node, element_kind, &value, None, vec![])]
+                .into();
+        }
+        if tag == "textarea" {
+            let value = trimmed_text(node.value.as_deref()).or_else(|| trimmed_text(node.placeholder.as_deref()));
+            return [self.base_element(&tag, path, local, node, ElementKind::Textarea, &value, None, vec![])]
+                .into();
+        }
+        if tag == "select" {
+            let element = self.base_element(&tag, path, local, node, ElementKind::Select { options: node.options.clone() }, &text, None, vec![]);
+            return [element].into();
+        }
+        if tag == "a" {
+            let url = self.map_link(node.href.as_deref());
+            let inline_children = node
+                .children
+                .iter()
+                .all(|child| is_text_tag(&child.tag.trim().to_ascii_lowercase()));
+            let label = text.clone().or_else(|| {
+                inline_children
+                    .then(|| descendant_text(&node.children))
+                    .flatten()
+            });
+            // An anchor around a card keeps its content as a linked box.
+            if let Some(label) = label.filter(|_| children.is_empty() || inline_children) {
+                if url.is_some() {
+                    return [self.base_element(&tag, path, local, node, ElementKind::Link, &Some(label), url, vec![])]
+                        .into();
                 }
-                _ => panic!("{path} is not a live page"),
+                return [self.text_element(&tag, path, local, node, &label)].into();
+            }
+            let element = self.base_element(&tag, path, local, node, ElementKind::Box, &text, url, children);
+            return [element].into();
+        }
+        if tag == "button" {
+            let value = text
+                .or_else(|| descendant_text(&node.children))
+                .or_else(|| trimmed_text(node.value.as_deref()))
+                .or_else(|| trimmed_text(node.alt.as_deref()))
+                .unwrap_or_else(|| "Button".into());
+            return [self.base_element(&tag, path, local, node, ElementKind::Button, &Some(value), None, vec![])]
+                .into();
+        }
+        if is_text_tag(&tag) {
+            if let Some(text) = text {
+                if children.is_empty() {
+                    return [self.text_element(&tag, path, local, node, &text)].into();
+                }
+                let mut merged = children;
+                let mut text_element = self.text_element(&tag, path, Rect { x: 0.0, y: 0.0, width: local.width, height: local.height }, node, &text);
+                text_element.id = stable_uuid(&format!("{}:{}:text", self.element_id(path, &tag), path.len()));
+                merged.insert(0, text_element);
+                let layout = layout_for(&node.styles);
+                if !visual(&node.styles) && matches!(layout, ElementLayout::Free) {
+                    return merged
+                        .into_iter()
+                        .map(|mut child| {
+                            child.rect.x += node.rect.x - origin.0;
+                            child.rect.y += node.rect.y - origin.1;
+                            child
+                        })
+                        .collect();
+                }
+                let boxed = self.base_element(&tag, path, local, node, ElementKind::Box, &None, None, merged);
+                return [boxed].into();
+            }
+            if children.is_empty() {
+                return vec![];
+            }
+            return children;
+        }
+
+        // Every other visible element is a container. Transparent wrappers are merged into
+        // their parent; visual boxes and flex/grid containers stay as real layers.
+        let layout = layout_for(&node.styles);
+        let keep = visual(&node.styles) || !matches!(layout, ElementLayout::Free);
+        if !keep {
+            if let Some(text) = text {
+                let mut merged = children;
+                merged.insert(0, self.text_element(&tag, path, local, node, &text));
+                return merged;
+            }
+            return children
+                .into_iter()
+                .map(|mut child| {
+                    child.rect.x += node.rect.x - origin.0;
+                    child.rect.y += node.rect.y - origin.1;
+                    child
+                })
+                .collect();
+        }
+        let element = self.base_element(&tag, path, local, node, ElementKind::Box, &text, None, children);
+        [element].into()
+    }
+
+    fn children_elements(&self, node: &WebNode, path: &mut Vec<usize>, depth: usize, origin: (f64, f64)) -> Vec<Element> {
+        let mut elements = Vec::new();
+        for (index, child) in node.children.iter().enumerate() {
+            path.push(index);
+            elements.extend(self.elements(child, origin, path, depth + 1));
+            path.pop();
+        }
+        elements
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn base_element(
+        &self,
+        tag: &str,
+        path: &[usize],
+        rect: Rect,
+        node: &WebNode,
+        kind: ElementKind,
+        text: &Option<String>,
+        url: Option<String>,
+        children: Vec<Element>,
+    ) -> Element {
+        Element {
+            id: self.element_id(path, tag),
+            kind,
+            name: None,
+            link: None,
+            rect,
+            rotation: 0.0,
+            visible: true,
+            locked: false,
+            style: self.node_style(node, false),
+            text: clip_text(text.as_deref().unwrap_or_default()),
+            image: None,
+            url,
+            layout: layout_for(&node.styles),
+            overrides: BTreeMap::new(),
+            children,
+            meta: ElementMeta::default(),
+        }
+    }
+
+    fn text_element(&self, tag: &str, path: &[usize], rect: Rect, node: &WebNode, text: &str) -> Element {
+        Element {
+            id: self.element_id(path, &format!("{tag}:text")),
+            kind: ElementKind::Text,
+            name: None,
+            link: None,
+            rect,
+            rotation: 0.0,
+            visible: true,
+            locked: false,
+            style: self.node_style(node, true),
+            text: clip_text(text),
+            image: None,
+            url: None,
+            layout: ElementLayout::Free,
+            overrides: BTreeMap::new(),
+            children: vec![],
+            meta: ElementMeta::default(),
+        }
+    }
+}
+
+fn page_plans<'a>(captures: &'a [WebCapture], project: &Project) -> Result<Vec<PagePlan<'a>>> {
+    ensure(!captures.is_empty(), "Render at least one page before importing it.")?;
+    ensure(captures.len() <= 60, "A website import renders at most 30 pages.")?;
+    let mut grouped: BTreeMap<String, (&WebCapture, Option<&WebCapture>)> = BTreeMap::new();
+    for capture in captures {
+        let key = normalize_url(&capture.url);
+        let entry = grouped.entry(key).or_insert((capture, None));
+        if capture.width >= 700.0 {
+            if entry.0.width < 700.0 {
+                entry.0 = capture;
+            }
+        } else if entry.1.is_none() {
+            entry.1 = Some(capture);
+        }
+    }
+    let remaining = crate::MAX_PAGES.saturating_sub(project.pages.len());
+    ensure(remaining > 0, "This project already holds the maximum number of boundaries.")?;
+    let limit = remaining.min(30);
+    let existing: BTreeSet<String> = project
+        .pages
+        .iter()
+        .map(|page| page.path.to_ascii_lowercase())
+        .collect();
+    let first = grouped
+        .keys()
+        .next()
+        .and_then(|url| url::Url::parse(url).ok());
+    let base = captures
+        .first()
+        .map(|capture| capture.site.trim())
+        .filter(|site| !site.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            first
+                .as_ref()
+                .and_then(|url| url.host_str())
+                .map(|host| host.trim_start_matches("www.").to_owned())
+        })
+        .unwrap_or_else(|| "website".into())
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_owned();
+    let base = if base.is_empty() { "website".into() } else { base };
+    let mut paths = existing;
+    let mut plans = Vec::new();
+    for (key, (desktop, phone)) in grouped {
+        let parsed = url::Url::parse(&key).ok();
+        let raw_path = if desktop.route.is_empty() {
+            parsed.as_ref().map(|url| url.path()).unwrap_or("/")
+        } else {
+            desktop.route.as_str()
+        };
+        let slug = path_slug(raw_path, &base);
+        let mut path = slug.clone();
+        let mut suffix = 2;
+        while paths.contains(&path.to_ascii_lowercase()) {
+            path = format!("{slug}-{suffix}");
+            suffix += 1;
+        }
+        paths.insert(path.to_ascii_lowercase());
+        let title = desktop.title.trim();
+        let name = if title.is_empty() {
+            if raw_path == "/" || raw_path.is_empty() {
+                "Imported home".into()
+            } else {
+                segment_name(raw_path)
+            }
+        } else {
+            title.chars().take(120).collect()
+        };
+        let page_id = stable_uuid(&format!("website:page:{key}"));
+        let size_id = stable_uuid(&format!("website:size:{key}:desktop"));
+        let phone_size_id = stable_uuid(&format!("website:size:{key}:phone"));
+        plans.push(PagePlan {
+            url: key,
+            desktop,
+            phone,
+            path,
+            name,
+            page_id,
+            size_id,
+            phone_size_id,
+        });
+        if plans.len() >= limit {
+            break;
+        }
+    }
+    Ok(plans)
+}
+
+fn snake(value: &str) -> String {
+    let lowered = value.trim().to_ascii_lowercase();
+    let mut slug = lowered
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    while slug.contains("--") {
+        slug = slug.replace("--", "-");
+    }
+    slug.trim_matches('-').to_owned()
+}
+
+fn reserved_segment(segment: &str) -> bool {
+    matches!(segment, "assets" | "src" | "node_modules" | "con" | "prn" | "aux" | "nul")
+        || (segment.len() == 4
+            && (segment.starts_with("com") || segment.starts_with("lpt"))
+            && segment.ends_with(['1', '2', '3', '4', '5', '6', '7', '8', '9']))
+}
+
+fn path_slug(raw_path: &str, base: &str) -> String {
+    let base = snake(base);
+    let base = if base.is_empty() {
+        "website".to_owned()
+    } else if reserved_segment(&base) {
+        format!("{base}-site")
+    } else {
+        base
+    };
+    let mut segments: Vec<String> = raw_path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let without_extension = segment
+                .rsplit_once('.')
+                .filter(|(_, extension)| matches!(extension.to_ascii_lowercase().as_str(), "html" | "htm"))
+                .map_or(segment, |(stem, _)| stem);
+            let slug = snake(without_extension);
+            if slug.is_empty() || slug == "index" {
+                String::new()
+            } else {
+                let slug: String = slug.chars().take(60).collect();
+                if reserved_segment(&slug) {
+                    format!("{slug}-page")
+                } else {
+                    slug
+                }
+            }
+        })
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    if segments.last().is_some_and(|segment| segment == "index") {
+        segments.pop();
+    }
+    if segments.is_empty() {
+        format!("/{base}")
+    } else {
+        format!("/{base}/{}", segments.join("/"))
+    }
+}
+
+fn segment_name(raw_path: &str) -> String {
+    raw_path
+        .trim_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|value| !value.is_empty())
+        .map(|value| value.rsplit_once('.').map_or(value, |(stem, _)| stem).replace(['-', '_'], " "))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "Page".into())
+}
+
+/// Convert rendered pages into boundaries, layers, script notes and behaviour pointers.
+pub fn import_website(
+    captures: &[WebCapture],
+    picture_ids: &BTreeMap<String, Uuid>,
+    project: &Project,
+) -> Result<ImportedWebsite> {
+    let plans = page_plans(captures, project)?;
+    let page_paths: BTreeMap<String, String> = plans
+        .iter()
+        .map(|plan| (normalize_url(&plan.url), plan.path.clone()))
+        .collect();
+    let mut right = project
+        .pages
+        .iter()
+        .flat_map(|page| page.sizes.iter().map(|size| size.x + size.width as f64))
+        .chain(project.reference.iter().map(|item| item.rect.x + item.rect.width))
+        .fold(0.0_f64, f64::max);
+    if right <= 0.0 {
+        right = 0.0;
+    }
+    let top = project
+        .pages
+        .iter()
+        .flat_map(|page| page.sizes.iter().map(|size| size.y))
+        .fold(0.0_f64, f64::min);
+    right += 160.0;
+    let mut imported = ImportedWebsite::default();
+    let mut element_total = project
+        .pages
+        .iter()
+        .map(|page| count_elements(&page.elements))
+        .sum::<usize>();
+    let pointer_room = crate::MAX_POINTERS.saturating_sub(project.pointers.len());
+    let mut pointer_total = 0usize;
+    let mut reference_room = crate::MAX_REFERENCE_ITEMS.saturating_sub(project.reference.len());
+    for plan in plans {
+        let page_x = right;
+        let page_y = top;
+        let desktop_height = plan.desktop.height.clamp(1.0, 100_000.0).round() as u32;
+        let converter = Converter {
+            page: &plan,
+            picture_ids,
+            page_paths: &page_paths,
+            element_count: 0,
+            warnings: Vec::new(),
+        };
+        let mut base_path = Vec::new();
+        let mut base_elements = converter.children_elements(
+            &WebNode {
+                tag: "body".into(),
+                rect: Rect { x: 0.0, y: 0.0, width: plan.desktop.width, height: desktop_height as f64 },
+                text: None,
+                src: None,
+                poster: None,
+                href: None,
+                input_type: None,
+                placeholder: None,
+                value: None,
+                alt: None,
+                options: vec![],
+                attributes: WebAttributes::default(),
+                styles: WebStyles::default(),
+                children: plan.desktop.nodes.clone(),
+            },
+            &mut base_path,
+            0,
+            (0.0, 0.0),
+        );
+        let mut phone_size = Vec::new();
+        if let Some(phone) = plan.phone {
+            let phone_height = phone.height.clamp(1.0, 100_000.0).round() as u32;
+            let phone_converter = Converter {
+                page: &plan,
+                picture_ids,
+                page_paths: &page_paths,
+                element_count: 0,
+                warnings: Vec::new(),
+            };
+            let mut phone_path = Vec::new();
+            let phone_elements = phone_converter.children_elements(
+                &WebNode {
+                    tag: "body".into(),
+                    rect: Rect { x: 0.0, y: 0.0, width: phone.width, height: phone_height as f64 },
+                    text: None,
+                    src: None,
+                    poster: None,
+                    href: None,
+                    input_type: None,
+                    placeholder: None,
+                    value: None,
+                    alt: None,
+                    options: vec![],
+                    attributes: WebAttributes::default(),
+                    styles: WebStyles::default(),
+                    children: phone.nodes.clone(),
+                },
+                &mut phone_path,
+                0,
+                (0.0, 0.0),
+            );
+            let mut overrides = BTreeMap::new();
+            collect_overrides(&phone_elements, &mut overrides);
+            apply_overrides(&mut base_elements, &overrides, plan.phone_size_id);
+            phone_size.push(PageSize {
+                id: plan.phone_size_id,
+                label: "Phone".into(),
+                width: 390,
+                height: phone_height,
+                kind: BoundaryKind::Page,
+                x: page_x + 1440.0 + 160.0,
+                y: page_y,
+            });
+            imported.warnings.extend(converter.warnings.iter().cloned());
+            imported.warnings.extend(phone_converter.warnings.iter().cloned());
+        }
+        let mut sizes = vec![PageSize {
+            id: plan.size_id,
+            label: "Desktop".into(),
+            width: 1440,
+            height: desktop_height,
+            kind: BoundaryKind::Page,
+            x: page_x,
+            y: page_y,
+        }];
+        sizes.extend(phone_size);
+        let width = if plan.phone.is_some() { 1440.0 + 160.0 + 390.0 } else { 1440.0 };
+        right = page_x + width + 160.0;
+
+        // Scripts are reference notes below the boundary, not layers inside it.
+        let mut note_x = page_x;
+        let mut note_y = page_y + f64::from(desktop_height) + 24.0;
+        for (index, script) in plan.desktop.scripts.iter().take(12.min(reference_room)).enumerate() {
+            let label = script
+                .src
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .or_else(|| {
+                    script
+                        .text
+                        .as_deref()
+                        .and_then(|text| text.lines().map(str::trim).find(|line| !line.is_empty()))
+                        .map(str::to_owned)
+                });
+            let Some(label) = label else { continue };
+            let text = format!("Script: {}", label.chars().take(220).collect::<String>());
+            if reference_room == 0 {
+                break;
+            }
+            reference_room -= 1;
+            imported.reference.push(ReferenceItem {
+                id: stable_uuid(&format!("website:script:{}:{index}", plan.url)),
+                rect: Rect { x: note_x, y: note_y, width: 280.0, height: 96.0 },
+                kind: ReferenceKind::Note { text },
+            });
+            note_x += 300.0;
+            if index % 3 == 2 {
+                note_x = page_x;
+                note_y += 110.0;
             }
         }
-        for file in lazy.values_mut() {
-            let PreviewFile::Rendered(page) = file else {
-                continue;
+
+        let pointers = behaviour_pointers(plan.desktop, &plan);
+        let page_elements = count_elements(&base_elements);
+        if element_total + page_elements > crate::MAX_ELEMENTS {
+            imported
+                .warnings
+                .push("The remaining pages were left out to stay inside the project element limit.".into());
+            break;
+        }
+        element_total += page_elements;
+        let page = Page {
+            id: plan.page_id,
+            name: plan.name,
+            path: plan.path.clone(),
+            included: true,
+            output: OutputType::Webpage,
+            sizes,
+            appearance: project.appearance,
+            elements: base_elements,
+        };
+        for pointer in pointers {
+            if pointer_total >= pointer_room {
+                imported
+                    .warnings
+                    .push("Some recognisable behaviours were left out at the project pointer limit.".into());
+                break;
+            }
+            pointer_total += 1;
+            imported.pointers.push(pointer);
+        }
+        imported.pages.push(page);
+    }
+    Ok(imported)
+}
+
+fn count_elements(elements: &[Element]) -> usize {
+    elements
+        .iter()
+        .map(|element| 1 + count_elements(&element.children))
+        .sum()
+}
+
+fn collect_overrides(elements: &[Element], overrides: &mut BTreeMap<Uuid, ElementOverride>) {
+    for element in elements {
+        overrides.insert(
+            element.id,
+            ElementOverride {
+                rect: Some(element.rect),
+                style: Some(element.style.clone()),
+                layout: Some(element.layout.clone()),
+                hidden: false,
+                dismissed: false,
+            },
+        );
+        collect_overrides(&element.children, overrides);
+    }
+}
+
+fn apply_overrides(elements: &mut [Element], overrides: &BTreeMap<Uuid, ElementOverride>, phone_size: Uuid) {
+    for element in elements {
+        if let Some(over) = overrides.get(&element.id) {
+            element.overrides.insert(phone_size, over.clone());
+        }
+        apply_overrides(&mut element.children, overrides, phone_size);
+    }
+}
+
+fn behaviour_pointers(capture: &WebCapture, plan: &PagePlan<'_>) -> Vec<Pointer> {
+    let mut pointers = Vec::new();
+    let mut path = Vec::new();
+    walk_behaviours(&capture.nodes, &mut path, plan, &mut pointers);
+    pointers
+}
+
+fn walk_behaviours(nodes: &[WebNode], path: &mut Vec<usize>, plan: &PagePlan<'_>, pointers: &mut Vec<Pointer>) {
+    for (index, node) in nodes.iter().enumerate() {
+        path.push(index);
+        let tag = node.tag.trim().to_ascii_lowercase();
+        let class = node.attributes.class_name.to_ascii_lowercase();
+        let id = node.attributes.id.to_ascii_lowercase();
+        let role = node.attributes.role.to_ascii_lowercase();
+        let controls = node.attributes.aria_controls.clone().unwrap_or_default();
+        let expanded = node.attributes.aria_expanded.is_some();
+        let toggle = node.attributes.data_toggle.clone().unwrap_or_default().to_ascii_lowercase();
+        let menuish = class.contains("menu") || class.contains("nav") || class.contains("hamburger")
+            || id.contains("menu") || id.contains("nav") || toggle.contains("collapse") || toggle.contains("menu");
+        let tabish = role == "tab" || (class.contains("tab") && (expanded || !controls.is_empty()));
+        let accordion = class.contains("accordion") || toggle.contains("collapse");
+        let visible = node.rect.width >= 1.0 && node.rect.height >= 1.0 && node.styles.opacity > 0.001;
+        if visible && (tag == "button" || tag == "a" || role == "button") && (menuish || tabish || accordion) {
+            let comment = if tabish {
+                "Switches to the tab panel this control names."
+            } else if accordion {
+                "Expands and collapses this section."
+            } else {
+                "Toggles the navigation menu."
             };
-            *file = PreviewFile::Inline(page.bytes().unwrap());
+            let element_id = stable_uuid(&format!(
+                "website:{}:{}:{}",
+                normalize_url(&plan.url),
+                tag,
+                path.iter().map(usize::to_string).collect::<Vec<_>>().join(".")
+            ));
+            pointers.push(Pointer {
+                id: stable_uuid(&format!("website:pointer:{}:{}", plan.url, path.iter().map(usize::to_string).collect::<Vec<_>>().join("."))),
+                from: PointerSource::Element { page_id: plan.page_id, element_id, size_id: Some(plan.size_id) },
+                to: PointerTarget::Boundary { page_id: plan.page_id, size_id: Some(plan.size_id) },
+                comment: comment.into(),
+                wiring: None,
+                play: None,
+                play_comment: String::new(),
+            });
         }
-        assert_eq!(eager.len(), lazy.len());
-        for (path, file) in &eager {
-            assert_eq!(body(file), body(&lazy[path]), "{path}");
-        }
-        // The old algorithm rendered each page from the static inline sources.
-        let static_files = project
-            .website_preview_package(false, LIMIT, "")
-            .unwrap()
-            .unwrap();
-        let render = inline_files(&static_files);
-        let importer = Importer {
-            keep_scripts: true,
-            assets: Assets::Linked(""),
-            files: &render,
-            routes: BTreeMap::new(),
-            pictures: BTreeMap::new(),
-        };
-        for source in &pages {
-            let (_, content) = importer.page(source).unwrap();
-            assert_eq!(content.html.into_bytes(), body(&eager[source]), "{source}");
-        }
-    }
-
-    fn media_files() -> BTreeMap<String, Vec<u8>> {
-        BTreeMap::from([
-            ("index.html".into(), b"<!doctype html><html><head><link rel='stylesheet' href='site.css'></head><body><img src='images/photo.png'><img src='/portrait/pose.webp'><p style=\"background:url('images/tile.png')\"></p></body></html>".to_vec()),
-            ("site.css".into(), b"body{background:url(images/bg.png)}".to_vec()),
-            ("images/photo.png".into(), b"photo".to_vec()),
-            ("images/bg.png".into(), b"bg".to_vec()),
-            ("images/tile.png".into(), b"tile".to_vec()),
-            ("portrait/pose.webp".into(), b"pose".to_vec()),
-        ])
-    }
-
-    fn media_site() -> Project {
-        crate::import_website_files("Website", &media_files()).unwrap()
-    }
-
-    #[test]
-    fn canvas_content_references_site_assets_by_path() {
-        let project = media_site();
-        let page = project.page(project.home_page_id).unwrap();
-        let content = project.website_canvas_content(page).unwrap().unwrap();
-        // Root-relative sources (`/portrait/...`) resolve from the site root like relative ones.
-        for reference in [
-            "/images/photo.png",
-            "/images/bg.png",
-            "/images/tile.png",
-            "\"/portrait/pose.webp\"",
-        ] {
-            assert!(
-                content.html.contains(reference),
-                "{reference} in {}",
-                content.html
-            );
-        }
-        assert!(!content.html.contains("data:image/"), "{}", content.html);
-    }
-
-    #[test]
-    fn scripted_canvas_package_keeps_assets_referenced_and_source_unchanged() {
-        let project = media_site();
-        let before = project.clone();
-        let package = project
-            .website_preview_package(true, LIMIT, "")
-            .unwrap()
-            .unwrap();
-        let rendered = String::from_utf8(body(&package["index.html"])).unwrap();
-        assert!(rendered.contains("/images/photo.png"), "{rendered}");
-        assert!(rendered.contains("/images/bg.png"));
-        assert!(!rendered.contains("data:image/"));
-        assert_eq!(project, before);
-    }
-
-    #[test]
-    fn canvas_content_does_not_decode_binary_site_files() {
-        let mut project = media_site();
-        project
-            .website
-            .as_mut()
-            .unwrap()
-            .files
-            .insert("images/photo.png".into(), "not base64!".into());
-        assert!(project.website_files().is_err());
-        let page = project.page(project.home_page_id).unwrap();
-        let content = project.website_canvas_content(page).unwrap().unwrap();
-        assert!(content.html.contains("/images/photo.png"));
-    }
-
-    #[test]
-    fn inline_imports_still_embed_site_assets() {
-        let files = media_files();
-        let importer = Importer {
-            keep_scripts: true,
-            assets: Assets::Inline,
-            files: &files,
-            routes: BTreeMap::new(),
-            pictures: BTreeMap::new(),
-        };
-        let (_, content) = importer.page("index.html").unwrap();
-        assert!(
-            content.html.contains("data:image/png;base64,"),
-            "{}",
-            content.html
-        );
-        assert!(!content.html.contains("/images/"), "{}", content.html);
-    }
-
-    #[test]
-    fn render_errors_are_cached_and_read_as_unavailable() {
-        let file = PreviewFile::Rendered(Arc::new(LivePage {
-            source: "broken.html".into(),
-            prefix: "".into(),
-            render: Arc::new(BTreeMap::from([("broken.html".into(), vec![0xff])])),
-            text_limit: LIMIT,
-            rendered: OnceLock::new(),
-        }));
-        let PreviewFile::Rendered(page) = &file else {
-            unreachable!()
-        };
-        let error = page.bytes().unwrap_err();
-        assert_eq!(page.bytes().unwrap_err(), error);
-        assert_eq!(file.inline_len(), None);
-        assert_eq!(file.decoded_len(), None);
-        assert!(file.read_range(0, 0).is_err());
-    }
-
-    fn median(mut values: [f64; 5]) -> f64 {
-        values.sort_by(f64::total_cmp);
-        values[2]
-    }
-
-    /// DESEGNOS_BENCH_JOURNAL=<journal> cargo test --release -p desegnos-core live_preview_bench -- --ignored --nocapture
-    #[test]
-    #[ignore = "timing"]
-    fn live_preview_bench() {
-        let Ok(journal) = std::env::var("DESEGNOS_BENCH_JOURNAL") else {
-            eprintln!("DESEGNOS_BENCH_JOURNAL is not set");
-            return;
-        };
-        let text = std::fs::read_to_string(journal).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let project: Project = serde_json::from_value(value["project"].clone()).unwrap();
-        let pages = project.website.as_ref().unwrap().page_files.len();
-        let mut eager = [0.0; 5];
-        let mut lazy = [0.0; 5];
-        let mut served = [0.0; 5];
-        for run in 0..5 {
-            let start = std::time::Instant::now();
-            project.website_preview_files(true, LIMIT, "").unwrap();
-            eager[run] = start.elapsed().as_secs_f64() * 1000.0;
-
-            let start = std::time::Instant::now();
-            let package = project
-                .website_preview_package(true, LIMIT, "")
-                .unwrap()
-                .unwrap();
-            lazy[run] = start.elapsed().as_secs_f64() * 1000.0;
-
-            let page = package
-                .values()
-                .find_map(|file| match file {
-                    PreviewFile::Rendered(page) => Some(page),
-                    _ => None,
-                })
-                .expect("a live page");
-            let start = std::time::Instant::now();
-            page.bytes().unwrap();
-            served[run] = start.elapsed().as_secs_f64() * 1000.0;
-        }
-        println!(
-            "{pages} pages: eager {:.1} ms, lazy package {:.1} ms, lazy + 1 page {:.1} ms",
-            median(eager),
-            median(lazy),
-            median(served)
-        );
+        walk_behaviours(&node.children, path, plan, pointers);
+        path.pop();
     }
 }

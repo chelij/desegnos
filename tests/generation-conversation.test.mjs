@@ -1,101 +1,68 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { compileModules } from './typescript.mjs';
 
-const temporary = await mkdtemp(new URL('../.conversation-', import.meta.url));
+globalThis.HTMLElement = class {};
+globalThis.document = {
+  activeElement: null,
+  querySelector() { return null; },
+  getElementById() { return null; },
+  addEventListener() {}, removeEventListener() {},
+};
+const modules = await compileModules(['src/GenerationLog.tsx']);
 try {
-  const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--jsx', 'react-jsx', '--moduleResolution', 'bundler', '--types', 'vite/client', '--skipLibCheck', '--outDir', temporary, 'src/GenerationLog.tsx'], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  const banner = join(temporary, 'ProblemBanner.js');
-  await writeFile(banner, (await readFile(banner, 'utf8')).replaceAll("from './icons'", "from './icons.js'"));
-  const disclosure = join(temporary, 'Disclosure.js');
-  await writeFile(disclosure, (await readFile(disclosure, 'utf8')).replaceAll("from './icons'", "from './icons.js'"));
-  for (const name of ['GenerationLog']) {
-    let source = await readFile(join(temporary, `${name}.js`), 'utf8');
-    source = source.replace(/^import .* from '\.\/WorkspaceSurface';$/m, 'const WorkspaceSurface = ({ children }) => children;')
-      .replace(/^import .* from '\.\/api';$/m, "const native = () => { throw new Error('Rendering must not call the native bridge'); };")
-      .replace(/^import .* from '\.\/Preview';$/m, 'const PagePreview = () => null;')
-      .replace(/^import .* from '\.\/Notes';$/m, "const scopeLabel = () => 'Whole site';")
-      .replace(/from '\.\/(GenerationDrafts|generationDraftState)'/g, "from './$1.mjs'")
-      .replace(/^import .* from '\.\/Disclosure';$/m, "import { Disclosure } from './Disclosure.js';");
-    await writeFile(join(temporary, `${name}.mjs`), source);
-  }
-  const { GenerationLog } = await import(pathToFileURL(join(temporary, 'GenerationLog.mjs')));
+  await modules.rewrite('GenerationLog.js', source => source.replace(
+    /import \{ WorkspaceSurface \} from '\.\/WorkspaceSurface\.js';/,
+    'const WorkspaceSurface = ({ children }) => children;'));
+  const { GenerationLog } = await modules.load('GenerationLog.js');
   const id = '12345678-1234-1234-1234-123456789abc';
-  const project = { id: 'project', revision: 1, pages: [{ id: 'page', name: 'Home', viewport: { width: 1200, height: 800 }, regions: [{ id, prompt: 'Add a booking form', rect: { x: 40, y: 40, width: 320, height: 200 } }] }] };
-  const job = { jobId: 'job', status: 'blocked', settings: { model: 'model' }, requirements: { markdown: '' }, generationMode: 'fuzzy', areas: [{ pageId: 'page', regionId: id }],
-    candidate: { summary: 'Booking form needs a service address.', regions: [{ regionId: id, status: 'conflict', explanation: `Area ${id}: Which booking service should this use?` }], criticism: [{ message: 'Keep the heading concise.', suggestion: 'Shorten the heading.' }], decisionProposals: [{ topic: `Booking links ${id}`, value: 'Use the booking service', scope: { kind: 'project' } }] },
-    drafts: [{ id: 'draft', pageId: 'page', regionIds: [id], reason: 'CSS outside the region', code: '<script>PRIVATE GENERATED SOURCE</script>' }], usage: { inputTokens: 10, outputTokens: 20 }, repairRounds: 0 };
-  const props = { job, project, controller: { job }, settings: null, operation: null, error: null, close() {}, openSettings() {}, openImport() {}, openBrief() {}, manageUsage: async () => {}, editRequest() {} };
-  await test('conflict diagnostics stay hidden while an app rejection keeps its retry', () => {
-    const explanation = `Area ${id} ([data-desegnos-region=${id}]): Region script root contains another region. Excerpt: <section id="private">`;
-    const conflicted = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation }] } };
-    const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: conflicted }));
-    const visible = html.split(/<summary[^>]*>.*?Technical details<\/span><\/summary>/)[0];
-    assert.match(visible, /Needs attention/);
-    assert.equal((visible.match(/>Try again</g) ?? []).length, 1);
-    assert.doesNotMatch(visible, /Needs your input|>Change request</);
-    assert.match(html, /Technical details<\/span><\/summary>/);
-    assert.match(html, /Excerpt/);
-    assert.doesNotMatch(visible, /data-desegnos-|Excerpt|private|script root|12345678-1234/);
-    assert.equal(conflicted.candidate.regions[0].explanation, explanation);
+  const element = {
+    id, kind: 'box', name: null, rect: { x: 0, y: 0, width: 100, height: 60 }, rotation: 0, visible: true, locked: false,
+    style: {}, text: '', image: null, url: null, layout: { kind: 'free' }, children: [],
+    meta: { requests: [], context: [], pending: { prompt: 'Add a booking form', attachments: [], requestedAt: 'now' } },
+  };
+  const project = { id: 'project', name: 'Site', pages: [{ id: 'page', name: 'Home', path: '/', included: true, output: 'webpage', sizes: [], elements: [element] }] };
+  const job = {
+    jobId: 'job', status: 'blocked', provider: 'openai', settings: { model: 'model' }, generationMode: 'fuzzy',
+    requirements: { markdown: '' }, areas: [{ pageId: 'page', elementId: id }], usage: { inputTokens: 10, outputTokens: 20 },
+    candidate: { summary: 'Booking form needs a service.', requests: [{ elementId: id, status: 'conflict', explanation: 'Which booking service should this use?' }], criticism: [], decisionProposals: [] },
+  };
+  const controller = { job, operation: null, elapsedSeconds: null, error: '', stopped: false, canStop: false, prepare() {}, cancel() {} };
+  const render = (overrides = {}) => renderToStaticMarkup(React.createElement(GenerationLog, {
+    job, project, controller, settings: null, operation: null, error: null,
+    close() {}, openSettings() {}, openImport() {}, openBrief() {}, manageUsage: async () => {}, editRequest() {}, reply: async () => {}, ...overrides,
+  }));
+
+  await test('a declared question stays in the conversation with its resolving actions', () => {
+    const html = render();
+    assert.match(html, /Sent to the AI/);
+    assert.match(html, /Resend this request/);
+    assert.match(html, /Needs your input/);
+    assert.match(html, /Which booking service should this use\?/);
+    assert.match(html, /Change request/);
+    assert.match(html, /AI settings/);
+    assert.doesNotMatch(html, />Try again</);
+    assert.match(html, /Booking form needs a service\./);
   });
-  await test('an unclear answer keeps Try again while a declared question does not', () => {
-    const question = renderToStaticMarkup(React.createElement(GenerationLog, props));
-    assert.doesNotMatch(question, />Try again</);
-    assert.match(question, /Which booking service should this use\?/);
-    assert.match(question, />Change request</);
-    assert.match(question, />AI settings</);
-    const rejected = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation: `Area ${id}: Region script also affects another area.` }] } };
-    const retry = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: rejected }));
-    assert.equal((retry.match(/>Try again</g) ?? []).length, 1);
-    assert.doesNotMatch(retry, /Needs your input|>Change request</);
+
+  await test('an app rejection keeps Try again and hides the declared-question route', () => {
+    const rejected = { ...job, candidate: { ...job.candidate, requests: [{ elementId: id, status: 'conflict', explanation: `Area ${id}: The generation result omitted a requested layer.` }] } };
+    const html = render({ job: rejected });
+    assert.match(html, />Try again</);
+    assert.doesNotMatch(html, /Needs your input|>Change request</);
   });
-  await test('editing the request makes Try again available again', () => {
-    const markdown = '```json\n' + JSON.stringify({ pageId: 'page', regionId: id, prompt: 'Add an earlier booking form', placementHint: { x: 0, y: 0, width: 10, height: 10 } }) + '\n```';
-    const edited = { ...job, requirements: { markdown } };
-    const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: edited }));
-    assert.equal((html.match(/>Try again</g) ?? []).length, 1);
-    assert.doesNotMatch(html, /Needs your input/);
+
+  await test('an open request editor leaves only the fix and past generations remain reachable', () => {
+    const html = render({ requestEditorOpen: elementId => elementId === id });
+    assert.doesNotMatch(html, />Change request</);
+    assert.match(html, /AI settings/);
+    assert.match(html, /Past generations/);
+    assert.match(html, /Reply to the AI/);
   });
-  await test('a missing file points at Import while an identity question points at the brief', () => {
-    const missing = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation: 'The logo file is missing.' }] } };
-    const importHtml = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: missing }));
-    assert.match(importHtml, /The logo file is missing\./);
-    assert.match(importHtml, />Import…</);
-    const identity = { ...job, candidate: { ...job.candidate, regions: [{ regionId: id, status: 'conflict', explanation: 'Which brand name should the header use?' }] } };
-    const briefHtml = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: identity }));
-    assert.match(briefHtml, />Project brief</);
-  });
-  await test('conversation presents one ordered review without the legacy generation card or raw source', () => {
-    const html = renderToStaticMarkup(React.createElement(GenerationLog, props));
-    const order = ['Sent to the AI', 'AI reply', 'Design feedback', 'Suggested rules', 'Request details', 'token-footer'];
-    let previous = -1;
-    for (const marker of order) { const position = html.indexOf(marker); assert.ok(position > previous, `${marker} is missing or out of order`); previous = position; }
-    assert.equal((html.match(/Request details<\/span><\/summary>/g) ?? []).length, 1);
-    assert.doesNotMatch(html, /Build remaining draft|Ask AI to fix|problem-banner|Needs details/);
-    assert.doesNotMatch(html, /generation-status|generation-dialog|Copy code|PRIVATE GENERATED SOURCE/);
-  });
-  await test('preparation does not mount the old generation header inside the conversation', () => {
-    const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, job: null, operation: 'Preparing AI instructions…' }));
-    assert.match(html, /Preparing AI instructions/);
-    assert.doesNotMatch(html, /generation-status|generation-dialog|0:00/);
-  });
-  await test('the conversation leaves out Change request for the request already being edited', () => {
-    assert.doesNotMatch(renderToStaticMarkup(React.createElement(GenerationLog, { ...props, requestEditorOpen: () => true })), />Change request</);
-    assert.match(renderToStaticMarkup(React.createElement(GenerationLog, { ...props, requestEditorOpen: () => false })), />Change request</);
-  });
-  await test('a declared conflict offers one whole-page retry', () => {
-    const html = renderToStaticMarkup(React.createElement(GenerationLog, { ...props, allowWholePage: async () => {} }));
-    assert.equal((html.match(/>Allow whole page and retry</g) ?? []).length, 1);
-    // A request already allowed to change the whole page has nothing to widen.
-    const wholePage = { ...project, pages: [{ ...project.pages[0], regions: [{ ...project.pages[0].regions[0], wholePage: true }] }] };
-    assert.doesNotMatch(renderToStaticMarkup(React.createElement(GenerationLog, { ...props, project: wholePage, allowWholePage: async () => {} })), /Allow whole page and retry/);
-  });
-} finally { await rm(temporary, { recursive: true, force: true }); }
+} finally {
+  delete globalThis.document;
+  delete globalThis.HTMLElement;
+  await modules.cleanup();
+}

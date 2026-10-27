@@ -96,13 +96,6 @@ impl ToolSearch {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn empty() -> Self {
-        Self {
-            directories: vec![],
-        }
-    }
-
     pub fn path(&self) -> OsString {
         env::join_paths(&self.directories).unwrap_or_default()
     }

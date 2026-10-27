@@ -1,13 +1,11 @@
 import { Notice, ProblemBanner, needsAiSettings, type ProblemAction } from './ProblemBanner.js';
 import { userError, outcomeReason } from './userErrors.js';
 import { fixLabel, jobOutcome, staleResult } from './generationProblems.js';
-import { summarizeReportedOutsideChanges } from './noticeSummary.js';
 import { useEffect, useRef, useState } from 'react';
 import { MenuButton, type MenuItem } from './Menus';
 import { scopeLabel } from './Notes';
-import { SourceView } from './Preview';
 import { Disclosure } from './Disclosure';
-import type { AiSettingsView, GenerationJobView, Project, ResponseCorrelation, ResponseRejection } from './types';
+import type { AiSettingsView, Element, GenerationJobView, Project, ResponseCorrelation, ResponseRejection } from './types';
 import type { GenerationController } from './useGeneration';
 
 const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
@@ -20,7 +18,7 @@ const rejectionLabels: Record<ResponseRejection, string> = {
   messageRole: 'Output message is not from the assistant', messageState: 'Output message is not complete',
   messagePhase: 'Unrecognized message phase', contentShape: 'Missing or unsupported text content',
   answerCount: 'Expected one final answer; intermediate commentary is excluded', credentialEcho: 'Reply contains a credential',
-  candidateJson: 'Final answer is not valid JSON', candidateShape: 'Final answer is not a site object',
+  candidateJson: 'Final answer is not valid JSON', candidateShape: 'Final answer is not a generation reply',
   jobMismatch: 'Returned job ID differs from the frozen request', requirementsMismatch: 'Returned requirements digest differs from the frozen request',
   usage: 'Reported usage is missing fields or has inconsistent totals',
 };
@@ -34,6 +32,29 @@ const terminalOutputLabels: Record<ResponseCorrelation['terminalOutput'], string
   notReceived: 'Not received', absent: 'Omitted', null: 'Null', array: 'Item list', invalid: 'Invalid',
 };
 
+function allElements(elements: Element[]): Element[] {
+  return elements.flatMap(element => [element, ...allElements(element.children)]);
+}
+
+export function projectElement(project: Project, id: string): Element | null {
+  for (const page of project.pages) {
+    const found = allElements(page.elements).find(element => element.id === id);
+    if (found) return found;
+  }
+  return null;
+}
+
+function elementLabel(element: Element): string {
+  if (element.name?.trim()) return element.name;
+  return element.text.trim().split('\n')[0] || element.kind[0].toUpperCase() + element.kind.slice(1);
+}
+
+function requestLabel(project: Project, id: string) {
+  const page = project.pages.find(page => allElements(page.elements).some(element => element.id === id));
+  const element = page ? allElements(page.elements).find(item => item.id === id) : null;
+  return element && page ? `${page.name} · ${elementLabel(element)}` : 'Layer';
+}
+
 function CorrelationDetails({ value }: { value: ResponseCorrelation }) {
   return <>
     <dt>Stream matching</dt><dd>{correlationLabels[value.cause]} <span className="small muted">({value.cause})</span></dd>
@@ -43,60 +64,47 @@ function CorrelationDetails({ value }: { value: ResponseCorrelation }) {
   </>;
 }
 
-function requestLabel(project: Project, id: string) {
-  for (const page of project.pages) {
-    const index = page.regions.findIndex(region => region.id === id);
-    if (index >= 0) return `${page.name} · Box ${index + 1}`;
-  }
-  return 'Request';
-}
-
 export function GenerationFeedback({ controller, action, openSettings, openImport, openBrief, changeRequest, requestEditorOpen, project, details }: {
   details?: () => void;
   controller: GenerationController; action?: ProblemAction; openSettings?: () => void; openImport?: () => void; openBrief?: () => void;
-  changeRequest?: (regionId: string) => void; requestEditorOpen?: (regionId: string) => boolean; project?: Project;
+  changeRequest?: (elementId: string) => void; requestEditorOpen?: (elementId: string) => boolean; project?: Project;
 }) {
   const { job: currentJob, operation, elapsedSeconds, error } = controller;
   const job = operation === 'Preparing AI instructions…' ? null : currentJob;
   if (!job && !operation && !error && !controller.stopped) return null;
   const minutes = elapsedSeconds ?? 0;
-  const review = jobOutcome(job, id => project?.pages.flatMap(page => page.regions).find(region => region.id === id)?.prompt);
+  const review = jobOutcome(job, id => project ? projectElement(project, id)?.meta.pending?.prompt : undefined);
   const needsInput = review.blocked.length > 0 && review.retryable.length === 0 && !review.retryAll;
   const retry = review.retryable.length > 0 || review.retryAll || review.retryBatches || (controller.stopped && !review.blocked.length);
-  // A batched job resends only the failed parts; anything else prepares the unfinished areas.
   const retryRequests = () => {
     if (review.retryBatches) void controller.retry().catch(() => {});
-    else void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {});
+    else void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {});
   };
   const blocked = review.blocked[0];
-  const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your page…' : 'Building your page…',
-    ready: 'Updating your page…', blocked: staleResult(job) ? 'Page changed — not applied' : needsInput ? 'Needs your input' : 'Needs attention', failed: 'Couldn’t build the page', unknown: 'Not sure the page was built',
-    cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your page…', applied: 'Page updated' };
+  const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your layers…' : 'Building your layers…',
+    ready: 'Updating your layers…', blocked: staleResult(job) ? 'Design changed — not applied' : needsInput ? 'Needs your input' : 'Needs attention', failed: 'Couldn’t build the layers', unknown: 'Not sure the layers were built',
+    cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your layers…', applied: 'Layers updated' };
   const heading = operation === 'Stopping…' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
   const fix = blocked?.fix ? () => {
     const open = blocked.fix === 'aiSettings' ? openSettings : blocked.fix === 'import' ? openImport : openBrief;
     open?.();
   } : undefined;
   const fixAction = blocked?.fix && fix ? { label: fixLabel(blocked.fix), onClick: fix } : undefined;
-  // A request whose editor is already open has nothing to gain from Change request.
-  const change = blocked && changeRequest && !requestEditorOpen?.(blocked.regionId) ? { label: 'Change request', onClick: () => changeRequest(blocked.regionId) } : undefined;
+  const change = blocked && changeRequest && !requestEditorOpen?.(blocked.elementId) ? { label: 'Change request', onClick: () => changeRequest(blocked.elementId) } : undefined;
   const changeAction = change ?? fixAction;
-  // Keep the resolving surface visible beside the request change when both exist.
   const secondaryAction = needsInput && change && fixAction ? fixAction : details ? { label: 'Details', onClick: details } : undefined;
   return <Notice className={`generation-notice status-${job?.status ?? 'preparing'}`} variant={error || job && ['failed', 'blocked', 'unknown'].includes(job.status) ? 'error' : job?.status === 'applied' ? 'success' : 'info'} priority="result" title={heading} dismissKey={`${job?.jobId}:${job?.status}:${operation}:${error}`}
-    message={error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${job?.batches?.length ? `${job.message} · ` : ''}${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : blocked?.reason ?? ''}
+    message={error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : blocked?.reason ?? ''}
     action={action ?? (needsAiSettings(error || job?.message || '') && openSettings ? { label: 'AI settings', onClick: openSettings } : controller.canStop ? { label: 'Stop', onClick: () => { void controller.cancel(); } } : changeAction ?? (retry ? { label: 'Try again', onClick: retryRequests } : undefined))}
     secondaryAction={secondaryAction} />;
 }
 
 export function GenerationDetails({ controller, project, settings, openSettings, openImport, openBrief, manageUsage, editRequest, requestEditorOpen }: {
   controller: GenerationController; project: Project; settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
-  requestEditorOpen?: (regionId: string) => boolean;
+  requestEditorOpen?: (elementId: string) => boolean;
 }) {
   const { job, operation } = controller;
   const [tab, setTab] = useState<'review' | 'requirements' | 'attempts' | 'details'>('review');
-  const [showSource, setShowSource] = useState(false);
-  const [pageId, setPageId] = useState('');
   const [selected, setSelected] = useState<number[]>([]);
   const [confirmRetry, setConfirmRetry] = useState(false);
   const retryConfirmation = useRef<HTMLElement>(null);
@@ -105,33 +113,20 @@ export function GenerationDetails({ controller, project, settings, openSettings,
   function dismissRetry() { setConfirmRetry(false); if (retryTrigger.current?.isConnected) retryTrigger.current.focus({ preventScroll: true }); }
   const [usageError, setUsageError] = useState('');
   const [openingUsage, setOpeningUsage] = useState(false);
-  useEffect(() => { setConfirmRetry(false); setSelected(job?.acceptedDecisionIndices ?? []); setPageId(''); setTab('review'); setShowSource(false); }, [job?.jobId]);
+  useEffect(() => { setConfirmRetry(false); setSelected(job?.acceptedDecisionIndices ?? []); setTab('review'); }, [job?.jobId]);
   useEffect(() => { if (job?.status === 'ready' || job?.status === 'blocked' || job?.status === 'applied') setTab('review'); }, [job?.status]);
   useEffect(() => { if (job?.status === 'ready') setSelected(job.recommendedDecisionIndices); }, [job?.jobId, job?.status]);
   useEffect(() => { if (job?.status === 'applied') setSelected(job.acceptedDecisionIndices); }, [job?.status, job?.acceptedDecisionIndices]);
   const candidate = job?.candidate;
-  const conflicts = candidate?.regions.filter(region => region.status === 'conflict') ?? [];
-  const generatedImages = (candidate?.pages ?? []).flatMap(page => {
-    const template = document.createElement('template');
-    template.innerHTML = page.content.html;
-    return Array.from(template.content.querySelectorAll('img[data-desegnos-generated-prompt]')).filter(node => node.getAttribute('data-desegnos-generated-job') === job?.jobId).map(node => ({
-      prompt: node.getAttribute('data-desegnos-generated-prompt') ?? '',
-      src: node.getAttribute('src') ?? '',
-      regionId: node.closest('[data-desegnos-region]')?.getAttribute('data-desegnos-region')
-        ?? project.pages.find(item => item.id === page.pageId)?.regions.find(region =>
-          (region.elements ?? []).some(target => node.closest('[data-desegnos-id]')?.getAttribute('data-desegnos-id') === target.id))?.id,
-      pageId: page.pageId,
-      failed: node.hasAttribute('data-desegnos-placeholder'),
-    }));
-  });
-  const source = candidate?.pages.find(page => page.pageId === pageId) ?? candidate?.pages[0];
-  const review = jobOutcome(job, id => project.pages.flatMap(page => page.regions).find(region => region.id === id)?.prompt);
+  const conflicts = candidate?.requests.filter(request => request.status === 'conflict') ?? [];
+  const generatedImages = candidate?.images ?? [];
+  const review = jobOutcome(job, id => projectElement(project, id)?.meta.pending?.prompt);
   const canRetry = review.retryable.length > 0 || review.retryAll || review.retryBatches;
   const retryRequests = () => {
     if (review.retryBatches) void controller.retry().catch(() => {});
-    else void controller.prepare(undefined, review.retryable.length ? review.retryable : undefined).catch(() => {});
+    else void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {});
   };
-  const changeRequest = (regionId: string) => { editRequest(regionId); setConfirmRetry(false); };
+  const changeRequest = (elementId: string) => { editRequest(elementId); setConfirmRetry(false); };
   const openFix = (fix: Parameters<typeof fixLabel>[0]) => { if (fix === 'aiSettings') openSettings(); else if (fix === 'import') openImport?.(); else openBrief?.(); };
   const canDiscard = !!job && ['prepared', 'ready', 'blocked', 'failed', 'unknown', 'cancelled'].includes(job.status);
   const alreadyApplied = !!job && project.appliedJobIds.includes(job.jobId);
@@ -142,17 +137,8 @@ export function GenerationDetails({ controller, project, settings, openSettings,
   const providerError = job?.providerError;
   const service = ({ openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const)[job?.provider ?? 'openai'];
   const bodyKinds = { unavailable: 'Not read completely', eventStream: 'Generation event stream', empty: 'Empty', jsonError: 'JSON error', jsonDetail: 'JSON admission detail', jsonResponse: 'JSON response without a stream', jsonOther: 'Other JSON', html: 'HTML', text: 'Text', binary: 'Binary' };
-  const affectedPageIds = new Set(Object.keys(job?.requirements.dependencies ?? {}).filter(key => key.startsWith('source:')).map(key => key.slice(7)));
+  const affectedPageIds = new Set(Object.keys(job?.requirements.dependencies ?? {}).filter(key => key.startsWith('element:')).map(key => key.split(':')[1]));
   const affectedPages = project.pages.filter(page => affectedPageIds.has(page.id)).map(page => page.name);
-  // Every document this reply changed, so a multi-page result names each page.
-  const changedDocuments = [...new Set([
-    ...(candidate?.pages ?? []).map(page => project.pages.find(item => item.id === page.pageId)?.name ?? page.pageId),
-    ...(candidate?.documents ?? []).map(document => {
-      if (document.document.kind === 'siteFile') return document.document.path;
-      const pageId = document.document.pageId;
-      return project.pages.find(item => item.id === pageId)?.name ?? pageId;
-    }),
-  ])];
   async function usage() {
     setOpeningUsage(true); setUsageError('');
     try { await manageUsage(); }
@@ -164,10 +150,9 @@ export function GenerationDetails({ controller, project, settings, openSettings,
     { id: 'technical', label: 'Advanced', children: [
       { id: 'requirements', label: job?.status === 'prepared' ? 'What will be sent' : 'AI instructions sent', action: () => setTab('requirements') },
       { id: 'request-details', label: 'Request details', action: () => setTab('details') },
-      { id: 'source', label: showSource ? 'Hide source code' : 'Source code', disabled: !candidate?.pages.length, action: () => { setTab('review'); setShowSource(value => !value); } },
       { id: 'attempts', label: 'Attempts', action: () => setTab('attempts') },
       { id: 'refresh', label: 'Refresh job', disabled: !!operation, action: () => { void controller.refresh(); } },
-      ...(canRetry ? [{ id: 'retry-snapshot', label: 'Retry with current page', disabled: !!operation, action: () => { retryTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setConfirmRetry(true); } }] : []),
+      ...(canRetry ? [{ id: 'retry-snapshot', label: 'Retry with current design', disabled: !!operation, action: () => { retryTrigger.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setConfirmRetry(true); } }] : []),
     ] },
     { id: 'settings', label: 'AI settings', action: openSettings },
     ...(canDiscard ? [{ id: 'discard', label: job?.status === 'prepared' ? 'Discard request' : 'Discard result', disabled: !!operation, action: () => { void controller.discard().catch(() => {}); } }] : []),
@@ -183,18 +168,18 @@ export function GenerationDetails({ controller, project, settings, openSettings,
         {job.status === 'unknown' && <Notice variant="warning" message={`The result did not arrive. Trying again ${usesChatgpt ? 'uses your plan again' : 'may cost again'}.`} />}
         {job.status === 'cancelled' && <p className="small muted">{usesChatgpt ? 'Submitted work may still count toward your plan.' : 'Submitted work may still be charged.'}</p>}
         {usageLimit && <Notice variant="warning" title="ChatGPT usage limit reached" message="Review your limit in ChatGPT settings." />}
-        {job.status === 'applied' && !alreadyApplied && <Notice variant="warning" message="These changes are no longer on the page. They may have been undone." />}
-        <div className="generation-review-toolbar"><p>{job.requirements.regionCount} {job.requirements.regionCount === 1 ? 'request' : 'requests'} · {affectedPages.join(', ')} · {readable(job.generationMode)}</p><MenuButton label="More" ariaLabel="Generation options" items={more} /></div>
+        {job.status === 'applied' && !alreadyApplied && <Notice variant="warning" message="These changes are no longer on the canvas. They may have been undone." />}
+        <div className="generation-review-toolbar"><p>{job.requirements.requestCount} {job.requirements.requestCount === 1 ? 'request' : 'requests'} · {affectedPages.join(', ')} · {readable(job.generationMode)}</p><MenuButton label="More" ariaLabel="Generation options" items={more} /></div>
         <Disclosure className="generation-section" open={tab === 'details'} summary="Request details"><dl className="generation-facts"><dt>Cost</dt><dd>{usesChatgpt ? `Counts toward ${frozenAccount?.label ?? 'your ChatGPT'} plan or credits` : `About ${money(job.estimateUsd)}; final charges may vary`}</dd><dt>Provider</dt><dd>{service}</dd><dt>Authentication</dt><dd>{usesChatgpt ? 'ChatGPT plan' : 'API key'}</dd><dt>Model</dt><dd>{job.settings.model}</dd><dt>Generation mode</dt><dd>{readable(job.generationMode)}</dd>
           {usesChatgpt ? <><dt>Account</dt><dd>{frozenAccount?.label ?? job.chatgptAccountId ?? 'No account recorded'}{frozenAccount && <span className="small muted"> · {job.chatgptAccountId}</span>}</dd><dt>Reasoning effort</dt><dd>{job.settings.reasoningEffort}</dd></> : <>
             <dt>Estimated job cost</dt><dd>{money(job.estimateUsd)}</dd><dt>Estimate allowance</dt><dd>{money(job.settings.spendingLimitUsd)}</dd>
             <dt>Output cap</dt><dd>{job.settings.maxOutputTokens.toLocaleString()} tokens · {job.settings.reasoningEffort} reasoning</dd></>}</dl>
         {usesChatgpt && <div className="plan-disclosure"><p>Counts toward this account’s ChatGPT plan or credits.</p>{!usageLimit && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}</div>}
         {!usesChatgpt && pricing && <p className="small muted">Catalogue verified {pricing.verifiedAt}. Estimates may include higher long-context rates and are not guaranteed billing caps.</p>}
-        <p className="small muted">Sent to {usesChatgpt ? `ChatGPT (${frozenAccount?.label ?? 'current account'})` : `${service} (API key)`}</p>
+        <p className="small muted">Sent to {usesChatgpt ? `ChatGPT (${frozenAccount?.label ?? 'current account'})` : `${service} (API key)`}.</p>
         <p className="small muted">Received {job.receivedBytes.toLocaleString()} bytes from {service}.</p>
         {providerError && <section aria-label="Provider response details"><h4>Provider response</h4><dl className="generation-facts">
-          <dt>Outcome</dt><dd>{providerError.outcome === 'unknown' ? 'No completed generation stream; usage is unknown' : providerError.outcome === 'received' ? 'Error received; no site was applied' : readable(providerError.outcome)}</dd>
+          <dt>Outcome</dt><dd>{providerError.outcome === 'unknown' ? 'No completed generation stream; usage is unknown' : providerError.outcome === 'received' ? 'Error received; nothing was applied' : readable(providerError.outcome)}</dd>
           {providerError.httpStatus !== null && <><dt>HTTP status</dt><dd>{providerError.httpStatus}</dd></>}
           {providerError.responseFormat && <><dt>Content type</dt><dd>{providerError.responseFormat.contentType ?? 'Missing or unrecognized'}</dd><dt>Body format</dt><dd>{bodyKinds[providerError.responseFormat.bodyKind]}</dd><dt>Body size</dt><dd>{providerError.responseFormat.bodyTruncated ? 'At least ' : ''}{providerError.responseFormat.bodyBytes.toLocaleString()} bytes{providerError.responseFormat.bodyTruncated ? ' (partial reply)' : ''}</dd>
             {providerError.responseFormat.limitBytes != null && <><dt>Read limit</dt><dd>{providerError.responseFormat.limitBytes.toLocaleString()} bytes</dd></>}</>}
@@ -214,44 +199,36 @@ export function GenerationDetails({ controller, project, settings, openSettings,
           {attempt.responseId && <p className="small response-id">Response: {attempt.responseId}</p>}{attempt.usage && <p className="small">{attempt.usage.inputTokens} input · {attempt.usage.outputTokens} output · {attempt.usage.totalTokens} total tokens</p>}
         </li>)}</ol>}</section>}
         <section className="generation-section">{!candidate ? <>{job.status === 'prepared' ? <p className="muted">Ready to send.</p> : job.status === 'generating' ? <p className="muted">Generating…</p> : <><p>Needs attention</p>{job.message && <Disclosure summary="Technical details"><p className="small">{job.message}</p></Disclosure>}</>}</> : <>
-          {job.status === 'applied' && conflicts.length > 0 && <p>Applied {candidate.regions.length - conflicts.length} of {candidate.regions.length} areas</p>}
+          {job.status === 'applied' && conflicts.length > 0 && <p>Applied {candidate.requests.length - conflicts.length} of {candidate.requests.length} requests</p>}
           {(job.status === 'blocked' || conflicts.length > 0) ? <section aria-label="Finish your draft">
-            <ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => {
-              const request = project.pages.flatMap(page => page.regions).find(regionItem => regionItem.id === region.regionId);
-              const gap = review.blocked.find(item => item.regionId === region.regionId);
-              return <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p className="preserve-text">{request?.prompt}</p>
-                {gap ? <><p className="preserve-text">{gap.reason}</p>{(!requestEditorOpen?.(region.regionId) || gap.fix) && <div className="form-actions">
-                  {!requestEditorOpen?.(region.regionId) && <button type="button" onClick={() => changeRequest(region.regionId)}>Change request</button>}
+            <ul className="generation-list">{candidate.requests.filter(request => request.status !== 'implemented').map(request => {
+              const element = projectElement(project, request.elementId);
+              const gap = review.blocked.find(item => item.elementId === request.elementId);
+              return <li key={request.elementId}><strong>{requestLabel(project, request.elementId)}</strong><p className="preserve-text">{element?.meta.pending?.prompt}</p>
+                {gap ? <><p className="preserve-text">{gap.reason}</p>{(!requestEditorOpen?.(request.elementId) || gap.fix) && <div className="form-actions">
+                  {!requestEditorOpen?.(request.elementId) && <button type="button" onClick={() => changeRequest(request.elementId)}>Change request</button>}
                   {gap.fix && <button type="button" onClick={() => openFix(gap.fix!)}>{fixLabel(gap.fix)}</button>}
                 </div>}</> : <span>Needs attention</span>}</li>;
             })}</ul>
-            <Disclosure summary="Technical details"><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.regions.filter(region => region.status !== 'implemented').map(region => <li key={region.regionId}><strong>{requestLabel(project, region.regionId)}</strong><p>{region.explanation}</p></li>)}</ul></Disclosure>
-          </section> : <><h3>Your page</h3><p>{candidate.summary}</p>{candidate.outsideChanges && candidate.outsideChanges.length > 0 && <p className="small">{summarizeReportedOutsideChanges(candidate.outsideChanges)}</p>}</>}
-          {changedDocuments.length > 1 && <p className="small muted">Changed: {changedDocuments.join(', ')}</p>}
-          {generatedImages.length > 0 && <section aria-label="Generated images"><h3>Generated images</h3>{generatedImages.map((image, index) => <figure key={index}>
-            {image.src.startsWith('data:image/png;base64,') && !image.failed && <img src={image.src} alt="Generated result" width={144} height={144} style={{ objectFit: 'contain' }} />}
-            <figcaption><strong>{image.regionId ? requestLabel(project, image.regionId) : project.pages.find(page => page.id === image.pageId)?.name}</strong><p>{image.prompt}</p>{image.failed && <p>Image generation failed. Replace this image or try again.</p>}</figcaption>
-          </figure>)}</section>}
-          {source && <><div className="candidate-page-picker"><label>Result page<select value={source.pageId} onChange={event => setPageId(event.target.value)}>{candidate.pages.map(item => <option key={item.pageId} value={item.pageId}>{project.pages.find(page => page.id === item.pageId)?.name ?? item.pageId}</option>)}</select></label></div>
-            {showSource && <section className="candidate-source"><h3>Source code</h3><SourceView key={source.pageId} content={source.content} label="Generated" /></section>}
-          </>}
+            <Disclosure summary="Technical details"><p>{job.message}</p><p>{candidate.summary}</p><ul className="generation-list">{candidate.requests.filter(request => request.status !== 'implemented').map(request => <li key={request.elementId}><strong>{requestLabel(project, request.elementId)}</strong><p>{request.explanation}</p></li>)}</ul></Disclosure>
+          </section> : <><h3>Your layers</h3><p>{candidate.summary}</p></>}
+          {generatedImages.length > 0 && <section aria-label="Generated images"><h3>Requested pictures</h3><ul className="generation-list">{generatedImages.map(image => <li key={image.key}><strong>{image.key}</strong><p>{image.prompt}</p></li>)}</ul></section>}
           {candidate.decisionProposals.length > 0 && <Disclosure className="proposal-list" summary={`Suggested rules (${candidate.decisionProposals.length})`}>{candidate.decisionProposals.map((proposal, index) => <label key={index} className="proposal">
             <input type="checkbox" checked={selected.includes(index)} disabled={job.status !== 'ready' || alreadyApplied || !!operation} onChange={event => setSelected(previous => event.target.checked ? [...previous, index] : previous.filter(value => value !== index))} />
             <span><strong>{proposal.topic}</strong><span className="preserve-text">{outcomeReason(proposal.value)}</span><span className="small muted">{scopeLabel(project, proposal.scope)} · {outcomeReason(proposal.rationale)}</span></span>
           </label>)}</Disclosure>}
-          {candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.regionId ? requestLabel(project, criticism.regionId) : 'Whole site'}</strong><p>{outcomeReason(criticism.message)}</p><p className="muted">{outcomeReason(criticism.suggestion)}</p></li>)}</ul></Disclosure>}
-          <Disclosure className="generation-coverage" summary="Request details"><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.regions.map(region => <tr key={region.regionId}><th>{requestLabel(project, region.regionId)}</th><td>{readable(region.status)}</td><td>{region.status === 'conflict' ? outcomeReason(region.explanation) : region.explanation}</td></tr>)}</tbody></table></div>
-            {candidate.componentRequests.length > 0 && <ul className="generation-list">{candidate.componentRequests.map((component, index) => <li key={index}><strong>{component.capability}</strong><p>{component.resolution === 'native' ? 'Built in' : 'Unavailable'}: {outcomeReason(component.reason)}</p></li>)}</ul>}
+          {candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul className="generation-list">{candidate.criticism.map((criticism, index) => <li key={index}><strong>{criticism.elementId ? requestLabel(project, criticism.elementId) : 'Whole project'}</strong><p>{outcomeReason(criticism.message)}</p><p className="muted">{outcomeReason(criticism.suggestion)}</p></li>)}</ul></Disclosure>}
+          <Disclosure className="generation-coverage" summary="Request details"><div className="table-scroll"><table className="coverage-table"><thead><tr><th>Request</th><th>Result</th><th>Explanation</th></tr></thead><tbody>{candidate.requests.map(request => <tr key={request.elementId}><th>{requestLabel(project, request.elementId)}</th><td>{readable(request.status)}</td><td>{request.status === 'conflict' ? outcomeReason(request.explanation) : request.explanation}</td></tr>)}</tbody></table></div>
           </Disclosure>
         </>}</section>
         <div className="generation-actions form-actions">
           {usageLimit && <button className="primary" disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}
           {job.status === 'ready' && !alreadyApplied && <button className="primary" disabled={!!operation} onClick={() => { void controller.apply([...selected].sort((a, b) => a - b)).catch(() => {}); }}>{conflicts.length > 0 ? 'Apply ready changes' : 'Apply changes'}</button>}
-          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => page.regions.some(region => !region.completed && region.prompt.trim()))} onClick={retryRequests}>Try again</button>}
+          {canRetry && <button className="primary" disabled={!!operation || !project.pages.some(page => allElements(page.elements).some(element => element.meta.pending?.prompt.trim()))} onClick={retryRequests}>Try again</button>}
         </div>
       </>}
     </div>
-    {confirmRetry && job && <section ref={retryConfirmation} aria-label="Confirm retry" className="dialog-body"><strong>Try these requests with the current page?</strong><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
+    {confirmRetry && job && <section ref={retryConfirmation} aria-label="Confirm retry" className="dialog-body"><strong>Try these requests with the current design?</strong><p>{usesChatgpt ? `This uses ${frozenAccount?.label ?? 'the original ChatGPT account'} again.` : 'This sends another paid request.'}</p>
       <p>{usesChatgpt ? 'The retry counts toward that account’s ChatGPT plan or credits balance. Earlier attempts may also have used your plan or credits.' : `Estimated job cost: ${money(job.estimateUsd)}. Earlier attempts may also have been charged.`}</p>
       {usageError && <ProblemBanner message={userError(usageError)} dismiss={() => setUsageError('')} />}
       <div className="form-actions"><button className="primary" disabled={!!operation} onClick={() => { dismissRetry(); retryRequests(); }}>{usesChatgpt ? 'Retry using ChatGPT plan' : 'Send paid retry'}</button>{usesChatgpt && <button disabled={openingUsage} onClick={() => { void usage(); }}>Manage usage</button>}<button onClick={dismissRetry}>Keep current job</button></div></section>}

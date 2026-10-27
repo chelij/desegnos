@@ -323,6 +323,367 @@ fn enqueue_pages(
     queue.extend(candidates.into_iter().map(|(_, url)| url));
 }
 
+
+/// One renderable snapshot fetched from a public website. Files keep their original site paths
+/// so relative CSS, image and link URLs keep working when the snapshot is served locally.
+#[derive(Debug, Default)]
+pub struct WebsiteSnapshot {
+    pub name: String,
+    pub files: Vec<(String, Vec<u8>)>,
+    pub pages: Vec<WebsiteSnapshotPage>,
+    pub skipped: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebsiteSnapshotPage {
+    pub route: String,
+    pub title: String,
+}
+
+const MAX_SNAPSHOT_PAGES: usize = 30;
+const MAX_SNAPSHOT_PAGE_BYTES: usize = 1024 * 1024;
+const MAX_SNAPSHOT_ASSET_BYTES: usize = 4 * 1024 * 1024;
+const MAX_SNAPSHOT_ASSETS: usize = 240;
+const MAX_SNAPSHOT_TOTAL_BYTES: usize = 96 * 1024 * 1024;
+
+const ASSET_MIMES: &[&str] = &[
+    "text/css",
+    "text/javascript",
+    "application/javascript",
+    "application/x-javascript",
+    "application/json",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/svg+xml",
+    "image/avif",
+    "image/x-icon",
+    "image/vnd.microsoft.icon",
+    "font/woff",
+    "font/woff2",
+    "font/ttf",
+    "font/otf",
+    "application/font-woff",
+    "application/vnd.ms-fontobject",
+    "video/mp4",
+    "video/webm",
+    "audio/mpeg",
+    "audio/ogg",
+    "audio/wav",
+];
+
+fn page_file(route: &str) -> String {
+    let route = route.trim_start_matches('/');
+    if route.is_empty() {
+        "index.html".into()
+    } else if route.ends_with('/') {
+        format!("{route}index.html")
+    } else if route.ends_with(".html") || route.ends_with(".htm") {
+        route.to_owned()
+    } else {
+        format!("{route}.html")
+    }
+}
+
+fn snapshot_route(url: &Url) -> String {
+    let path = url.path();
+    if path == "/index.html" || path == "/index.htm" {
+        "/".into()
+    } else {
+        path.to_owned()
+    }
+}
+
+fn decoded_path(path: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut chars = path.bytes();
+    while let Some(byte) = chars.next() {
+        bytes.push(if byte == b'%' {
+            let high = (chars.next()? as char).to_digit(16)?;
+            let low = (chars.next()? as char).to_digit(16)?;
+            (high * 16 + low) as u8
+        } else {
+            byte
+        });
+    }
+    let value = String::from_utf8(bytes).ok()?;
+    if value.is_empty()
+        || value.contains(['\\', '\0'])
+        || value.chars().any(char::is_control)
+        || value.split('/').any(|part| part.is_empty() || part == "." || part == ".." || part.starts_with('.'))
+    {
+        return None;
+    }
+    Some(value)
+}
+
+fn asset_file(url: &Url) -> Option<String> {
+    let path = url.path().trim_start_matches('/');
+    if path.is_empty() || path.ends_with('/') || path.contains('.') && path.ends_with('.') {
+        return None;
+    }
+    decoded_path(path)
+}
+
+fn localize_same_site(text: &str, origin: &Url) -> String {
+    let prefix = origin.as_str().trim_end_matches('/');
+    let host = origin.host_str().unwrap_or_default();
+    let mut text = text.replace(prefix, "");
+    if !host.is_empty() {
+        text = text.replace(&format!("//{host}"), "");
+    }
+    text
+}
+
+/// Fetch up to 30 same-site pages and the assets they need, with size and request caps.
+pub async fn fetch_website_snapshot(input: &str, fixture: Option<&Url>) -> Result<WebsiteSnapshot, String> {
+    #[cfg(not(any(test, feature = "test-support")))]
+    if fixture.is_some() {
+        return Err("Test website sources are unavailable in this build.".into());
+    }
+    let mut first = match fixture {
+        Some(origin) => origin
+            .join(input)
+            .map_err(|_| "Enter a website address.".to_owned())?,
+        None => website_address(input)?,
+    };
+    if first.path() == "/index.html" || first.path() == "/index.htm" {
+        first.set_path("/");
+    }
+    let host = first
+        .host_str()
+        .unwrap_or("website")
+        .trim_start_matches("www.")
+        .to_owned();
+    let mut snapshot = WebsiteSnapshot {
+        name: host,
+        ..WebsiteSnapshot::default()
+    };
+    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut pages_seen = BTreeSet::new();
+    let mut page_queue = VecDeque::new();
+    page_queue.push_back(first.clone());
+    pages_seen.insert(first.to_string());
+    let mut requests = 0;
+    let mut total = 0usize;
+    let mut assets: VecDeque<(Url, Url)> = VecDeque::new();
+    let mut asset_seen = BTreeSet::new();
+    while requests < MAX_SNAPSHOT_PAGES {
+        let Some(url) = page_queue.pop_front() else { break };
+        requests += 1;
+        let (bytes, _mime, final_url) = fetch_public_document(
+            url.as_str(),
+            fixture,
+            "/",
+            "text/html,application/xhtml+xml",
+            &["text/html", "application/xhtml+xml"],
+            MAX_SNAPSHOT_PAGE_BYTES,
+            Some(first.host_str().unwrap_or_default()),
+        )
+        .await
+        .map_err(|reason| format!("That website couldn’t be read: it {reason}."))?;
+        let origin = Url::parse(&format!("{}://{}", final_url.scheme(), final_url.authority())).ok();
+        let Some(origin) = origin else { continue };
+        total += bytes.len();
+        if total > MAX_SNAPSHOT_TOTAL_BYTES {
+            return Err("The website is larger than the import limit.".into());
+        }
+        let text = localize_same_site(&String::from_utf8_lossy(&bytes), &origin);
+        let route = snapshot_route(&url);
+        let file = page_file(&route);
+        files.insert(file.clone(), text.clone().into_bytes());
+        let title = desegnos_core::identity_source_page(&file, &text)
+            .map(|page| page.title)
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or_else(|| {
+                if route == "/" {
+                    "Home".into()
+                } else {
+                    route.trim_matches('/').rsplit('/').next().unwrap_or("Page").replace(['-', '_'], " ")
+                }
+            });
+        snapshot.pages.push(WebsiteSnapshotPage { route, title });
+        // Discover more pages before assets, so navigation is complete even on large sites.
+        let links = desegnos_core::website_links(&text);
+        enqueue_snapshot_pages(&url, &links.pages, &mut pages_seen, &mut page_queue);
+        let found = desegnos_core::website_assets(&text);
+        for href in found
+            .stylesheets
+            .iter()
+            .chain(found.images.iter())
+            .chain(found.scripts.iter())
+            .chain(found.media.iter())
+            .chain(found.frames.iter())
+            .chain(found.inline_styles.iter())
+        {
+            let Ok(asset) = url.join(href) else { continue };
+            if asset.host_str() != first.host_str() || asset.origin() != first.origin() || asset.scheme() != first.scheme() {
+                continue;
+            }
+            if asset_seen.insert(asset.to_string()) {
+                assets.push_back((asset, url.clone()));
+            }
+        }
+        if page_queue.is_empty() || requests >= MAX_SNAPSHOT_PAGES {
+            break;
+        }
+    }
+    if !page_queue.is_empty() {
+        snapshot
+            .skipped
+            .push("Only the first 30 same-site pages are imported".into());
+    }
+    let mut downloaded = 0;
+    while let Some((url, referrer)) = assets.pop_front() {
+        if downloaded >= MAX_SNAPSHOT_ASSETS {
+            snapshot
+                .skipped
+                .push("Only the first 240 page assets are imported".into());
+            break;
+        }
+        let Some(file) = asset_file(&url) else { continue };
+        if files.contains_key(&file) {
+            continue;
+        }
+        let extension = file.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let accept = if extension == "css" {
+            "text/css"
+        } else if matches!(extension.as_str(), "js" | "mjs") {
+            "text/javascript"
+        } else if matches!(
+            extension.as_str(),
+            "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "avif" | "ico"
+        ) {
+            "image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif,image/x-icon"
+        } else if matches!(extension.as_str(), "woff" | "woff2" | "ttf" | "otf" | "eot") {
+            "font/woff,font/woff2,font/ttf,font/otf,application/font-woff,application/vnd.ms-fontobject"
+        } else {
+            "*/*"
+        };
+        match fetch_public(
+            url.as_str(),
+            fixture,
+            referrer.path(),
+            accept,
+            ASSET_MIMES,
+            MAX_SNAPSHOT_ASSET_BYTES,
+        )
+        .await
+        {
+            Ok((bytes, _mime)) => {
+                downloaded += 1;
+                total += bytes.len();
+                if total > MAX_SNAPSHOT_TOTAL_BYTES {
+                    snapshot
+                        .skipped
+                        .push("Website assets reached the import size limit".into());
+                    break;
+                }
+                let stored = if extension == "css" {
+                    localize_same_site(&String::from_utf8_lossy(&bytes), &first).into_bytes()
+                } else {
+                    bytes
+                };
+                if extension == "css" {
+                    // One level of stylesheet references is enough for backgrounds and fonts.
+                    for href in desegnos_core::css_urls(&String::from_utf8_lossy(&stored)) {
+                        let Ok(asset) = url.join(&href) else { continue };
+                        if asset.host_str() == first.host_str()
+                            && asset.origin() == first.origin()
+                            && asset_seen.insert(asset.to_string())
+                        {
+                            assets.push_back((asset, url.clone()));
+                        }
+                    }
+                }
+                files.insert(file, stored);
+            }
+            Err(reason) => snapshot
+                .skipped
+                .push(format!("{url}: asset skipped, it {reason}")),
+        }
+    }
+    snapshot.files = files.into_iter().collect();
+    snapshot.pages.sort_by(|first, second| {
+        (first.route != "/", &first.route).cmp(&(second.route != "/", &second.route))
+    });
+    snapshot.pages.dedup_by(|first, second| first.route == second.route);
+    Ok(snapshot)
+}
+
+fn enqueue_snapshot_pages(
+    base: &Url,
+    links: &[String],
+    seen: &mut BTreeSet<String>,
+    queue: &mut VecDeque<Url>,
+) {
+    let mut candidates = Vec::new();
+    for href in links {
+        if seen.len() >= 256 {
+            break;
+        }
+        let Ok(mut url) = base.join(href) else { continue };
+        url.set_fragment(None);
+        if url.path() == "/index.html" || url.path() == "/index.htm" {
+            url.set_path("/");
+        }
+        if url.host_str() != base.host_str()
+            || url.origin() != base.origin()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+        {
+            continue;
+        }
+        let path = url.path().to_ascii_lowercase();
+        let last = path.rsplit('/').next().unwrap_or_default();
+        if (last.contains('.') && !last.ends_with(".html") && !last.ends_with(".htm"))
+            || path.split('/').any(|part| {
+                matches!(part, "logout" | "signout" | "delete" | "checkout" | "admin" | "login" | "account")
+            })
+        {
+            continue;
+        }
+        if seen.insert(url.to_string()) {
+            candidates.push(url);
+        }
+    }
+    candidates.sort_by(|first, second| first.as_str().cmp(second.as_str()));
+    queue.extend(candidates);
+}
+
+
+
+/// Download one picture referenced by an imported page. Same public-address and size rules as
+/// every other Desegnos download; the bytes are capped before they reach the project store.
+pub async fn fetch_website_image(
+    source: &str,
+    fixture: Option<&Url>,
+) -> Result<(Vec<u8>, String), String> {
+    #[cfg(not(any(test, feature = "test-support")))]
+    if fixture.is_some() {
+        return Err("Test website sources are unavailable in this build.".into());
+    }
+    fetch_public(
+        source,
+        fixture,
+        "/",
+        "image/png,image/jpeg,image/webp,image/gif,image/svg+xml",
+        &[
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/gif",
+            "image/svg+xml",
+        ],
+        8 * 1024 * 1024,
+    )
+    .await
+    .map_err(|reason| format!("That picture couldn’t be read: it {reason}."))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

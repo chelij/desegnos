@@ -4,20 +4,15 @@ import type { Project, WorkspaceView } from './types';
 export type HistoryEntry = { label: string; at: number; position: number };
 
 function describe(before: Project, after: Project): string {
-  if (after.appliedJobIds.some(id => !before.appliedJobIds.includes(id))) return 'AI built the page';
+  if (after.appliedJobIds.some(id => !before.appliedJobIds.includes(id))) return 'AI updated layers';
   if (after.name !== before.name) return 'Renamed project';
   if (after.pages.length > before.pages.length) return `Added page “${after.pages.at(-1)!.name}”`;
   if (after.pages.length < before.pages.length) return 'Removed a page';
   for (const page of after.pages) {
     const old = before.pages.find(item => item.id === page.id);
     if (!old) continue;
-    if (page.regions.length > old.regions.length) return `Added a box on ${page.name}`;
-    if (page.regions.length < old.regions.length) return `Removed a box on ${page.name}`;
-    if (JSON.stringify(page.content) !== JSON.stringify(old.content)) return `Edited ${page.name}`;
-    const changed = page.regions.find(region => { const previous = old.regions.find(item => item.id === region.id); return previous && previous.prompt !== region.prompt; });
-    if (changed) return `Described a box on ${page.name}`;
-    if (page.regions.some(region => { const previous = old.regions.find(item => item.id === region.id); return previous && !region.elements?.length && JSON.stringify(previous.rect) !== JSON.stringify(region.rect); })) return `Moved a box on ${page.name}`;
-    if (page.name !== old.name || page.path !== old.path || page.appearance !== old.appearance || page.included !== old.included || JSON.stringify(page.viewport) !== JSON.stringify(old.viewport)) return `Changed ${page.name} settings`;
+    if (JSON.stringify(page.elements) !== JSON.stringify(old.elements)) return `Changed something on ${page.name}`;
+    if (page.name !== old.name || page.path !== old.path || page.appearance !== old.appearance || page.included !== old.included || JSON.stringify(page.sizes) !== JSON.stringify(old.sizes)) return `Changed ${page.name} settings`;
   }
   if (JSON.stringify([after.brief, after.decisions, after.exceptions]) !== JSON.stringify([before.brief, before.decisions, before.exceptions])) return 'Updated project brief';
   return 'Changed the project';

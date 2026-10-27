@@ -1,14 +1,19 @@
 use crate::{
-    Error, GenerationDossier, MAX_APPLIED_JOBS, MAX_PROJECT_SOURCE_BYTES, Result, SiteContent,
-    ensure,
+    Element, ElementMove, ElementPatch, Error, GenerationDossier, LinkedDefinition,
+    LinkedPasteInstance, MAX_APPLIED_JOBS, RequestAttachment, Result, ensure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-pub const SCHEMA_VERSION: u32 = 10;
+pub const SCHEMA_VERSION: u32 = 14;
+/// The longest export destination the project remembers.
+pub const MAX_EXPORT_DESTINATION: usize = 4_096;
 pub const MAX_PAGES: usize = 100;
+pub const MAX_PAGE_SIZES: usize = 8;
 pub const MAX_PROMPT_CHARS: usize = 16_384;
+pub const MAX_REFERENCE_ITEMS: usize = 1000;
+pub const MAX_POINTERS: usize = 1000;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -115,300 +120,556 @@ impl Rect {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// How a page behaves inside its canvas boundary.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ElementTarget {
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub id: String,
-    pub selector: String,
-    pub tag: String,
-    pub label: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub source_sha256: String,
+pub enum BoundaryKind {
+    /// Fixed width, grows taller as content is added.
+    Page,
+    /// Fixed size, content beyond it clips.
+    Screen,
 }
 
-impl ElementTarget {
-    pub fn validate(&self) -> Result<()> {
-        validate_text(&self.label, "Element label", 240, false)?;
-        ensure(
-            !self.id.is_empty()
-                || (self.source_sha256.len() == 64
-                    && self
-                        .source_sha256
-                        .bytes()
-                        .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())),
-            "The selected element has an invalid source fingerprint.",
-        )?;
-        ensure(
-            self.id.is_empty() || crate::stable_targets::valid_id(&self.id),
-            "The selected element has an invalid editor ID.",
-        )?;
-        let parts: Vec<_> = self.selector.split(" > ").collect();
-        ensure(
-            parts.first() == Some(&"body") && parts.len() <= 64 && self.selector.len() <= 4096,
-            "The selected element has an invalid selector.",
-        )?;
-        for part in parts.iter().skip(1) {
-            let Some((tag, position)) = part.split_once(":nth-of-type(") else {
-                return Err(Error(
-                    "The selected element has an invalid selector.".into(),
-                ));
-            };
-            ensure(
-                valid_tag(tag)
-                    && position
-                        .strip_suffix(')')
-                        .and_then(|n| n.parse::<u32>().ok())
-                        .is_some_and(|n| n > 0),
-                "The selected element has an invalid selector.",
-            )?;
+/// What a boundary ships as. Websites and apps are built by the AI from the element tree;
+/// slides and images are rendered directly from it.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum OutputType {
+    #[default]
+    Webpage,
+    AppScreen,
+    Slide,
+    Image,
+}
+
+impl OutputType {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Webpage => "Webpage",
+            Self::AppScreen => "App screen",
+            Self::Slide => "Slide",
+            Self::Image => "Image",
         }
+    }
+
+    /// Websites and apps are written by the AI export job; slides and images render directly.
+    pub fn needs_ai(self) -> bool {
+        matches!(self, Self::Webpage | Self::AppScreen)
+    }
+
+    /// The reply field a page's exported files arrive in.
+    pub fn reply_kind(self) -> &'static str {
+        if self.needs_ai() { "code" } else { "render" }
+    }
+}
+
+/// One screen size of a page boundary. A page has one or more sizes drawn side by side on the
+/// canvas; the first is the base size, whose element values every other size inherits unless it
+/// overrides them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PageSize {
+    pub id: Uuid,
+    pub label: String,
+    pub width: u32,
+    pub height: u32,
+    pub kind: BoundaryKind,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl PageSize {
+    pub fn validate(&self) -> Result<()> {
         ensure(
-            valid_tag(&self.tag)
-                && (self.selector == "body" && self.tag == "body"
-                    || parts.last().is_some_and(|part| {
-                        part.starts_with(&format!("{}:nth-of-type(", self.tag))
-                    })),
-            "The selected element tag disagrees with its selector.",
+            !self.id.is_nil(),
+            "A size needs a nonempty identifier.",
+        )?;
+        validate_text(&self.label, "Size name", 60, true)?;
+        Viewport {
+            width: self.width,
+            height: self.height,
+        }
+        .validate()?;
+        ensure(
+            self.x.is_finite() && self.y.is_finite(),
+            "Canvas positions must be finite.",
         )
     }
 }
 
-fn valid_tag(tag: &str) -> bool {
-    !tag.is_empty()
-        && tag.len() <= 80
-        && tag.bytes().next().is_some_and(|b| b.is_ascii_alphabetic())
-        && tag.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+/// A common size offered when adding a linked size to a boundary.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SizePreset {
+    Phone,
+    Tablet,
+    Desktop,
+    Custom,
 }
 
-fn is_false(value: &bool) -> bool {
-    !value
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-pub enum RegionShape {
-    #[default]
-    Rect,
-    Ellipse,
-    Freehand {
-        points: Vec<[f64; 2]>,
-    },
-}
-
-impl RegionShape {
-    pub fn is_rect(&self) -> bool {
-        matches!(self, Self::Rect)
-    }
-
-    pub fn validate(&self) -> Result<()> {
-        if let Self::Freehand { points } = self {
-            ensure(
-                (3..=500).contains(&points.len()),
-                "A freehand area needs between 3 and 500 points.",
-            )?;
-            ensure(
-                points
-                    .iter()
-                    .flatten()
-                    .all(|n| n.is_finite() && (0.0..=1.0).contains(n)),
-                "Freehand points must be finite fractions between 0 and 1.",
-            )?;
+impl SizePreset {
+    /// The width, height and name of a preset; Custom uses the caller's values.
+    pub fn dimensions(self, width: u32, height: u32) -> (String, u32, u32) {
+        match self {
+            Self::Phone => ("Phone".into(), 390, 844),
+            Self::Tablet => ("Tablet".into(), 820, 1180),
+            Self::Desktop => ("Desktop".into(), 1440, 900),
+            Self::Custom => ("Size".into(), width, height),
         }
+    }
+}
+
+/// The name a new size gets from its width, so a boundary reads as Phone, Tablet or Desktop.
+pub fn size_label(width: u32) -> &'static str {
+    if width >= 1024 {
+        "Desktop"
+    } else if width >= 700 {
+        "Tablet"
+    } else {
+        "Phone"
+    }
+}
+
+/// One size's spot on the project canvas, as sent by a layout command. Field names stay
+/// snake_case like every other command argument.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CanvasPlacement {
+    pub page_id: Uuid,
+    pub size_id: Uuid,
+    pub x: f64,
+    pub y: f64,
+    pub kind: BoundaryKind,
+}
+
+impl CanvasPlacement {
+    fn place(self, pages: &mut [Page]) -> Result<()> {
+        let page = pages
+            .iter_mut()
+            .find(|page| page.id == self.page_id)
+            .ok_or_else(|| Error("A page on the canvas no longer exists.".into()))?;
+        let size = page
+            .size_mut(self.size_id)
+            .ok_or_else(|| Error("This size on the canvas no longer exists.".into()))?;
+        size.x = self.x;
+        size.y = self.y;
+        size.kind = self.kind;
         Ok(())
     }
 }
 
-/// A page or page group a request may also change. An empty request selection means its own
-/// page or framed document.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// One reference item's spot on the project canvas, moved when a boundary pushes it aside.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ReferencePlacement {
+    pub item_id: Uuid,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// A reference item's content. Reference items are material the AI may read, and
+/// nothing outside every boundary ever ships.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
     rename_all_fields = "camelCase",
     deny_unknown_fields
 )]
-pub enum PageSelection {
-    /// One project page.
-    Page { page_id: Uuid },
-    /// Every page and editable site document below one path, for example `projects`.
-    Prefix { path: String },
-    /// Every page and editable site document.
-    All,
+pub enum ReferenceKind {
+    Note { text: String },
+    Link { url: String, title: String },
+    /// A picture already stored in `project.pictures`; bytes never leave the project.
+    Image {
+        picture: Uuid,
+        /// The original file name, when the project still knows it; context sends names only.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        name: String,
+    },
+    Swatch { color: String },
 }
 
-impl PageSelection {
-    pub fn page(page_id: Uuid) -> Self {
-        Self::Page { page_id }
-    }
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReferenceItem {
+    pub id: Uuid,
+    pub rect: Rect,
+    pub kind: ReferenceKind,
+}
 
-    /// Accept `/projects/`, `projects` and `/projects` as the same directory prefix.
-    pub fn prefix(path: &str) -> Result<Self> {
-        let path = path.trim().trim_matches('/');
-        ensure(
-            !path.is_empty()
-                && path.chars().count() <= 1024
-                && !path.split('/').any(|part| part.is_empty() || part == ".."),
-            "Choose a page group for this request.",
-        )?;
-        Ok(Self::Prefix { path: path.into() })
-    }
-
-    /// Whether this selection covers a page route or site path, written without a leading slash.
-    pub fn covers(&self, location: &str, page_id: Option<Uuid>) -> bool {
-        let location = location.trim_matches('/');
-        match self {
-            Self::Page { page_id: selected } => page_id == Some(*selected),
-            Self::Prefix { path } => {
-                location == path
-                    || location
-                        .strip_prefix(path.as_str())
-                        .is_some_and(|rest| rest.starts_with('/'))
-            }
-            Self::All => true,
-        }
-    }
-
+impl ReferenceItem {
     pub fn validate(&self, project: &Project) -> Result<()> {
-        match self {
-            Self::Page { page_id } => {
-                project.page(*page_id)?;
-            }
-            Self::Prefix { path } => {
+        self.rect.validate(Viewport {
+            width: 1,
+            height: 1,
+        })?;
+        match &self.kind {
+            ReferenceKind::Note { text } => {
                 ensure(
-                    !path.trim().is_empty() && path.chars().count() <= 1024,
-                    "Choose a page group for this request.",
+                    text.chars().count() <= MAX_PROMPT_CHARS && !text.contains('\0'),
+                    "Reference notes are limited to 16,384 characters.",
                 )?;
             }
-            Self::All => {}
+            ReferenceKind::Link { url, title } => {
+                ensure(
+                    url.len() <= 2048
+                        && url::Url::parse(url).is_ok_and(|parsed| {
+                            matches!(parsed.scheme(), "https" | "http")
+                                && parsed.host_str().is_some()
+                                && parsed.username().is_empty()
+                                && parsed.password().is_none()
+                        }),
+                    "A reference link must start with http:// or https://.",
+                )?;
+                validate_text(title, "Link title", 240, false)?;
+            }
+            ReferenceKind::Image { picture, name } => {
+                ensure(
+                    project.picture_uri(*picture).is_some(),
+                    "A reference picture is not in this project.",
+                )?;
+                validate_text(name, "Picture name", 120, false)?;
+            }
+            ReferenceKind::Swatch { color } => ensure(
+                valid_swatch(color),
+                "A swatch colour must be #rgb or #rrggbb.",
+            )?,
         }
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Region {
-    pub id: Uuid,
-    pub rect: Rect,
-    #[serde(default, skip_serializing_if = "RegionShape::is_rect")]
-    pub shape: RegionShape,
-    /// Measured page elements for shape scope and whole-page coverage; refreshed before generation.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub area_bounds: Vec<crate::TargetBounds>,
-    pub z_index: i32,
-    pub prompt: String,
-    /// This request edits a document shown inside one of the page's iframes; its rect is mapped
-    /// into that document's CSS pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub frame_target: Option<crate::FrameTarget>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub elements: Vec<ElementTarget>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub allow_target_removal: bool,
-    /// A phone-layout fix: only CSS inside small-screen media queries may change.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub mobile_only: bool,
-    /// Bounded preview errors; this request uses whole-page repair authority.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub runtime_errors: Vec<String>,
-    /// Force page scope, or suppress automatic detection after the user turns it off.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub whole_page: bool,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub whole_page_disabled: bool,
-    /// Pages this request may also change; empty means only its own page or framed document.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub pages: Vec<PageSelection>,
-    /// Files and links dropped on the request.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<crate::RequestAttachment>,
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub completed: bool,
+/// Where a pointer starts: a layer inside a page, or the page boundary itself. `size_id` names
+/// the linked size the endpoint was drawn in, when the page has more than one.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum PointerSource {
+    Element {
+        page_id: Uuid,
+        element_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_id: Option<Uuid>,
+    },
+    Boundary {
+        page_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_id: Option<Uuid>,
+    },
 }
 
-impl Region {
-    /// A covering base layer, or full-width page-layout intent, grants automatic page scope.
-    /// Coverage uses measured page extents, falling back to the guide.
-    /// Phone fixes and element selections stay local unless explicitly overridden.
-    pub fn is_whole_page(&self, page: &Page) -> bool {
-        if self.frame_target.is_some() {
-            return false;
+/// Where a pointer goes. A layer grants edit permission; reference items and URLs are read only.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum PointerTarget {
+    Element {
+        page_id: Uuid,
+        element_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_id: Option<Uuid>,
+    },
+    Boundary {
+        page_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size_id: Option<Uuid>,
+    },
+    Reference { item_id: Uuid },
+    Url { url: String },
+}
+
+/// What Play can do with a simple pointer. Everything else exports only.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum PlayAction {
+    GoTo { boundary: Uuid },
+    Show { element: Uuid },
+    Hide { element: Uuid },
+    Toggle { element: Uuid },
+    Swap { element: Uuid, with_element: Uuid },
+}
+
+/// The generated code a pointer produced: a fingerprint of its marked fragments and the comment
+/// it was generated from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PointerWiring {
+    pub fingerprint: String,
+    pub generated_comment: String,
+}
+
+/// One boundary as an export wrote it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExportedPage {
+    pub page_id: Uuid,
+    pub path: String,
+    pub output: OutputType,
+}
+
+/// The code one pointer produced: a fingerprint of its marked fragments and the comment the
+/// export was written for. A pointer with no marked fragments is not recorded.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExportedPointer {
+    pub fingerprint: String,
+    pub comment: String,
+}
+
+/// What the last export produced. Kept in the project so the canvas can compare its comments
+/// and recompute pointer fingerprints from the destination folder.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExportRecord {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    /// The project database version the export was written from.
+    pub version: i64,
+    /// The absolute export folder.
+    pub destination: String,
+    pub exported_at: String,
+    pub pages: Vec<ExportedPage>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub pointers: BTreeMap<Uuid, ExportedPointer>,
+}
+
+impl ExportRecord {
+    pub fn validate(&self) -> Result<()> {
+        ensure(!self.id.is_nil(), "An export needs a nonempty identifier.")?;
+        ensure(
+            !self.project_id.is_nil(),
+            "An export needs the project it was written from.",
+        )?;
+        ensure(self.version >= 0, "An export version cannot be negative.")?;
+        ensure(
+            self.destination.len() <= MAX_EXPORT_DESTINATION
+                && (!self.destination.contains('\0'))
+                && std::path::Path::new(&self.destination).is_absolute(),
+            "An export destination must be an absolute folder path.",
+        )?;
+        validate_text(
+            &self.exported_at,
+            "Export time",
+            64,
+            true,
+        )?;
+        ensure(
+            self.pages.len() <= MAX_PAGES,
+            "An export records at most 100 boundaries.",
+        )?;
+        for page in &self.pages {
+            ensure(!page.page_id.is_nil(), "An exported boundary needs a nonempty identifier.")?;
+            validate_path(&page.path)?;
         }
-        !self.runtime_errors.is_empty()
-            || self.whole_page
-            || (!self.whole_page_disabled && self.auto_whole_page(page))
+        ensure(
+            self.pointers.len() <= MAX_POINTERS,
+            "An export records at most 1,000 pointers.",
+        )?;
+        for exported in self.pointers.values() {
+            ensure(
+                exported.fingerprint.len() == 64
+                    && exported.fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "An export fingerprint must be a SHA-256 digest.",
+            )?;
+            validate_text(&exported.comment, "Pointer comment", MAX_PROMPT_CHARS, false)?;
+        }
+        Ok(())
+    }
+}
+
+/// A line from a frame or boundary to what it grants the AI permission to read or change.
+/// The comment is the spec; a missing endpoint leaves the pointer in place and broken.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Pointer {
+    pub id: Uuid,
+    pub from: PointerSource,
+    pub to: PointerTarget,
+    pub comment: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wiring: Option<PointerWiring>,
+    /// A simple action the comment asks for, and the comment it was classified from.
+    #[serde(default, deserialize_with = "crate::required_nullable", skip_serializing_if = "Option::is_none")]
+    pub play: Option<PlayAction>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub play_comment: String,
+}
+
+impl Pointer {
+    pub fn validate(&self) -> Result<()> {
+        ensure(!self.id.is_nil(), "A pointer needs a nonempty identifier.")?;
+        validate_text(
+            &self.comment,
+            "Pointer comment",
+            MAX_PROMPT_CHARS,
+            false,
+        )?;
+        if let PointerTarget::Url { url } = &self.to {
+            ensure(valid_http_url(url), "A pointer URL must start with http:// or https://.")?;
+        }
+        if let Some(wiring) = &self.wiring {
+            ensure(
+                wiring.fingerprint.len() <= 256 && !wiring.fingerprint.contains('\0'),
+                "A pointer fingerprint is limited to 256 characters.",
+            )?;
+            validate_text(
+                &wiring.generated_comment,
+                "Wiring comment",
+                MAX_PROMPT_CHARS,
+                false,
+            )?;
+        }
+        validate_text(
+            &self.play_comment,
+            "Play comment",
+            MAX_PROMPT_CHARS,
+            false,
+        )?;
+        if let Some(PlayAction::Swap { element, with_element }) = &self.play {
+            ensure(
+                element != with_element,
+                "A swap pointer needs two different layers.",
+            )?;
+        }
+        if let Some(PlayAction::GoTo { boundary }) = &self.play {
+            ensure(
+                !boundary.is_nil(),
+                "A go-to pointer needs a boundary.",
+            )?;
+        }
+        Ok(())
     }
 
-    pub fn auto_whole_page(&self, page: &Page) -> bool {
-        if self.frame_target.is_some()
-            || self.mobile_only
-            || self.has_targets()
-            || !self.shape.is_rect()
-        {
-            return false;
-        }
-        let width = self
-            .area_bounds
-            .iter()
-            .map(|b| b.rect.x + b.rect.width)
-            .fold(f64::from(page.viewport.width), f64::max);
-        let height = self
-            .area_bounds
-            .iter()
-            .map(|b| b.rect.y + b.rect.height)
-            .reduce(f64::max)
-            .unwrap_or(f64::from(page.viewport.height));
-        let overlap = |start: f64, length: f64, extent: f64| {
-            ((start + length).min(extent) - start.max(0.0)).max(0.0)
-        };
-        let base_layer = page
-            .request_layers()
-            .first()
-            .is_some_and(|region| region.id == self.id);
-        overlap(self.rect.x, self.rect.width, width) >= width * 0.95
-            && (self.has_page_layout_intent()
-                || base_layer
-                    && ((self.rect.y.abs() <= f64::from(page.viewport.height) * 0.1
-                        && overlap(
-                            self.rect.y,
-                            self.rect.height,
-                            f64::from(page.viewport.height),
-                        ) >= f64::from(page.viewport.height) * 0.9)
-                        || overlap(self.rect.y, self.rect.height, height) >= height * 0.9))
+    pub fn is_broken(&self, project: &Project) -> bool {
+        pointer_is_broken(project, self)
     }
+}
 
-    /// Deliberately narrow page-layout phrases, never a general keyword like "background".
-    /// A full-width request may carry this intent even when drawn below the viewport.
-    fn has_page_layout_intent(&self) -> bool {
-        let prompt = self
-            .prompt
-            .to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|word| !word.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-        [
-            "one page one screen",
-            "one screen only",
-            "single screen",
-            "fit the page to",
-            "fit this page to",
-            "fit on one screen",
-            "fit in one screen",
-            "page height",
-            "page layout",
-            "viewport height",
-        ]
+fn valid_http_url(url: &str) -> bool {
+    url.len() <= 2048
+        && url::Url::parse(url).is_ok_and(|parsed| {
+            matches!(parsed.scheme(), "https" | "http")
+                && parsed.host_str().is_some()
+                && parsed.username().is_empty()
+                && parsed.password().is_none()
+        })
+}
+
+fn pointer_source_missing(project: &Project, source: &PointerSource) -> bool {
+    match source {
+        PointerSource::Element {
+            page_id,
+            element_id,
+            size_id,
+        } => project
+            .pages
+            .iter()
+            .find(|page| page.id == *page_id)
+            .is_none_or(|page| {
+                crate::elements::find_in(&page.elements, *element_id).is_none()
+                    || size_id.is_some_and(|size| page.size(size).is_none())
+            }),
+        PointerSource::Boundary { page_id, size_id } => project
+            .pages
+            .iter()
+            .find(|page| page.id == *page_id)
+            .is_none_or(|page| size_id.is_some_and(|size| page.size(size).is_none())),
+    }
+}
+
+fn pointer_target_missing(project: &Project, target: &PointerTarget) -> bool {
+    match target {
+        PointerTarget::Element {
+            page_id,
+            element_id,
+            size_id,
+        } => project
+            .pages
+            .iter()
+            .find(|page| page.id == *page_id)
+            .is_none_or(|page| {
+                crate::elements::find_in(&page.elements, *element_id).is_none()
+                    || size_id.is_some_and(|size| page.size(size).is_none())
+            }),
+        PointerTarget::Boundary { page_id, size_id } => project
+            .pages
+            .iter()
+            .find(|page| page.id == *page_id)
+            .is_none_or(|page| size_id.is_some_and(|size| page.size(size).is_none())),
+        PointerTarget::Reference { item_id } => !project.reference.iter().any(|item| item.id == *item_id),
+        // A URL is drawn on its reference card; without that card the line has no target.
+        PointerTarget::Url { url } => !project.reference.iter().any(|item| {
+            matches!(&item.kind, ReferenceKind::Link { url: card, .. } if card == url)
+        }),
+    }
+}
+
+/// Pure: a pointer is broken when either endpoint no longer exists. Pointers are never
+/// deleted with what they reference, so this decides how they are shown and offered.
+pub fn pointer_is_broken(project: &Project, pointer: &Pointer) -> bool {
+    pointer_source_missing(project, &pointer.from) || pointer_target_missing(project, &pointer.to)
+}
+
+/// Every pointer whose source or target is missing, in project order.
+pub fn broken_pointers(project: &Project) -> Vec<Uuid> {
+    project
+        .pointers
         .iter()
-        .any(|phrase| format!(" {prompt} ").contains(&format!(" {phrase} ")))
-    }
+        .filter(|pointer| pointer.is_broken(project))
+        .map(|pointer| pointer.id)
+        .collect()
+}
 
-    pub fn targets(&self) -> Vec<&ElementTarget> {
-        self.elements.iter().collect()
+fn valid_swatch(color: &str) -> bool {
+    let Some(hex) = color.strip_prefix('#') else {
+        return false;
+    };
+    (hex.len() == 3 || hex.len() == 6) && hex.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn normalized_swatch(color: &str) -> String {
+    let hex = color.trim().trim_start_matches('#').to_ascii_lowercase();
+    // #rgb and #rrggbb describe the same colour; store the canonical six digits.
+    let hex = if hex.len() == 3 {
+        hex.chars().flat_map(|c| [c, c]).collect()
+    } else {
+        hex
+    };
+    format!("#{hex}")
+}
+
+/// A frame dragged out keeps its size, but never shrinks below a readable note.
+fn converted_reference_note(rect: Rect) -> Rect {
+    Rect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width.max(200.0),
+        height: rect.height.max(120.0),
     }
-    pub fn has_targets(&self) -> bool {
-        !self.elements.is_empty()
+}
+
+fn attachment_id() -> String {
+    Uuid::new_v4().simple().to_string()[..16].into()
+}
+
+fn reference_picture_name(picture: Uuid, name: &str) -> String {
+    if name.trim().is_empty() {
+        format!("Picture {}", &picture.simple().to_string()[..8])
+    } else {
+        name.chars().take(120).collect()
     }
 }
 
@@ -419,23 +680,45 @@ pub struct Page {
     pub name: String,
     pub path: String,
     pub included: bool,
-    pub viewport: Viewport,
+    /// What this boundary ships as: a webpage, app screen, slide or image.
+    #[serde(default)]
+    pub output: OutputType,
+    /// Linked sizes, base first. Every size draws its own boundary on the canvas.
+    pub sizes: Vec<PageSize>,
     pub appearance: Appearance,
-    pub regions: Vec<Region>,
-    #[serde(deserialize_with = "crate::required_nullable")]
-    pub content: Option<SiteContent>,
+    /// Root layers of this boundary, back to front.
+    pub elements: Vec<Element>,
 }
 
 impl Page {
-    /// Bottom to top, matching the canvas and Layers list. Stable sort retains array-order ties.
-    pub fn request_layers(&self) -> Vec<&Region> {
-        let mut layers: Vec<_> = self
-            .regions
-            .iter()
-            .filter(|region| !region.completed)
-            .collect();
-        layers.sort_by_key(|region| region.z_index);
-        layers
+    /// The base size: its element values are the ones the other sizes inherit.
+    pub fn base_size(&self) -> &PageSize {
+        self.sizes.first().expect("a validated page has a size")
+    }
+
+    pub fn base_size_id(&self) -> Uuid {
+        self.base_size().id
+    }
+
+    pub fn size(&self, id: Uuid) -> Option<&PageSize> {
+        self.sizes.iter().find(|size| size.id == id)
+    }
+
+    pub fn size_mut(&mut self, id: Uuid) -> Option<&mut PageSize> {
+        self.sizes.iter_mut().find(|size| size.id == id)
+    }
+
+    /// The page's base viewport, the size the design starts from.
+    pub fn viewport(&self) -> Viewport {
+        let base = self.base_size();
+        Viewport {
+            width: base.width,
+            height: base.height,
+        }
+    }
+
+    pub fn has_many_sizes(&self) -> bool {
+        self.sizes.len() > 1
     }
 }
 
@@ -458,7 +741,7 @@ pub struct Brief {
 pub enum Scope {
     Project,
     Page(Uuid),
-    Region(Uuid),
+    Element(Uuid),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -506,16 +789,28 @@ pub struct Project {
     pub brief: Brief,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_identity: Option<crate::ImportedIdentity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub website: Option<crate::ImportedWebsite>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub pictures: BTreeMap<Uuid, std::sync::Arc<str>>,
+    /// Everything outside every boundary: reference the AI can read that never ships.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reference: Vec<ReferenceItem>,
+    /// Lines from a frame or boundary to what its comment may read or change. A pointer
+    /// outlives what it references so a deleted target can be reattached.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pointers: Vec<Pointer>,
+    /// Named elements every copy shares. Copies store their own position, parent and request
+    /// history; a definition outlives its last copy.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub linked: BTreeMap<Uuid, LinkedDefinition>,
     pub decisions: Vec<Decision>,
     pub exceptions: Vec<DesignException>,
     pub extensions: BTreeMap<String, ExtensionRecord>,
     pub applied_job_ids: Vec<Uuid>,
     #[serde(deserialize_with = "crate::required_nullable")]
     pub latest_generation: Option<GenerationDossier>,
+    /// The last export written from this project, so pointer clashes can compare against it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_export: Option<ExportRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -525,9 +820,6 @@ pub enum Command {
         name: String,
     },
     /// Lay a page's code out readably (Code view → Tidy code), without the AI.
-    FormatPageCode {
-        page_id: Uuid,
-    },
     SetGrid {
         enabled: bool,
     },
@@ -537,116 +829,220 @@ pub enum Command {
     SetGenerationMode {
         mode: GenerationMode,
     },
-    AddPage {
-        name: String,
-        path: String,
-    },
     UpdatePage {
         page_id: Uuid,
         name: String,
         path: String,
-        viewport: Viewport,
         appearance: Appearance,
         included: bool,
+    },
+    /// Change what a boundary ships as.
+    SetPageOutput {
+        page_id: Uuid,
+        output: OutputType,
+    },
+    /// Change one linked size of a boundary: its name, dimensions or kind.
+    UpdatePageSize {
+        page_id: Uuid,
+        size_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        width: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        height: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<BoundaryKind>,
+        /// Neighbours a grown size pushes aside, in the same undo step.
+        #[serde(default)]
+        moves: Vec<CanvasPlacement>,
+        #[serde(default)]
+        reference: Vec<ReferencePlacement>,
+    },
+    /// Add a page and place it on the project canvas in one step. `moves` carries the
+    /// boundaries the new one pushes aside, so drawing is a single undoable gesture.
+    AddCanvasPage {
+        name: String,
+        path: String,
+        size: PageSize,
+        #[serde(default)]
+        moves: Vec<CanvasPlacement>,
+        /// Reference items the new boundary pushes aside, in the same undo step.
+        #[serde(default)]
+        reference: Vec<ReferencePlacement>,
+    },
+    /// Add a linked size to a page, placed to the right of it, with the neighbours it pushes.
+    AddPageSize {
+        page_id: Uuid,
+        size: PageSize,
+        #[serde(default)]
+        moves: Vec<CanvasPlacement>,
+        #[serde(default)]
+        reference: Vec<ReferencePlacement>,
+    },
+    /// Remove a linked size. The base size cannot be removed.
+    RemovePageSize {
+        page_id: Uuid,
+        size_id: Uuid,
+    },
+    /// Move one or more boundaries in one step, e.g. a drag and the neighbours it pushes.
+    SetCanvasLayout {
+        placements: Vec<CanvasPlacement>,
+        /// Reference items the moved or drawn boundaries push aside, in the same undo step.
+        #[serde(default)]
+        reference: Vec<ReferencePlacement>,
+    },
+    AddReferenceItem {
+        item: ReferenceItem,
+        /// Picture bytes for a dropped Image item; the command derives and stores its id.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        picture_data_uri: Option<String>,
+    },
+    /// Move an item and/or change its content in one undo step.
+    UpdateReferenceItem {
+        item_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rect: Option<Rect>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        color: Option<String>,
+    },
+    RemoveReferenceItems {
+        ids: Vec<Uuid>,
+    },
+    AddPointer {
+        pointer: Pointer,
+    },
+    /// Change a comment and/or either endpoint in one undo step.
+    UpdatePointer {
+        pointer_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        from: Option<PointerSource>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        to: Option<PointerTarget>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        comment: Option<String>,
+    },
+    RemovePointers {
+        ids: Vec<Uuid>,
+    },
+    /// Set or clear the generated code a pointer is wired to. A new comment in the same command
+    /// keeps Keep code to one undo step; a missing wiring clears it so it is generated again.
+    SetPointerWiring {
+        pointer_id: Uuid,
+        wiring: Option<PointerWiring>,
+        comment: Option<String>,
+    },
+    /// Resolve contradicting pointers from one source: keep this one, remove the others, and
+    /// optionally replace its comment (Merge, which also clears the wiring).
+    ResolvePointerClash {
+        keep: Uuid,
+        drop: Vec<Uuid>,
+        merged_comment: Option<String>,
+    },
+    /// Record a completed export: the version, folder, boundaries and the code fingerprint of
+    /// every pointer it built. Also wires those pointers to the code it produced.
+    RecordExport {
+        record: ExportRecord,
+    },
+    /// Keep a pointer's comment after its exported code changed: forget the recorded code so the
+    /// next export rebuilds it.
+    ForgetExportPointer {
+        pointer_id: Uuid,
+    },
+    /// A layer dragged out of every boundary becomes a note plus its attachments.
+    ElementToReference {
+        page_id: Uuid,
+        element_id: Uuid,
+        rect: Rect,
+    },
+    /// A note, link, colour or picture dragged into a boundary becomes a layer there.
+    ReferenceToElement {
+        item_id: Uuid,
+        page_id: Uuid,
+        rect: Rect,
+    },
+    /// Selected reference items travel with these requests as context, through the same
+    /// request attachments generation already sends.
+    AttachReferenceContext {
+        element_ids: Vec<Uuid>,
+        item_ids: Vec<Uuid>,
     },
     DeletePage {
         page_id: Uuid,
     },
-    AddRegion {
+    InsertElements {
         page_id: Uuid,
-        rect: Rect,
-    },
-    AddShapedRegion {
-        page_id: Uuid,
-        rect: Rect,
-        shape: RegionShape,
-    },
-    AddElementRegion {
-        page_id: Uuid,
-        rect: Rect,
-        element: ElementTarget,
-    },
-    AddElementRegions {
-        page_id: Uuid,
-        elements: Vec<ElementTarget>,
-        bounds: Vec<crate::TargetBounds>,
-        #[serde(default)]
-        allow_target_removal: bool,
-    },
-    RetargetRegion {
-        page_id: Uuid,
-        region_id: Uuid,
-        elements: Vec<ElementTarget>,
-        bounds: Vec<crate::TargetBounds>,
-        #[serde(default)]
-        allow_target_removal: bool,
-    },
-    SetRegionTargetRemoval {
-        page_id: Uuid,
-        region_id: Uuid,
-        allow_target_removal: bool,
-    },
-    SetRegionWholePage {
-        page_id: Uuid,
-        region_id: Uuid,
-        whole_page: bool,
-    },
-    SetRegionRuntimeErrors {
-        page_id: Uuid,
-        region_id: Uuid,
-        errors: Vec<String>,
-    },
-    /// Target a document shown by one of the page's iframes, with the box in its coordinates.
-    SetRegionFrameTarget {
-        page_id: Uuid,
-        region_id: Uuid,
+        parent_id: Option<Uuid>,
+        index: usize,
+        elements: Vec<Element>,
+        /// Picture bytes for a placed image; the command stores them and sets the reference.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        frame_target: Option<crate::FrameTarget>,
-    },
-    SetRegionMobileOnly {
-        page_id: Uuid,
-        region_id: Uuid,
-        mobile_only: bool,
-    },
-    SetRegionPages {
-        page_id: Uuid,
-        region_id: Uuid,
-        pages: Vec<PageSelection>,
-    },
-    AddRegionAttachment {
-        page_id: Uuid,
-        region_id: Uuid,
-        attachment: crate::RequestAttachment,
-    },
-    RemoveRegionAttachment {
-        page_id: Uuid,
-        region_id: Uuid,
-        attachment_id: String,
-    },
-    DeleteElements {
-        page_id: Uuid,
-        elements: Vec<ElementTarget>,
-        /// The document to delete from; defaults to the current page.
+        picture_data_uri: Option<String>,
+        /// The linked size the layer was added in; every other size hides it and draws a
+        /// placeholder. Omitted means it was added for all sizes.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        document: Option<crate::DocumentTarget>,
+        size_id: Option<Uuid>,
     },
-    UpdateRegion {
+    /// Add a rendered website as boundaries, reference notes, behaviour pointers and pictures
+    /// in one undo step. The native importer has already turned pictures into data URIs.
+    ImportWebsite {
+        pages: Vec<Page>,
+        reference: Vec<ReferenceItem>,
+        pointers: Vec<Pointer>,
+        pictures: BTreeMap<Uuid, String>,
+    },
+    UpdateElements {
         page_id: Uuid,
-        region_id: Uuid,
-        rect: Rect,
-        prompt: String,
+        patches: Vec<ElementPatch>,
     },
-    DismissEmptyRegions {
-        keep_region_id: Option<Uuid>,
+    /// Join 2 or more selected layers under one new linked definition. `source_id` is the
+    /// copy whose content wins; every selected layer becomes an instance of it.
+    LinkElements {
+        ids: Vec<Uuid>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_id: Option<Uuid>,
     },
-    RemoveRegion {
+    /// Detach selected instances into plain layers with their current resolved content.
+    UnlinkElements {
+        ids: Vec<Uuid>,
+    },
+    /// Forget a linked definition that no copy uses.
+    RemoveLinkedDefinition {
+        id: Uuid,
+    },
+    /// Paste new copies of a linked element, making the source linked when it is not.
+    PasteLinkedInstances {
+        items: Vec<LinkedPasteInstance>,
+    },
+    MoveElements {
+        moves: Vec<ElementMove>,
+    },
+    RemoveElements {
         page_id: Uuid,
-        region_id: Uuid,
+        ids: Vec<Uuid>,
     },
-    ArrangeRegion {
+    GroupElements {
         page_id: Uuid,
-        region_id: Uuid,
-        direction: crate::LayerDirection,
+        ids: Vec<Uuid>,
+    },
+    UngroupElements {
+        page_id: Uuid,
+        id: Uuid,
+    },
+    /// Set or clear the request waiting for Generate on a layer.
+    SetElementRequest {
+        element_id: Uuid,
+        request: Option<crate::PendingRequest>,
+    },
+    UpdateElementContext {
+        element_id: Uuid,
+        context: Vec<RequestAttachment>,
     },
     SetBrief {
         brief: Brief,
@@ -670,6 +1066,62 @@ pub enum Command {
     },
 }
 
+impl Command {
+    /// A short, plain label for the change. Saved versions are named from these.
+    pub fn version_label(&self) -> &'static str {
+        match self {
+            Self::RenameProject { .. } => "Renamed the project",
+            Self::SetGrid { .. } => "Changed the grid",
+            Self::SetGridSettings { .. } => "Changed the grid",
+            Self::SetGenerationMode { .. } => "Changed the AI style",
+            Self::UpdatePage { .. } => "Changed a boundary",
+            Self::SetPageOutput { .. } => "Changed a boundary's output",
+            Self::UpdatePageSize { .. } => "Changed a size",
+            Self::AddCanvasPage { .. } => "Added a boundary",
+            Self::AddPageSize { .. } => "Added a size",
+            Self::RemovePageSize { .. } => "Removed a size",
+            Self::SetCanvasLayout { .. } => "Moved boundaries",
+            Self::AddReferenceItem { item, .. } => match item.kind {
+                ReferenceKind::Note { .. } => "Added a note",
+                ReferenceKind::Link { .. } => "Added a link",
+                ReferenceKind::Image { .. } => "Added a picture",
+                ReferenceKind::Swatch { .. } => "Added a colour",
+            },
+            Self::UpdateReferenceItem { .. } => "Changed reference",
+            Self::RemoveReferenceItems { .. } => "Removed reference",
+            Self::AddPointer { .. } => "Added a pointer",
+            Self::UpdatePointer { .. } => "Changed a pointer",
+            Self::RemovePointers { .. } => "Removed pointers",
+            Self::SetPointerWiring { .. } => "Wired a pointer",
+            Self::ResolvePointerClash { .. } => "Resolved a pointer clash",
+            Self::RecordExport { .. } => "Exported the project",
+            Self::ForgetExportPointer { .. } => "Rebuilt a pointer at the next export",
+            Self::ElementToReference { .. } => "Moved a layer to reference",
+            Self::ReferenceToElement { .. } => "Moved reference into a boundary",
+            Self::AttachReferenceContext { .. } => "Attached reference",
+            Self::DeletePage { .. } => "Removed a boundary",
+            Self::InsertElements { .. } => "Added elements",
+            Self::ImportWebsite { .. } => "Imported a website",
+            Self::UpdateElements { .. } => "Changed elements",
+            Self::LinkElements { .. } => "Linked elements",
+            Self::UnlinkElements { .. } => "Unlinked elements",
+            Self::RemoveLinkedDefinition { .. } => "Removed a linked element",
+            Self::PasteLinkedInstances { .. } => "Pasted linked elements",
+            Self::MoveElements { .. } => "Moved elements",
+            Self::RemoveElements { .. } => "Removed elements",
+            Self::GroupElements { .. } => "Grouped elements",
+            Self::UngroupElements { .. } => "Ungrouped elements",
+            Self::SetElementRequest { .. } => "Asked AI on a layer",
+            Self::UpdateElementContext { .. } => "Changed layer context",
+            Self::SetBrief { .. } => "Changed the project brief",
+            Self::SetDecision { .. } => "Kept a decision",
+            Self::RemoveDecision { .. } => "Removed a decision",
+            Self::AddException { .. } => "Added an exception",
+            Self::RemoveException { .. } => "Removed an exception",
+        }
+    }
+}
+
 impl Project {
     pub fn new(name: String, viewport: Viewport, appearance: Appearance) -> Result<Self> {
         let home_page_id = Uuid::new_v4();
@@ -689,20 +1141,31 @@ impl Project {
                 name: "Home".into(),
                 path: "/".into(),
                 included: true,
-                viewport,
+                output: OutputType::default(),
+                sizes: vec![PageSize {
+                    id: Uuid::new_v4(),
+                    label: size_label(viewport.width).into(),
+                    width: viewport.width,
+                    height: viewport.height,
+                    kind: BoundaryKind::Page,
+                    x: 0.0,
+                    y: 0.0,
+                }],
                 appearance,
-                regions: vec![],
-                content: None,
+                elements: vec![],
             }],
             brief: Brief::default(),
             imported_identity: None,
-            website: None,
             pictures: BTreeMap::new(),
+            reference: vec![],
+            pointers: vec![],
+            linked: BTreeMap::new(),
             decisions: vec![],
             exceptions: vec![],
             extensions: BTreeMap::new(),
             applied_job_ids: vec![],
             latest_generation: None,
+            last_export: None,
         };
         project.validate()?;
         Ok(project)
@@ -722,28 +1185,424 @@ impl Project {
             .ok_or_else(|| Error("This page no longer exists.".into()))
     }
 
-    /// Requests whose frame target is this page's document. Their region markers belong in this
-    /// page's source even though the region itself lives on the host page.
-    pub(crate) fn framed_region_ids(&self, page_id: Uuid) -> BTreeSet<Uuid> {
-        self.pages
+    /// A picture id resolves from the shared project store or an imported identity catalogue;
+    /// its bytes stay in the project.
+    pub(crate) fn picture_uri(&self, id: Uuid) -> Option<std::sync::Arc<str>> {
+        self.pictures.get(&id).cloned().or_else(|| {
+            let identity = self.imported_identity.as_ref()?;
+            identity
+                .assets
+                .iter()
+                .find(|asset| asset.id == id)
+                .map(|asset| std::sync::Arc::from(asset.data_uri.as_str()))
+                .or_else(|| {
+                    identity
+                        .photos
+                        .iter()
+                        .find(|photo| photo.id == id)
+                        .map(|photo| photo.data_uri.clone())
+                })
+        })
+    }
+
+    fn pointer_mut(&mut self, id: Uuid) -> Result<&mut Pointer> {
+        self.pointers
+            .iter_mut()
+            .find(|pointer| pointer.id == id)
+            .ok_or_else(|| Error("This pointer no longer exists.".into()))
+    }
+
+    fn add_pointer(&mut self, pointer: Pointer) -> Result<()> {
+        ensure(
+            self.pointers.len() < MAX_POINTERS,
+            "A project holds at most 1,000 pointers.",
+        )?;
+        ensure(
+            !self.pointers.iter().any(|existing| existing.id == pointer.id),
+            "This pointer already exists.",
+        )?;
+        self.pointers.push(pointer);
+        Ok(())
+    }
+
+    fn update_pointer(
+        &mut self,
+        pointer_id: Uuid,
+        from: Option<PointerSource>,
+        to: Option<PointerTarget>,
+        comment: Option<String>,
+    ) -> Result<()> {
+        let pointer = self.pointer_mut(pointer_id)?;
+        if let Some(from) = from {
+            pointer.from = from;
+        }
+        if let Some(to) = to {
+            pointer.to = to;
+        }
+        if let Some(comment) = comment {
+            pointer.comment = comment;
+        }
+        Ok(())
+    }
+
+    fn reference_mut(&mut self, id: Uuid) -> Result<&mut ReferenceItem> {
+        self.reference
+            .iter_mut()
+            .find(|item| item.id == id)
+            .ok_or_else(|| Error("This reference item no longer exists.".into()))
+    }
+
+    fn place_reference(&mut self, placements: Vec<ReferencePlacement>) -> Result<()> {
+        for placement in placements {
+            let item = self.reference_mut(placement.item_id)?;
+            item.rect.x = placement.x;
+            item.rect.y = placement.y;
+        }
+        Ok(())
+    }
+
+    fn add_reference_item(
+        &mut self,
+        mut item: ReferenceItem,
+        picture_data_uri: Option<String>,
+    ) -> Result<()> {
+        if let ReferenceKind::Swatch { color } = &mut item.kind {
+            *color = normalized_swatch(color);
+        }
+        if let ReferenceKind::Image { picture, .. } = &mut item.kind {
+            if let Some(uri) = picture_data_uri {
+                let id = crate::project_assets::store_picture_uri(&uri)?;
+                self.pictures.insert(id, std::sync::Arc::from(uri.as_str()));
+                *picture = id;
+            }
+        } else {
+            ensure(
+                picture_data_uri.is_none(),
+                "Only a reference picture takes picture bytes.",
+            )?;
+        }
+        ensure(
+            self.reference.len() < MAX_REFERENCE_ITEMS,
+            "A reference holds at most 1,000 items.",
+        )?;
+        ensure(
+            !self.reference.iter().any(|existing| existing.id == item.id),
+            "This reference item already exists.",
+        )?;
+        self.reference.push(item);
+        Ok(())
+    }
+
+    fn update_reference_item(
+        &mut self,
+        item_id: Uuid,
+        rect: Option<Rect>,
+        text: Option<String>,
+        url: Option<String>,
+        title: Option<String>,
+        color: Option<String>,
+    ) -> Result<()> {
+        let has_content = text.is_some() || url.is_some() || title.is_some() || color.is_some();
+        let item = self.reference_mut(item_id)?;
+        if let Some(rect) = rect {
+            item.rect = rect;
+        }
+        if !has_content {
+            return Ok(());
+        }
+        match &mut item.kind {
+            ReferenceKind::Note { text: value } => {
+                ensure(
+                    url.is_none() && title.is_none() && color.is_none(),
+                    "This reference item is not a link or a swatch.",
+                )?;
+                if let Some(next) = text {
+                    *value = next;
+                }
+            }
+            ReferenceKind::Link { url: link, title: name } => {
+                ensure(
+                    text.is_none() && color.is_none(),
+                    "This reference item is not a note or a swatch.",
+                )?;
+                if let Some(next) = url {
+                    *link = next;
+                }
+                if let Some(next) = title {
+                    *name = next;
+                }
+            }
+            ReferenceKind::Swatch { color: value } => {
+                ensure(
+                    text.is_none() && url.is_none() && title.is_none(),
+                    "This reference item is not a note or a link.",
+                )?;
+                if let Some(next) = color {
+                    *value = normalized_swatch(&next);
+                }
+            }
+            ReferenceKind::Image { .. } => {
+                return Err(Error(
+                    "A reference picture's content cannot be edited.".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// One gesture: the layer disappears and its request text and attachments become
+    /// reference items beside where it was dropped.
+    fn element_to_reference(&mut self, page_id: Uuid, element_id: Uuid, rect: Rect) -> Result<()> {
+        let page = self.page_mut(page_id)?;
+        let element = crate::elements::remove_element(&mut page.elements, element_id)
+            .ok_or_else(|| Error("This layer no longer exists.".into()))?;
+        let pending = element.meta.pending.clone();
+        let prompt = pending
+            .as_ref()
+            .map(|request| request.prompt.clone())
+            .filter(|prompt| !prompt.trim().is_empty())
+            .unwrap_or_else(|| element.label());
+        let note = converted_reference_note(rect);
+        let mut items = vec![ReferenceItem {
+            id: Uuid::new_v4(),
+            rect: note,
+            kind: ReferenceKind::Note { text: prompt },
+        }];
+        let mut x = note.x + note.width + 16.0;
+        for attachment in pending.map(|request| request.attachments).unwrap_or_default() {
+            let item = match attachment.kind {
+                crate::AttachmentKind::Link => attachment.url.map(|url| {
+                    let title = url::Url::parse(&url)
+                        .ok()
+                        .and_then(|parsed| parsed.host_str().map(str::to_owned))
+                        .unwrap_or_else(|| url.clone());
+                    ReferenceItem {
+                        id: Uuid::new_v4(),
+                        rect: Rect {
+                            x,
+                            y: note.y,
+                            width: 200.0,
+                            height: 140.0,
+                        },
+                        kind: ReferenceKind::Link { url, title },
+                    }
+                }),
+                crate::AttachmentKind::Image => {
+                    let uri = attachment.data_uri;
+                    uri.map(|uri| {
+                        let id = crate::project_assets::store_picture_uri(&uri)
+                            .expect("validated attachment pictures have a picture id");
+                        self.pictures.insert(id, uri);
+                        ReferenceItem {
+                            id: Uuid::new_v4(),
+                            rect: Rect {
+                                x,
+                                y: note.y,
+                                width: 200.0,
+                                height: 140.0,
+                            },
+                            kind: ReferenceKind::Image {
+                                picture: id,
+                                name: attachment.name,
+                            },
+                        }
+                    })
+                }
+                // Text files stay with the old request; only pictures and links become cards.
+                crate::AttachmentKind::Text => None,
+            };
+            if let Some(item) = item {
+                x += 200.0 + 16.0;
+                items.push(item);
+            }
+        }
+        self.reference.extend(items);
+        Ok(())
+    }
+
+    /// Selected reference items become request attachments on these pending requests.
+    fn attach_reference_context(
+        &mut self,
+        element_ids: &[Uuid],
+        item_ids: &[Uuid],
+    ) -> Result<()> {
+        ensure(!element_ids.is_empty(), "Select a layer with a request first.")?;
+        let contexts: Vec<(String, crate::AttachmentKind, Option<String>, Option<String>)> =
+            item_ids
+                .iter()
+                .map(|id| {
+                    let item = self
+                        .reference
+                        .iter()
+                        .find(|item| item.id == *id)
+                        .ok_or_else(|| Error("This reference item no longer exists.".into()))?;
+                    Ok(match &item.kind {
+                        ReferenceKind::Note { text } => (
+                            "Reference note".to_string(),
+                            crate::AttachmentKind::Text,
+                            Some(text.clone()),
+                            None,
+                        ),
+                        ReferenceKind::Link { url, title } => (
+                            if title.trim().is_empty() {
+                                url.clone()
+                            } else {
+                                title.clone()
+                            },
+                            crate::AttachmentKind::Link,
+                            None,
+                            Some(url.clone()),
+                        ),
+                        // Reference pictures travel by name only; their bytes never leave the project.
+                        ReferenceKind::Image { picture, name } => (
+                            reference_picture_name(*picture, name),
+                            crate::AttachmentKind::Text,
+                            Some(reference_picture_name(*picture, name)),
+                            None,
+                        ),
+                        ReferenceKind::Swatch { color } => (
+                            "Reference colour".to_string(),
+                            crate::AttachmentKind::Text,
+                            Some(color.clone()),
+                            None,
+                        ),
+                    })
+                })
+                .collect::<Result<_>>()?;
+        for element_id in element_ids {
+            let element = self
+                .element_mut(*element_id)
+                .ok_or_else(|| Error("This layer no longer exists.".into()))?;
+            let pending = element
+                .meta
+                .pending
+                .as_mut()
+                .ok_or_else(|| Error("Give this layer a request first.".into()))?;
+            let mut used: BTreeSet<String> = pending
+                .attachments
+                .iter()
+                .map(|item| item.id.clone())
+                .collect();
+            let mut additions = Vec::new();
+            for (name, kind, text, url) in &contexts {
+                // An empty note carries no reference.
+                if *kind == crate::AttachmentKind::Text && text.as_deref().is_none_or(str::is_empty) {
+                    continue;
+                }
+                let duplicate = pending.attachments.iter().chain(additions.iter()).any(|existing| {
+                    existing.kind == *kind
+                        && existing.text == *text
+                        && existing.url == *url
+                });
+                if duplicate {
+                    continue;
+                }
+                let id = (1..)
+                    .map(|n| format!("a{}{n}", &element_id.simple().to_string()[..4]))
+                    .find(|id| !used.contains(id))
+                    .expect("an unused identifier");
+                used.insert(id.clone());
+                additions.push(crate::RequestAttachment {
+                    id,
+                    name: name.chars().take(120).collect(),
+                    kind: *kind,
+                    data_uri: None,
+                    preview: None,
+                    text: text.clone(),
+                    url: url.clone(),
+                });
+            }
+            ensure(
+                pending.attachments.len() + additions.len() <= 16,
+                "A request supports at most 16 attachments.",
+            )?;
+            pending.attachments.extend(additions);
+        }
+        Ok(())
+    }
+
+    /// A note, link, colour or picture dragged into a boundary becomes a layer there.
+    fn reference_to_element(&mut self, item_id: Uuid, page_id: Uuid, rect: Rect) -> Result<()> {
+        let item = self
+            .reference
             .iter()
-            .flat_map(|page| page.regions.iter())
-            .filter(|region| {
-                region
-                    .frame_target
-                    .as_ref()
-                    .is_some_and(|frame| frame.document == crate::DocumentTarget::Page { page_id })
-            })
-            .map(|region| region.id)
-            .collect()
+            .position(|item| item.id == item_id)
+            .map(|index| self.reference.remove(index))
+            .ok_or_else(|| Error("This reference item no longer exists.".into()))?;
+        let attachment = |id: String,
+                          name: String,
+                          kind: crate::AttachmentKind,
+                          data_uri: Option<std::sync::Arc<str>>,
+                          url: Option<String>| crate::RequestAttachment {
+            id,
+            name,
+            kind,
+            data_uri,
+            preview: None,
+            text: None,
+            url,
+        };
+        let mut element = match item.kind {
+            ReferenceKind::Image { picture, .. } => {
+                let mut element = crate::empty_element(crate::ElementKind::Image, rect);
+                element.image = Some(picture);
+                element
+            }
+            ReferenceKind::Note { text } => {
+                let mut element = crate::empty_element(crate::ElementKind::Box, rect);
+                if !text.trim().is_empty() {
+                    element.meta.pending = Some(crate::PendingRequest {
+                        prompt: text,
+                        attachments: vec![],
+                        requested_at: "reference".into(),
+                        size_id: None,
+                    });
+                }
+                element
+            }
+            ReferenceKind::Link { url, title } => {
+                let name: String = if title.trim().is_empty() {
+                    url.clone()
+                } else {
+                    title
+                }
+                .chars()
+                .take(120)
+                .collect();
+                let mut element = crate::empty_element(crate::ElementKind::Box, rect);
+                element.meta.pending = Some(crate::PendingRequest {
+                    prompt: String::new(),
+                    attachments: vec![attachment(
+                        attachment_id(),
+                        name,
+                        crate::AttachmentKind::Link,
+                        None,
+                        Some(url),
+                    )],
+                    requested_at: "reference".into(),
+                    size_id: None,
+                });
+                element
+            }
+            ReferenceKind::Swatch { color } => {
+                let mut element = crate::empty_element(crate::ElementKind::Box, rect);
+                element.meta.pending = Some(crate::PendingRequest {
+                    prompt: format!("Use {color}"),
+                    attachments: vec![],
+                    requested_at: "reference".into(),
+                    size_id: None,
+                });
+                element
+            }
+        };
+        element.rect = rect;
+        let page = self.page_mut(page_id)?;
+        page.elements.push(element);
+        Ok(())
     }
 
     pub fn pending_count(&self) -> usize {
-        self.pages
-            .iter()
-            .flat_map(|p| &p.regions)
-            .filter(|r| !r.completed && !r.prompt.trim().is_empty())
-            .count()
+        self.pending_request_count()
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -782,12 +1641,53 @@ impl Project {
                 "Project picture identifiers must be unique.",
             )?;
         }
-        self.validate_picture_store()?;
-        if let Some(site) = &self.website {
-            site.validate(self)?;
+        ensure(
+            self.reference.len() <= MAX_REFERENCE_ITEMS,
+            "A reference holds at most 1,000 items.",
+        )?;
+        for item in &self.reference {
+            ensure(
+                ids.insert(item.id),
+                "Project identifiers must be unique.",
+            )?;
+            item.validate(self)?;
         }
+        ensure(
+            self.pointers.len() <= MAX_POINTERS,
+            "A project holds at most 1,000 pointers.",
+        )?;
+        for pointer in &self.pointers {
+            ensure(
+                ids.insert(pointer.id),
+                "Project identifiers must be unique.",
+            )?;
+            pointer.validate()?;
+        }
+        ensure(
+            self.linked.len() <= crate::MAX_LINKED_DEFINITIONS,
+            "A project holds at most 1,000 linked elements.",
+        )?;
+        let mut linked_names = BTreeSet::new();
+        for (id, definition) in &self.linked {
+            ensure(
+                !id.is_nil() && definition.id == *id && ids.insert(*id),
+                "Linked element identifiers must be nonempty and unique.",
+            )?;
+            validate_text(
+                &definition.name,
+                "Linked element name",
+                crate::MAX_ELEMENT_NAME_CHARS,
+                true,
+            )?;
+            ensure(
+                linked_names.insert(definition.name.trim().to_lowercase()),
+                "Two linked elements cannot share a name.",
+            )?;
+            definition.validate(self)?;
+        }
+        self.validate_picture_store()?;
         let mut paths = BTreeSet::new();
-        let mut source_bytes = 0_usize;
+        let mut element_count = 0_usize;
         for page in &self.pages {
             ensure(ids.insert(page.id), "Project identifiers must be unique.")?;
             validate_text(&page.name, "Page name", 120, true)?;
@@ -796,74 +1696,26 @@ impl Project {
                 paths.insert(page.path.to_lowercase()),
                 "Two pages cannot use the same public path.",
             )?;
-            page.viewport.validate()?;
-            if let Some(content) = &page.content {
-                content.validate()?;
-                crate::stable_targets::validate_ids(&crate::editing::parse(&content.html)?)?;
-                source_bytes += content.byte_len();
+            ensure(
+                !page.sizes.is_empty() && page.sizes.len() <= MAX_PAGE_SIZES,
+                "A boundary needs between 1 and 8 sizes.",
+            )?;
+            let mut size_ids = BTreeSet::new();
+            for size in &page.sizes {
                 ensure(
-                    source_bytes <= MAX_PROJECT_SOURCE_BYTES,
-                    "The project exceeds its 64 MiB generated source limit.",
+                    ids.insert(size.id) && size_ids.insert(size.id),
+                    "Size identifiers must be nonempty and unique.",
                 )?;
+                size.validate()?;
             }
-            for region in &page.regions {
-                ensure(ids.insert(region.id), "Area identifiers must be unique.")?;
-                region.rect.validate(page.viewport)?;
-                region.shape.validate()?;
-                ensure(
-                    !region.has_targets() || region.shape.is_rect(),
-                    "Element requests must use rectangular bounds.",
-                )?;
-                ensure(
-                    region.area_bounds.len() <= 10_000,
-                    "An area supports at most 10,000 measured elements.",
-                )?;
-                let mut measured_ids = BTreeSet::new();
-                for bound in &region.area_bounds {
-                    bound.rect.validate(page.viewport)?;
-                    bound.target.validate()?;
-                    ensure(
-                        !bound.target.id.is_empty() && measured_ids.insert(&bound.target.id),
-                        "Measured elements need unique editor IDs.",
-                    )?;
-                }
-                ensure(
-                    region.elements.len() <= crate::MAX_BATCH_ELEMENT_EDITS,
-                    "A request supports at most 500 selected elements.",
-                )?;
-                let mut target_ids = BTreeSet::new();
-                for element in region.targets() {
-                    element.validate()?;
-                    ensure(
-                        element.id.is_empty() || target_ids.insert(&element.id),
-                        "A selected element was supplied twice.",
-                    )?;
-                }
-                ensure(
-                    region.runtime_errors.len() <= 10
-                        && region
-                            .runtime_errors
-                            .iter()
-                            .all(|error| !error.is_empty() && error.chars().count() <= 4096),
-                    "Preview errors exceed the repair request limit.",
-                )?;
-                ensure(
-                    region.runtime_errors.is_empty()
-                        || (!region.mobile_only && !region.has_targets()),
-                    "Runtime repairs require a page request.",
-                )?;
-                validate_text(&region.prompt, "Area description", MAX_PROMPT_CHARS, false)?;
-                ensure(
-                    region.pages.len() <= MAX_PAGES,
-                    "A request supports at most 100 pages.",
-                )?;
-                for selection in &region.pages {
-                    selection.validate(self)?;
-                }
-                for attachment in &region.attachments {
-                    attachment.validate()?;
-                }
-            }
+            crate::elements::validate_elements(
+                &page.elements,
+                self,
+                &size_ids,
+                &mut ids,
+                &mut element_count,
+            )?;
+            validate_request_sizes(&page.elements, &size_ids)?;
         }
         let home = self.page(self.home_page_id)?;
         ensure(
@@ -947,6 +1799,9 @@ impl Project {
         if let Some(dossier) = &self.latest_generation {
             dossier.validate(self)?;
         }
+        if let Some(record) = &self.last_export {
+            record.validate()?;
+        }
         Ok(())
     }
 
@@ -954,22 +1809,10 @@ impl Project {
         match scope {
             Scope::Project => Ok(()),
             Scope::Page(id) => self.page(*id).map(|_| ()),
-            Scope::Region(id) => ensure(
-                self.pages
-                    .iter()
-                    .any(|p| p.regions.iter().any(|r| r.id == *id)),
-                "This decision's area no longer exists.",
+            Scope::Element(id) => ensure(
+                self.element(*id).is_some(),
+                "This decision's layer no longer exists.",
             ),
-        }
-    }
-
-    fn dismiss_empty_regions(&mut self, keep: Option<Uuid>) {
-        for page in &mut self.pages {
-            for region in &mut page.regions {
-                if Some(region.id) != keep && region.prompt.trim().is_empty() {
-                    region.completed = true;
-                }
-            }
         }
     }
 
@@ -978,131 +1821,265 @@ impl Project {
             expected_revision == self.revision,
             "The project changed. Refresh the document before applying this edit.",
         )?;
-        if let Command::FormatPageCode { page_id } = &command {
-            let content = self
-                .page(*page_id)?
-                .content
-                .as_ref()
-                .ok_or_else(|| Error("This page has no code yet.".into()))?;
-            if crate::format_site_content(content) == *content {
-                self.validate()?;
-                return Ok(self.clone());
-            }
-        }
-        if let Command::DismissEmptyRegions { keep_region_id } = &command {
-            if let Some(id) = keep_region_id {
-                self.validate_scope(&Scope::Region(*id))?;
-            }
-            if !self
-                .pages
-                .iter()
-                .flat_map(|page| &page.regions)
-                .any(|region| {
-                    !region.completed
-                        && Some(region.id) != *keep_region_id
-                        && region.prompt.trim().is_empty()
-                })
-            {
-                self.validate()?;
-                return Ok(self.clone());
-            }
-        }
-        if let Command::ArrangeRegion {
-            page_id,
-            region_id,
-            direction,
-        } = &command
-        {
-            self.validate()?;
-            let page = self.page(*page_id)?;
-            let mut order = page
-                .regions
-                .iter()
-                .enumerate()
-                .filter(|(_, region)| !region.completed)
-                .map(|(index, _)| index)
-                .collect::<Vec<_>>();
-            order.sort_by_key(|index| page.regions[*index].z_index);
-            let position = order
-                .iter()
-                .position(|index| page.regions[*index].id == *region_id)
-                .ok_or_else(|| {
-                    Error("This request no longer exists or is already in history.".into())
-                })?;
-            let destination = match direction {
-                crate::LayerDirection::Forward => (position + 1).min(order.len() - 1),
-                crate::LayerDirection::Backward => position.saturating_sub(1),
-                crate::LayerDirection::Front => order.len() - 1,
-                crate::LayerDirection::Back => 0,
-            };
-            if destination == position {
-                return Ok(self.clone());
-            }
-            let index = order.remove(position);
-            order.insert(destination, index);
-            let mut next = self.clone();
-            next.revision = next
-                .revision
-                .checked_add(1)
-                .ok_or_else(|| Error("Project revision limit reached.".into()))?;
-            let page = next.page_mut(*page_id)?;
-            for (rank, index) in order.into_iter().enumerate() {
-                page.regions[index].z_index = i32::try_from(rank)
-                    .map_err(|_| Error("This page has too many request layers.".into()))?;
-            }
-            next.store_inline_images()?;
-            next.validate()?;
-            return Ok(next);
-        }
         let mut next = self.clone();
         next.revision = next
             .revision
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
-        let area_shape = match &command {
-            Command::AddShapedRegion { shape, .. } => shape.clone(),
-            _ => RegionShape::Rect,
-        };
         match command {
             Command::RenameProject { name } => next.name = name.trim().into(),
-            Command::FormatPageCode { page_id } => {
-                let page = next
-                    .pages
-                    .iter_mut()
-                    .find(|page| page.id == page_id)
-                    .ok_or_else(|| Error("This page no longer exists.".into()))?;
-                if let Some(content) = &page.content {
-                    page.content = Some(crate::format_site_content(content));
-                }
-            }
             Command::SetGrid { enabled } => next.show_grid = enabled,
             Command::SetGridSettings { settings } => next.grid_settings = settings,
             Command::SetGenerationMode { mode } => next.generation_mode = mode,
-            Command::AddPage { name, path } => next.pages.push(Page {
-                id: Uuid::new_v4(),
-                name: name.trim().into(),
-                path,
-                included: true,
-                viewport: next.viewport,
-                appearance: next.appearance,
-                regions: vec![],
-                content: None,
-            }),
             Command::UpdatePage {
                 page_id,
                 name,
                 path,
-                viewport,
                 appearance,
                 included,
             } => {
                 let p = next.page_mut(page_id)?;
                 p.name = name.trim().into();
                 p.path = path;
-                p.viewport = viewport;
                 p.appearance = appearance;
                 p.included = included;
             }
+            Command::SetPageOutput { page_id, output } => {
+                next.page_mut(page_id)?.output = output;
+            }
+            Command::UpdatePageSize {
+                page_id,
+                size_id,
+                label,
+                width,
+                height,
+                kind,
+                moves,
+                reference,
+            } => {
+                let p = next.page_mut(page_id)?;
+                let size = p
+                    .size_mut(size_id)
+                    .ok_or_else(|| Error("This size no longer exists.".into()))?;
+                if let Some(label) = label {
+                    size.label = label.trim().into();
+                }
+                if let Some(width) = width {
+                    size.width = width;
+                }
+                if let Some(height) = height {
+                    size.height = height;
+                }
+                if let Some(kind) = kind {
+                    size.kind = kind;
+                }
+                size.validate()?;
+                ensure(
+                    p.viewport().validate().is_ok(),
+                    "The base size must stay a valid viewport.",
+                )?;
+                for placement in moves {
+                    placement.place(&mut next.pages)?;
+                }
+                next.place_reference(reference)?;
+            }
+            Command::AddCanvasPage {
+                name,
+                path,
+                size,
+                moves,
+                reference,
+            } => {
+                ensure(
+                    !next.pages.iter().any(|page| page.sizes.iter().any(|item| item.id == size.id)),
+                    "This size already exists.",
+                )?;
+                next.pages.push(Page {
+                    id: Uuid::new_v4(),
+                    name: name.trim().into(),
+                    path,
+                    included: true,
+                    output: OutputType::default(),
+                    sizes: vec![size],
+                    appearance: next.appearance,
+                    elements: vec![],
+                });
+                for placement in moves {
+                    placement.place(&mut next.pages)?;
+                }
+                next.place_reference(reference)?;
+            }
+            Command::AddPageSize {
+                page_id,
+                size,
+                moves,
+                reference,
+            } => {
+                ensure(
+                    !next
+                        .pages
+                        .iter()
+                        .any(|page| page.sizes.iter().any(|item| item.id == size.id)),
+                    "This size already exists.",
+                )?;
+                let page = next.page_mut(page_id)?;
+                ensure(
+                    page.sizes.len() < MAX_PAGE_SIZES,
+                    "A boundary holds at most 8 sizes.",
+                )?;
+                size.validate()?;
+                page.sizes.push(size);
+                for placement in moves {
+                    placement.place(&mut next.pages)?;
+                }
+                next.place_reference(reference)?;
+            }
+            Command::RemovePageSize { page_id, size_id } => {
+                let page = next.page_mut(page_id)?;
+                ensure(
+                    page.sizes.len() > 1,
+                    "A boundary keeps at least one size.",
+                )?;
+                ensure(
+                    page.base_size_id() != size_id,
+                    "The base size cannot be removed.",
+                )?;
+                ensure(
+                    page.size(size_id).is_some(),
+                    "This size no longer exists.",
+                )?;
+                page.sizes.retain(|size| size.id != size_id);
+                for element in page.elements.iter_mut() {
+                    clear_size_overrides(element, size_id);
+                }
+                for definition in next.linked.values_mut() {
+                    clear_size_overrides(&mut definition.master, size_id);
+                }
+            }
+            Command::SetCanvasLayout {
+                placements,
+                reference,
+            } => {
+                for placement in placements {
+                    placement.place(&mut next.pages)?;
+                }
+                next.place_reference(reference)?;
+            }
+            Command::AddReferenceItem {
+                item,
+                picture_data_uri,
+            } => next.add_reference_item(item, picture_data_uri)?,
+            Command::UpdateReferenceItem {
+                item_id,
+                rect,
+                text,
+                url,
+                title,
+                color,
+            } => next.update_reference_item(item_id, rect, text, url, title, color)?,
+            Command::RemoveReferenceItems { ids } => {
+                ensure(!ids.is_empty(), "Choose a reference item to remove.")?;
+                for id in &ids {
+                    ensure(
+                        next.reference.iter().any(|item| item.id == *id),
+                        "This reference item no longer exists.",
+                    )?;
+                }
+                next.reference.retain(|item| !ids.contains(&item.id));
+            }
+            Command::AddPointer { pointer } => next.add_pointer(pointer)?,
+            Command::UpdatePointer {
+                pointer_id,
+                from,
+                to,
+                comment,
+            } => next.update_pointer(pointer_id, from, to, comment)?,
+            Command::RemovePointers { ids } => {
+                ensure(!ids.is_empty(), "Choose a pointer to remove.")?;
+                for id in &ids {
+                    ensure(
+                        next.pointers.iter().any(|pointer| pointer.id == *id),
+                        "This pointer no longer exists.",
+                    )?;
+                }
+                next.pointers.retain(|pointer| !ids.contains(&pointer.id));
+            }
+            Command::SetPointerWiring {
+                pointer_id,
+                wiring,
+                comment,
+            } => {
+                if let Some(wiring) = &wiring
+                    && let Some(record) = &mut next.last_export
+                {
+                    record.pointers.insert(
+                        pointer_id,
+                        ExportedPointer {
+                            fingerprint: wiring.fingerprint.clone(),
+                            comment: wiring.generated_comment.clone(),
+                        },
+                    );
+                }
+                let pointer = next.pointer_mut(pointer_id)?;
+                if let Some(comment) = comment {
+                    pointer.comment = comment;
+                }
+                pointer.wiring = wiring;
+            }
+            Command::ResolvePointerClash {
+                keep,
+                drop,
+                merged_comment,
+            } => {
+                ensure(!drop.is_empty(), "Choose the other pointer to resolve.")?;
+                ensure(!drop.contains(&keep), "Keep one of the two pointers.")?;
+                next.pointer_mut(keep)?;
+                for id in &drop {
+                    ensure(
+                        next.pointers.iter().any(|pointer| pointer.id == *id),
+                        "This pointer no longer exists.",
+                    )?;
+                }
+                let pointer = next.pointer_mut(keep)?;
+                if let Some(comment) = merged_comment {
+                    pointer.comment = comment;
+                    pointer.wiring = None;
+                }
+                next.pointers.retain(|pointer| !drop.contains(&pointer.id));
+            }
+            Command::RecordExport { record } => {
+                record.validate()?;
+                for pointer in &mut next.pointers {
+                    if let Some(exported) = record.pointers.get(&pointer.id) {
+                        pointer.wiring = Some(PointerWiring {
+                            fingerprint: exported.fingerprint.clone(),
+                            generated_comment: exported.comment.clone(),
+                        });
+                    }
+                }
+                next.last_export = Some(record);
+            }
+            Command::ForgetExportPointer { pointer_id } => {
+                next.pointer_mut(pointer_id)?;
+                if let Some(record) = &mut next.last_export {
+                    record.pointers.remove(&pointer_id);
+                }
+                next.pointer_mut(pointer_id)?.wiring = None;
+            }
+            Command::ElementToReference {
+                page_id,
+                element_id,
+                rect,
+            } => next.element_to_reference(page_id, element_id, rect)?,
+            Command::ReferenceToElement {
+                item_id,
+                page_id,
+                rect,
+            } => next.reference_to_element(item_id, page_id, rect)?,
+            Command::AttachReferenceContext {
+                element_ids,
+                item_ids,
+            } => next.attach_reference_context(&element_ids, &item_ids)?,
             Command::DeletePage { page_id } => {
                 next.page(page_id)?;
                 ensure(
@@ -1111,368 +2088,74 @@ impl Project {
                 )?;
                 next.pages.retain(|p| p.id != page_id);
             }
-            Command::AddRegion { page_id, rect }
-            | Command::AddShapedRegion { page_id, rect, .. } => {
-                next.dismiss_empty_regions(None);
-                let p = next.page_mut(page_id)?;
-                let z_index = p
-                    .regions
-                    .iter()
-                    .map(|r| r.z_index)
-                    .max()
-                    .unwrap_or(-1)
-                    .saturating_add(1);
-                p.regions.push(Region {
-                    pages: vec![],
-                    id: Uuid::new_v4(),
-                    rect,
-                    shape: area_shape,
-                    area_bounds: vec![],
-                    z_index,
-                    prompt: String::new(),
-
-                    frame_target: None,
-                    elements: vec![],
-                    allow_target_removal: false,
-                    mobile_only: false,
-                    runtime_errors: vec![],
-                    whole_page: false,
-                    whole_page_disabled: false,
-                    attachments: vec![],
-                    completed: false,
-                });
-            }
-            Command::AddElementRegion {
-                page_id,
-                rect,
-                element,
-            } => {
-                next.dismiss_empty_regions(None);
-                let canonical = next.canonical_targets(page_id, std::slice::from_ref(&element))?;
-                let page = next.page_mut(page_id)?;
-                let z_index = page
-                    .regions
-                    .iter()
-                    .map(|r| r.z_index)
-                    .max()
-                    .unwrap_or(-1)
-                    .saturating_add(1);
-                page.regions.push(Region {
-                    pages: vec![],
-                    id: Uuid::new_v4(),
-                    rect,
-                    shape: RegionShape::Rect,
-                    area_bounds: vec![],
-                    z_index,
-                    prompt: String::new(),
-
-                    frame_target: None,
-                    elements: canonical,
-                    allow_target_removal: false,
-                    mobile_only: false,
-                    runtime_errors: vec![],
-                    whole_page: false,
-                    whole_page_disabled: false,
-                    attachments: vec![],
-                    completed: false,
-                });
-            }
-            Command::AddElementRegions {
-                page_id,
-                elements,
-                bounds,
-                allow_target_removal,
-            } => {
-                let targets = next.canonical_targets(page_id, &elements)?;
-                let rect = next.target_bounds_union(page_id, &targets, &bounds)?;
-                next.dismiss_empty_regions(None);
-                let page = next.page_mut(page_id)?;
-                let z_index = page
-                    .regions
-                    .iter()
-                    .map(|r| r.z_index)
-                    .max()
-                    .unwrap_or(-1)
-                    .saturating_add(1);
-                page.regions.push(Region {
-                    pages: vec![],
-                    id: Uuid::new_v4(),
-                    rect,
-                    shape: RegionShape::Rect,
-                    area_bounds: vec![],
-                    z_index,
-                    prompt: String::new(),
-
-                    frame_target: None,
-                    elements: targets,
-                    allow_target_removal,
-                    mobile_only: false,
-                    runtime_errors: vec![],
-                    whole_page: false,
-                    whole_page_disabled: false,
-                    attachments: vec![],
-                    completed: false,
-                });
-            }
-            Command::RetargetRegion {
-                page_id,
-                region_id,
-                elements,
-                bounds,
-                allow_target_removal,
-            } => {
-                ensure(
-                    !next
-                        .page(page_id)?
-                        .regions
-                        .iter()
-                        .any(|region| region.id == region_id && region.frame_target.is_some()),
-                    "A framed request changes only its framed document.",
-                )?;
-                let targets = next.canonical_targets(page_id, &elements)?;
-                let rect = next.target_bounds_union(page_id, &targets, &bounds)?;
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed)
-                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                region.elements = targets;
-
-                region.rect = rect;
-                region.shape = RegionShape::Rect;
-                region.area_bounds.clear();
-                region.allow_target_removal = allow_target_removal;
-            }
-            Command::SetRegionTargetRemoval {
-                page_id,
-                region_id,
-                allow_target_removal,
-            } => {
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed && r.has_targets())
-                    .ok_or_else(|| Error("Select a request for existing elements first.".into()))?;
-                region.allow_target_removal = allow_target_removal;
-            }
-            Command::SetRegionWholePage {
-                page_id,
-                region_id,
-                whole_page,
-            } => {
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed)
-                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                region.whole_page = whole_page;
-                region.whole_page_disabled = !whole_page;
-                if whole_page {
-                    // A whole-page request edits the host page, so the framed document it was
-                    // drawn over is released in the same step instead of blocking the switch.
-                    region.frame_target = None;
-                    region.mobile_only = false;
-                }
-            }
-            Command::SetRegionRuntimeErrors {
-                page_id,
-                region_id,
-                errors,
-            } => {
-                ensure(
-                    !errors.is_empty()
-                        && errors.len() <= 10
-                        && errors
-                            .iter()
-                            .all(|e| !e.is_empty() && e.chars().count() <= 4096),
-                    "Preview errors exceed the repair request limit.",
-                )?;
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed)
-                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                ensure(
-                    !region.has_targets() && region.frame_target.is_none(),
-                    "Runtime repairs require a page request.",
-                )?;
-                region.runtime_errors = errors;
-                region.mobile_only = false;
-                region.prompt = "Fix these runtime errors on this page. Edit this page's shared JavaScript, region scripts, and HTML/CSS as needed to fix them. Keep the rest of the design and content unchanged.".into();
-            }
-            Command::SetRegionMobileOnly {
-                page_id,
-                region_id,
-                mobile_only,
-            } => {
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed)
-                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                ensure(
-                    region.frame_target.is_none() || !mobile_only,
-                    "A framed request changes only its framed document.",
-                )?;
-                region.mobile_only = mobile_only;
-                if mobile_only {
-                    region.whole_page = false;
-                }
-            }
-            Command::SetRegionPages {
-                page_id,
-                region_id,
+            Command::SetElementRequest {
+                element_id,
+                request,
+            } => next.set_element_request(element_id, request)?,
+            Command::ImportWebsite {
                 pages,
+                reference,
+                pointers,
+                pictures,
             } => {
-                ensure(
-                    pages.len() <= MAX_PAGES,
-                    "A request supports at most 100 pages.",
-                )?;
-                let mut unique = BTreeSet::new();
-                let mut selections = Vec::new();
-                for selection in pages {
-                    let selection = match selection {
-                        PageSelection::Prefix { path } => PageSelection::prefix(&path)?,
-                        selection => selection,
-                    };
-                    selection.validate(&next)?;
-                    if unique.insert(selection.clone()) {
-                        selections.push(selection);
-                    }
-                }
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed)
-                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                region.pages = selections;
-            }
-            Command::SetRegionFrameTarget {
-                page_id,
-                region_id,
-                frame_target,
-            } => {
-                if let Some(frame) = &frame_target {
+                for (id, uri) in pictures {
                     ensure(
-                        frame.page_id == page_id,
-                        "A framed request must belong to the page that holds its iframe.",
+                        crate::project_assets::store_picture_uri(&uri)? == id,
+                        "An imported picture failed its integrity check.",
                     )?;
+                    next.pictures.insert(id, std::sync::Arc::from(uri.as_str()));
                 }
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed)
-                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                region.frame_target = frame_target.clone();
-                if frame_target.is_some() {
-                    region.elements.clear();
-                    region.area_bounds.clear();
-                    region.shape = RegionShape::Rect;
-                    region.allow_target_removal = false;
-                    region.mobile_only = false;
-                    region.runtime_errors.clear();
-                    region.whole_page = false;
-                    region.whole_page_disabled = false;
-                }
-            }
-            Command::AddRegionAttachment {
-                page_id,
-                region_id,
-                mut attachment,
-            } => {
-                let page = next.page_mut(page_id)?;
-                let used: BTreeSet<String> = page
-                    .regions
+                let mut paths: BTreeSet<String> = next
+                    .pages
                     .iter()
-                    .flat_map(|r| r.attachments.iter().map(|a| a.id.clone()))
+                    .map(|page| page.path.to_ascii_lowercase())
                     .collect();
-                let region = page
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed)
-                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                ensure(
-                    region.attachments.len() < 16,
-                    "A request supports at most 16 attachments.",
-                )?;
-                // Identifiers are assigned here so they stay unique on the page.
-                attachment.id = (1..)
-                    .map(|n| format!("a{}{n}", &region_id.simple().to_string()[..4]))
-                    .find(|id| !used.contains(id))
-                    .expect("an unused identifier");
-                // Decoding a large photo is slow, so its AI preview is made once, here.
-                attachment.preview = match (attachment.kind, attachment.data_uri.as_deref()) {
-                    (crate::AttachmentKind::Image, Some(data)) => {
-                        crate::ai_preview(data).map(std::sync::Arc::from)
-                    }
-                    _ => None,
-                };
-                attachment.validate()?;
-                region.attachments.push(attachment);
+                for page in pages {
+                    ensure(
+                        !next.pages.iter().any(|existing| existing.id == page.id),
+                        "This imported boundary already exists.",
+                    )?;
+                    ensure(
+                        paths.insert(page.path.to_ascii_lowercase()),
+                        "Two imported pages cannot use the same public path.",
+                    )?;
+                    next.pages.push(page);
+                }
+                next.reference.extend(reference);
+                next.pointers.extend(pointers);
             }
-            Command::RemoveRegionAttachment {
+            Command::InsertElements {
                 page_id,
-                region_id,
-                attachment_id,
-            } => {
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id && !r.completed)
-                    .ok_or_else(|| Error("This request no longer exists.".into()))?;
-                let before = region.attachments.len();
-                region.attachments.retain(|a| a.id != attachment_id);
-                ensure(
-                    region.attachments.len() < before,
-                    "That attachment was already removed.",
-                )?;
-            }
-            Command::DeleteElements {
-                page_id,
+                parent_id,
+                index,
                 elements,
-                document,
-            } => {
-                let document = document.unwrap_or(crate::DocumentTarget::Page { page_id });
-                return self.delete_elements_in(expected_revision, &document, &elements);
-            }
-            Command::UpdateRegion {
+                picture_data_uri,
+                size_id,
+            } => next.insert_elements(
                 page_id,
-                region_id,
-                rect,
-                prompt,
-            } => {
-                let region = next
-                    .page_mut(page_id)?
-                    .regions
-                    .iter_mut()
-                    .find(|r| r.id == region_id)
-                    .ok_or_else(|| Error("This area no longer exists.".into()))?;
-                region.rect = rect;
-                region.prompt = prompt;
-                region.completed = false;
+                parent_id,
+                index,
+                elements,
+                picture_data_uri,
+                size_id,
+            )?,
+            Command::UpdateElements { page_id, patches } => {
+                next.update_elements(page_id, patches)?
             }
-            Command::DismissEmptyRegions { keep_region_id } => {
-                next.dismiss_empty_regions(keep_region_id)
+            Command::LinkElements { ids, source_id } => {
+                next.link_elements(ids, source_id)?
             }
-            Command::RemoveRegion { page_id, region_id } => {
-                let page = next.page_mut(page_id)?;
-                ensure(
-                    page.regions.iter().any(|r| r.id == region_id),
-                    "This area no longer exists.",
-                )?;
-                page.regions.retain(|r| r.id != region_id);
-            }
-            Command::ArrangeRegion { .. } => {
-                unreachable!("Layer arrangements are handled before ordinary edits")
-            }
+            Command::UnlinkElements { ids } => next.unlink_elements(ids)?,
+            Command::RemoveLinkedDefinition { id } => next.remove_linked_definition(id)?,
+            Command::PasteLinkedInstances { items } => next.paste_linked_instances(items)?,
+            Command::MoveElements { moves } => next.move_elements(moves)?,
+            Command::RemoveElements { page_id, ids } => next.remove_elements(page_id, ids)?,
+            Command::GroupElements { page_id, ids } => next.group_elements(page_id, ids)?,
+            Command::UngroupElements { page_id, id } => next.ungroup_elements(page_id, id)?,
+            Command::UpdateElementContext {
+                element_id,
+                context,
+            } => next.update_element_context(element_id, context)?,
             Command::SetBrief { brief } => next.brief = brief,
             Command::SetDecision {
                 topic,
@@ -1528,6 +2211,30 @@ impl Project {
         next.store_inline_images()?;
         next.validate()?;
         Ok(next)
+    }
+}
+
+/// A request names the size it was written in, so that size must belong to the boundary.
+fn validate_request_sizes(elements: &[Element], sizes: &BTreeSet<Uuid>) -> Result<()> {
+    for element in elements {
+        ensure(
+            element
+                .meta
+                .pending
+                .as_ref()
+                .and_then(|pending| pending.size_id)
+                .is_none_or(|size| sizes.contains(&size)),
+            "A request names a size this boundary does not have.",
+        )?;
+        validate_request_sizes(&element.children, sizes)?;
+    }
+    Ok(())
+}
+
+fn clear_size_overrides(element: &mut Element, size_id: Uuid) {
+    element.overrides.remove(&size_id);
+    for child in &mut element.children {
+        clear_size_overrides(child, size_id);
     }
 }
 

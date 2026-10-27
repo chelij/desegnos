@@ -4,16 +4,16 @@ Date: 2026-10-19. Owner decisions. Where this file and [RELEASE_PLAN.md](RELEASE
 
 ## What Desegnos is
 
-**Dreamweaver with AI.** A desktop website editor where you place things exactly where you want them, describe them, and the AI builds real HTML, CSS and JavaScript that you own.
+**A visual canvas with AI.** A desktop design tool where you place things exactly where you want them on an infinite canvas, by hand or by describing them. Everything stays visual while you work; at export the AI builds real HTML, CSS and JavaScript that you own, and slides and images export directly. See [CANVAS.md](CANVAS.md).
 
 ## What makes it different
 
 **Placement and control.** Other AI site builders are chat-first: you describe a page and accept what comes back. In Desegnos, you decide where things go and the AI fills them in. When the choice is between AI convenience and user control, control wins.
 
 What this means in practice:
-- **Placement fidelity is the core quality measure.** A generated element should land where its request box was, at about that size, in that order and grouping. Strict mode should honor this closely.
-- **Visual editing and code editing sit side by side, as in Dreamweaver.** Users can always see the generated source and, eventually, edit it directly.
-- **Changes are scoped.** A request changes only what it targets, and everything else stays as it was.
+- **Placement fidelity is the core quality measure.** AI-made elements land in the frame that asked for them, and exports keep elements where they were placed, at about that size, in that order and grouping. Precise mode honours this closely.
+- **Visual first.** Work happens on the canvas, not in code. Code exists only in exports, as ordinary files users can read and edit.
+- **Changes are scoped.** A request changes only the layer it targets, and everything else stays as it was. Pointers are the explicit way to let a request reach further.
 - **The output is ordinary files** that open without Desegnos and are not locked to any host.
 
 ## Who it is for

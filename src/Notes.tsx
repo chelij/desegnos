@@ -6,25 +6,32 @@ import { Icon } from './icons';
 export function scopeLabel(project: Project, scope: Scope) {
   if (scope.kind === 'project') return 'Whole site';
   if (scope.kind === 'page') return project.pages.find(page => page.id === scope.id)?.name ?? 'Missing page';
-  for (const page of project.pages) {
-    const index = page.regions.findIndex(region => region.id === scope.id);
-    if (index >= 0) return `${page.name} · Box ${index + 1}`;
+  const page = project.pages.find(page => findElement(page.elements, scope.id));
+  const element = page ? findElement(page.elements, scope.id) : null;
+  return page && element ? `${page.name} · ${element.name || element.text.trim().split('\n')[0] || element.kind}` : 'Missing layer';
+}
+
+function findElement(elements: Project['pages'][number]['elements'], id: string): Project['pages'][number]['elements'][number] | null {
+  for (const element of elements) {
+    if (element.id === id) return element;
+    const found = findElement(element.children, id);
+    if (found) return found;
   }
-  return 'Missing request';
+  return null;
 }
 
 function encodeScope(scope: Scope) { return scope.kind === 'project' ? 'project' : `${scope.kind}:${scope.id}`; }
 function decodeScope(value: string): Scope {
   if (value === 'project') return { kind: 'project' };
   const [kind, id] = value.split(':');
-  return { kind: kind === 'page' ? 'page' : 'region', id };
+  return { kind: kind === 'page' ? 'page' : 'element', id };
 }
 
 function ScopeSelect({ project, value, change, disabled = false }: { project: Project; value: Scope; change: (scope: Scope) => void; disabled?: boolean }) {
   return <label>Applies to<select value={encodeScope(value)} onChange={event => change(decodeScope(event.target.value))} disabled={disabled}>
     <option value="project">Whole site</option>
     {project.pages.map(page => <optgroup key={page.id} label={page.name}><option value={`page:${page.id}`}>Page: {page.name}</option>
-      {page.regions.map((region, index) => <option key={region.id} value={`region:${region.id}`}>{page.name} · Box {index + 1}</option>)}
+      {page.elements.map(element => <option key={element.id} value={`element:${element.id}`}>{page.name} · {element.name || element.text.trim().split('\n')[0] || element.kind}</option>)}
     </optgroup>)}
   </select></label>;
 }

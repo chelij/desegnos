@@ -1,21 +1,16 @@
-import { OutsideEditsNotice } from './OutsideEditsNotice';
 import { CrashReportNotice, EditorCrashBoundary } from './CrashReport';
 import { needsAiSettings, ProblemBanner, Notice, NoticeProvider, NoticeHost } from './ProblemBanner.js';
-import { summarizeOutsideChanges } from './noticeSummary.js';
 import { browserOpenUrl, userError } from './userErrors.js';
 import { updateSummary, type UpdateCheck, type UpdateSummary } from './updateCheck';
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { native, edit } from './api';
-import { Canvas, type CanvasHandle, type RequestPatch } from './Canvas';
-import { CanvasTools, type CanvasTool, type RequestShapeKind } from './CanvasTools';
+import { ToolStrip, type EditorTool, type ProjectTool } from './EditorTools';
 import { WorkspaceSurface, WorkspaceSurfaces, SurfaceHost, isTextField } from './WorkspaceSurface';
-import { ProjectCanvas } from './ProjectCanvas';
+import { ProjectCanvas, type ProjectCanvasHandle } from './ProjectCanvas';
 import { isPendingRecovery, type PendingRecovery, type RecoveryChoices } from './RecoveryBanner';
 import { SaveConflictDialog, type SaveConflict, type SaveOutcome, type SaveChoice } from './SaveConflict';
-import { documentKey, nativeTarget, regionTargets, sameTargets } from './elementTargets';
-import { acrossPagesChangedLabel } from './acrossPages';
 import brandLight from './assets/brand/desegnos-wordmark-light.svg';
 import brandDark from './assets/brand/desegnos-wordmark-dark.svg';
 import { NewProject } from './NewProject';
@@ -24,47 +19,81 @@ import type { ProjectLocationView } from './types';
 import { Notes, type DossierSection } from './Notes';
 import { MenuButton, type MenuItem } from './Menus';
 import './shell.css';
-import { editorShortcut, SHORTCUT_HELP, withShortcut } from './shortcuts';
+import { shortcutFor, shortcutLabel, SHORTCUT_GROUPS, withShortcut } from './shortcuts';
 import { Icon } from './icons';
-import { FloatingBar } from './FloatingBar';
 import { StatusChip } from './StatusChip';
-import { closePageTab, loadPageTabs, savePageTabs, showPageTab, visiblePageTabs } from './pageTabs';
 import { steppedZoom } from './canvasGeometry';
-import { pathPage } from './liveBar';
+import { boundaryMoves, layoutBoundaries, pushApartBoundaries, toggleCanvasTarget, selectedReference, selectedElementIds, type Boundary, type BoundaryMove, type CanvasTarget, type ReferenceMove } from './projectCanvasGeometry';
+import { findPageElement } from './projectCanvas/elementGeometry';
+import { isNestedLayer } from './projectCanvas/links';
+import { setPasteDefault, usePasteDefault } from './pastePreference';
+import { ElementProperties } from './projectCanvas/elementProperties';
+import { elementPath, findElementIn } from './projectCanvas/elementGeometry';
+import { BoundaryProperties, CanvasLayers, EditorDock, PointerProperties, ProjectProperties, ReferenceProperties, usePanelState } from './EditorDock';
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
-import { requestEditorOpen, showsOpener } from './visibleActions';
-import { CodePane, type CodeView, type SourceMapView, type CodePaneHandle } from './CodePane';
+import { showsOpener } from './visibleActions';
 import { FirstRunTips } from './Onboarding';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
-import type { WebsiteFolderSelection } from './types';
+import { WebsiteImport } from './WebsiteImport';
 import { announcedDraftCount, announcesStatus } from './generationSession.js';
 import { GenerationLog } from './GenerationLog';
 import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './deletePreference';
-import { checkProject, PageCheckPanel, type CheckItem } from './PageCheck';
 import { useHistory } from './useHistory';
+import { HistoryPanel } from './HistoryPanel';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AcrossPagesChange, AcrossPagesMatch, AcrossPagesView, AiSettingsView, Appearance, Brief, Command, DocumentTarget, ElementBatchEdit, ElementBatchEditView, ElementStyleEdit, FrameDocumentView, FrameTarget, LayerTarget, LayerDirection, LayerPasteView, ElementBounds, ElementDetails, ElementEdit, ElementEditView, ElementSelection, ElementTarget, GenerationJobView, GenerationMode, GridSettings, Page, Project, Rect, RecoveryInfo, PageSelection, Region, RegionShape, Viewport, WorkspaceView, RecentProjectsView, RecentProject, WebsiteExport, SiteContent, RequestAttachment } from './types';
+import type { AiSettingsView, Appearance, BoundaryKind, Brief, Command, CompactReport, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, Page, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, RecoveryInfo, ReferenceItem, RequestAttachment, RequestRecord, SizePreset, Viewport, WorkspaceView, RecentProjectsView, RecentProject, ExportCheck, ExportJobView, OutputType } from './types';
+import { baseSizeId, resolveForSize } from './projectCanvas/sizes';
+import { elementBoundsHeight } from './projectCanvas/elementGeometry';
+import { ExportPanel } from './projectCanvas/exportPanel';
+import { idlePlay, playClick, playPointerAt, playIsActive, type PlayState } from './projectCanvas/play';
+import type { PreviewState } from './ProjectCanvas';
 
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
-type Confirmation = { title: string; message: string; action: () => Promise<void>; skippable?: boolean };
+type Confirmation = { title: string; message: string; action: () => Promise<void>; skippable?: boolean; confirmLabel?: string };
 
 const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
 function errorMessage(error: unknown) { if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message); return String(error ?? ''); }
-// Open each page fitted to the window: web pages by width, mobile pages by height.
+function sizeName(width: number): string {
+  return width >= 1024 ? 'Desktop' : width >= 700 ? 'Tablet' : 'Phone';
+}
+
+/** The boundaries a project draws, one per linked size, with Page heights from its content. */
+function sizeBoundaries(project: Project): Boundary[] {
+  return layoutBoundaries(project.pages.map(page => ({ id: page.id, sizes: page.sizes.map(size => ({
+    ...size, height: Math.max(size.height, elementBoundsHeight(resolveForSize(project, page, size.id), size.height)),
+  })) })), project.homePageId);
+}
+
 function initialZoom(width: number, height = 900) { const fit = width > 600 ? (window.innerWidth - 96) / width : (window.innerHeight - 240) / height; return Math.max(0.1, Math.min(1, fit)); }
-function readRequestShape(): RequestShapeKind { try { const value = localStorage.getItem('desegnos.request-shape'); return value === 'ellipse' || value === 'freehand' ? value : 'rect'; } catch { return 'rect'; } }
 function readRulerUnit(): 'pixels' | 'percent' { try { return localStorage.getItem('desegnos.ruler-unit') === 'percent' ? 'percent' : 'pixels'; } catch { return 'pixels'; } }
-function readCodeWidth() { try { return Math.min(0.75, Math.max(0.2, Number(localStorage.getItem('desegnos.code-width')) || 0.42)); } catch { return 0.42; } }
-function readCodeView(projectId: string): CodeView { try { const value = localStorage.getItem(`desegnos.code-view.${projectId}`); return value === 'split' || value === 'code' ? value : 'design'; } catch { return 'design'; } }
 function readTheme(): Theme {
   try {
     const saved = localStorage.getItem('desegnos.editor-theme');
     return saved === 'light' || saved === 'dark' ? saved : 'system';
   }
   catch { return 'system'; }
+}
+
+function elementTree(elements: Element[]): Element[] {
+  return elements.flatMap(element => [element, ...elementTree(element.children)]);
+}
+
+function elementTreeIds(elements: Element[]): string[] {
+  return elementTree(elements).map(element => element.id);
+}
+
+function pendingCount(elements: Element[]): number {
+  return elements.reduce((count, element) => count + (element.meta.pending?.prompt.trim() ? 1 : 0) + pendingCount(element.children), 0);
+}
+
+function pendingElementIds(elements: Element[]): string[] {
+  return elements.flatMap(element => [
+    ...(element.meta.pending?.prompt.trim() ? [element.id] : []),
+    ...pendingElementIds(element.children),
+  ]);
 }
 
 export default function App() {
@@ -75,8 +104,6 @@ function Editor() {
   const [closeRequest, setCloseRequest] = useState<{ message: string; resolve: (answer: boolean) => void } | null>(null);
   const [view, setView] = useState<WorkspaceView | null>(null);
   const current = useRef<WorkspaceView | null>(null);
-  const canvas = useRef<CanvasHandle>(null);
-  const code = useRef<CodePaneHandle>(null);
   const tail = useRef<Promise<void>>(Promise.resolve());
   const [pending, setPending] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -88,33 +115,38 @@ function Editor() {
   const [notices, setNotices] = useState<{ id: number; message: string }[]>([]);
   const noticeId = useRef(0);
   const setNotice = useCallback((message: string) => { const id = ++noticeId.current; setNotices(items => [...items, { id, message }]); }, []);
-  // The recovery error can be put aside for this session; the recovery files stay on disk.
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
-  const [pageId, setPageId] = useState<string | null>(null);
-  const [projectCanvas, setProjectCanvas] = useState(false);
-  const canvasProject = useRef<string | null>(null);
-  // Open page tabs per project, persisted separately from the website output.
-  const [openPages, setOpenPages] = useState<Record<string, string[]>>({});
-  const [closeChoice, setCloseChoice] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [focusPrompt, setFocusPrompt] = useState(false);
   const [zoom, setZoom] = useState(0.75);
-  const [tool, setTool] = useState<CanvasTool>('select');
-  const [requestShape, setRequestShape] = useState<RequestShapeKind>(readRequestShape);
-  useEffect(() => { try { localStorage.setItem('desegnos.request-shape', requestShape); } catch { /* Preference storage can be unavailable. */ } }, [requestShape]);
+  const [tool, setTool] = useState<EditorTool>('select');
+  const [canvasTool, setCanvasTool] = useState<ProjectTool>('select');
+  const [insertKind, setInsertKind] = useState<ElementKind | null>(null);
+  const [insertSignal, setInsertSignal] = useState(0);
+  const [boundaryKind, setBoundaryKind] = useState<BoundaryKind>('page');
+  const [canvasSelection, setCanvasSelection] = useState<CanvasTarget[]>([]);
+  const [canvasFocus, setCanvasFocus] = useState<string | null>(null);
+  const [canvasBoundaries, setCanvasBoundaries] = useState<Boundary[]>([]);
+  const [canvasZoom, setCanvasZoom] = useState(1);
+  const canvasRef = useRef<ProjectCanvasHandle>(null);
+  const [panels, panelActions] = usePanelState();
   const [rulerUnit, setRulerUnit] = useState<'pixels' | 'percent'>(readRulerUnit);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [projectLocation, setProjectLocation] = useState<ProjectLocationView | null>(null);
   const [showProjectLocation, setShowProjectLocation] = useState(false);
-  const [dismissedSiteWarnings, setDismissedSiteWarnings] = useState('');
-  const [exported, setExported] = useState<WebsiteExport | null>(null);
-  const [exporting, setExporting] = useState(false);
-  const [resultReview, setResultReview] = useState<{ jobId: string; revision: number } | null>(null);
-  const [highlightResult, setHighlightResult] = useState(false);
-  const [showLayers, setShowLayers] = useState(false);
-  const [activeLayer, setActiveLayer] = useState<ElementTarget | null>(null);
-  const [framedDocuments, setFramedDocuments] = useState<{ pageId: string; documents: FrameDocumentView[] }>({ pageId: '', documents: [] });
+  const [showExport, setShowExport] = useState(false);
+  const [exportDestination, setExportDestination] = useState<string | null>(() => { try { return localStorage.getItem('desegnos.export-folder'); } catch { return null; } });
+  const [exportJob, setExportJob] = useState<ExportJobView | null>(null);
+  const [exportError, setExportError] = useState('');
+  const [exportSending, setExportSending] = useState(false);
+  const [checkedStates, setCheckedStates] = useState<PointerStateView[] | null>(null);
+  const [checkedProject, setCheckedProject] = useState<string | null>(null);
+  const [play, setPlay] = useState<PlayState>(idlePlay);
+  const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [previewRevision, setPreviewRevision] = useState<number | null>(null);
+  const checkTimer = useRef<number | null>(null);
+  const [pendingImages, setPendingImages] = useState(0);
   const [showNew, setShowNew] = useState(false);
   const [pendingRecovery, setPendingRecovery] = useState<PendingRecovery | null>(null);
   async function requestProjectOpen<T>(operation: () => Promise<T>): Promise<T | null> {
@@ -123,51 +155,30 @@ function Editor() {
     catch (error) {
       if (!isPendingRecovery(error)) throw error;
       setError(''); setPendingRecovery(error);
-      // The choice belongs to the start/open flow; bring it up when a project is already open.
       if (current.current?.project) setShowNew(true);
       return null;
     }
   }
   const [showNotes, setShowNotes] = useState<DossierSection | null>(null);
   const [showGridSettings, setShowGridSettings] = useState(false);
-  const [codeView, setCodeView] = useState<CodeView>('design');
-  const [showCheck, setShowCheck] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [showWebsiteImport, setShowWebsiteImport] = useState(false);
   const [importSource, setImportSource] = useState<import('./types').IdentitySource | null>(null);
-  const [importFolder, setImportFolder] = useState<WebsiteFolderSelection | null>(null);
-  const [importAsNew, setImportAsNew] = useState(false);
-  function startBrandImport() { setImportSource(null); setImportFolder(null); setImportAsNew(true); setShowNew(false); setShowImport(true); }
-  async function editWebsite(folderId: string) {
-    await synchronize(); await settle();
-    await queue(async () => {
-      const opened = await requestProjectOpen(() => native<WorkspaceView>('edit_website_folder', { folderId }));
-      if (!opened) return;
-      accept(opened); setSelected(null); setShowNew(false); setNotice('Website opened.');
-      if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height));
-      void refreshRecent().catch(() => {});
-    });
-  }
-  const [offerRestyle, setOfferRestyle] = useState<string | false>(false);
+  function startBrandImport() { setImportSource(null); setShowNew(false); setShowImport(true); }
+  function startWebsiteImport() { setShowImport(false); setShowNew(false); setShowWebsiteImport(true); }
   const [showLog, setShowLog] = useState(false);
   const [logFocus, setLogFocus] = useState(0);
-  const [pendingImages, setPendingImages] = useState(0);
-  // Live mode: the canvas page runs its scripts and takes clicks; requests can still be added.
-  const [live, setLive] = useState(false);
-  const [liveDevice, setLiveDevice] = useState<'desktop' | 'tablet' | 'phone'>('desktop');
-  // The path the live page is on, reported by its bridge; the editor selection stays put.
-  const [livePath, setLivePath] = useState('/');
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
   const askDelete = useAskBeforeDelete();
+  const pasteMode = usePasteDefault();
   const [skipNextAsk, setSkipNextAsk] = useState(false);
-  const [multiCount, setMultiCount] = useState(0);
   const history = useHistory();
-  const [sourceMap, setSourceMap] = useState<SourceMapView | null>(null);
-  const [codeWidth, setCodeWidth] = useState(readCodeWidth);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyEpoch, setHistoryEpoch] = useState(0);
+  const savedPosition = useRef({ sessionId: null as string | null, position: 0 });
   const [showShortcuts, setShowShortcuts] = useState(false);
-  const [canvasView, setCanvasView] = useState<{ serial: number; kind: 'guide' | 'selection' | 'fit' }>({ serial: 0, kind: 'guide' });
   const [showRecovery, setShowRecovery] = useState(false);
-  const [pageDialog, setPageDialog] = useState<'new' | Page | null>(null);
   const [showRename, setShowRename] = useState(false);
   const [showAiSettings, setShowAiSettings] = useState(false);
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null);
@@ -232,7 +243,6 @@ function Editor() {
   useEffect(() => { try { localStorage.setItem('desegnos.ruler-unit', rulerUnit); } catch {} }, [rulerUnit]);
 
   const accept = useCallback((next: WorkspaceView) => { current.current = next; setView(next); }, []);
-  // quiet: typing saves skip the busy count, which would re-render the whole editor twice per key.
   const queue = useCallback(<T,>(operation: (workspace: WorkspaceView | null) => Promise<T>, reportErrors = true, quiet = false): Promise<T> => {
     if (!quiet) setPending(count => count + 1);
     const result = tail.current.then(() => operation(current.current));
@@ -247,6 +257,202 @@ function Editor() {
     const next = await edit(project.revision, resolved);
     accept(next); return next;
   }, true, quiet), [queue, accept]);
+  const createCanvasBoundary = useCallback(async (bounds: Rect, kind: BoundaryKind, moves: BoundaryMove[], reference: ReferenceMove[]) => {
+    const added = await mutate(project => {
+      const name = canvasPageName(project.pages);
+      const width = Math.round(bounds.width), height = Math.round(bounds.height);
+      const size: PageSize = { id: crypto.randomUUID(), label: sizeName(width), width, height, kind, x: bounds.x, y: bounds.y };
+      return {
+        type: 'add_canvas_page' as const, name, path: suggestedPagePath(name, project.pages.map(page => page.path)),
+        size,
+        moves: moves.map(({ pageId, sizeId, x, y, kind }) => ({ page_id: pageId, size_id: sizeId, x, y, kind })),
+        reference: reference.map(({ itemId, x, y }) => ({ item_id: itemId, x, y })),
+      };
+    });
+    return added.project!.pages.at(-1)!.id;
+  }, [mutate]);
+  const saveCanvasPlacements = useCallback(async (placements: BoundaryMove[], reference: ReferenceMove[]) => {
+    if (!placements.length && !reference.length) return;
+    await mutate({
+      type: 'set_canvas_layout',
+      placements: placements.map(({ pageId, sizeId, x, y, kind }) => ({ page_id: pageId, size_id: sizeId, x, y, kind })),
+      reference: reference.map(({ itemId, x, y }) => ({ item_id: itemId, x, y })),
+    });
+  }, [mutate]);
+  const selectCanvasBoundary = useCallback((pageId: string | null, _sizeId?: string | null, additive = false) => {
+    setCanvasFocus(pageId);
+    if (!additive || !pageId) setCanvasSelection([]);
+  }, []);
+  const selectCanvasReference = useCallback((itemId: string, additive = false) => {
+    setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'reference', itemId }, additive));
+  }, []);
+  const selectCanvasElement = useCallback((pageId: string, elementId: string, sizeId: string | null, additive = false) => {
+    setCanvasFocus(pageId);
+    setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'element', pageId, elementId, sizeId }, additive));
+  }, []);
+  const selectCanvasPointer = useCallback((pointerId: string, additive = false) => {
+    setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'pointer', pointerId }, additive));
+  }, []);
+  const clearCanvasSelection = useCallback(() => setCanvasSelection([]), []);
+  const addCanvasReference = useCallback(async (item: ReferenceItem, pictureDataUri?: string) => {
+    await mutate(pictureDataUri === undefined
+      ? { type: 'add_reference_item', item }
+      : { type: 'add_reference_item', item, picture_data_uri: pictureDataUri });
+  }, [mutate]);
+  const updateCanvasReference = useCallback((itemId: string, patch: { rect?: Rect; text?: string; url?: string; title?: string; color?: string }) => {
+    void mutate({ type: 'update_reference_item', item_id: itemId, ...patch }).catch(() => {});
+  }, [mutate]);
+  const removeCanvasReference = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    setCanvasSelection(current => current.filter(target => target.kind !== 'reference' || !ids.includes(target.itemId)));
+    void mutate({ type: 'remove_reference_items', ids }).catch(() => {});
+  }, [mutate]);
+  const addCanvasPointer = useCallback(async (pointer: Pointer) => {
+    await mutate({ type: 'add_pointer', pointer });
+  }, [mutate]);
+  const updateCanvasPointer = useCallback((pointerId: string, patch: { from?: PointerSource; to?: PointerTarget; comment?: string }) => {
+    return mutate({ type: 'update_pointer', pointer_id: pointerId, ...patch });
+  }, [mutate]);
+  const insertCanvasElements = useCallback(async (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => {
+    await mutate({ type: 'insert_elements', page_id: pageId, parent_id: parentId, index, elements,
+      ...(pictureDataUri === undefined ? {} : { picture_data_uri: pictureDataUri }),
+      ...(sizeId ? { size_id: sizeId } : {}) });
+  }, [mutate]);
+  const updateCanvasElements = useCallback(async (pageId: string, patches: ElementPatch[]) => {
+    if (!patches.length) return;
+    try { await mutate({ type: 'update_elements', page_id: pageId, patches }); } catch { /* App surfaces the failed command. */ }
+  }, [mutate]);
+  const moveCanvasElements = useCallback(async (moves: ElementMove[]) => {
+    if (!moves.length) return;
+    try { await mutate({ type: 'move_elements', moves }); } catch { /* App surfaces the failed command. */ }
+  }, [mutate]);
+  const groupCanvasElements = useCallback(async (pageId: string, ids: string[]) => {
+    const before = new Set(elementTreeIds(current.current?.project?.pages.find(page => page.id === pageId)?.elements ?? []));
+    const next = await mutate({ type: 'group_elements', page_id: pageId, ids });
+    const page = next.project?.pages.find(page => page.id === pageId);
+    return page ? elementTree(page.elements).find(element => element.kind === 'group' && !before.has(element.id))?.id ?? null : null;
+  }, [mutate]);
+  const ungroupCanvasElements = useCallback(async (pageId: string, id: string) => {
+    const group = findElementIn(current.current?.project?.pages.find(page => page.id === pageId)?.elements ?? [], id);
+    const children = group?.kind === 'group' ? group.children.map(child => child.id) : [];
+    await mutate({ type: 'ungroup_elements', page_id: pageId, id });
+    return children;
+  }, [mutate]);
+  const linkCanvasElements = useCallback((ids: string[], sourceId: string | null) => {
+    return mutate({ type: 'link_elements', ids, source_id: sourceId }).then(() => undefined);
+  }, [mutate]);
+  const unlinkCanvasElements = useCallback((ids: string[]) => {
+    return mutate({ type: 'unlink_elements', ids }).then(() => undefined);
+  }, [mutate]);
+  const pasteLinkedInstances = useCallback((items: LinkedPasteInstance[]) => {
+    return mutate({ type: 'paste_linked_instances', items }).then(() => undefined);
+  }, [mutate]);
+  const removeLinkedDefinition = useCallback((id: string) => {
+    void mutate({ type: 'remove_linked_definition', id }).catch(() => {});
+  }, [mutate]);
+  // An inline field reports its own error, so a rejected name never leaves the panel.
+  const renameCanvasElement = useCallback((pageId: string, elementId: string, name: string | null) => {
+    return queue(async workspace => {
+      const project = workspace?.project;
+      if (!project) throw new Error('Create or open a project first.');
+      const next = await edit(project.revision, { type: 'update_elements', page_id: pageId, patches: [{ id: elementId, name }] });
+      accept(next); return next;
+    }, false, true).then(() => undefined);
+  }, [queue, accept]);
+  const setCanvasElementRequest = useCallback(async (elementId: string, request: PendingRequest | null) => {
+    await mutate({ type: 'set_element_request', element_id: elementId, request });
+  }, [mutate]);
+  const updateCanvasElementContext = useCallback((elementId: string, context: RequestAttachment[]) => {
+    void mutate({ type: 'update_element_context', element_id: elementId, context }).catch(() => {});
+  }, [mutate]);
+  const removeCanvasPointers = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    setCanvasSelection(current => current.filter(target => target.kind !== 'pointer' || !ids.includes(target.pointerId)));
+    void mutate({ type: 'remove_pointers', ids }).catch(() => {});
+  }, [mutate]);
+  const keepPointerComment = useCallback((pointerId: string) => {
+    void mutate({ type: 'set_pointer_wiring', pointer_id: pointerId, wiring: null }).catch(() => {});
+  }, [mutate]);
+  const keepPointerThis = useCallback((pointerId: string, otherId: string) => {
+    void mutate({ type: 'resolve_pointer_clash', keep: pointerId, drop: [otherId] }).catch(() => {});
+  }, [mutate]);
+  const mergePointerClash = useCallback((pointer: Pointer, other: Pointer) => {
+    const comment = [pointer.comment.trim(), other.comment.trim()].filter(Boolean).join('\n\n');
+    void mutate({ type: 'resolve_pointer_clash', keep: pointer.id, drop: [other.id], merged_comment: comment }).catch(() => {});
+  }, [mutate]);
+  const elementToReference = useCallback(async (pageId: string, elementId: string, rect: Rect) => {
+    setCanvasSelection([]);
+    await mutate({ type: 'element_to_reference', page_id: pageId, element_id: elementId, rect });
+  }, [mutate]);
+  const referenceToElement = useCallback(async (itemId: string, pageId: string, rect: Rect, sizeId?: string | null) => {
+    const next = await mutate({ type: 'reference_to_element', item_id: itemId, page_id: pageId, rect });
+    const added = next.project?.pages.find(page => page.id === pageId)?.elements.at(-1);
+    setCanvasFocus(pageId);
+    setCanvasSelection(added ? [{ kind: 'element', pageId, elementId: added.id, sizeId: sizeId ?? null }] : []);
+  }, [mutate]);
+  const attachReferenceContext = useCallback(async (elementIds: string[], itemIds: string[]) => {
+    if (!elementIds.length || !itemIds.length) return;
+    await mutate({ type: 'attach_reference_context', element_ids: elementIds, item_ids: itemIds });
+  }, [mutate]);
+  const reportCanvasZoom = useCallback((zoom: number) => setCanvasZoom(zoom), []);
+  const updateCanvasPage = useCallback((pageId: string, patch: { name?: string; path?: string; appearance?: Appearance; included?: boolean }) => {
+    void mutate(project => {
+      const page = project.pages.find(item => item.id === pageId);
+      if (!page) return null;
+      const name = patch.name ?? page.name, path = patch.path ?? page.path, appearance = patch.appearance ?? page.appearance;
+      const included = page.id === project.homePageId ? true : patch.included ?? page.included;
+      if (name === page.name && path === page.path && appearance === page.appearance && included === page.included) return null;
+      return { type: 'update_page', page_id: pageId, name, path, appearance, included };
+    }).catch(() => {});
+  }, [mutate]);
+  const updateCanvasPageSize = useCallback((pageId: string, sizeId: string, patch: { label?: string; width?: number; height?: number; kind?: BoundaryKind }) => {
+    void mutate(project => {
+      const page = project.pages.find(item => item.id === pageId);
+      const size = page?.sizes.find(item => item.id === sizeId);
+      if (!page || !size) return null;
+      const before = sizeBoundaries(project);
+      const resized = before.map(item => item.sizeId === sizeId
+        ? { ...item, rect: { ...item.rect, width: patch.width ?? item.rect.width, height: patch.height ?? item.rect.height } }
+        : item);
+      const pushed = pushApartBoundaries(resized, sizeId);
+      return {
+        type: 'update_page_size' as const, page_id: pageId, size_id: sizeId, ...patch,
+        moves: boundaryMoves(pushed, before).map(({ pageId: movePageId, sizeId: movedId, x, y, kind }) => ({ page_id: movePageId, size_id: movedId, x, y, kind })),
+        reference: [],
+      };
+    }).catch(() => {});
+  }, [mutate]);
+  /** Adding a linked size is one undo step, including the boundaries it pushes aside. */
+  const addCanvasPageSize = useCallback((pageId: string, preset: SizePreset, width = 0, height = 0) => {
+    void mutate(project => {
+      const page = project.pages.find(item => item.id === pageId);
+      if (!page) return null;
+      const last = page.sizes.at(-1)!;
+      const dimensions = preset === 'phone' ? { label: 'Phone', width: 390, height: 844 }
+        : preset === 'tablet' ? { label: 'Tablet', width: 820, height: 1180 }
+          : preset === 'desktop' ? { label: 'Desktop', width: 1440, height: 900 }
+            : { label: sizeName(Math.round(width)), width: Math.round(width), height: Math.round(height) };
+      const size: PageSize = { id: crypto.randomUUID(), ...dimensions, kind: last.kind, x: last.x + last.width + 160, y: last.y };
+      const anchor = sizeBoundaries(project);
+      const pushed = pushApartBoundaries([...anchor, { pageId, sizeId: size.id, label: size.label, rect: { x: size.x, y: size.y, width: size.width, height: size.height }, kind: size.kind }], size.id);
+      const placed = pushed.find(item => item.sizeId === size.id)!;
+      return {
+        type: 'add_page_size' as const, page_id: pageId,
+        size: { ...size, x: placed.rect.x, y: placed.rect.y },
+        moves: boundaryMoves(pushed.filter(item => item.sizeId !== size.id), anchor)
+          .map(({ pageId: movePageId, sizeId, x, y, kind }) => ({ page_id: movePageId, size_id: sizeId, x, y, kind })),
+        reference: [],
+      };
+    }).catch(() => {});
+  }, [mutate]);
+  const removeCanvasPageSize = useCallback((pageId: string, sizeId: string) => {
+    void mutate({ type: 'remove_page_size', page_id: pageId, size_id: sizeId }).catch(() => {});
+  }, [mutate]);
+  const renameProject = useCallback((name: string) => { void mutate({ type: 'rename_project', name }).catch(() => {}); }, [mutate]);
+  const showDotGrid = useCallback((enabled: boolean) => { void mutate({ type: 'set_grid', enabled }).catch(() => {}); }, [mutate]);
+  const changeGridFlags = useCallback((patch: Partial<Pick<GridSettings, 'snap' | 'rulers'>>) => {
+    void mutate(project => ({ type: 'set_grid_settings', settings: { ...project.gridSettings, ...patch } })).catch(() => {});
+  }, [mutate]);
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try { const loaded = await native<WorkspaceView>('get_workspace'); accept(loaded); if (loaded.project) setZoom(initialZoom(loaded.project.viewport.width, loaded.project.viewport.height)); }
@@ -256,39 +462,34 @@ function Editor() {
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { history.observe(view); }, [view, history.observe]);
   useEffect(() => {
+    // Keep unsaved edits in the project file while the project stays dirty and still.
+    const active = view?.project;
+    if (!view?.dirty || !active) return;
+    const timer = window.setInterval(() => { void native('autosave_project').catch(() => {}); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [view?.dirty, view?.project?.id]);
+  useEffect(() => {
+    // A different session starts a fresh count of the changes since the last saved version.
+    savedPosition.current = { sessionId: view?.history?.sessionId ?? null, position: 0 };
+  }, [view?.history?.sessionId]);
+  useEffect(() => {
+    // Once the project matches its file again (a save, or a restored version), counting restarts.
+    if (view && !view.dirty && view.history) {
+      savedPosition.current = { sessionId: view.history.sessionId, position: view.history.position };
+    }
+  }, [view]);
+  function versionLabel() {
+    return history.entries.filter(entry => entry.position > savedPosition.current.position).map(entry => entry.label).slice(-4).join(' · ');
+  }
+  useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
     const update = () => { const value = theme === 'system' ? (media.matches ? 'dark' : 'light') : theme; document.documentElement.dataset.theme = value; setResolvedTheme(value); };
     update(); media.addEventListener('change', update);
     try { localStorage.setItem('desegnos.editor-theme', theme); } catch {}
     return () => media.removeEventListener('change', update);
   }, [theme]);
-  useEffect(() => {
-    const project = view?.project;
-    if (!project) { setPageId(null); setSelected(null); return; }
-    const page = project.pages.find(page => page.id === pageId);
-    if (!page) {
-      // Prefer a page whose tab is open, so restored tab state survives a restart.
-      const pageIds = project.pages.map(item => item.id);
-      const open = loadPageTabs(project.id, pageIds);
-      setPageId(open.includes(project.homePageId) ? project.homePageId : open[0] ?? project.homePageId);
-      setSelected(null);
-    } else if (!page.regions.some(region => region.id === selected)) setSelected(null);
-  }, [view, pageId, selected]);
-
-  const settle = useCallback(async () => {
-    await tail.current;
-  }, []);
-  const synchronize = useCallback(async (requireBounds = false) => {
-    try { await code.current?.synchronize(); await canvas.current?.synchronize(requireBounds); }
-    catch (error) { setError(errorMessage(error)); throw error; }
-  }, []);
-  useEffect(() => {
-    if (!isTauri()) return;
-    const heartbeat = () => { void native('editor_heartbeat').catch(() => {}); };
-    heartbeat();
-    const timer = setInterval(heartbeat, 2000);
-    return () => clearInterval(timer);
-  }, []);
+  const settle = useCallback(async () => { await tail.current; }, []);
+  const synchronize = useCallback(async () => { await settle(); }, [settle]);
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
@@ -298,7 +499,6 @@ function Editor() {
       if (closing.current) return;
       closing.current = true;
       try {
-        await synchronize();
         await settle();
         const identity = await native<import('./types').IdentityAnalysis | null>('get_identity_analysis').catch(() => null);
         const generating = generationRef.current?.status === 'generating' || identity?.status === 'analyzing';
@@ -309,45 +509,29 @@ function Editor() {
       finally { closing.current = false; }
     }).then(stop => { if (disposed) stop(); else unlisten = stop; }, error => setError(errorMessage(error)));
     return () => { disposed = true; unlisten?.(); };
-  }, [settle, synchronize]);
+  }, [settle]);
 
   function chooseSaveConflict(choice: SaveChoice) { const resolve = saveChoice.current; saveChoice.current = null; setSaveConflict(null); resolve?.(choice); }
   function save(saveAs = false): Promise<WorkspaceView | null> {
     if (saveFlight.current) return saveFlight.current;
     const operation = async () => {
-      await synchronize();
       await settle();
-      let outcome = await queue(() => native<SaveOutcome>('save_project_checked', { saveAs }));
+      const label = versionLabel() || null;
+      let outcome = await queue(() => native<SaveOutcome>('save_project_checked', { saveAs, label }));
       while (outcome.status === 'conflict') {
         const conflict = outcome.conflict;
         const choice = await new Promise<SaveChoice>(resolve => { saveChoice.current = resolve; setSaveConflict(conflict); });
         outcome = await queue(() => native<SaveOutcome>('resolve_save_conflict', { token: conflict.token, choice }));
       }
       if (outcome.status === 'cancelled') return null;
-      accept(outcome.workspace); setDismissedSiteWarnings(''); setNotice(outcome.workspace.outsideEdits && (outcome.workspace.outsideEdits.changedPaths.length || outcome.workspace.outsideEdits.keptStalePaths.length) ? '' : 'Project saved.'); void refreshRecent().catch(() => {});
+      accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent().catch(() => {});
+      savedPosition.current = { sessionId: outcome.workspace.history?.sessionId ?? null, position: outcome.workspace.history?.position ?? 0 };
       return outcome.workspace;
     };
     saveFlight.current = operation().finally(() => { saveFlight.current = null; });
     return saveFlight.current;
   }
-  async function importOutsideChanges() {
-    await synchronize(); await settle();
-    await queue(async () => {
-      const source = await native<import('./types').IdentitySource>('project_site_import_source');
-      setImportSource(source); setImportFolder(null); setImportAsNew(false); setShowImport(true);
-    });
-  }
-  async function overwriteOutsideChanges() {
-    await synchronize(); await settle();
-    await queue(async workspace => {
-      if (!workspace?.project) return;
-      const next = await native<WorkspaceView>('overwrite_project_site', { projectId: workspace.project.id, revision: workspace.project.revision });
-      accept(next); setDismissedSiteWarnings('');
-      setNotice(next.outsideEdits?.backedUp ? 'Saved. Outside edits were moved to .desegnos-outside-edits.' : 'Project saved.');
-    });
-  }
   async function replace(label: string, run: Replacement['run']) {
-    await synchronize();
     await settle();
     if (current.current?.dirty) setReplacement({ label, run });
     else await run(false);
@@ -356,120 +540,54 @@ function Editor() {
     await replace('close this project', async discard => {
       await queue(async () => {
         accept(await native<WorkspaceView>('close_project', { discard }));
-        setSelected(null); setNotice('Project closed.');
+        setSelected(null); setCanvasSelection([]); setCanvasFocus(null); setNotice('Project closed.');
       });
     });
   }
-  /** Close one project tab. `discard` keeps the recovery journal and only stops offering it. */
-  async function closeProjectTab(projectId: string, discard: boolean) {
-    await synchronize(); await settle();
-    const wasActive = current.current?.project?.id === projectId;
+  async function switchProjectTab(projectId: string) {
+    if (projectId === current.current?.project?.id) return;
+    await settle();
     await queue(async () => {
-      accept(await native<WorkspaceView>('close_project', { projectId, discard }));
-      setSelected(null); setCloseChoice(null); setNotice('Project closed.');
-      if (wasActive) setPageId(null);
-    });
+      accept(await native<WorkspaceView>('switch_project', { projectId }));
+      setSelected(null); setCanvasSelection([]); setCanvasFocus(null); setNotice('Switched project.');
+    }).catch(() => {});
   }
-  async function saveAndCloseProjectTab(projectId: string) {
-    if (current.current?.project?.id !== projectId) {
-      await switchProject(projectId);
-      if (current.current?.project?.id !== projectId) return;
+  async function closeProjectTab(projectId: string) {
+    const entry = current.current?.openProjects?.find(item => item.id === projectId);
+    if (!entry) return;
+    if (projectId === current.current?.project?.id) {
+      await closeProject();
+      return;
     }
-    const saved = await save();
-    if (!saved || saved.dirty) return;
-    await closeProjectTab(projectId, false);
+    if (entry.dirty) {
+      setConfirmation({ title: `Close “${entry.name}”?`, confirmLabel: 'Close project', message: 'This project has changes that are not saved to its file. Closing it will discard them.', action: async () => {
+        await queue(async () => {
+          accept(await native<WorkspaceView>('close_project', { projectId, discard: true }));
+          setNotice('Project closed.');
+        });
+      } });
+      return;
+    }
+    await queue(async () => {
+      accept(await native<WorkspaceView>('close_project', { projectId, discard: false }));
+      setNotice('Project closed.');
+    }).catch(() => {});
   }
   async function importContext(analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) {
-    await synchronize(); await settle();
+    await settle();
     await queue(async workspace => {
-      const next = importAsNew || !workspace?.project
+      const next = !workspace?.project
         ? await native<WorkspaceView>('create_project', { name: 'Imported brand', viewport: { width: 1440, height: 900 }, discard: false, identityAnalysisId: analysisId, identityFindingIndices: findings, identityAssetIds: assets, identityPhotoIds: photos, identityItemIndices: items, identityPagePaths: pages })
         : await native<WorkspaceView>('import_context', { revision: workspace.project.revision, identityAnalysisId: analysisId, identityFindingIndices: findings, identityAssetIds: assets, identityPhotoIds: photos, identityItemIndices: items, identityPagePaths: pages, attachMatchingPages: attachMatching });
       accept(next);
       setNotice('Context added to the project brief.');
-      // Pages generated before this import don't follow it yet: offer to rebuild them.
-      if (next.project?.pages.some(item => item.content)) setOfferRestyle('Existing pages need restyling.');
     });
   }
-  // Opening, creating or recovering adds a project tab group; the current project stays open.
-  async function openAlongside(run: Replacement['run']) { await synchronize(); await settle(); await run(false); }
-  async function switchProject(projectId: string, pageId?: string) {
-    await synchronize(); await settle();
-    await queue(async () => {
-      const next = await native<WorkspaceView>('switch_project', { projectId });
-      accept(next); setSelected(null);
-      if (pageId) activatePage(pageId);
-      if (next.project) setZoom(initialZoom(next.project.viewport.width, next.project.viewport.height));
-    });
-  }
-  // One page-wide request per generated page, then Generate: the AI restyles each page to the
-  // newly imported brand while keeping its content and layout.
-  // Files and links dropped on a request travel with it to Generate.
-  const [archiveReports, setArchiveReports] = useState<Record<string, import('./types').ArchiveReport[]>>({});
-  async function attachToRequest(regionId: string, files: File[], links: string[]) {
-    const owner = current.current?.project?.pages.find(item => item.regions.some(region => region.id === regionId));
-    if (!owner) return;
-    const readText = (file: File) => file.text();
-    const readImage = (file: File) => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error(`${file.name} could not be read.`)); reader.readAsDataURL(file); });
-    const problems: string[] = [];
-    for (const file of files) {
-      try {
-        if (/\.zip$/i.test(file.name)) {
-          if (file.size > 32 * 1024 * 1024) throw new Error(`${file.name}: exceeds the 32 MiB archive limit.`);
-          const count = current.current?.project?.pages.find(item => item.id === owner.id)?.regions.find(item => item.id === regionId)?.attachments?.length ?? 0;
-          const data = (await readImage(file)).split(',')[1];
-          const unpacked = await native<{ attachments: RequestAttachment[]; skipped: { name: string; reason: string }[] }>('unpack_request_zip', { name: file.name, data, remaining: Math.max(0, 16 - count) });
-          let added = 0;
-          for (const attachment of unpacked.attachments) {
-            try { await mutate({ type: 'add_region_attachment', page_id: owner.id, region_id: regionId, attachment }); added++; }
-            catch (reason) { unpacked.skipped.push({ name: attachment.name, reason: errorMessage(reason) }); }
-          }
-          const key = `${current.current?.project?.id}:${regionId}`;
-          setArchiveReports(previous => ({ ...previous, [key]: [...(previous[key] ?? []), { name: file.name, added, skipped: unpacked.skipped }] }));
-          continue;
-        }
-        let attachment: RequestAttachment;
-        if (/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
-          attachment = { id: 'new', name: file.name.slice(0, 120), kind: 'image', dataUri: await readImage(file) };
-        } else if (file.type.startsWith('text/') || /\.(txt|md|csv|json|html?)$/i.test(file.name)) {
-          const text = await readText(file);
-          attachment = { id: 'new', name: file.name.slice(0, 120), kind: 'text', text };
-        } else throw new Error(`${file.name}: only pictures (PNG, JPEG, WebP, GIF), text files, and ZIPs can be attached.`);
-        await mutate({ type: 'add_region_attachment', page_id: owner.id, region_id: regionId, attachment });
-      } catch (reason) { problems.push(errorMessage(reason)); }
-    }
-    for (const url of links) {
-      try { await mutate({ type: 'add_region_attachment', page_id: owner.id, region_id: regionId, attachment: { id: 'new', name: new URL(url).hostname.slice(0, 120), kind: 'link', url } }); }
-      catch (reason) { problems.push(errorMessage(reason)); }
-    }
-    if (problems.length) setError(problems.join(' ')); else setNotice('Attached to the request.');
-  }
-  // One switch for light/dark: the editor and every page of the open project.
-  async function switchAppearance(next: 'light' | 'dark') {
-    setTheme(next);
-    const target = current.current?.project; if (!target) return;
-    for (const item of target.pages.filter(entry => entry.appearance !== next)) {
-      await mutate(project => { const page = project.pages.find(entry => entry.id === item.id); return page && page.appearance !== next ? { type: 'update_page', page_id: page.id, name: page.name, path: page.path, viewport: page.viewport, appearance: next, included: page.included } : null; });
-    }
-    if (target.pages.some(entry => entry.content && entry.appearance !== next)) setOfferRestyle(`Existing pages need restyling for ${next} mode.`);
-  }
-  async function regenerateWithContext() {
-    await synchronize(true); await settle();
-    setOfferRestyle(false);
-    const target = current.current?.project; if (!target) return;
-    for (const item of target.pages.filter(entry => entry.content)) {
-      const before = new Set((current.current?.project?.pages.find(entry => entry.id === item.id)?.regions ?? []).map(region => region.id));
-      const next = await mutate({ type: 'add_region', page_id: item.id, rect: { x: 0, y: 0, width: item.viewport.width, height: Math.min(item.viewport.height, 160) } });
-      const added = next.project!.pages.find(entry => entry.id === item.id)!.regions.find(region => !before.has(region.id));
-      if (added) await changeRegion(item.id, added.id, { prompt: `Update this page to follow the project brand rules (colours, fonts, tone and logo) and its ${item.appearance} appearance. Keep its content, structure and layout the same.` });
-    }
-    generate();
-  }
+  async function openAlongside(run: Replacement['run']) { await settle(); await run(false); }
   async function open(folder = false, path?: string, discardRecovery = false) {
     await openAlongside(async discard => {
       await queue(async () => {
-        const opened = await requestProjectOpen(() => native<WorkspaceView | { website: WebsiteFolderSelection } | null>('open_project', { discard, folder, path: path ?? null, discardRecovery }));
-        if (opened && 'website' in opened) { setImportSource(null); setImportFolder(opened.website); setImportAsNew(false); setShowNew(false); setShowImport(true); return; }
+        const opened = await requestProjectOpen(() => native<WorkspaceView | null>('open_project', { discard, folder, path: path ?? null, discardRecovery }));
         if (opened) { accept(opened); setSelected(null); setNotice('Project opened.'); setShowNew(false); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
       });
     });
@@ -490,16 +608,6 @@ function Editor() {
       setRecentProjects(await native<RecentProject[]>('forget_recent_project', { path }));
     }, false);
   }
-  async function openInBrowser() {
-    await synchronize(); await settle();
-    setError(''); setOpenFailure(null);
-    try { await native<string>('open_in_browser'); setNotice('Opened in your browser.'); }
-    catch (error) {
-      const url = browserOpenUrl(error);
-      if (url) setOpenFailure({ message: `The site is running at ${url}`, url });
-      else setError(errorMessage(error));
-    }
-  }
   // The only update request: a manual read of the newest release, with no install step.
   async function checkForUpdates() {
     setCheckingUpdates(true); setUpdateError(''); setUpdateResult(null);
@@ -511,17 +619,171 @@ function Editor() {
     try { await native('open_preview_link', { url }); }
     catch { setOpenFailure({ message: url, url }); }
   }
-  async function exportWebsite() {
-    await synchronize(); await settle();
-    setExporting(true); setError('');
-    try {
-      const project = current.current?.project;
-      if (!project) return;
-      const result = await native<WebsiteExport | null>('export_website', { projectId: project.id, revision: project.revision });
-      if (result) setExported(result);
-    } catch (error) { setError(errorMessage(error)); }
-    finally { setExporting(false); }
+  // Export: destination, included boundaries and the paid-send decision live in the dock.
+  function openExportPanel(restore = true) {
+    const project = current.current?.project;
+    if (!project) return;
+    setShowExport(true);
+    if (restore && !exportJob) void native<ExportJobView | null>('get_export_job', { projectId: project.id }).then(job => { if (job) setExportJob(job); }).catch(() => {});
+    if (panels.hidden) panelActions.toggleHidden();
+    if (panels.collapsed) panelActions.setCollapsed(false);
   }
+  async function chooseExportDestination() {
+    try {
+      const picked = await native<{ path: string } | null>('pick_export_destination');
+      if (!picked) return;
+      setExportDestination(picked.path);
+      try { localStorage.setItem('desegnos.export-folder', picked.path); } catch { /* Preferences can be unavailable. */ }
+    } catch (error) { setExportError(errorMessage(error)); }
+  }
+  async function refreshWorkspace() {
+    try { accept(await native<WorkspaceView>('get_workspace')); } catch { /* The next edit reports its own error. */ }
+  }
+  function showJobResult(job: ExportJobView, previewPageId?: string | null) {
+    if (job.status === 'ready') void refreshWorkspace();
+    if (job.result?.previewUrl) {
+      const pageId = previewPageId ?? job.pages[0]?.pageId ?? null;
+      if (pageId) { setPreview({ pageId, url: job.result.previewUrl, stale: false }); setPreviewRevision(current.current?.project?.revision ?? null); }
+    }
+    if (job.status === 'ready' && !job.result?.previewUrl) setNotice(job.message);
+  }
+  async function runExport(previewPageId: string | null = null) {
+    await settle();
+    const project = current.current?.project;
+    if (!project) return;
+    if (!previewPageId && !exportDestination) { await chooseExportDestination(); return; }
+    setExportError(''); setShowExport(true); setExportSending(false); setExportJob(null);
+    try {
+      const job = await native<ExportJobView>('prepare_export', {
+        projectId: project.id, revision: project.revision,
+        destination: previewPageId ? null : exportDestination,
+        pageIds: previewPageId ? [previewPageId] : null,
+        preview: !!previewPageId,
+      });
+      setExportJob(job);
+      showJobResult(job, previewPageId);
+    } catch (error) { setExportError(errorMessage(error)); }
+  }
+  async function sendExport() {
+    if (!exportJob) return;
+    setExportSending(true); setExportError('');
+    try {
+      const job = await native<ExportJobView>('start_export', { jobId: exportJob.jobId });
+      setExportJob(job);
+      showJobResult(job);
+      if (job.status === 'failed' || job.status === 'cancelled') setExportError(job.message);
+    } catch (error) { setExportError(errorMessage(error)); }
+    finally { setExportSending(false); }
+  }
+  async function cancelExport() {
+    if (!exportJob) return;
+    try { setExportJob(await native<ExportJobView>('cancel_export', { jobId: exportJob.jobId })); }
+    catch (error) { setExportError(errorMessage(error)); }
+  }
+  function openExportFolder(path: string) {
+    const project = current.current?.project;
+    if (!project) return;
+    void native('open_export_folder', { projectId: project.id, path }).catch(error => setError(errorMessage(error)));
+  }
+  async function openInBrowser() {
+    const project = current.current?.project;
+    if (!project) return;
+    try { await native<string>('open_in_browser', { projectId: project.id }); }
+    catch (error) {
+      const message = errorMessage(error);
+      const url = message.match(/https?:\/\/\S+/)?.[0];
+      setError(message);
+      if (url) setOpenFailure({ message, url });
+    }
+  }
+  async function keepPointerCode(pointerId: string) {
+    const project = current.current?.project;
+    if (!project) return;
+    try {
+      const job = await native<ExportJobView>('keep_pointer_code', { projectId: project.id, pointerId });
+      setExportJob(job); openExportPanel(false); setShowHistory(false);
+    } catch (error) { setError(errorMessage(error)); }
+  }
+  function forgetExportPointer(pointerId: string) {
+    void mutate({ type: 'forget_export_pointer', pointer_id: pointerId }).catch(() => {});
+  }
+  // Clash check: fingerprints are recomputed from the last export folder on open and on focus.
+  const recheckExport = useCallback(async () => {
+    const project = current.current?.project;
+    if (!project) { setCheckedStates(null); setCheckedProject(null); return; }
+    try {
+      const check = await native<ExportCheck>('recheck_export', { projectId: project.id });
+      setCheckedStates(check.states); setCheckedProject(project.id);
+    } catch { /* A missing folder simply reports the project's own states. */ }
+  }, []);
+  const scheduleExportCheck = useCallback(() => {
+    if (checkTimer.current !== null) window.clearTimeout(checkTimer.current);
+    checkTimer.current = window.setTimeout(() => { checkTimer.current = null; void recheckExport(); }, 250);
+  }, [recheckExport]);
+  useEffect(() => { const currentProject = current.current?.project; if (!currentProject) { setCheckedStates(null); setCheckedProject(null); return; } scheduleExportCheck(); }, [view?.project?.id, view?.project?.revision, view?.project?.lastExport?.id, scheduleExportCheck]);
+  useEffect(() => {
+    const onFocus = () => scheduleExportCheck();
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [scheduleExportCheck]);
+  useEffect(() => { if (showHistory) scheduleExportCheck(); }, [showHistory, scheduleExportCheck]);
+  // Play and Preview export.
+  function togglePlay(pageId?: string | null) {
+    const target = pageId ?? canvasFocus ?? (selectedElementPageId ?? null);
+    if (!target) { setNotice('Select a boundary to play.'); return; }
+    if (preview) closePreview();
+    setPlay(current => current.boundary === target ? idlePlay : { ...idlePlay, boundary: target });
+    setCanvasFocus(target);
+    setCanvasSelection([]);
+  }
+  function playElement(pageId: string, elementId: string) {
+    const projectNow = current.current?.project;
+    if (!projectNow) return;
+    setPlay(current => {
+      if (current.boundary !== pageId) return current;
+      const step = playClick(projectNow, current, pageId, elementId);
+      if (step.goTo) {
+        setCanvasFocus(step.goTo);
+        requestAnimationFrame(() => canvasRef.current?.focusBoundary(step.goTo!));
+      }
+      return step.play;
+    });
+  }
+  function previewSelectedBoundary() {
+    const target = canvasFocus ?? selectedElementPageId ?? current.current?.project?.homePageId ?? null;
+    if (!target) return;
+    const page = current.current?.project?.pages.find(item => item.id === target);
+    if (page && page.output !== 'webpage' && page.output !== 'appScreen') {
+      setNotice('Slides and images export directly; preview shows AI-built pages.');
+      return;
+    }
+    if (playIsActive(play)) setPlay(idlePlay);
+    void runExport(target);
+  }
+  function closePreview() {
+    setPreview(null);
+    void native('close_preview').catch(() => {});
+  }
+  function refreshPreview() {
+    const pageId = preview?.pageId;
+    if (!pageId) return;
+    closePreview();
+    void runExport(pageId);
+  }
+  useEffect(() => { const revision = view?.project?.revision; if (preview && revision !== undefined && previewRevision !== null && revision !== previewRevision) setPreview(value => value ? { ...value, stale: true } : value); }, [view?.project?.revision, preview, previewRevision]);
+  useEffect(() => { if (!view?.project) setShowExport(false); setExportJob(null); setExportError(''); setPreview(null); setPlay(idlePlay); }, [view?.project?.id]);
+  useEffect(() => {
+    if (!preview && !playIsActive(play)) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      if (isTextField(event.target)) return;
+      event.preventDefault();
+      if (preview) { closePreview(); return; }
+      setPlay(idlePlay);
+    };
+    window.addEventListener('keydown', escape);
+    return () => window.removeEventListener('keydown', escape);
+  }, [preview, play]);
   async function create(name: string, viewport: Viewport, parentDirectory?: string) {
     await openAlongside(async discard => {
       await queue(async () => {
@@ -553,163 +815,101 @@ function Editor() {
   }
   useEffect(() => { if (!view?.recoveries.length) setShowRecovery(false); }, [view?.recoveries.length]);
   async function travel(command: 'undo_project' | 'redo_project') {
-    await synchronize();
     await settle();
     await queue(async () => { accept(await native<WorkspaceView>(command)); setNotice(command === 'undo_project' ? 'Change undone.' : 'Change redone.'); });
   }
-  // Hold the mutation queue while travelling so edits cannot interleave with the jump.
-  async function jumpTo(position: number) {
-    const sessionId = current.current?.history?.sessionId;
-    await synchronize(); await settle();
-    await queue(async workspace => {
-      let next = workspace;
-      if (!next?.history || next.history.sessionId !== sessionId || position < next.history.start || position > next.history.end) throw new Error('That change is no longer available in this history.');
-      while (next.history!.position !== position) {
-        next = await native<WorkspaceView>(next.history!.position > position ? 'undo_project' : 'redo_project');
-        accept(next);
-      }
-      setNotice('Returned to the selected change.');
-    });
+  async function saveCopy() {
+    const result = await queue(() => native<WorkspaceView | null>('save_project_copy'));
+    if (result) setNotice('Saved a copy without history.');
+  }
+  async function compactHistory() {
+    const report = await queue(() => native<CompactReport>('compact_history'));
+    setHistoryEpoch(value => value + 1);
+    setNotice(report.removedVersions === 0 && report.removedBlobs === 0
+      ? 'History is already compact.'
+      : `History compacted: removed ${report.removedVersions} ${report.removedVersions === 1 ? 'version' : 'versions'}.`);
   }
   const changeBrief = useCallback((patch: Partial<Brief>) => mutate(project => ({ type: 'set_brief', brief: { ...project.brief, ...patch } }))
     .then(workspace => workspace.project!.brief), [mutate]);
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
-      const target = event.target;
-      if (event.defaultPrevented || target instanceof HTMLElement && target.closest('.cm-editor')) return;
-      const editingText = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable);
-      // WebKitGTK lacks these text key bindings with the pinned muda 0.20 stack.
-      // Remove when the native stack supplies them and the trusted-input test passes.
-      // https://github.com/tauri-apps/tauri/issues/16299
-      if (editingText && navigator.userAgent.includes('Linux')) {
-        const textAction = editorShortcut(event, false);
-        if (textAction === 'undo' || textAction === 'redo') {
-          event.preventDefault(); document.execCommand(textAction); return;
-        }
+      if (event.defaultPrevented) return;
+      const editingText = isTextField(event.target);
+      // Text fields keep their own editing history; WebKitGTK needs the explicit mapping.
+      if (editingText && navigator.userAgent.includes('Linux') && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
+        event.preventDefault(); document.execCommand(event.shiftKey ? 'redo' : 'undo'); return;
       }
-      const shortcut = editorShortcut(event, editingText);
-      if (!shortcut) return;
-      // Selected interface text (a notice, the AI conversation) copies as text, not as a layer.
-      const selection = window.getSelection()?.toString() ?? '';
-      if (shortcut === 'copyLayer' && selection.trim()) {
-        event.preventDefault(); void native('copy_text', { text: selection }).catch(() => {}); return;
-      }
-      // Side panels keep focus while editing, so app-wide commands still work there.
-      if (event.target instanceof Element && event.target.closest('.workspace-surface') && !['save', 'saveAs', 'open', 'new', 'undo', 'redo', 'zoomIn', 'zoomOut', 'fit', 'actualSize', 'doubleSize', 'nextPage', 'previousPage', 'closePageTab'].includes(shortcut)) return;
-      if (event.repeat && ['new', 'open', 'saveAs', 'help', 'remove', 'closePageTab'].includes(shortcut)) { event.preventDefault(); return; }
+      const action = shortcutFor(event, editingText);
+      if (!action) return;
       const project = current.current?.project;
-      let action: (() => Promise<unknown>) | undefined;
-      if (shortcut === 'help') { event.preventDefault(); setShowShortcuts(true); return; }
-      if (shortcut === 'new') { event.preventDefault(); setShowNew(true); return; }
-      if (shortcut === 'closePageTab') {
-        event.preventDefault();
-        if (project && page) closePageTabInStrip(page.id);
-        return;
+      if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels'].includes(action)) return;
+      switch (action) {
+        // The canvas owns these; its listener runs first and prevents the default.
+        case 'copy': case 'cut': case 'paste': case 'pasteChoice': case 'duplicate':
+        case 'link': case 'unlink': case 'group': case 'ungroup': case 'forward': case 'backward': case 'front': case 'back':
+        case 'selectAll': case 'selectChild': case 'selectParent': case 'nudge': case 'nudgeFar': case 'delete':
+          return;
+        case 'help': event.preventDefault(); setShowShortcuts(true); return;
+        case 'new': event.preventDefault(); setShowNew(true); return;
+        case 'open': event.preventDefault(); void open().catch(() => {}); return;
+        case 'renameLayer': {
+          const field = document.querySelector<HTMLInputElement>('[data-field="layer-name"]');
+          if (!field) return;
+          event.preventDefault(); field.focus({ preventScroll: true }); field.select(); return;
+        }
+        case 'insert': event.preventDefault(); setInsertKind(null); setInsertSignal(value => value + 1); return;
+        case 'imageTool': event.preventDefault(); setInsertKind(null); setCanvasTool('image'); return;
+        case 'selectTool': case 'frameTool': case 'boundaryTool': case 'pointerTool': case 'textTool': case 'panTool':
+        case 'rectTool': case 'ellipseTool': case 'lineTool': case 'noteTool': {
+          event.preventDefault(); setInsertKind(null);
+          setCanvasTool(action === 'selectTool' ? 'select' : action === 'frameTool' ? 'frame' : action === 'boundaryTool' ? 'boundary'
+            : action === 'pointerTool' ? 'pointer' : action === 'textTool' ? 'text' : action === 'panTool' ? 'pan'
+              : action === 'rectTool' ? 'rect' : action === 'ellipseTool' ? 'ellipse' : action === 'lineTool' ? 'line' : 'note');
+          return;
+        }
+        case 'askAI': event.preventDefault(); document.querySelector<HTMLElement>('[data-element-request]')?.focus(); return;
+        case 'hidePanels':
+          if (!project) return;
+          if (event.target instanceof Element && event.target.closest('.workspace-surface, .editor-menu, .layers-popover')) return;
+          event.preventDefault(); panelActions.toggleHidden(); return;
+        case 'zoomIn': event.preventDefault(); canvasRef.current?.zoomStep(1); return;
+        case 'zoomOut': event.preventDefault(); canvasRef.current?.zoomStep(-1); return;
+        case 'zoomReset': event.preventDefault(); canvasRef.current?.zoomTo(1); return;
+        case 'fitAll': event.preventDefault(); canvasRef.current?.fit(); return;
+        case 'fitSelection': event.preventDefault(); canvasRef.current?.fitSelection(); return;
+        case 'play': if (!project) return; event.preventDefault(); togglePlay(); return;
+        case 'preview': if (!project) return; event.preventDefault(); previewSelectedBoundary(); return;
+        case 'export':
+          if (!project) return;
+          event.preventDefault(); openExportPanel();
+          if (exportDestination) void runExport(); else void chooseExportDestination();
+          return;
+        case 'undo': case 'redo':
+          if (!project) return;
+          event.preventDefault();
+          if (action === 'undo' ? current.current?.canUndo : current.current?.canRedo) {
+            void travel(action === 'undo' ? 'undo_project' : 'redo_project').catch(() => {});
+          }
+          return;
+        case 'save': if (!project) return; event.preventDefault(); void save().catch(() => {}); return;
+        case 'saveAs': if (!project) return; event.preventDefault(); void save(true).catch(() => {}); return;
+        case 'closeProject': if (!project) return; event.preventDefault(); void closeProject().catch(() => {}); return;
       }
-      if (shortcut === 'open') action = open;
-      else if (!project) return;
-      else if (shortcut === 'save' || shortcut === 'saveAs') action = () => save(shortcut === 'saveAs');
-      else if (shortcut === 'undo' || shortcut === 'redo') {
-        event.preventDefault();
-        if (shortcut === 'undo' ? current.current?.canUndo : current.current?.canRedo) action = () => travel(shortcut === 'undo' ? 'undo_project' : 'redo_project');
-      } else if (shortcut === 'zoomIn' || shortcut === 'zoomOut') { event.preventDefault(); setZoom(value => steppedZoom(value, shortcut === 'zoomIn' ? 1 : -1)); return; }
-      else if (shortcut === 'actualSize' || shortcut === 'doubleSize') { event.preventDefault(); setZoom(shortcut === 'actualSize' ? 1 : 2); return; }
-      else if (shortcut === 'rectangleTool' || shortcut === 'circleTool' || shortcut === 'freehandTool') { event.preventDefault(); setRequestShape(shortcut === 'rectangleTool' ? 'rect' : shortcut === 'circleTool' ? 'ellipse' : 'freehand'); setTool('request'); return; }
-      else if (shortcut === 'selectTool' || shortcut === 'requestTool' || shortcut === 'panTool') { event.preventDefault(); setTool(shortcut === 'selectTool' ? 'select' : shortcut === 'requestTool' ? 'request' : 'pan'); return; }
-      else if (shortcut === 'cutLayer') { if (activeLayer || selected) { event.preventDefault(); void canvas.current?.cutLayer(); } return; }
-      else if (shortcut === 'copyLayer') { if (window.getSelection()?.toString().trim()) return; if (activeLayer || selected) { event.preventDefault(); void canvas.current?.copyLayer(); } return; }
-      else if (shortcut === 'pasteLayer') { event.preventDefault(); void canvas.current?.pasteLayer(); return; }
-      else if (shortcut === 'layerForward' || shortcut === 'layerBackward' || shortcut === 'layerFront' || shortcut === 'layerBack') {
-        if (activeLayer || selected) { event.preventDefault(); void canvas.current?.arrangeLayer(({ layerForward: 'forward', layerBackward: 'backward', layerFront: 'front', layerBack: 'back' } as const)[shortcut]); } return;
-      }
-      else if (shortcut === 'askAI') { event.preventDefault(); canvas.current?.askAI(); return; }
-      else if (shortcut === 'selectSimilar') { event.preventDefault(); canvas.current?.selectSimilar(); return; }
-      else if (shortcut === 'undoElement') { event.preventDefault(); void canvas.current?.undoElement(); return; }
-      else if (shortcut === 'fit') { event.preventDefault(); recenter('fit'); return; }
-      else if (shortcut === 'remove' && selected) { event.preventDefault(); removeRegion(selected); return; }
-      else if (shortcut === 'nextPage' || shortcut === 'previousPage') {
-        event.preventDefault();
-        const index = project.pages.findIndex(page => page.id === (pageId ?? project.homePageId));
-        const id = project.pages[(Math.max(0, index) + (shortcut === 'nextPage' ? 1 : project.pages.length - 1)) % project.pages.length].id;
-        action = async () => { await selectPage(id); requestAnimationFrame(() => document.getElementById(`page-tab-${id}`)?.focus()); };
-      }
-      if (action) { event.preventDefault(); void action().catch(() => {}); }
     };
     window.addEventListener('keydown', listener);
     return () => window.removeEventListener('keydown', listener);
   });
 
   const project = view?.project ?? null;
-  const importedImages = [...(project?.importedIdentity?.assets ?? []), ...(project?.importedIdentity?.photos ?? [])];
-  const storedImages = Object.entries(project?.pictures ?? {}).map(([id, dataUri], index) => ({ id, dataUri,
-    name: importedImages.find(image => image.dataUri === dataUri)?.name ?? `Picture ${index + 1}` }));
-  const projectImages = [...storedImages, ...importedImages.filter(image => !storedImages.some(stored => stored.dataUri === image.dataUri))];
-  const page = project?.pages.find(page => page.id === pageId) ?? project?.pages.find(page => page.id === project.homePageId) ?? null;
-  // Framed documents the selected element belongs to. They are read again when page code or
-  // a framed document changes (view.documentsKey), never when only a prompt is typed.
-  const frameRead = useRef(0);
-  const documentsKey = view?.documentsKey ?? '';
-  useEffect(() => {
-    if (!project || !page?.content) { setFramedDocuments({ pageId: '', documents: [] }); return; }
-    const ticket = ++frameRead.current;
-    const projectId = project.id, pageId = page.id;
-    void native<FrameDocumentView[]>('get_frame_documents', { projectId, pageId })
-      .then(value => { if (ticket === frameRead.current) setFramedDocuments({ pageId, documents: value.map(item => ({ ...item, pageId })) }); })
-      .catch(() => { if (ticket === frameRead.current) setFramedDocuments({ pageId, documents: [] }); });
-  }, [documentsKey, project?.id, page?.id, !!page?.content]);
-  const frameDocuments = framedDocuments.pageId === page?.id ? framedDocuments.documents : [];
-  // Code and Split show the document the selected element lives in.
-  const framedDocument = activeLayer?.document ?? null;
-  const framedCode = !framedDocument ? null
-    : framedDocument.kind === 'siteFile'
-      ? frameDocuments.find(item => documentKey(item.document) === documentKey(framedDocument))?.content ?? null
-      : project?.pages.find(item => item.id === framedDocument.pageId)?.content ?? null;
-  // Only a path that names a project page can leave Live for the editor.
-  const livePage = project && livePath ? pathPage(livePath, project.pages) : null;
-  const region = page?.regions.find(region => region.id === selected) ?? null;
-  const pageIdsKey = project?.pages.map(item => item.id).join(',') ?? '';
-  const openPageIds = project ? visiblePageTabs(openPages[project.id], project.pages.map(item => item.id)) : [];
-  // The strip scrolls without a scrollbar (it overlapped the tabs and took their clicks): wheel scrolls sideways, the active tab stays in view.
-  const tabStrip = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const strip = tabStrip.current; if (!strip) return;
-    const wheel = (event: WheelEvent) => {
-      if (strip.scrollWidth <= strip.clientWidth || Math.abs(event.deltaX) > Math.abs(event.deltaY)) return;
-      event.preventDefault(); strip.scrollLeft += event.deltaY;
-    };
-    strip.addEventListener('wheel', wheel, { passive: false });
-    return () => strip.removeEventListener('wheel', wheel);
-  }, [!!project]);
-  useEffect(() => { if (page) document.getElementById(`page-tab-${page.id}`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [page?.id]);
-  // Restore a project's open page tabs the first time it becomes active, then drop tabs for
-  // pages that no longer exist. A project with no saved tabs shows all of its pages.
-  useEffect(() => {
-    const projectId = project?.id;
-    if (!projectId) return;
-    const pageIds = pageIdsKey ? pageIdsKey.split(',') : [];
-    setOpenPages(previous => {
-      const known = previous[projectId];
-      const next = known ? visiblePageTabs(known, pageIds) : loadPageTabs(projectId, pageIds);
-      if (known && next.length === known.length && next.every((id, index) => id === known[index])) return previous;
-      savePageTabs(projectId, next);
-      return { ...previous, [projectId]: next };
-    });
-  }, [project?.id, pageIdsKey]);
-  const requestedAreas = project?.pages.reduce((count, page) => count + page.regions.filter(region => !region.completed && region.prompt.trim()).length, 0) ?? 0;
-  const checks = useMemo(() => project ? checkProject(project) : [], [project]);
-  const placeholderCount = checks.filter(item => item.kind === 'placeholder').length;
-  const fixCount = checks.filter(item => item.kind !== 'found').length;
-  // The native source map ties code ranges to canvas elements; it is only valid for the exact HTML it was built from.
-  const mapHtml = codeView !== 'design' ? page?.content?.html ?? null : null;
-  useEffect(() => {
-    if (!mapHtml || !project || !page) { setSourceMap(null); return; }
-    let active = true; const projectId = project.id, pageId = page.id, html = mapHtml;
-    const timer = setTimeout(() => { void native<{ ranges: SourceMapView['ranges'] }>('get_page_source_map', { projectId, pageId }).then(value => { if (active) setSourceMap({ html, ranges: value.ranges }); }, () => { if (active) setSourceMap(null); }); }, 150);
-    return () => { active = false; clearTimeout(timer); };
-  }, [mapHtml, project?.id, page?.id]);
+  const pointerStates = view?.pointerStates ?? [];
+  const pointerStateMap = Object.fromEntries((checkedStates && checkedProject === project?.id ? checkedStates : pointerStates).map(item => [item.id, item])) as Record<string, PointerStateView>;
+  const requestedAreas = project ? project.pages.reduce((count, page) => count + pendingCount(page.elements), 0) : 0;
+  const needsGeneratingPointers = pointerStates.filter(item => item.state === 'needsGenerating').length;
+  const effectivePointerStates = checkedStates && checkedProject === project?.id ? checkedStates : pointerStates;
+  const clashPointers = effectivePointerStates.filter(item => item.state === 'contradicts' || item.state === 'broken' || item.state === 'codeChanged');
   const activeProjectId = project?.id ?? null;
-  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve(command === 'prepare_generation' || command === 'start_generation' || command === 'retry_generation' || command === 'apply_generation' || command === 'generation_draft' && args?.action === 'apply' ? synchronize(['prepare_generation', 'start_generation', 'retry_generation'].includes(command)) : undefined).then(() => queue(async workspace => {
+  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve().then(() => queue(async workspace => {
     signal?.throwIfAborted();
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {
@@ -724,87 +924,31 @@ function Editor() {
     }
     signal?.throwIfAborted();
     const result = await native<T>(command, args);
-    if (command === 'prepare_generation' && (result as import('./types').GenerationJobView).baseRevision !== workspace?.project?.revision) {
-      // Preparing may attach a framed document to an older request, which bumps the revision.
-      const refreshed = await native<WorkspaceView>('get_workspace');
-      if (refreshed.project?.id === activeProjectId) accept(refreshed);
-    }
     if (command === 'apply_generation' && !signal?.aborted) accept(result as WorkspaceView);
-    if (command === 'generation_draft' && (result as import('./types').DraftReview).workspace) accept((result as import('./types').DraftReview).workspace!);
     return result;
-  })), [queue, activeProjectId, accept, refreshAiSettings, synchronize]);
-  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); if (phoneFix.current) { phoneFix.current = false; setLiveDevice('phone'); setLive(true); } if (generationOwns.current && workspace.project?.latestGeneration) { setResultReview({ jobId: workspace.project.latestGeneration.jobId, revision: workspace.project.revision }); setHighlightResult(true); } }, []);
+  })), [queue, activeProjectId, accept, refreshAiSettings]);
+  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); if (workspace.project?.latestGeneration) setNotice('Generated result applied.'); }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
   }), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
-  // Pages this result changed stay marked in the strip until the user keeps or undoes it.
-  const changedPageIds = new Set(resultReview ? (generation.job?.candidate?.pages ?? []).map(item => item.pageId) : []);
   generationRef.current = generation.job;
   generationOwns.current = generation.owns;
-  // Escape leaves Add request for Select; capture runs before the canvas swallows the key.
-  useEffect(() => {
-    if (tool !== 'request') return;
-    const exit = (event: KeyboardEvent) => { if (event.key === 'Escape' && !isTextField(event.target)) setTool('select'); };
-    window.addEventListener('keydown', exit, true);
-    return () => window.removeEventListener('keydown', exit, true);
-  }, [tool]);
-  useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
-  // A project opens on its project canvas; opening a page moves to that page's editor.
-  useEffect(() => {
-    const id = view?.project?.id ?? null;
-    if (!id) { canvasProject.current = null; setProjectCanvas(false); return; }
-    if (canvasProject.current === id) return;
-    canvasProject.current = id;
-    setProjectCanvas(true);
-  }, [view?.project?.id]);
-  // Escape with nothing selected leaves the page for the project canvas. The canvas
-  // handles its own Escape first; this covers focus outside it.
-  useEffect(() => {
-    const leave = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || isTextField(event.target)) return;
-      if (projectCanvas || tool !== 'select' || selected || activeLayer || live || !view?.project) return;
-      if (document.querySelector('.editor-menu')) return;
-      setProjectCanvas(true);
-    };
-    window.addEventListener('keydown', leave);
-    return () => window.removeEventListener('keydown', leave);
-  }, [projectCanvas, tool, selected, activeLayer, live, view?.project?.id]);
-  useEffect(() => { setLivePath(page?.path ?? '/'); }, [live, page?.id]);
-  async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
-  function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
-    const host = event.currentTarget.parentElement; if (!host) return;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    const bounds = host.getBoundingClientRect();
-    const moveTo = (x: number) => { const width = Math.min(0.75, Math.max(0.2, (bounds.right - x) / bounds.width)); setCodeWidth(width); try { localStorage.setItem('desegnos.code-width', String(width)); } catch {} };
-    const onMove = (next: PointerEvent) => moveTo(next.clientX);
-    const stop = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', stop); };
-    window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', stop);
-  }
-  useEffect(() => { if (resultReview && project?.revision !== resultReview.revision) setResultReview(null); }, [project?.revision, resultReview]);
-  useEffect(() => { if (!highlightResult) return; const timer = setTimeout(() => setHighlightResult(false), 2000); return () => clearTimeout(timer); }, [highlightResult, resultReview?.jobId]);
-  async function rejectResult() {
-    const review = resultReview;
-    if (!review) return;
-    await synchronize(); await settle();
-    await queue(async workspace => {
-      setResultReview(null);
-      if (workspace?.project?.revision !== review.revision || workspace.project.latestGeneration?.jobId !== review.jobId) return;
-      accept(await native<WorkspaceView>('undo_project')); setNotice('Generated changes undone.');
-    });
-  }
   const working = generation.canStop || activeGeneration(generation.job) || !!generation.operation;
+  useEffect(() => { setShowLog(false); setSelected(null); }, [activeProjectId]);
+  useEffect(() => { setCanvasSelection([]); setCanvasFocus(null); }, [view?.project?.id]);
   useEffect(() => {
-    // Escape leaves a text box once fields have had their own Escape handling.
-    const leave = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || !isTextField(event.target)) return;
-      event.preventDefault();
-      (document.activeElement as HTMLElement | null)?.blur();
-    };
-    window.addEventListener('keydown', leave);
-    return () => window.removeEventListener('keydown', leave);
-  }, []);
+    const pages = view?.project?.pages, reference = view?.project?.reference ?? [], pointers = view?.project?.pointers ?? [];
+    setCanvasSelection(current => {
+      const next = current.filter(target => target.kind === 'element'
+        ? !!pages?.some(page => page.id === target.pageId && findElementIn(page.elements, target.elementId)
+          && (target.sizeId === null || page.sizes.some(size => size.id === target.sizeId)))
+        : target.kind === 'pointer' ? pointers.some(pointer => pointer.id === target.pointerId) : reference.some(item => item.id === target.itemId));
+      return next.length === current.length ? current : next;
+    });
+    if (canvasFocus && !pages?.some(page => page.id === canvasFocus)) setCanvasFocus(null);
+  }, [view?.project?.pages, view?.project?.reference, view?.project?.pointers, canvasFocus]);
   useEffect(() => { if (generation.visible) { setShowLog(true); generation.close(); } }, [generation.visible]);
   const draftCount = announcedDraftCount(generation.job, generation.owns);
   const showGenerationStatus = !!generation.error || announcesStatus(generation.job, { owns: generation.owns, stopped: generation.stopped, working });
@@ -820,405 +964,125 @@ function Editor() {
     void refreshAiSettings().catch(() => {});
   }
   function editGenerationRequest(id: string) {
-    const owner = project?.pages.find(item => item.regions.some(region => region.id === id));
-    if (owner) run(async () => { await selectPage(owner.id, id); setSelected(id); setFocusPrompt(true); });
+    const owner = project?.pages.find(item => !!findElementIn(item.elements, id));
+    if (owner) { setCanvasFocus(owner.id); setCanvasSelection([{ kind: 'element', pageId: owner.id, elementId: id, sizeId: baseSizeId(owner) }]); }
   }
-  async function replyToGeneration(targets: { pageId: string; regionId: string }[], text: string) {
-    const regionIds: string[] = [];
+  async function replyToGeneration(targets: { pageId: string; elementId: string }[], text: string) {
+    const elementIds: string[] = [];
     for (const target of targets) {
-      const region = project?.pages.find(page => page.id === target.pageId)?.regions.find(region => region.id === target.regionId);
-      if (!region) continue;
-      const prompt = region.prompt.trim();
-      await changeRegion(target.pageId, target.regionId, { prompt: prompt ? `${prompt}\n\nFeedback: ${text}` : `Feedback: ${text}` });
-      regionIds.push(target.regionId);
+      const element = project?.pages.find(page => page.id === target.pageId) && findElementIn(project!.pages.find(page => page.id === target.pageId)!.elements, target.elementId);
+      if (!element) continue;
+      const prompt = element.meta.pending?.prompt.trim() ?? '';
+      await changeRequest(target.pageId, target.elementId, { prompt: prompt ? `${prompt}\n\nFeedback: ${text}` : `Feedback: ${text}` });
+      elementIds.push(target.elementId);
     }
-    if (!regionIds.length) throw new Error('Those requests are no longer in the project.');
-    await generation.prepare(undefined, regionIds);
+    if (!elementIds.length) throw new Error('Those requests are no longer in the project.');
+    await generation.prepare(elementIds);
   }
-  async function allowWholePageAndRetry(regionId: string) {
-    const owner = project?.pages.find(item => item.regions.some(region => region.id === regionId));
-    if (!owner) throw new Error('That request is no longer in the project.');
-    // One command releases the framed document and turns whole page on; prepare then skips
-    // frame adoption for this request.
-    await changeRegion(owner.id, regionId, { wholePage: true });
-    // Let the canvas redraw the released frame before prepare measures it; preparing straight
-    // away could adopt a frame from the page state the user just left.
-    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
-    await generation.prepare(undefined, [regionId]);
+  async function allowWholePageAndRetry(elementId: string) {
+    await generation.prepare([elementId]);
   }
-  const requestEditorIsOpen = (regionId: string) => requestEditorOpen(regionId, { selectedRegionId: selected, focusedRegionId: focusPrompt ? selected : null });
-  function openImportDialog() { setImportSource(null); setImportFolder(null); setImportAsNew(false); setShowImport(true); }
+  const requestEditorIsOpen = () => false;
+  function openImportDialog() { setImportSource(null); setShowImport(true); }
   function resolveGenerationFix(fix: 'aiSettings' | 'import' | 'brief') {
     if (fix === 'aiSettings') setShowAiSettings(true);
     else if (fix === 'import') openImportDialog();
     else setShowNotes('decisions');
   }
-  function generate() {
-    phoneFix.current = false;
-    if (!requestedAreas && pendingImages) {
-      void synchronize().then(() => setNotice('Pictures resized and updated.')).catch(() => {});
-      return;
-    }
-    // A previous apply failure (for example a stale result that lost a race with its
-    // block) must not suppress this generation's own progress and result notices.
+  function generate(elementIds?: string[]) {
+    const contextItems = selectedReference(canvasSelection);
+    if (!requestedAreas && pendingImages) { setNotice('Pictures resized and updated.'); return; }
     setError('');
     setShowLog(true);
-    void generation.prepare().catch(() => {});
+    void generation.prepare(elementIds, contextItems).catch(() => {});
   }
-
-  const [observationsVersion, setObservationsVersion] = useState(0);
-  async function fixRuntimeErrors(errors: string[]) {
-    if (!page?.content || working || !aiConnected) return;
-    const pageId = page.id;
-    await synchronize(true); await settle();
-    const next = await mutate(current => {
-      const target = current.pages.find(item => item.id === pageId);
-      if (!target?.content) throw new Error('This page is no longer available.');
-      return { type: 'add_region', page_id: pageId, rect: { x: 0, y: 0, width: target.viewport.width, height: target.viewport.height } };
-    });
-    const added = next.project!.pages.find(item => item.id === pageId)!.regions.at(-1)!;
-    await mutate({ type: 'set_region_runtime_errors', page_id: pageId, region_id: added.id, errors: errors.slice(0, 10).map(error => error.slice(0, 4096)) });
-    setSelected(null); setShowLog(true);
-    await generation.prepare(undefined, [added.id]);
+  async function changeRequest(pageId: string, elementId: string, patch: { prompt?: string | (() => string); rect?: Rect }): Promise<{ prompt: string }> {
+    const element = current.current?.project?.pages.find(page => page.id === pageId) && findElementIn(current.current!.project!.pages.find(page => page.id === pageId)!.elements, elementId);
+    if (!element) throw new Error('This layer is no longer in the project.');
+    if (patch.rect) await updateCanvasElements(pageId, [{ id: elementId, rect: patch.rect }]);
+    const prompt = (typeof patch.prompt === 'function' ? patch.prompt() : patch.prompt) ?? element.meta.pending?.prompt ?? '';
+    const existing = element.meta.pending;
+    const request: PendingRequest = { prompt, attachments: existing?.attachments ?? [], requestedAt: existing?.requestedAt ?? new Date().toISOString(), sizeId: existing?.sizeId ?? null };
+    await mutate({ type: 'set_element_request', element_id: elementId, request });
+    return { prompt };
   }
-  function keepResult() { setObservationsVersion(value => value + 1); setResultReview(null); }
-
-  function dismissEmpty(keep: string | null) {
-    return mutate(project => project.pages.some(page => page.regions.some(region => !region.completed && region.id !== keep && !region.prompt.trim()))
-      ? { type: 'dismiss_empty_regions', keep_region_id: keep } : null);
-  }
-  function selectRequest(id: string | null, cleanEmpty = true) {
-    setSelected(id); setFocusPrompt(false);
-    if (cleanEmpty) void dismissEmpty(id).catch(() => {});
-  }
-  // Page tabs: closing hides a page from the strip; it never deletes the page.
-  function projectPageIds() { return current.current?.project?.pages.map(item => item.id) ?? []; }
-  function openPageTab(id: string) {
-    const projectId = current.current?.project?.id;
-    if (!projectId) return;
-    const pageIds = projectPageIds();
-    setOpenPages(previous => {
-      const open = visiblePageTabs(previous[projectId], pageIds);
-      const next = showPageTab(open, id, pageIds);
-      if (next === open) return previous;
-      savePageTabs(projectId, next);
-      return { ...previous, [projectId]: next };
-    });
-  }
-  function activatePage(id: string) { openPageTab(id); setPageId(id); setProjectCanvas(false); }
-  function closePageTabInStrip(id: string) {
-    const projectId = current.current?.project?.id;
-    if (!projectId) return;
-    const open = visiblePageTabs(openPages[projectId], projectPageIds());
-    const result = closePageTab(open, id, pageId);
-    if (result.open === open) return;
-    savePageTabs(projectId, result.open);
-    setOpenPages(previous => ({ ...previous, [projectId]: result.open }));
-    if (result.active !== pageId && result.active) { setPageId(result.active); setSelected(null); }
-  }
-  async function selectPage(id: string, keep: string | null = null) { await synchronize(); await settle(); await dismissEmpty(keep); activatePage(id); setSelected(null); }
-  async function addRegion(rect: Rect, shape?: RegionShape): Promise<Region | null> {
-    if (!page) return null;
-    const id = page.id;
-    const next = await mutate(shape && shape.kind !== 'rect' ? { type: 'add_shaped_region', page_id: id, rect, shape } : { type: 'add_region', page_id: id, rect });
-    const region = next.project!.pages.find(page => page.id === id)!.regions.at(-1)!;
-    setSelected(region.id); setFocusPrompt(true);
-    return region;
-  }
-  async function pickElement(selections: ElementSelection[], pages?: PageSelection[]) {
-    if (!page || !selections.length) return null;
-    const pageId = page.id, elements = selections.map(selection => selection.element);
-    await synchronize(true); await settle();
-    // Resolve against the queued current state, so repeated clicks cannot create duplicate requests.
-    const next = await mutate(project => {
-      const currentPage = project.pages.find(item => item.id === pageId);
-      if (!currentPage) throw new Error('This page was removed.');
-      if (currentPage.regions.some(region => !region.completed && sameTargets(regionTargets(region), elements))) return null;
-      return { type: 'add_element_regions', page_id: pageId, elements, bounds: selections.map(selection => ({ target: selection.element, rect: selection.rect })) };
-    });
-    const request = next.project!.pages.find(item => item.id === pageId)?.regions.find(region => !region.completed && sameTargets(regionTargets(region), elements));
-    if (request) { await dismissEmpty(request.id); if (pages?.length) await changeRegion(pageId, request.id, { pages }); setSelected(request.id); setFocusPrompt(true); }
-    return request ?? null;
-  }
-  // Fix on phones: one phone-only request (a section, or the whole page), generated right away.
-  // The native scope check only lets small-screen CSS change, so the desktop design stays identical.
-  const phoneFix = useRef(false);
-  async function fixOnPhones(selection?: ElementSelection) {
-    if (!page?.content) return;
-    const pageId = page.id;
-    const others = page.regions.filter(region => !region.completed && region.prompt.trim() && !region.mobileOnly);
-    if (others.length) { setError('Phone fixes run on their own. Generate or remove the other requests on this page first.'); return; }
-    const before = new Set(page.regions.map(region => region.id));
-    const next = await mutate(selection
-      ? { type: 'add_element_regions', page_id: pageId, elements: [selection.element], bounds: [{ target: selection.element, rect: selection.rect }] }
-      : { type: 'add_region', page_id: pageId, rect: { x: 0, y: 0, width: page.viewport.width, height: Math.min(page.viewport.height, 160) } });
-    const added = next.project!.pages.find(item => item.id === pageId)!.regions.find(region => !before.has(region.id));
-    if (!added) return;
-    await changeRegion(pageId, added.id, { prompt: selection ? 'Make this section look good and easy to use on phones.' : 'Make this whole page look good and easy to use on phones.' });
-    await mutate({ type: 'set_region_mobile_only', page_id: pageId, region_id: added.id, mobile_only: true });
-    setSelected(null);
-    generate(); phoneFix.current = true;
-  }
-  async function deleteElements(elements: ElementTarget[]) {
-    if (!page) return;
-    // Targets inside a frame are deleted from that document; page targets keep their own call.
-    const groups = new Map<string, ElementTarget[]>();
-    for (const target of elements) groups.set(documentKey(target.document), [...(groups.get(documentKey(target.document)) ?? []), target]);
-    for (const group of groups.values()) {
-      await mutate({ type: 'delete_elements', page_id: page.id, elements: group.map(nativeTarget), document: group[0].document ?? null });
+  const attachToRequest = useCallback(async (elementId: string, files: File[], links: string[]) => {
+    const owner = current.current?.project?.pages.find(item => !!findElementIn(item.elements, elementId));
+    if (!owner) return;
+    const element = findElementIn(owner.elements, elementId)!;
+    const readImage = (file: File) => new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => reject(new Error(`${file.name} could not be read.`)); reader.readAsDataURL(file); });
+    const attachments = [...(element.meta.pending?.attachments ?? [])];
+    const problems: string[] = [];
+    for (const file of files) {
+      try {
+        let attachment: RequestAttachment;
+        if (/^image\/(png|jpeg|webp|gif)$/.test(file.type)) attachment = { id: crypto.randomUUID().replace(/-/g, '').slice(0, 16), name: file.name.slice(0, 120), kind: 'image', dataUri: await readImage(file) };
+        else if (file.type.startsWith('text/') || /\.(txt|md|csv|json)$/i.test(file.name)) attachment = { id: crypto.randomUUID().replace(/-/g, '').slice(0, 16), name: file.name.slice(0, 120), kind: 'text', text: await file.text() };
+        else throw new Error(`${file.name}: only pictures (PNG, JPEG, WebP, GIF) and text files can be attached.`);
+        attachments.push(attachment);
+      } catch (reason) { problems.push(errorMessage(reason)); }
     }
-    setNotice('Items deleted.');
+    for (const url of links) {
+      try { attachments.push({ id: crypto.randomUUID().replace(/-/g, '').slice(0, 16), name: new URL(url).hostname.slice(0, 120), kind: 'link', url }); }
+      catch (reason) { problems.push(errorMessage(reason)); }
+    }
+    await mutate({ type: 'set_element_request', element_id: elementId, request: { prompt: element.meta.pending?.prompt ?? '', attachments, requestedAt: element.meta.pending?.requestedAt ?? new Date().toISOString() } });
+    if (problems.length) setError(problems.join(' ')); else setNotice('Attached to the request.');
+  }, [mutate]);
+  async function switchAppearance(next: 'light' | 'dark') {
+    setTheme(next);
+    const target = current.current?.project; if (!target) return;
+    for (const item of target.pages.filter(entry => entry.appearance !== next)) {
+      await mutate(project => { const page = project.pages.find(entry => entry.id === item.id); return page && page.appearance !== next ? { type: 'update_page', page_id: page.id, name: page.name, path: page.path, appearance: next, included: page.included } : null; });
+    }
   }
-  async function inspectElement(target: ElementTarget): Promise<ElementDetails> {
-    if (!page || !project) throw new Error('Select an element first.');
-    const projectId = project.id; const pageId = page.id;
-    return queue(async workspace => {
-      if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns this element.');
-      return native<ElementDetails>('inspect_element', { projectId, pageId, target: nativeTarget(target), document: target.document ?? null });
-    }, false);
-  }
-  async function editElement(target: ElementTarget, change: ElementEdit): Promise<ElementTarget | null> {
-    if (!page || !project) throw new Error('Select an element first.');
-    const projectId = project.id; const pageId = page.id; setError('');
-    return queue(async workspace => {
-      if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns this element.');
-      const payload = change.kind === 'layerStyles' ? { ...change, styles: change.styles.map(style => ({ ...style, target: nativeTarget(style.target) })) } : change;
-      const result = await native<ElementEditView>('edit_element', { projectId, pageId, revision: workspace.project.revision, target: nativeTarget(target), change: payload, document: target.document ?? null });
-      accept(result.workspace); setNotice('Element updated.'); return result.element;
-    }, false);
-  }
-  // One native batch edit keeps every change in the selection in a single history step.
-  async function editElementsNative(edits: ElementBatchEdit[]): Promise<(ElementTarget | null)[]> {
-    if (!page || !project || !edits.length) return [];
-    const projectId = project.id; const pageId = page.id; setError('');
-    const document = edits[0].target.document ?? null;
-    return queue(async workspace => {
-      if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns these elements.');
-      const payload = edits.map(({ target, change }) => ({ target: nativeTarget(target), edit: change.kind === 'layerStyles' ? { ...change, styles: change.styles.map(style => ({ ...style, target: nativeTarget(style.target) })) } : change }));
-      const result = await native<ElementBatchEditView>('edit_elements', { projectId, pageId, revision: workspace.project.revision, edits: payload, document });
-      accept(result.workspace); setNotice('Elements updated.');
-      return result.elements.map((element, index) => element && edits[index].target.document ? { ...element, document: edits[index].target.document } : element);
-    }, false);
-  }
-  // The other pages and framed site files that contain the selected element.
-  async function findAcrossPages(target: ElementTarget): Promise<AcrossPagesMatch[]> {
-    if (!page || !project) return [];
-    const projectId = project.id; const pageId = page.id;
-    return queue(async workspace => {
-      if (workspace?.project?.id !== projectId) return [];
-      return native<AcrossPagesMatch[]>('element_matches', { projectId, pageId, target: nativeTarget(target), document: target.document ?? null });
-    }, false);
-  }
-  // One native change carries the edit to the chosen pages in a single undo step.
-  async function editAcrossPages(target: ElementTarget, change: ElementEdit, documents: DocumentTarget[]): Promise<AcrossPagesChange[]> {
-    if (!page || !project) throw new Error('Select an element first.');
-    const projectId = project.id; const pageId = page.id; setError('');
-    return queue(async workspace => {
-      if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns these elements.');
-      const result = await native<AcrossPagesView>('edit_element_across_pages', { projectId, pageId, revision: workspace.project.revision, target: nativeTarget(target), change, documents, document: target.document ?? null });
-      accept(result.workspace); setNotice(result.changes.length ? acrossPagesChangedLabel(result.changes.length) + '.' : 'Element updated.');
-      return result.changes;
-    }, false);
-  }
-  async function copyElementsNative(targets: ElementTarget[], styles: ElementStyleEdit[][]): Promise<void> {
-    if (!page || !project || !targets.length) return;
-    const projectId = project.id; const pageId = page.id;
-    await settle();
-    await queue(async workspace => {
-      if (workspace?.project?.id !== projectId) throw new Error('The project changed before the elements were copied.');
-      await native<void>('copy_elements', { projectId, pageId, revision: workspace.project.revision, targets: targets.map(nativeTarget), visualStyles: styles.map(list => list.map(style => ({ ...style, target: nativeTarget(style.target) }))), document: targets[0].document ?? null });
-    }, false);
-  }
-  async function undoElementNative(target: ElementTarget): Promise<ElementTarget | null> {
-    if (!page || !project) throw new Error('Select an element first.');
-    const projectId = project.id; const pageId = page.id; setError('');
-    await synchronize(); await settle();
-    return queue(async workspace => {
-      if (workspace?.project?.id !== projectId) throw new Error('Return to the project that owns this element.');
-      const result = await native<ElementEditView>('undo_element', { projectId, pageId, revision: workspace.project.revision, target: nativeTarget(target), document: target.document ?? null });
-      accept(result.workspace); setNotice('Element stepped back to its previous version.'); return result.element;
-    }, false);
-  }
-  const layerTarget = (target: LayerTarget): LayerTarget => target.kind === 'element' ? { kind: 'element', target: nativeTarget(target.target) } : target;
-  const targetDocument = (target: LayerTarget) => target.kind === 'element' ? target.target.document ?? null : null;
-  async function ensureElementIdNative(target: ElementTarget): Promise<ElementTarget | null> {
-    const projectId = project?.id, targetPageId = page?.id;
-    return queue(async workspace => {
-      if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before this frame could be reached.');
-      const result = await native<ElementEditView>('ensure_element_id', { projectId, pageId: targetPageId, revision: workspace.project.revision, target: nativeTarget(target), document: target.document ?? null });
-      accept(result.workspace);
-      return result.element ? { ...result.element, ...(target.document ? { document: target.document } : {}) } : null;
-    }, false);
-  }
-  async function setFrameTargetNative(regionId: string, frameTarget: FrameTarget | null) {
-    if (!page) return;
-    await mutate({ type: 'set_region_frame_target', page_id: page.id, region_id: regionId, frame_target: frameTarget });
-  }
-  async function copyLayerNative(target: LayerTarget, styles: ElementStyleEdit[]) {
-    const projectId = project?.id, targetPageId = page?.id;
-    await settle();
-    await queue(async workspace => {
-      if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was copied.');
-      await native<void>('copy_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, target: layerTarget(target), visualStyles: styles.map(style => ({ ...style, target: nativeTarget(style.target) })), document: targetDocument(target) });
-      setNotice('Layer copied.');
-    }, false);
-  }
-  async function pasteLayerNative(after: ElementTarget | null): Promise<LayerPasteView> {
-    const projectId = project?.id, targetPageId = page?.id;
-    await settle();
-    return queue(async workspace => {
-      if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was pasted.');
-      const result = await native<LayerPasteView>('paste_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, after: after ? nativeTarget(after) : null, document: after?.document ?? null });
-      accept(result.workspace); setNotice('Layer pasted.'); return result;
-    }, false);
-  }
-  async function arrangeRequest(id: string, direction: LayerDirection) {
-    if (!page) return;
-    await mutate({ type: 'arrange_region', page_id: page.id, region_id: id, direction });
-  }
-  async function cutLayerNative(target: LayerTarget, styles: ElementStyleEdit[]) {
-    const projectId = project?.id, targetPageId = page?.id;
-    await settle();
-    await queue(async workspace => {
-      if (!projectId || !targetPageId || workspace?.project?.id !== projectId) throw new Error('The project changed before the layer was cut.');
-      const next = await native<WorkspaceView>('cut_layer', { projectId, pageId: targetPageId, revision: workspace.project.revision, target: layerTarget(target), visualStyles: styles.map(style => ({ ...style, target: nativeTarget(style.target) })), document: targetDocument(target) });
-      accept(next); setNotice('Layer cut.');
-    }, false);
-  }
-  // Element bounds are measured in the settled promoted frame. If the workspace moved to a
-  // revision with other page content in the meantime, that reading describes a replaced
-  // layout and must not be recorded into the new one.
-  async function refreshElementBounds(pageId: string, viewport: Viewport, bounds: ElementBounds[], fingerprint: string) {
-    const projectId = project?.id;
-    await queue(async workspace => {
-      if (!projectId || workspace?.project?.id !== projectId) throw new Error('The project changed before its element positions were recorded.');
-      const target = workspace.project.pages.find(item => item.id === pageId);
-      if (!target || JSON.stringify([target.content, target.viewport, target.appearance]) !== fingerprint) return workspace!;
-      const next = await native<WorkspaceView>('refresh_element_target_bounds', { projectId, pageId, viewport, bounds });
-      accept(next); return next;
-    }, false);
-  }
-  function changeRegion(targetPageId: string, regionId: string, patch: RequestPatch): Promise<Region> {
-    return mutate(project => {
-      const area = project.pages.find(page => page.id === targetPageId)?.regions.find(region => region.id === regionId);
-      if (!area) throw new Error('This area is no longer in the project.');
-      if (patch.wholePage !== undefined) return { type: 'set_region_whole_page', page_id: targetPageId, region_id: regionId, whole_page: patch.wholePage };
-      if (patch.pages !== undefined) return { type: 'set_region_pages', page_id: targetPageId, region_id: regionId, pages: patch.pages };
-      const rect = typeof patch.rect === 'function' ? patch.rect(area.rect) : { ...area.rect, ...patch.rect };
-      const prompt = (typeof patch.prompt === 'function' ? patch.prompt() : patch.prompt) ?? area.prompt;
-      if (rect.x === area.rect.x && rect.y === area.rect.y && rect.width === area.rect.width && rect.height === area.rect.height && prompt === area.prompt) return null;
-      return { type: 'update_region', page_id: targetPageId, region_id: regionId, rect, prompt };
-    }, typeof patch.prompt === 'function').then(next => next.project!.pages.find(page => page.id === targetPageId)!.regions.find(region => region.id === regionId)!);
-  }
-  function removeRegion(id = region?.id) {
-    if (!page || !id) return;
-    const page_id = page.id; const region_id = id;
-    const action = async () => { await mutate({ type: 'remove_region', page_id, region_id }); setSelected(null); requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.getElementById('page-canvas')?.focus(); }); };
-    if (!askBeforeDelete()) { run(action); return; }
+  // One confirmation covers a whole canvas selection, then each item removes itself.
+  function removeCanvasSelection(referenceIds: string[], pointerIds: string[] = [], elementIds: { pageId: string; elementId: string }[] = [], ask = true) {
+    if (!referenceIds.length && !pointerIds.length && !elementIds.length) return;
+    const action = async () => {
+      if (pointerIds.length) await mutate({ type: 'remove_pointers', ids: pointerIds });
+      if (referenceIds.length) await mutate({ type: 'remove_reference_items', ids: referenceIds });
+      for (const pageId of [...new Set(elementIds.map(item => item.pageId))]) {
+        await mutate({ type: 'remove_elements', page_id: pageId, ids: elementIds.filter(item => item.pageId === pageId).map(item => item.elementId) });
+      }
+      setSelected(null); setCanvasSelection([]);
+      requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
+    };
+    const plural = referenceIds.length + pointerIds.length + elementIds.length > 1;
+    if (!ask || !askBeforeDelete()) { run(action); return; }
     setSkipNextAsk(false);
-    setConfirmation({ title: 'Remove request?', message: 'Remove this request? Remove any linked choices or exceptions from the project brief first.', action, skippable: true });
+    setConfirmation({ title: plural ? 'Remove these items?' : 'Remove this item?', message: plural ? 'Remove these layers, reference items and pointers?' : 'Remove this item?', action, skippable: true });
   }
-  async function removePage() {
-    if (!page) return;
-    await synchronize();
-    const page_id = page.id;
-    setConfirmation({ title: 'Remove page?', message: `Remove “${page.name}” and its ${page.regions.length} requests? Remove any linked choices or exceptions from the project brief first.`,
-      action: async () => { await mutate({ type: 'delete_page', page_id }); activatePage(project!.homePageId); setSelected(null); } });
-  }
-
   const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
-  const recenter = (kind: 'guide' | 'selection' | 'fit') => setCanvasView(value => ({ serial: value.serial + 1, kind }));
 
-  // Page check: select the item on the canvas, switching pages first and waiting for the page to render.
-  async function showCheckItem(item: CheckItem) {
-    if (page?.id !== item.pageId) await selectPage(item.pageId);
-    if (!item.selector || !item.tag) return null;
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const found = canvas.current?.focusElement(item.selector, item.tag, item.elementId ?? undefined, item.pageId);
-      if (found) return found;
-      await new Promise(resolve => setTimeout(resolve, 150));
-    }
-    setError('That item could not be found on the canvas. The page may have changed.'); return null;
-  }
-  function openFoundSource(pageId: string, target: ElementTarget) {
-    const projectId = current.current?.project?.id; if (!projectId) return;
-    void native('open_found_source', { projectId, pageId, target: nativeTarget(target) }).catch(error => setError(errorMessage(error)));
-  }
-  async function saveSource(language: keyof SiteContent, text: string, expected: string) {
-    const projectId = project?.id, pageId = page?.id;
-    await canvas.current?.synchronize(); await settle();
-    return queue(async workspace => {
-      const target = workspace?.project?.pages.find(item => item.id === pageId);
-      // Never write over code that changed elsewhere since this draft began.
-      if (!workspace?.project || workspace.project.id !== projectId || !target || (target.content?.[language] ?? '') !== expected) throw { conflict: true, message: 'This page changed elsewhere while you were editing.' };
-      const next = await native<WorkspaceView>('edit_page_source', { projectId, pageId, revision: workspace.project.revision, [language]: text });
-      accept(next);
-      const applied = next.project?.pages.find(item => item.id === pageId)?.content;
-      if (!applied) throw new Error('The edited page is no longer available. Your draft is still here.');
-      return applied;
-    }, false);
-  }
-  // Retarget atomically so the request description and linked brief rules stay together.
-  async function repickRequest(regionId: string, selection: ElementSelection) {
-    const target = current.current?.project?.pages.find(item => item.regions.some(region => region.id === regionId));
-    if (!target) return;
-    await mutate({ type: 'retarget_region', page_id: target.id, region_id: regionId, elements: [selection.element], bounds: [{ target: selection.element, rect: selection.rect }] });
-    setSelected(regionId); setNotice('Request moved to the new element.');
-  }
-  async function fixCheckItem(item: CheckItem) {
-    const found = await showCheckItem(item);
-    if (item.selector && !found) return;
-    const target = current.current?.project?.pages.find(entry => entry.id === item.pageId);
-    if (!target) return;
-    // Reuse an open request on the same element instead of stacking a second one.
-    const existing = found && target.regions.find(region => !region.completed && sameTargets(regionTargets(region), [found.element]));
-    const before = new Set(target.regions.map(region => region.id));
-    const added = existing || await (found ? mutate({ type: 'add_element_region', page_id: target.id, ...found })
-      : mutate({ type: 'add_region', page_id: target.id, rect: { x: 0, y: 0, width: target.viewport.width, height: 120 } }))
-      .then(next => next.project!.pages.find(entry => entry.id === target.id)!.regions.find(region => !before.has(region.id)));
-    if (!added) return;
-    if (added.prompt.includes(item.fix)) { setSelected(added.id); return; }
-    await changeRegion(target.id, added.id, { prompt: added.prompt.trim() ? `${added.prompt.trim()}\n${item.fix}` : item.fix });
-    setSelected(added.id); setNotice('Request added.');
-  }
-
-  // Keep this menu short: only what someone building a website reaches for.
-  // Canvas-level actions (copy, arrange, zoom) live on the canvas and its right-click menu.
   const menuItems: MenuItem[] = [
-    { id: 'new', label: 'New project', shortcut: 'Ctrl/Cmd+N', action: () => setShowNew(true) },
-    { id: 'open', label: 'Open project…', shortcut: 'Ctrl/Cmd+O', action: () => run(open) },
+    { id: 'new', label: 'New project', shortcut: shortcutLabel('new'), action: () => setShowNew(true) },
+    { id: 'open', label: 'Open project…', shortcut: shortcutLabel('open'), action: () => run(open) },
     { id: 'open-folder', label: 'Open project folder…', action: () => run(() => open(true)) },
-    { id: 'save', label: 'Save', shortcut: 'Ctrl/Cmd+S', disabled: !project, action: () => run(() => save()) },
-    { id: 'close-project', label: 'Close project', disabled: !project, action: () => run(closeProject) },
-    { id: 'save-as', label: 'Save as', shortcut: 'Ctrl/Cmd+Shift+S', disabled: !project, action: () => run(() => save(true)) },
-    { id: 'move-project', label: 'Move into project folder', disabled: !project || !!view?.projectFolder, action: () => run(async () => {
-      await synchronize(); await settle();
-      await queue(async () => { accept(await native<WorkspaceView>('move_into_project_folder')); setNotice('Project moved into its folder. The original archive was kept as a backup.'); void refreshRecent().catch(() => {}); });
-    }) },
+    { id: 'save', label: 'Save', shortcut: shortcutLabel('save'), disabled: !project, action: () => run(() => save()) },
+    { id: 'close-project', label: 'Close project', shortcut: shortcutLabel('closeProject'), disabled: !project, action: () => run(closeProject) },
+    { id: 'save-as', label: 'Save as', shortcut: shortcutLabel('saveAs'), disabled: !project, action: () => run(() => save(true)) },
+    { id: 'save-copy', label: 'Save a copy without history…', disabled: !project || pending > 0, action: () => run(saveCopy) },
+    { id: 'compact-history', label: 'Compact history', disabled: !project || pending > 0, action: () => run(compactHistory) },
     ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => setShowRecovery(true) }] : []),
     { id: 'file-divider', label: '', separator: true },
-    { id: 'add-page', label: 'Add page', disabled: !project || project.pages.length >= 100, action: () => setPageDialog('new') },
-    { id: 'page-settings', label: 'Page settings', disabled: !page, action: () => setPageDialog(page) },
-    { id: 'remove-page', label: 'Remove page', disabled: !page || page.id === project?.homePageId, action: () => run(removePage) },
-    { id: 'page-divider', label: '', separator: true },
-    { id: 'live', label: 'Live view', checked: live, disabled: !page?.content, action: () => { setLive(value => !value); setLiveDevice('desktop'); } },
-    { id: 'code-view', label: 'View', disabled: !project, children: (['design', 'split', 'code'] as CodeView[]).map(value => ({ id: `view-${value}`, label: value === 'design' ? 'Design' : value === 'split' ? 'Split (design + code)' : 'Code', checked: codeView === value, action: () => run(() => changeCodeView(value)) })) },
-    { id: 'open-in-browser', label: 'Open in browser', disabled: !project?.pages.some(page => page.content), action: () => run(openInBrowser) },
-    { id: 'export', label: 'Export website…', disabled: exporting || !project?.pages.some(page => page.content), action: () => run(exportWebsite) },
+    { id: 'export', label: 'Export…', shortcut: shortcutLabel('export'), disabled: !project, action: openExportPanel },
+    { id: 'open-browser', label: 'Open in browser', disabled: !project || !project.lastExport, action: () => run(openInBrowser) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
     { id: 'ai-divider', label: '', separator: true },
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
     { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
-    { id: 'page-check', label: fixCount ? `Check page (${fixCount})` : 'Check page', disabled: !project?.pages.some(item => item.content), action: () => setShowCheck(true) },
     { id: 'style-guide', label: 'Style guide', disabled: !project, action: () => setShowStyleGuide(true) },
-    { id: 'import', label: 'Import…', disabled: !project, action: () => { setImportSource(null); setImportFolder(null); setImportAsNew(false); setShowImport(true); } },
+    { id: 'import', label: 'Import context…', disabled: !project, action: () => { setImportSource(null); setShowImport(true); } },
+    { id: 'import-website', label: 'Import website…', disabled: !project, action: () => startWebsiteImport() },
     { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
     { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
     { id: 'project-location', label: 'Default project location', action: () => setShowProjectLocation(true) },
     { id: 'ask-delete', label: 'Ask before deleting', checked: askDelete, action: () => setAskBeforeDelete(!askDelete) },
+    { id: 'paste-default', label: 'Ask on paste', checked: !pasteMode, action: () => setPasteDefault(null) },
     { id: 'check-updates', label: 'Check for updates…', disabled: checkingUpdates, action: () => { void checkForUpdates(); } },
-    { id: 'help', label: 'Keyboard shortcuts', shortcut: 'F1', action: () => setShowShortcuts(true) },
+    { id: 'help', label: 'Keyboard shortcuts', shortcut: shortcutLabel('help'), action: () => setShowShortcuts(true) },
   ];
 
   const problemAction = needsAiSettings(error) ? { label: 'AI settings', onClick: () => setShowAiSettings(true) }
@@ -1229,22 +1093,78 @@ function Editor() {
     openSaved: () => run(() => open(false, pendingRecovery.path, true)),
     dismiss: () => setPendingRecovery(null),
   } : null;
+  const selectedBoundary = canvasFocus ? project?.pages.find(item => item.id === canvasFocus) ?? null : null;
+  const selectedReferenceItem = canvasSelection.length === 1 && canvasSelection[0].kind === 'reference'
+    ? project?.reference.find(item => item.id === (canvasSelection[0] as { kind: 'reference'; itemId: string }).itemId) ?? null
+    : null;
+  const selectedPointer = canvasSelection.length === 1 && canvasSelection[0].kind === 'pointer'
+    ? (project?.pointers ?? []).find(item => item.id === (canvasSelection[0] as { kind: 'pointer'; pointerId: string }).pointerId) ?? null
+    : null;
+  const selectedElementTargets = canvasSelection.flatMap(target => target.kind === 'element' ? [target] : []);
+  const selectedElementPageId = selectedElementTargets.length && selectedElementTargets.every(target => target.pageId === selectedElementTargets[0].pageId) ? selectedElementTargets[0].pageId : null;
+  const selectedElements = selectedElementPageId && project
+    ? selectedElementTargets.flatMap(target => {
+      const element = findPageElement(project, target.pageId, target.elementId);
+      return element ? [element] : [];
+    })
+    : [];
+  const selectedPointerState = selectedPointer ? pointerStateMap[selectedPointer.id] ?? null : null;
+  const selectedPointerOther = selectedPointerState?.clashWith.length
+    ? (project?.pointers ?? []).find(item => item.id === selectedPointerState.clashWith[0]) ?? null
+    : null;
+  function selectNextPointerClash() {
+    const ids = clashPointers.map(item => item.id);
+    if (!ids.length) return;
+    const index = selectedPointer ? ids.indexOf(selectedPointer.id) : -1;
+    setCanvasSelection([{ kind: 'pointer', pointerId: ids[(index + 1) % ids.length] }]);
+  }
+  function chooseTool(next: EditorTool) { setInsertKind(null); setCanvasTool(next); }
+  function moveCanvasElementTo(pageId: string, sizeId: string, elementId: string, parentId: string | null, index: number) {
+    const projectNow = current.current?.project;
+    const page = projectNow?.pages.find(page => page.id === pageId);
+    if (!projectNow || !page) return;
+    const element = findElementIn(resolveForSize(projectNow, page, sizeId), elementId);
+    const path = elementPath(projectNow, pageId, elementId, sizeId);
+    const origin = path?.[path.length - 1]?.origin;
+    const parentOrigin = parentId ? elementPath(projectNow, pageId, parentId, sizeId)?.at(-1)?.origin ?? { x: 0, y: 0 } : { x: 0, y: 0 };
+    if (!element || !path || !origin) return;
+    const over = element.overrides?.[sizeId];
+    const shown = over?.rect ?? element.rect;
+    const rect = { x: origin.x - parentOrigin.x, y: origin.y - parentOrigin.y, width: shown.width, height: shown.height };
+    void moveCanvasElements([{ id: elementId, to_page_id: pageId, to_parent_id: parentId, index, rect, size_id: sizeId }]);
+  }
+  function armInsert(kind: ElementKind) {
+    if (kind === 'image') { setInsertKind(null); setCanvasTool('image'); return; }
+    if (kind === 'text') { setInsertKind(null); setCanvasTool('text'); return; }
+    setInsertKind(kind);
+    setCanvasTool('insert');
+  }
   return <div className="application editor-shell">
     {closeRequest && <WorkspaceSurface place="banner" title="Close Desegnos?" close={() => { closeRequest.resolve(false); setCloseRequest(null); }}><p>{closeRequest.message}</p><div className="form-actions"><button onClick={() => { closeRequest.resolve(true); setCloseRequest(null); }}>Close Desegnos</button><button onClick={() => { closeRequest.resolve(false); setCloseRequest(null); }}>Keep editing</button></div></WorkspaceSurface>}
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
       {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot" />}</button>}
+      {project && !!view?.openProjects?.length && <nav className="project-tabs" aria-label="Open projects">
+        {view.openProjects.map((entry, index) => <div className={entry.active ? 'project-tab active' : 'project-tab'} key={entry.id}>
+          <button type="button" className="project-tab-name" title={entry.name} aria-current={entry.active ? 'page' : undefined} onClick={() => run(() => switchProjectTab(entry.id))}>
+            <span className="project-dot" style={{ background: PROJECT_COLOURS[index % PROJECT_COLOURS.length] }} aria-hidden="true" />
+            <span className="project-tab-label">{entry.name}</span>
+            {entry.dirty && <span className="dirty-dot" aria-label="Unsaved changes" />}
+          </button>
+          <button type="button" className="project-tab-close icon-button sm" aria-label={`Close ${entry.name}`} title={`Close ${entry.name}`} onClick={() => run(() => closeProjectTab(entry.id))}><Icon name="close" size={12} /></button>
+        </div>)}
+      </nav>}
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
-      {project && <div className="view-switch segmented" role="group" aria-label="Editor view">{(['design', 'split', 'code'] as CodeView[]).map(value => <button key={value} type="button" aria-pressed={codeView === value} onClick={() => run(() => changeCodeView(value))}>{value === 'design' ? 'Design' : value === 'split' ? 'Split' : 'Code'}</button>)}</div>}
       <div className="shell-primary-actions">
         <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
-        {project && showsOpener({ available: true, open: showImport }) && <button type="button" onClick={() => { setImportSource(null); setImportFolder(null); setImportAsNew(false); setShowImport(true); }}>Import…</button>}
+        {project && showsOpener({ available: true, open: showImport }) && <button type="button" onClick={() => { setImportSource(null); setShowImport(true); }}>Import…</button>}
         {project && <>{view?.canUndo && <button aria-label="Undo last change" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}>Undo</button>}{view?.canRedo && <button aria-label="Redo last change" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}>Redo</button>}
-          <MenuButton label="History" className="history-menu" ariaLabel="Change history" items={history.entries.length > 1 ? history.entries.map(entry => ({ id: `history-${entry.position}`, label: `${entry.label}${entry.position > (view?.history?.position ?? 0) ? ' (undone)' : ''}`, shortcut: new Date(entry.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), checked: entry.position === view?.history?.position, disabled: pending > 0 || working, action: () => run(() => jumpTo(entry.position)) })).reverse() : [{ id: 'history-empty', label: 'No changes yet', disabled: true }]} /></>}
-        {page?.content && <button type="button" className="live-toggle" aria-pressed={live} title={live ? 'Back to editing' : 'Live view'} onClick={() => { setLive(value => !value); setLiveDevice('desktop'); }}>Live</button>}
-        {project?.pages.some(item => item.content) && <button disabled={exporting} onClick={() => run(exportWebsite)}>{exporting ? 'Exporting…' : 'Export…'}</button>}
+          <button type="button" className={showHistory ? 'history-toggle active' : 'history-toggle'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}>History</button></>}
+        {project && <button type="button" className={playIsActive(play) ? 'history-toggle active' : undefined} aria-pressed={playIsActive(play)} title={withShortcut('Play', 'play')} onClick={() => togglePlay()}>Play</button>}
+        {project && <button type="button" title={withShortcut('Preview export', 'preview')} onClick={previewSelectedBoundary}>Preview</button>}
+        {project && <button type="button" className={showExport ? 'history-toggle active' : undefined} aria-pressed={showExport} title={withShortcut('Export', 'export')} onClick={() => openExportPanel()}>Export…</button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {showsOpener({ available: !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" onClick={() => setShowLog(true)}>AI log</button>}
-        {project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : generate}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
+        {project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : () => generate()}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
       </div>
     </header>
     <SurfaceHost place="banner" />
@@ -1255,120 +1175,108 @@ function Editor() {
     {updateError && <ProblemBanner message={userError(updateError)} dismiss={() => setUpdateError('')} />}
     {notices.map(item => <Notice key={item.id} variant="info" message={item.message} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
     <CrashReportNotice />
-    {exported && <Notice className="export-notice" priority="result" variant={exported.warnings.length ? 'warning' : 'success'} title="Website exported" message={`${exported.pageCount} ${exported.pageCount === 1 ? 'page' : 'pages'}${exported.warnings.length ? ` · ${[...new Set(exported.warnings)].join(' ')}` : ''}`} action={{ label: 'Open folder', onClick: () => run(() => native('open_export_folder', { path: exported.path })) }} dismiss={() => setExported(null)} />}
-    {offerRestyle && project && <Notice variant="info" message={offerRestyle} action={{ label: 'Regenerate pages', disabled: pending > 0 || working, onClick: () => run(regenerateWithContext) }} dismiss={() => setOfferRestyle(false)} />}
     {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <ProblemBanner message={userError(view.recoveryError)} dismiss={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} />}
-    {project?.website?.framework && <p className="field-help" role="note">Edits don't change the {project.website.framework} source files.</p>}
-    {!!project?.website?.skipped.length && <details className="field-help"><summary>Skipped {project.website.skipped.length} files</summary><p>{project.website.skipped.slice(0, 5).join(", ")}</p></details>}
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
       <SurfaceHost place="start" />
       {!showNew && <NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} recovery={recovery} />}
     </main> : <>
-      <div className="page-strip"><div className="page-tabs" ref={tabStrip} role="tablist" aria-label="Project pages">
-        {(view.openProjects?.length ? view.openProjects : [{ id: project.id, name: project.name, dirty: !!view.dirty, active: true, pages: [] }]).map((open, groupIndex, groups) => <div key={open.id} data-project-id={open.id} className={`project-tab-group${open.active ? ' active' : ''}${groups.length > 1 ? ' labelled' : ''}`} style={{ '--project-colour': PROJECT_COLOURS[groupIndex % PROJECT_COLOURS.length] } as CSSProperties} role="group" aria-label={`Project ${open.name}`}>
-          {groups.length > 1 && <div className="project-tab-head"><span className="project-tab-label" title={open.name}><span>{open.name}{open.dirty && <span className="project-dirty-dot" aria-hidden="true" />}</span></span>
-            {showsOpener({ available: true, open: closeChoice === open.id }) && <button type="button" className="project-tab-close close-button icon-button sm" aria-label={`Close ${open.name}`} title={`Close ${open.name}`} onClick={() => { if (open.dirty) setCloseChoice(open.id); else run(() => closeProjectTab(open.id, false)); }}><Icon name="close" /></button>}</div>}
-          <div className="project-tab-row">{closeChoice === open.id ? <div className="project-close-choice" role="group" aria-label={`Close ${open.name}`}>
-            <button type="button" className="primary" disabled={pending > 0} onClick={() => run(() => saveAndCloseProjectTab(open.id))}>Save</button>
-            <button type="button" className="danger" disabled={pending > 0} onClick={() => run(() => closeProjectTab(open.id, true))}>Don’t save</button>
-            <button type="button" onClick={() => setCloseChoice(null)}>Cancel</button>
-          </div> : open.active ? <>
-        {openPageIds.map((id, index) => { const item = project.pages.find(entry => entry.id === id); if (!item) return null; return <div key={item.id} className={`page-tab-shell${page?.id === item.id ? ' active' : ''}`}>
-          <button className={`page-tab${changedPageIds.has(item.id) ? ' changed' : ''}`} id={`page-tab-${item.id}`} role="tab" aria-selected={page?.id === item.id} aria-controls="page-panel" tabIndex={page?.id === item.id ? 0 : -1}
-            title={`${item.path}${item.included ? '' : ' · Hidden page'}${changedPageIds.has(item.id) ? ' · Changed' : ''}`} onClick={() => run(() => selectPage(item.id))}
-            onKeyDown={event => {
-              if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-              event.preventDefault();
-              const next = event.key === 'Home' ? 0 : event.key === 'End' ? openPageIds.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + openPageIds.length) % openPageIds.length;
-              document.getElementById(`page-tab-${openPageIds[next]}`)?.focus(); run(() => selectPage(openPageIds[next]));
-            }}><span>{item.name}</span>{!item.included && <span className="page-draft">Hidden</span>}</button>
-          <button type="button" className="page-tab-close close-button icon-button sm" aria-label={`Close ${item.name} tab`} title={withShortcut('Close tab', 'closePage')} disabled={openPageIds.length <= 1} onClick={() => closePageTabInStrip(item.id)}><Icon name="close" /></button>
-        </div>; })}
-          <button className="add-page-tab icon-button sm" aria-label="Add page" title="Add page" disabled={project.pages.length >= 100} onClick={() => setPageDialog('new')}><Icon name="plus" /></button>
-          <MenuButton label="Pages" ariaLabel="All pages" title="All pages" className="page-list-menu" items={project.pages.map(item => ({ id: `page-list-${item.id}`, label: item.name, checked: openPageIds.includes(item.id), action: () => run(() => selectPage(item.id)) }))} /></> : open.pages.map(item => <button key={item.id} type="button" className="parked-tab" title={`Switch to ${open.name}`} onClick={() => run(() => switchProject(open.id, item.id))}><span>{item.name}</span></button>)}</div>
-        </div>)}
-      </div></div>
-      <main className={`workspace view-${codeView}`} id="page-panel" role="tabpanel" aria-labelledby={page ? `page-tab-${page.id}` : undefined} style={{ '--code-width': `${codeWidth * 100}%` } as CSSProperties}>
+      <div className="editor-body">
+      {!panels.hidden && <ToolStrip tool={canvasTool} onTool={chooseTool}
+        zoom={canvasZoom}
+        onZoomStep={direction => canvasRef.current?.zoomStep(direction)}
+        onZoom={value => canvasRef.current?.zoomTo(value)}
+        onFit={() => canvasRef.current?.fit()}
+        boundaryKind={boundaryKind} onBoundaryKind={setBoundaryKind}
+        onInsert={armInsert} insertSignal={insertSignal} />}
+      <div className="editor-work">
+      <main className="workspace" id="project-panel">
       <div className="design-pane">
       <SurfaceHost place="canvas" />
       <NoticeHost />
-      {projectCanvas && project ? <ProjectCanvas project={project} openPage={id => run(() => selectPage(id))} /> : page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} pages={project.pages} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveDevice={live && page?.content ? liveDevice : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} editElements={editElementsNative} copyElements={copyElementsNative} findAcrossPages={findAcrossPages} editAcrossPages={editAcrossPages} resolveGenerationFix={resolveGenerationFix} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => addRegion(rect, shape)} ensureElementId={ensureElementIdNative} setFrameTarget={setFrameTargetNative} frameDocuments={frameDocuments} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={(selection, chosen) => pickElement(selection, chosen)} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} allowWholePage={allowWholePageAndRetry} onProjectCanvas={() => setProjectCanvas(true)} />}
-      {resultReview && !showGenerationStatus ? <Notice className="generation-notice status-applied" variant="success" priority="result" title="Page updated"
-        message={summarizeOutsideChanges(generation.job?.validationEvents ?? [], generation.job?.candidate?.outsideChanges ?? [])}
-        action={{ label: 'Undo', disabled: pending > 0, onClick: () => run(() => rejectResult()) }}
-        secondaryAction={showsOpener({ available: true, open: showLog }) ? { label: 'Details', onClick: openGeneration } : undefined}
-        dismiss={keepResult} /> : showGenerationStatus ? <GenerationFeedback controller={generation} project={project ?? undefined} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} requestEditorOpen={requestEditorIsOpen} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : draftCount > 0 && showsOpener({ available: true, open: showLog }) ? <Notice priority="result" message={`${draftCount} ${draftCount === 1 ? 'draft' : 'drafts'}`} action={{ label: 'Details', onClick: openGeneration }} /> : null}
+      <ProjectCanvas ref={canvasRef} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} selection={canvasSelection} focused={canvasFocus} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} clearSelection={clearCanvasSelection} changeRequest={(pageId, elementId, patch) => changeRequest(pageId, elementId, patch)} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(elementId, files, links) => run(() => attachToRequest(elementId, files, links))} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} onZoom={reportCanvasZoom} onLayout={setCanvasBoundaries}
+        selectElement={selectCanvasElement} removeElements={(items, ask) => removeCanvasSelection([], [], items, ask)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
+        groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
+        linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
+        play={play} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
+        preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} />
+      {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} requestEditorOpen={requestEditorIsOpen} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : draftCount > 0 && showsOpener({ available: true, open: showLog }) ? <Notice priority="result" message={`${draftCount} ${draftCount === 1 ? 'draft' : 'drafts'}`} action={{ label: 'Details', onClick: openGeneration }} /> : null}
       <FirstRunTips />
-      {live && page?.content && <FloatingBar className="live-bar" role="group" aria-label="Live view">
-        <span className="floating-bar-label">Live</span>
-        <div className="floating-bar-group" role="group" aria-label="Live history">
-          <button type="button" className="icon-button" aria-label="Back" title="Back" onClick={() => canvas.current?.liveHistory('back')}><Icon name="arrow-left" /></button>
-          <button type="button" className="icon-button" aria-label="Forward" title="Forward" onClick={() => canvas.current?.liveHistory('forward')}><Icon name="arrow-right" /></button>
-          <button type="button" className="icon-button" aria-label="Reload" title="Reload" onClick={() => canvas.current?.liveHistory('reload')}><Icon name="reload" /></button>
-        </div>
-        <span className="floating-bar-divider" aria-hidden="true" />
-        {livePage
-          ? <button type="button" className="live-path-field" title="Edit this page" aria-label={`Edit this page: ${livePath}`} onClick={() => run(async () => { await selectPage(livePage.id); setLive(false); })}><Icon name="link" size={14} /><span>{livePath}</span></button>
-          : <span className="live-path-field" title={livePath}><Icon name="link" size={14} /><span>{livePath}</span></span>}
-        <div className="segmented live-device" role="group" aria-label="Live device">
-          {([['desktop', 'monitor', page.viewport.width < 600 ? 'Page width' : 'Desktop'], ['tablet', 'tablet', 'Tablet'], ['phone', 'phone', 'Phone']] as const).map(([device, icon, label]) => <button key={device} type="button" className="icon-button" aria-label={label} title={label} aria-pressed={liveDevice === device} onClick={() => setLiveDevice(device)}><Icon name={icon} /></button>)}
-        </div>
-        {liveDevice === 'phone' && <button type="button" className="live-fix" title="Fix this page for phones" onClick={() => run(() => fixOnPhones())}>Fix on phones</button>}
-        <button type="button" className="icon-button" aria-label="Open in browser" title="Serve this site locally and open it in your browser" onClick={() => run(openInBrowser)}><Icon name="external" /></button>
-        <button type="button" className="primary live-exit" onClick={() => setLive(false)}>Exit live</button>
-      </FloatingBar>}
-      {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}
-      {!projectCanvas && <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} requestShape={requestShape} setRequestShape={setRequestShape} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} projectCanvas={() => setProjectCanvas(true)} />}
       </div>
-      {codeView !== 'design' && <>
-        {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}
-        <CodePane ref={code} saveProject={() => run(() => save())} tidy={page?.content && !framedCode ? () => run(async () => { await synchronize(); await mutate({ type: 'format_page_code', page_id: page.id }); setNotice('Code tidied. Undo puts it back.'); }) : undefined} key={`${page?.id}:${framedCode ? documentKey(activeLayer?.document) : 'page'}`} content={framedCode ?? page?.content ?? null} target={activeLayer} map={framedCode ? null : sourceMap} save={!framedCode && page?.content ? saveSource : undefined} pick={(selector, id) => { canvas.current?.focusElement(selector, selector.split(' > ').at(-1)!.split(':')[0], id, page?.id, framedCode ? activeLayer?.document : undefined); }} />
-      </>}
-      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} resultApplied={!!resultReview} requestEditorOpen={requestEditorIsOpen} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} manageUsage={manageChatgptUsage} editRequest={editGenerationRequest} allowWholePage={allowWholePageAndRetry} reply={replyToGeneration} close={() => setShowLog(false)} />}
+      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} resultApplied={false} requestEditorOpen={requestEditorIsOpen} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} manageUsage={manageChatgptUsage} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => setShowLog(false)} />}
       <SurfaceHost place="panel" />
       </main>
-      <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{multiCount > 1 ? `${multiCount} selected` : region && page ? `Box ${page.regions.indexOf(region) + 1}` : ''}</span><div className="canvas-status-actions">{showsOpener({ available: fixCount > 0, open: showCheck }) && <StatusChip tone="warning" className="check-chip" onClick={() => setShowCheck(true)} role="status" ariaLabel="Open page check">{placeholderCount > 0 ? `${placeholderCount} placeholder${placeholderCount === 1 ? '' : 's'}` : `${fixCount} to check`}</StatusChip>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
+      </div>
+      <EditorDock state={panels} actions={panelActions}
+        exportPanel={showExport && project
+          ? <ExportPanel project={project} destination={exportDestination} busy={pending > 0} job={exportJob} sending={exportSending} error={exportError}
+              chooseDestination={() => run(chooseExportDestination)} runExport={() => runExport()} sendExport={() => run(sendExport)}
+              cancelExport={() => run(cancelExport)} retryExport={() => run(sendExport)}
+              openFolder={openExportFolder} openInBrowser={() => run(openInBrowser)} previewExport={pageId => runExport(pageId)}
+              close={() => setShowExport(false)} />
+          : undefined}
+        history={showHistory && project
+          ? <HistoryPanel projectId={project.id} refreshKey={`${project.id}:${view?.dirty ? 'dirty' : 'saved'}:${view?.history?.version ?? 0}:${historyEpoch}`}
+              apply={accept} notice={setNotice} error={setError} />
+          : undefined}
+        properties={selectedPointer
+          ? <PointerProperties pointer={selectedPointer} project={project} state={selectedPointerState} busy={pending > 0} rewriting={false}
+              aiConnected={aiConnected} connectAi={() => setShowAiSettings(true)}
+              change={comment => updateCanvasPointer(selectedPointer.id, { comment })}
+              keepComment={() => ["codeChanged", "needsExporting"].includes(selectedPointerState?.state ?? '') ? forgetExportPointer(selectedPointer.id) : keepPointerComment(selectedPointer.id)}
+              keepCode={() => run(() => keepPointerCode(selectedPointer.id))}
+              keepThis={() => selectedPointerOther && keepPointerThis(selectedPointer.id, selectedPointerOther.id)}
+              merge={() => selectedPointerOther && mergePointerClash(selectedPointer, selectedPointerOther)}
+              reattach={() => canvasRef.current?.armPointer(selectedPointer.id)} remove={() => removeCanvasPointers([selectedPointer.id])} />
+          : selectedReferenceItem
+          ? <ReferenceProperties item={selectedReferenceItem} busy={pending > 0} update={patch => updateCanvasReference(selectedReferenceItem.id, patch)} remove={() => removeCanvasReference([selectedReferenceItem.id])} />
+          : selectedElements.length && selectedElementPageId
+            ? <ElementProperties project={project} page={project.pages.find(page => page.id === selectedElementPageId)!} pageId={selectedElementPageId} sizeId={selectedElementTargets[0].sizeId} elements={selectedElements} busy={pending > 0}
+                update={patches => void updateCanvasElements(selectedElementPageId, patches)}
+                rename={name => renameCanvasElement(selectedElementPageId, selectedElements[0].id, name)}
+                link={() => canvasRef.current?.linkSelection()} unlink={() => canvasRef.current?.unlinkSelection()}
+                canLink={selectedElementTargets.length >= 2}
+                canUnlink={selectedElementTargets.length === 1 && (!!selectedElements[0]?.link || isNestedLayer(project, selectedElements[0]?.id ?? ''))}
+                setRequest={setCanvasElementRequest} updateContext={updateCanvasElementContext}
+                generate={() => generate(selectedElements.map(element => element.id))} error={setError} />
+          : selectedBoundary
+            ? <BoundaryProperties page={selectedBoundary} busy={pending > 0} commit={patch => updateCanvasPage(selectedBoundary.id, patch)}
+                setOutput={output => void mutate({ type: 'set_page_output', page_id: selectedBoundary.id, output })}
+                preview={() => previewSelectedBoundary()}
+                updateSize={(sizeId, patch) => updateCanvasPageSize(selectedBoundary.id, sizeId, patch)}
+                addSize={(preset, width, height) => addCanvasPageSize(selectedBoundary.id, preset, width, height)}
+                removeSize={size => {
+                  setConfirmation({ title: `Remove the ${size.label} size?`, message: 'Its layers stay in the other sizes; their overrides for this size are removed.', action: async () => { removeCanvasPageSize(selectedBoundary.id, size.id); } });
+                }} />
+            : <ProjectProperties project={project} busy={pending > 0} rename={renameProject} setGrid={showDotGrid} setGridSettings={changeGridFlags} />}
+        layers={<CanvasLayers project={project} boundaries={canvasBoundaries} selection={canvasSelection} focused={canvasFocus} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer}
+          selectElement={selectCanvasElement} updateElements={(pageId, sizeId, patches) => void updateCanvasElements(pageId, patches.map(patch => ({ ...patch, size_id: sizeId })))}
+          moveElement={moveCanvasElementTo} removeLinked={removeLinkedDefinition} />} />
+      </div>
+      <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 ? `${canvasSelection.length} selected` : ''}</span><div className="canvas-status-actions">{playIsActive(play) && <StatusChip tone="info" role="status" className="play-chip" onClick={() => setPlay(idlePlay)} ariaLabel="Stop Play">Playing · Esc to stop</StatusChip>}{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
     </>}
-    {showShortcuts && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help"><dl>{SHORTCUT_HELP.map(([label, keys]) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></div></WorkspaceSurface>}
+    {showShortcuts && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help">{SHORTCUT_GROUPS.map(group => <section key={group.group}><h3>{group.group}</h3><dl>{group.items.map(({ label, keys }) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></section>)}<p className="field-help">Hold Space while dragging to pan. Alt+drag duplicates the selected layers. Escape stops Play, closes a preview, or cancels the current gesture.</p></div></WorkspaceSurface>}
     {showNew && <WorkspaceSurface place={project ? 'panel' : 'start'} title="New project" startHeading={false} close={() => setShowNew(false)}><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} recovery={recovery} /></WorkspaceSurface>}
-    {view?.outsideEdits && dismissedSiteWarnings !== `${project?.id}:${JSON.stringify(view.outsideEdits)}` && <OutsideEditsNotice edits={view.outsideEdits} busy={pending > 0} importChanges={() => run(importOutsideChanges)} overwrite={() => run(overwriteOutsideChanges)} dismiss={() => setDismissedSiteWarnings(`${project?.id}:${JSON.stringify(view.outsideEdits)}`)} />}
-    {!!view?.siteWarnings?.length && <Notice variant="warning" message={view.siteWarnings.join(' ')} /> }
     {showProjectLocation && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
     {showRecovery && view && <WorkspaceSurface place={project ? 'panel' : 'start'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
-    {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importAsNew}:${importSource?.id ?? ''}`} initialSource={importSource} initialFolder={importFolder} editWebsite={editWebsite} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} close={() => setShowImport(false)} pages={project && !importAsNew ? { homePageId: project.homePageId, revision: project.revision, beforePick: async () => { await synchronize(); await settle(); }, apply: async (token, remove) => {
-      await synchronize(); await settle();
-      await queue(async () => { accept(await native<WorkspaceView>('apply_website_import', { token, remove })); });
-    } } : undefined} /></WorkspaceSurface>}
+    {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importSource?.id ?? ''}`} initialSource={importSource} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} importWebsite={startWebsiteImport} close={() => setShowImport(false)} /></WorkspaceSurface>}
+    {showWebsiteImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import website" close={() => setShowWebsiteImport(false)}><WebsiteImport busy={pending > 0} onImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setShowWebsiteImport(false); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => setShowWebsiteImport(false)} /></WorkspaceSurface>}
     {showStyleGuide && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Style guide" close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></WorkspaceSurface>}
     {showNotes && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project brief" close={() => setShowNotes(null)}><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
     {showGridSettings && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Grid and rulers" close={() => setShowGridSettings(false)}><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
       if (visible !== project.showGrid) await mutate({ type: 'set_grid', enabled: visible });
       await mutate({ type: 'set_grid_settings', settings }); setShowGridSettings(false);
     }} /></WorkspaceSurface>}
-    {pageDialog && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title={pageDialog === 'new' ? 'Add page' : 'Page settings'} close={() => setPageDialog(null)}>
-      <PageForm paths={project.pages.map(item => item.path)} page={pageDialog === 'new' ? null : pageDialog} home={pageDialog !== 'new' && pageDialog.id === project.homePageId} busy={pending > 0} submit={async values => {
-        if (pageDialog === 'new') {
-          await dismissEmpty(null);
-          await synchronize();
-          const next = await mutate({ type: 'add_page', name: values.name, path: values.path });
-          activatePage(next.project!.pages.at(-1)!.id); setSelected(null);
-        } else await mutate({ type: 'update_page', page_id: pageDialog.id, ...values });
-        setPageDialog(null);
-      }} />
-    </WorkspaceSurface>}
     {showRename && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Rename project" close={() => setShowRename(false)}><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); setShowRename(false); }} /></WorkspaceSurface>}
     {saveConflict && <SaveConflictDialog conflict={saveConflict} choose={chooseSaveConflict} />}
     {replacement && <WorkspaceSurface place="banner" title="Save your changes?" close={() => setReplacement(null)}><div className="dialog-body"><p>Save “{project?.name}” before you {replacement.label}?</p><p className="muted">Discard continues without saving these changes to the project file.</p><div className="form-actions">
       <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(() => {}); }}>Save and continue</button>
       <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(() => {}); }}>Discard and continue</button><button onClick={() => setReplacement(null)}>Keep editing</button>
     </div></div></WorkspaceSurface>}
-    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className="danger" disabled={pending > 0} onClick={() => { if (confirmation.skippable && skipNextAsk) setAskBeforeDelete(false); void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>Delete</button><button onClick={() => setConfirmation(null)}>Cancel</button>{confirmation.skippable && <details><summary>Options</summary><label className="check-label"><input type="checkbox" checked={skipNextAsk} onChange={event => setSkipNextAsk(event.target.checked)} />Don’t ask again</label></details>}</div></WorkspaceSurface>}
+    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className={confirmation.confirmLabel ? undefined : 'danger'} disabled={pending > 0} onClick={() => { if (confirmation.skippable && skipNextAsk) setAskBeforeDelete(false); void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>{confirmation.confirmLabel ?? 'Delete'}</button><button onClick={() => setConfirmation(null)}>Cancel</button>{confirmation.skippable && <details><summary>Options</summary><label className="check-label"><input type="checkbox" checked={skipNextAsk} onChange={event => setSkipNextAsk(event.target.checked)} />Don’t ask again</label></details>}</div></WorkspaceSurface>}
     {showAiSettings && <WorkspaceSurface place={project ? 'panel' : 'start'} title="AI settings" close={() => setShowAiSettings(false)}><AiSettings current={aiSettings} refresh={refreshAiSettings} update={updateAiSettings} manageUsage={manageChatgptUsage} pollingError={aiPollingError} /></WorkspaceSurface>}
   </div>;
 }
-
-
 
 function editedAgo(editedAtMs: number) {
   const minutes = Math.max(0, Math.floor((Date.now() - editedAtMs) / 60_000));
@@ -1405,6 +1313,13 @@ function RenameProject({ name, submit }: { name: string; submit: (value: string)
   return <form className="dialog-body" onSubmit={event => { event.preventDefault(); setBusy(true); void submit(value.trim()).catch(() => {}).finally(() => setBusy(false)); }}><label>Project name<input autoFocus required maxLength={120} value={value} onChange={event => setValue(event.target.value)} /></label><div className="form-actions"><button className="primary" disabled={busy || !value.trim()}>Rename project</button></div></form>;
 }
 
+function canvasPageName(pages: Page[]) {
+  const names = new Set(pages.map(page => page.name.trim().toLowerCase()));
+  let number = 2;
+  while (names.has(`page ${number}`)) number++;
+  return `Page ${number}`;
+}
+
 function suggestedPagePath(name: string, paths: string[]) {
   let slug = name.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'page';
   if (/^(assets|src|node_modules|con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(slug)) slug += '-page';
@@ -1412,32 +1327,6 @@ function suggestedPagePath(name: string, paths: string[]) {
   let path = base; let suffix = 2;
   while (paths.some(existing => existing.toLowerCase() === path.toLowerCase())) path = `${base}-${suffix++}`;
   return path;
-}
-
-function PageForm({ page, paths, home, busy, submit }: { page: Page | null; paths: string[]; home: boolean; busy: boolean; submit: (values: Pick<Page, 'name' | 'path' | 'viewport' | 'appearance' | 'included'>) => Promise<void> }) {
-  const [name, setName] = useState(page?.name ?? '');
-  const [path, setPath] = useState(page?.path ?? '/page');
-  const [customPath, setCustomPath] = useState(false);
-  const [viewport, setViewport] = useState<Viewport>(page?.viewport ?? { width: 1440, height: 900 });
-  const [appearance, setAppearance] = useState<Appearance>(page?.appearance ?? 'light');
-  const [included, setIncluded] = useState(page?.included ?? true);
-  const [saving, setSaving] = useState(false);
-  function save(event: FormEvent) { event.preventDefault(); setSaving(true); void submit({ name: name.trim(), path: path.trim(), viewport, appearance, included }).catch(() => {}).finally(() => setSaving(false)); }
-  return <form className="dialog-body page-form" onSubmit={save} onInvalid={event => { if (event.target instanceof HTMLElement) { const details = event.target.closest('details'); if (details) details.open = true; } }}>
-    <label>Page name<input autoFocus required maxLength={120} value={name} onChange={event => {
-      const value = event.target.value; setName(value); if (!page && !customPath) setPath(suggestedPagePath(value, paths));
-    }} /></label>
-    {page && <>
-      <fieldset><legend>Screen guide</legend><div className="segmented">{([{ label: 'Desktop', width: 1440, height: 900 }, { label: 'Mobile', width: 390, height: 844 }]).map(size => <button key={size.label} type="button" aria-pressed={viewport.width === size.width && viewport.height === size.height} onClick={() => setViewport({ width: size.width, height: size.height })}>{size.label}</button>)}</div></fieldset>
-      <details className="custom-screen"><summary>Custom screen size · {viewport.width} × {viewport.height}</summary><div className="field-pair">
-        <label>Screen width<input type="number" min={1} max={32768} required value={viewport.width} onChange={event => setViewport({ ...viewport, width: Number(event.target.value) })} /></label><label>Screen height<input type="number" min={1} max={100000} required value={viewport.height} onChange={event => setViewport({ ...viewport, height: Number(event.target.value) })} /></label>
-      </div></details>
-      <label>Website appearance<select value={appearance} onChange={event => setAppearance(event.target.value as Appearance)}><option value="light">Light page</option><option value="dark">Dark page</option></select></label>
-      <label className="check-label"><input type="checkbox" checked={included} disabled={home} onChange={event => setIncluded(event.target.checked)} />Include this page in export</label>
-    </>}
-    <details className="page-address"><summary>Page address · {path}</summary><label>Page path<input required maxLength={1024} disabled={home} value={path} onChange={event => { setPath(event.target.value); setCustomPath(true); }} aria-describedby="page-path-help" /></label><p id="page-path-help" className="field-help">{home ? 'The home page uses /.' : 'Start with /, such as /about.'}</p></details>
-    <div className="form-actions"><button className="primary" disabled={busy || saving || !name.trim() || !path.trim()}>{page ? 'Save page settings' : 'Add page'}</button></div>
-  </form>;
 }
 
 function GridForm({ settings, showGrid, busy, submit, rulerUnit, changeRulerUnit }: { rulerUnit: 'pixels' | 'percent'; changeRulerUnit: (value: 'pixels' | 'percent') => void; settings: GridSettings; showGrid: boolean; busy: boolean; submit: (settings: GridSettings, visible: boolean) => Promise<void> }) {

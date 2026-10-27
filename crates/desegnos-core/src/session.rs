@@ -1,5 +1,5 @@
 use crate::{
-    Command, Error, GenerationApplicationStatus, GenerationCandidate, Project,
+    Command, Error, ExportRecord, GenerationApplicationStatus, GenerationCandidate, Project,
     RequirementsSnapshot, Result, ensure,
 };
 
@@ -11,40 +11,17 @@ pub struct Session {
     history_id: uuid::Uuid,
     history_start: usize,
     history_version: u64,
-    element_steps: Option<ElementSteps>,
     /// The edit key whose burst is in progress, and when it last changed: a run of edits to
     /// one box, element, page or project setting is one history step, not one per keystroke.
     burst: Option<(String, std::time::Instant)>,
+    /// Labels of the history steps committed since the last saved version.
+    version_labels: Vec<String>,
+    /// The label of the edit that is about to be committed.
+    pending_label: Option<&'static str>,
 }
 
 /// Edits to the same thing that pause longer than this start a new history step.
 const STEP_PAUSE: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// Repeated "undo this element" presses walk further back through one element's versions.
-struct ElementSteps {
-    document: crate::DocumentTarget,
-    element_id: String,
-    /// Newest first; index 0 is the version the walk started from.
-    versions: Vec<String>,
-    index: usize,
-    revision_after: u64,
-}
-
-/// The selected element's outer HTML, or None when that document has no such element.
-fn element_version(
-    project: &Project,
-    document: &crate::DocumentTarget,
-    element_id: &str,
-) -> Option<String> {
-    let html = project.document_html(document).ok()?;
-    let doc = project.parse_document_target(document, &html).ok()?;
-    let nodes = doc.select(&format!(
-        "[{}=\"{}\"]",
-        crate::ELEMENT_ID_ATTRIBUTE,
-        element_id
-    ));
-    (nodes.nodes().len() == 1).then(|| nodes.nodes()[0].html().to_string())
-}
 
 impl Session {
     pub fn new(mut project: Project) -> Result<Self> {
@@ -59,8 +36,9 @@ impl Session {
             history_id: uuid::Uuid::new_v4(),
             history_start: 0,
             history_version: user_revision_floor,
-            element_steps: None,
             burst: None,
+            version_labels: vec![],
+            pending_label: None,
         })
     }
     pub fn project(&self) -> &Project {
@@ -93,284 +71,70 @@ impl Session {
     ) -> Result<()> {
         self.assert_revision(revision)?;
         let key = self.burst_key(&command);
+        let label = command.version_label();
         let candidate = self.project.apply(self.project.revision, command)?;
         if candidate.revision == self.project.revision {
             return Ok(());
         }
         durable(&candidate)?;
+        self.pending_label = Some(label);
         self.commit_or_merge(candidate, key);
         Ok(())
+    }
+
+    /// The labels of the history steps since the last saved version, oldest first.
+    pub fn take_version_labels(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.version_labels)
     }
 
     /// Edits that land on the same thing in quick succession become one history step.
     fn burst_key(&self, command: &Command) -> Option<String> {
         match command {
-            // Only the text of a request changed (its box stayed put).
-            Command::UpdateRegion {
-                region_id, rect, ..
+            // Only the text of a request changed (its layer stayed put).
+            Command::SetElementRequest {
+                element_id,
+                request: Some(request),
             } => self
                 .project
-                .pages
-                .iter()
-                .flat_map(|page| &page.regions)
-                .find(|region| region.id == *region_id)
-                .filter(|region| region.rect == *rect)
-                .map(|region| format!("prompt:{}", region.id)),
+                .element(*element_id)
+                .filter(|(_, element)| element.meta.pending.as_ref().is_none_or(|pending| pending.attachments == request.attachments))
+                .map(|_| format!("request:{element_id}")),
             Command::UpdatePage { page_id, .. } => Some(format!("page:{page_id}")),
+            Command::UpdatePageSize {
+                page_id, size_id, ..
+            } => Some(format!("size:{page_id}:{size_id}")),
+            // Only the comment changed; endpoints stayed put.
+            Command::UpdatePointer {
+                pointer_id,
+                from: None,
+                to: None,
+                ..
+            } => Some(format!("pointer-comment:{pointer_id}")),
             Command::RenameProject { .. } => Some("project-name".into()),
             Command::SetGridSettings { .. } => Some("grid".into()),
             _ => None,
         }
     }
 
-    pub fn import_website(
+    /// Record a finished export without adding an undo step: it is metadata about the design,
+    /// not a design change. Undo and Redo carry the newest export record forward.
+    pub fn record_export(
         &mut self,
-        revision: u64,
-        files: &std::collections::BTreeMap<String, Vec<u8>>,
-        remove: &[uuid::Uuid],
+        record: ExportRecord,
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<()> {
-        self.assert_revision(revision)?;
-        let candidate = self.project.import_website(revision, files, remove)?;
-        if candidate.revision != self.project.revision {
-            durable(&candidate)?;
-            self.commit(candidate);
-        }
-        Ok(())
-    }
-
-    pub fn import_context(
-        &mut self,
-        revision: u64,
-        context: crate::ImportedContext,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
-        self.assert_revision(revision)?;
         let candidate = self
             .project
-            .import_context(self.project.revision, context)?;
+            .apply(self.project.revision, Command::RecordExport { record })?;
+        if candidate.revision == self.project.revision {
+            return Ok(());
+        }
         durable(&candidate)?;
-        self.commit(candidate);
-        Ok(())
-    }
-
-    pub fn edit_page_source(
-        &mut self,
-        revision: u64,
-        page_id: uuid::Uuid,
-        edit: &crate::PageSourceEdit,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> crate::SourceEditResult<()> {
-        self.assert_revision(revision)?;
-        let candidate = self.project.edit_page_source(revision, page_id, edit)?;
-        if candidate.revision != self.project.revision {
-            durable(&candidate)?;
-            self.commit_or_merge(candidate, Some(format!("source:{page_id}")));
-        }
-        Ok(())
-    }
-
-    pub fn edit_element(
-        &mut self,
-        revision: u64,
-        page_id: uuid::Uuid,
-        target: &crate::ElementTarget,
-        edit: &crate::ElementEdit,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<Option<crate::ElementTarget>> {
-        self.edit_element_document(
-            revision,
-            &crate::DocumentTarget::Page { page_id },
-            target,
-            edit,
-            durable,
-        )
-    }
-
-    /// Edit an element in the current page or in an editable framed site HTML file.
-    pub fn edit_element_document(
-        &mut self,
-        revision: u64,
-        document: &crate::DocumentTarget,
-        target: &crate::ElementTarget,
-        edit: &crate::ElementEdit,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<Option<crate::ElementTarget>> {
-        self.assert_revision(revision)?;
-        // Text and style changes to one element continue its step; structural changes
-        // (replace, reorder, remove, duplicate) are always their own step.
-        let key = match edit {
-            crate::ElementEdit::Update { .. } | crate::ElementEdit::LayerStyles { .. } => {
-                let anchor = if target.id.is_empty() {
-                    target.selector.as_str()
-                } else {
-                    target.id.as_str()
-                };
-                Some(format!("element:{}:{anchor}", document.key()))
-            }
-            _ => None,
-        };
-        let (next, target) =
-            self.project
-                .edit_element_in(document, self.project.revision, target, edit)?;
-        if next.revision != self.project.revision {
-            durable(&next)?;
-            self.commit_or_merge(next, key);
-        }
-        Ok(target)
-    }
-
-    /// Apply several element changes to one document as one history step. The durable write
-    /// and the history entry cover the whole batch; a rejected target leaves all of it alone.
-    pub fn edit_elements_document(
-        &mut self,
-        revision: u64,
-        document: &crate::DocumentTarget,
-        edits: &[crate::ElementBatchEdit],
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<Vec<Option<crate::ElementTarget>>> {
-        self.assert_revision(revision)?;
-        let (next, targets) =
-            self.project
-                .edit_elements_in(document, self.project.revision, edits)?;
-        if next.revision != self.project.revision {
-            durable(&next)?;
-            self.commit(next);
-        }
-        Ok(targets)
-    }
-
-    /// Apply one element change to the same element on other pages as one history step. The
-    /// durable write and the history entry cover every document the change reached.
-    pub fn edit_element_across_documents(
-        &mut self,
-        revision: u64,
-        request: &crate::AcrossPagesEdit,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<Vec<crate::AcrossPagesChange>> {
-        self.assert_revision(revision)?;
-        let (next, changes) = self
-            .project
-            .edit_element_across(self.project.revision, request)?;
-        if next.revision != self.project.revision {
-            durable(&next)?;
-            self.commit(next);
-        }
-        Ok(changes)
-    }
-
-    pub fn paste_layer(
-        &mut self,
-        revision: u64,
-        page_id: uuid::Uuid,
-        clipboard: &crate::LayerClipboard,
-        insertion: Option<&crate::ElementTarget>,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<crate::LayerPasteSelection> {
-        self.paste_layer_document(
-            revision,
-            &crate::DocumentTarget::Page { page_id },
-            clipboard,
-            insertion,
-            durable,
-        )
-    }
-
-    pub fn paste_layer_document(
-        &mut self,
-        revision: u64,
-        document: &crate::DocumentTarget,
-        clipboard: &crate::LayerClipboard,
-        insertion: Option<&crate::ElementTarget>,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<crate::LayerPasteSelection> {
-        self.assert_revision(revision)?;
-        let (next, selection) =
-            self.project
-                .paste_layer_in(self.project.revision, document, clipboard, insertion)?;
-        durable(&next)?;
-        self.commit(next);
-        Ok(selection)
-    }
-
-    pub fn refresh_element_bounds(
-        &mut self,
-        page_id: uuid::Uuid,
-        viewport: crate::Viewport,
-        bounds: &[crate::ElementBounds],
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
-        let next = self
-            .project
-            .refresh_element_bounds(page_id, viewport, bounds)?;
-        if next.revision != self.project.revision {
-            durable(&next)?;
-            self.project = next;
-        }
-        Ok(())
-    }
-
-    /// Give pending requests drawn over an editable frame their framed document. This is
-    /// measured state like refreshed bounds: journaled and durable, but not a history step.
-    pub fn adopt_frame_targets(
-        &mut self,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
-        let next = self.project.adopt_frame_targets()?;
-        if next.revision != self.project.revision {
-            durable(&next)?;
-            self.project = next;
-        }
-        Ok(())
-    }
-
-    pub fn refresh_element_target_bounds(
-        &mut self,
-        page_id: uuid::Uuid,
-        viewport: crate::Viewport,
-        bounds: &[crate::ElementTargetBounds],
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
-        let next = self
-            .project
-            .refresh_element_target_bounds(page_id, viewport, bounds)?;
-        if next.revision != self.project.revision {
-            durable(&next)?;
-            self.project = next;
-        }
-        Ok(())
-    }
-
-    pub fn apply_generation(
-        &mut self,
-        snapshot: &RequirementsSnapshot,
-        candidate: &GenerationCandidate,
-        accepted_decision_indices: &[usize],
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
-        let next = self
-            .project
-            .apply_generation(snapshot, candidate, accepted_decision_indices)?;
-        if next.revision == self.project.revision {
-            return Ok(());
-        }
-        durable(&next)?;
-        self.commit(next);
-        Ok(())
-    }
-
-    pub fn apply_generation_draft(
-        &mut self,
-        snapshot: &RequirementsSnapshot,
-        draft: &crate::GenerationDraft,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
-        let next = self.project.apply_generation_draft(snapshot, draft)?;
-        if next.revision == self.project.revision {
-            return Ok(());
-        }
-        durable(&next)?;
-        self.commit(next);
+        self.project = candidate;
+        self.user_revision_floor = self.project.revision;
+        self.history_version = self.project.revision;
+        self.burst = None;
+        self.pending_label = None;
         Ok(())
     }
 
@@ -389,118 +153,49 @@ impl Session {
         }
         durable(&next)?;
         self.project = next;
+        self.version_labels.push("AI filled frames".into());
         // A recorded Generate result ends any step in progress.
         self.end_history_step();
         Ok(())
     }
 
-    /// Steps one element back to its previous version while every other change stays. Each
-    /// further press goes one version older. It is an ordinary edit, so Undo reverts it.
-    /// Only the element's own HTML (inline styles included) is restored, not shared CSS.
-    pub fn undo_element(
+    /// Apply one validated generation reply as one undo step.
+    pub fn apply_generation(
         &mut self,
-        revision: u64,
-        page_id: uuid::Uuid,
-        target: &crate::ElementTarget,
+        snapshot: &RequirementsSnapshot,
+        candidate: &GenerationCandidate,
+        accepted_decision_indices: &[usize],
+        generated_pictures: &std::collections::BTreeMap<String, String>,
         durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<Option<crate::ElementTarget>> {
-        self.undo_element_document(
-            revision,
-            &crate::DocumentTarget::Page { page_id },
-            target,
-            durable,
-        )
-    }
-
-    /// Give one element its editor identity, for anchoring a framed request to its iframe.
-    pub fn ensure_element_id_document(
-        &mut self,
-        revision: u64,
-        document: &crate::DocumentTarget,
-        target: &crate::ElementTarget,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<Option<crate::ElementTarget>> {
-        self.assert_revision(revision)?;
-        let (next, target) =
-            self.project
-                .ensure_element_id_in(document, self.project.revision, target)?;
-        if next.revision != self.project.revision {
-            durable(&next)?;
-            self.commit(next);
-        }
-        Ok(target)
-    }
-
-    pub fn undo_element_document(
-        &mut self,
-        revision: u64,
-        document: &crate::DocumentTarget,
-        target: &crate::ElementTarget,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<Option<crate::ElementTarget>> {
-        self.assert_revision(revision)?;
-        ensure(
-            !target.id.is_empty(),
-            "This element has no earlier version to go back to.",
+    ) -> Result<()> {
+        let next = crate::apply_generation_output(
+            &self.project,
+            snapshot,
+            candidate,
+            accepted_decision_indices,
+            generated_pictures,
         )?;
-        let continuing = self.element_steps.as_ref().is_some_and(|steps| {
-            steps.document == *document
-                && steps.element_id == target.id
-                && steps.revision_after == self.project.revision
-        });
-        if !continuing {
-            let mut versions: Vec<String> = Vec::new();
-            let mut last_html: Option<String> = None;
-            for project in std::iter::once(&self.project).chain(self.undo.iter().rev()) {
-                // Snapshots that left this document untouched need no parsing.
-                let html = project.document_html(document).ok();
-                if html.is_some() && html == last_html {
-                    continue;
-                }
-                last_html = html;
-                let Some(version) = element_version(project, document, &target.id) else {
-                    break;
-                };
-                if versions.last() != Some(&version) {
-                    versions.push(version);
-                }
-            }
-            self.element_steps = Some(ElementSteps {
-                document: document.clone(),
-                element_id: target.id.clone(),
-                versions,
-                index: 0,
-                revision_after: self.project.revision,
-            });
-        }
-        let steps = self.element_steps.as_ref().expect("set above");
-        let html = steps
-            .versions
-            .get(steps.index + 1)
-            .cloned()
-            .ok_or_else(|| Error("This element has no earlier version.".into()))?;
-        let (next, element) = self.project.edit_element_in(
-            document,
-            self.project.revision,
-            target,
-            &crate::ElementEdit::Replace {
-                html,
-                keep_style: false,
-            },
-        )?;
-        if next.revision == self.project.revision {
-            // Equal after normalisation: move past it so the next press goes further back.
-            if let Some(steps) = self.element_steps.as_mut() {
-                steps.index += 1;
-            }
-            return Ok(element);
-        }
         durable(&next)?;
+        // Applying a reply publishes layers: it is one design edit and one undo step.
+        self.pending_label = Some("AI updated layers");
         self.commit(next);
-        let steps = self.element_steps.as_mut().expect("set above");
-        steps.index += 1;
-        steps.revision_after = self.project.revision;
-        Ok(element)
+        Ok(())
+    }
+
+    pub fn import_context(
+        &mut self,
+        revision: u64,
+        context: crate::ImportedContext,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<()> {
+        self.assert_revision(revision)?;
+        let candidate = self
+            .project
+            .import_context(self.project.revision, context)?;
+        durable(&candidate)?;
+        self.pending_label = Some("Imported brand");
+        self.commit(candidate);
+        Ok(())
     }
 
     /// Commit the edit, or fold it into the step its burst key is still building, then make
@@ -529,6 +224,7 @@ impl Session {
             self.commit(candidate);
         }
         self.burst = key.map(|key| (key, now));
+        self.pending_label = None;
     }
 
     /// End the step in progress: the next edit starts a new one. Called when focus leaves an
@@ -539,6 +235,9 @@ impl Session {
 
     fn commit(&mut self, candidate: Project) {
         self.burst = None;
+        if let Some(label) = self.pending_label.take() {
+            self.version_labels.push(label.to_owned());
+        }
         self.user_revision_floor = candidate.revision;
         self.history_version = candidate.revision;
         self.undo
@@ -576,12 +275,15 @@ impl Session {
                             .contains(&dossier.job_id)
                 });
         candidate.latest_generation = self.project.latest_generation.clone();
+        self.carry_export_metadata(&mut candidate);
         if generation_was_applied && let Some(dossier) = &mut candidate.latest_generation {
             dossier.application_status = GenerationApplicationStatus::Undone;
         }
         candidate.validate()?;
         durable(&candidate)?;
         self.burst = None;
+        self.pending_label = None;
+        self.version_labels.push("Undid a change".into());
         self.user_revision_floor = candidate.revision;
         self.undo.pop();
         self.redo
@@ -617,6 +319,7 @@ impl Session {
                             })
                 });
         candidate.latest_generation = self.project.latest_generation.clone();
+        self.carry_export_metadata(&mut candidate);
         if generation_is_restored && let Some(dossier) = &mut candidate.latest_generation {
             dossier.application_status = GenerationApplicationStatus::Applied;
             dossier.applied_at_revision = Some(candidate.revision);
@@ -624,10 +327,45 @@ impl Session {
         candidate.validate()?;
         durable(&candidate)?;
         self.burst = None;
+        self.pending_label = None;
+        self.version_labels.push("Redid a change".into());
         self.user_revision_floor = candidate.revision;
         self.redo.pop();
         self.undo
             .push(std::mem::replace(&mut self.project, candidate));
+        Ok(())
+    }
+
+    /// Export records and the wiring they stamped are metadata: a design Undo never rolls them
+    /// back, so a clash check keeps comparing against the last real export.
+    fn carry_export_metadata(&self, candidate: &mut Project) {
+        candidate.last_export = self.project.last_export.clone();
+        for pointer in &mut candidate.pointers {
+            if let Some(current) = self.project.pointers.iter().find(|item| item.id == pointer.id) {
+                pointer.wiring = current.wiring.clone();
+            }
+        }
+    }
+
+    /// Make a saved version the current state as one undo step. The caller has already stored
+    /// it as a new version, so history is never rewritten.
+    pub fn restore(
+        &mut self,
+        project: Project,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<()> {
+        let mut candidate = project;
+        candidate.revision = self
+            .project
+            .revision
+            .checked_add(1)
+            .ok_or_else(|| Error("Project revision limit reached.".into()))?;
+        candidate.applied_job_ids = self.project.applied_job_ids.clone();
+        candidate.latest_generation = self.project.latest_generation.clone();
+        candidate.validate()?;
+        durable(&candidate)?;
+        self.pending_label = Some("Restored a version");
+        self.commit(candidate);
         Ok(())
     }
 
@@ -670,6 +408,153 @@ mod tests {
 
     fn key() -> Option<String> {
         Some("project-name".into())
+    }
+
+    #[test]
+    fn undo_restores_the_previous_canvas_placement() {
+        let mut session = session();
+        let page_id = session.project.home_page_id;
+        let size_id = session
+            .project()
+            .page(page_id)
+            .unwrap()
+            .base_size_id();
+        let revision = session.project.revision;
+        session
+            .execute(
+                revision,
+                Command::SetCanvasLayout {
+                    placements: vec![crate::CanvasPlacement {
+                        page_id,
+                        size_id,
+                        x: 80.0,
+                        y: 40.0,
+                        kind: crate::BoundaryKind::Screen,
+                    }],
+                    reference: vec![],
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        let placed = session
+            .project()
+            .page(page_id)
+            .unwrap()
+            .size(size_id)
+            .cloned()
+            .unwrap();
+        assert_eq!(placed.x, 80.0);
+        assert_eq!(placed.y, 40.0);
+        assert_eq!(placed.kind, crate::BoundaryKind::Screen);
+        session.undo(|_| Ok(())).unwrap();
+        let undone = session
+            .project()
+            .page(page_id)
+            .unwrap()
+            .size(size_id)
+            .cloned()
+            .unwrap();
+        assert_eq!(undone.x, 0.0);
+        assert_eq!(undone.kind, crate::BoundaryKind::Page);
+        session.redo(|_| Ok(())).unwrap();
+        assert_eq!(
+            session
+                .project()
+                .page(page_id)
+                .unwrap()
+                .size(size_id)
+                .unwrap()
+                .kind,
+            crate::BoundaryKind::Screen
+        );
+    }
+
+    #[test]
+    fn reference_add_and_update_are_one_undo_step_each() {
+        let mut session = session();
+        let item = crate::ReferenceItem {
+            id: uuid::Uuid::new_v4(),
+            rect: crate::Rect {
+                x: 40.0,
+                y: -40.0,
+                width: 200.0,
+                height: 120.0,
+            },
+            kind: crate::ReferenceKind::Note {
+                text: "reference".into(),
+            },
+        };
+        let item_id = item.id;
+        let position = session.history().2;
+        session
+            .execute(
+                session.project().revision,
+                Command::AddReferenceItem {
+                    item,
+                    picture_data_uri: None,
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(session.history().2, position + 1, "one history step");
+        assert_eq!(session.project().reference.len(), 1);
+        session.undo(|_| Ok(())).unwrap();
+        assert!(session.project().reference.is_empty());
+        session.redo(|_| Ok(())).unwrap();
+        assert_eq!(session.project().reference.len(), 1);
+        let position = session.history().2;
+        session
+            .execute(
+                session.project().revision,
+                Command::UpdateReferenceItem {
+                    item_id,
+                    rect: Some(crate::Rect {
+                        x: 80.0,
+                        y: -80.0,
+                        width: 240.0,
+                        height: 160.0,
+                    }),
+                    text: Some("edited reference".into()),
+                    url: None,
+                    title: None,
+                    color: None,
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(session.history().2, position + 1, "one history step");
+        assert_eq!(
+            session.project().reference[0].kind,
+            crate::ReferenceKind::Note {
+                text: "edited reference".into()
+            }
+        );
+        session.undo(|_| Ok(())).unwrap();
+        assert_eq!(
+            session.project().reference[0].kind,
+            crate::ReferenceKind::Note {
+                text: "reference".into()
+            }
+        );
+        assert_eq!(session.project().reference[0].rect.x, 40.0);
+        let position = session.history().2;
+        session
+            .execute(
+                session.project().revision,
+                Command::RemoveReferenceItems { ids: vec![item_id] },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert!(session.project().reference.is_empty());
+        assert_eq!(session.history().2, position + 1, "one history step");
+        session.undo(|_| Ok(())).unwrap();
+        assert_eq!(session.project().reference.len(), 1);
+        assert_eq!(
+            session.project().reference[0].kind,
+            crate::ReferenceKind::Note {
+                text: "reference".into()
+            }
+        );
     }
 
     #[test]

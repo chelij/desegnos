@@ -1,269 +1,446 @@
-use desegnos_storage::{WebsiteFolder, detect_website_folder};
-use serde::Serialize;
-use std::{
-    collections::BTreeMap,
-    io::{BufRead, BufReader, Read},
-    path::PathBuf,
-    process::Stdio,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
+//! Import a website as canvas elements.
+//!
+//! Native code fetches a public site or reads a local folder/ZIP with the same bounded, no-code
+//! rules as brand import, serves the snapshot from a loopback server, and turns the browser's
+//! rendered-tree captures into project elements. Page code never runs: the served page is
+//! rendered inside a script-disabled nested frame, and only our extraction wrapper runs.
+use crate::local_site::ImportSite;
+use crate::workspace::Workspace;
+use base64::{Engine, engine::general_purpose::STANDARD};
+use desegnos_core::WebCapture;
+use desegnos_storage::{
+    WebsiteSnapshot, collect_website_snapshot, new_import_folder, write_website_snapshot,
 };
-use tauri::{AppHandle, State};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
+use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
+use desegnos_ai::WebUrl as Url;
 use uuid::Uuid;
+
+type NativeResult<T> = Result<T, String>;
+type ImportState<'a> = State<'a, Mutex<WebsiteImportState>>;
+type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
+
+const MAX_CAPTURE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_IMPORTED_PICTURES: usize = 160;
+const MAX_IMPORTED_PICTURE_TOTAL: usize = 64 * 1024 * 1024;
+const SERVED_FILE_LIMIT: usize = 128 * 1024 * 1024;
+
+fn message(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+fn trusted(window: &WebviewWindow) -> NativeResult<()> {
+    if window.label() == "editor" {
+        Ok(())
+    } else {
+        Err("Only the Desegnos editor can import a website.".into())
+    }
+}
+
+struct ImportSource {
+    folder: PathBuf,
+    base_url: String,
+    pages: Vec<ImportPage>,
+}
+
+struct ImportPage {
+    route: String,
+    title: String,
+}
+
+/// The one website snapshot currently served for rendering.
+#[derive(Default)]
+pub struct WebsiteImportState {
+    site: ImportSite,
+    source: Option<ImportSource>,
+}
+
+impl Drop for WebsiteImportState {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+impl WebsiteImportState {
+    fn clear(&mut self) {
+        self.site.stop();
+        if let Some(source) = self.source.take() {
+            let _ = fs::remove_dir_all(source.folder);
+        }
+    }
+}
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct FolderSelection {
-    pub id: Uuid,
-    pub name: String,
-    pub website: Option<WebsiteFolder>,
+pub struct WebsiteImportPageView {
+    route: String,
+    title: String,
+    url: String,
 }
-#[derive(Clone, Default, Serialize)]
+
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BuildStatus {
-    pub running: bool,
-    pub line: String,
-    pub error: Option<String>,
-    pub folder: Option<FolderSelection>,
+pub struct WebsiteImportView {
+    id: Uuid,
+    name: String,
+    base_url: String,
+    extractor_url: String,
+    pages: Vec<WebsiteImportPageView>,
 }
-struct Selection {
-    path: PathBuf,
-    status: Arc<Mutex<BuildStatus>>,
-    stop: Arc<AtomicBool>,
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebsiteImportResultView {
+    workspace: crate::workspace::WorkspaceView,
+    pages: usize,
+    layers: usize,
+    pictures: usize,
+    warnings: Vec<String>,
 }
-#[derive(Default)]
-pub struct WebsiteImports {
-    selections: BTreeMap<Uuid, Selection>,
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WebsiteSourceKind {
+    Folder,
+    Zip,
 }
-impl WebsiteImports {
-    pub fn select(&mut self, path: PathBuf) -> Result<FolderSelection, String> {
-        let path = path.canonicalize().map_err(|e| e.to_string())?;
-        let website = detect_website_folder(&path).map_err(|e| e.to_string())?;
-        let id = Uuid::new_v4();
-        let view = FolderSelection {
-            id,
-            name: path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            website,
-        };
-        if self.selections.len() >= 16 {
-            let oldest = self
-                .selections
-                .iter()
-                .find(|(_, s)| s.status.lock().is_ok_and(|s| !s.running))
-                .map(|(id, _)| *id)
-                .ok_or("Stop a site build first.")?;
-            self.selections.remove(&oldest);
-        }
-        self.selections.insert(
-            id,
-            Selection {
-                path,
-                status: Arc::default(),
-                stop: Arc::default(),
-            },
-        );
-        Ok(view)
-    }
-    pub fn path(&self, id: Uuid) -> Result<PathBuf, String> {
-        let selected = self
-            .selections
-            .get(&id)
-            .ok_or("Choose the website folder again.")?;
-        if selected.status.lock().map_err(|e| e.to_string())?.running {
-            return Err("Stop the build before opening this website.".into());
-        }
-        Ok(selected.path.clone())
-    }
+
+fn extractor_html(script: &str) -> String {
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Importing page</title>\
+<style>html,body{{margin:0;padding:0;background:#fff}}#stage{{display:block}}</style></head>\
+<body><div id=\"stage\"></div><script>{script}</script></body></html>"
+    )
 }
+
+fn install(
+    state: &Mutex<WebsiteImportState>,
+    snapshot: WebsiteSnapshot,
+    extractor: &str,
+) -> NativeResult<WebsiteImportView> {
+    let folder = new_import_folder().map_err(message)?;
+    write_website_snapshot(&folder, &snapshot).map_err(message)?;
+    fs::write(folder.join("__desegnos_extract.html"), extractor_html(extractor))
+        .map_err(message)?;
+    let name = snapshot.name.clone();
+    let mut seen_routes = BTreeSet::new();
+    let mut pages = snapshot
+        .pages
+        .iter()
+        .filter(|page| {
+            let key = page.route.trim_end_matches('/').to_ascii_lowercase();
+            seen_routes.insert(if key.is_empty() { "/".into() } else { key })
+        })
+        .map(|page| ImportPage {
+            route: page.route.clone(),
+            title: page.title.clone(),
+        })
+        .collect::<Vec<_>>();
+    pages.truncate(30);
+    let mut state = state.lock().map_err(message)?;
+    state.clear();
+    let base_url = state
+        .site
+        .serve(&folder, SERVED_FILE_LIMIT)
+        .map_err(message)?;
+    let id = Uuid::new_v4();
+    let view = WebsiteImportView {
+        id,
+        name: name.clone(),
+        base_url: base_url.clone(),
+        extractor_url: format!("{base_url}__desegnos_extract.html"),
+        pages: pages
+            .iter()
+            .map(|page| WebsiteImportPageView {
+                route: page.route.clone(),
+                title: page.title.clone(),
+                url: format!("{base_url}{}", page.route.trim_start_matches('/')),
+            })
+            .collect(),
+    };
+    state.source = Some(ImportSource {
+        folder,
+        base_url,
+        pages,
+    });
+    Ok(view)
+}
+
+/// Fetch a public website address, serve its snapshot and list the pages to render.
 #[tauri::command]
-pub async fn pick_website_folder(
+pub async fn prepare_website_import_url(
+    window: WebviewWindow,
+    state: ImportState<'_>,
+    url: String,
+    extractor: String,
+) -> NativeResult<WebsiteImportView> {
+    trusted(&window)?;
+    #[cfg(feature = "native-tests")]
+    let fixture = std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN")
+        .ok()
+        .and_then(|value| desegnos_ai::WebUrl::parse(&value).ok());
+    #[cfg(not(feature = "native-tests"))]
+    let fixture: Option<desegnos_ai::WebUrl> = None;
+    let snapshot = desegnos_ai::fetch_website_snapshot(&url, fixture.as_ref()).await?;
+    install(
+        &state,
+        WebsiteSnapshot {
+            name: snapshot.name,
+            files: snapshot.files,
+            pages: snapshot
+                .pages
+                .into_iter()
+                .map(|page| desegnos_storage::WebsitePage {
+                    route: page.route,
+                    title: page.title,
+                })
+                .collect(),
+            skipped: snapshot.skipped,
+        },
+        &extractor,
+    )
+}
+
+/// Choose a website folder or ZIP archive, serve it and list its HTML pages.
+#[tauri::command]
+pub async fn pick_website_import_source(
     app: AppHandle,
-    state: State<'_, Mutex<WebsiteImports>>,
-) -> Result<Option<FolderSelection>, String> {
+    window: WebviewWindow,
+    state: ImportState<'_>,
+    kind: WebsiteSourceKind,
+    extractor: String,
+) -> NativeResult<Option<WebsiteImportView>> {
+    trusted(&window)?;
     let picked = tauri::async_runtime::spawn_blocking(move || {
-        crate::file_dialogs::picked(
-            app.dialog()
-                .file()
-                .set_title("Choose website or brand folder")
-                .blocking_pick_folder(),
-        )
+        let dialog = app.dialog().file();
+        let picked = crate::file_dialogs::picked(match kind {
+            WebsiteSourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
+            WebsiteSourceKind::Zip => dialog
+                .add_filter("Website ZIP", &["zip"])
+                .blocking_pick_file()
+                .map(|path| vec![path]),
+        })?;
+        let Some(picked) = picked else { return Ok(None) };
+        let path = picked
+            .into_iter()
+            .next()
+            .ok_or("Choose a website folder or ZIP.")?
+            .into_path()
+            .map_err(message)?;
+        let snapshot = collect_website_snapshot(&path).map_err(message)?;
+        Ok::<_, String>(Some(snapshot))
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(message)??;
     picked
-        .map(|p| {
-            state
-                .lock()
-                .map_err(|e| e.to_string())?
-                .select(p.into_path().map_err(|e| e.to_string())?)
-        })
+        .map(|snapshot| install(&state, snapshot, &extractor))
         .transpose()
 }
+
 #[tauri::command]
-pub fn website_build(
-    state: State<'_, Mutex<WebsiteImports>>,
-    folder_id: Uuid,
-    action: String,
-) -> Result<BuildStatus, String> {
-    let service = state.lock().map_err(|e| e.to_string())?;
-    let selected = service
-        .selections
-        .get(&folder_id)
-        .ok_or("Choose the website folder again.")?;
-    if action == "stop" {
-        selected.stop.store(true, Ordering::Relaxed);
-    } else if action == "start" {
-        let mut status = selected.status.lock().map_err(|e| e.to_string())?;
-        if status.running {
-            return Ok(status.clone());
-        }
-        let detected = detect_website_folder(&selected.path)
-            .map_err(|e| e.to_string())?
-            .ok_or("No website found.")?;
-        if let Some(reason) = &detected.build_unavailable {
-            return Err(reason.clone());
-        }
-        if let Some(command) = &detected.install_command {
-            return Err(format!(
-                "Run {command} in this folder first: {}",
-                detected.path.display()
-            ));
-        }
-        let command = detected
-            .build_command
-            .ok_or("No build command found. Build the site in this folder first.")?;
-        *status = BuildStatus {
-            running: true,
-            line: format!("Running {}", command.join(" ")),
-            error: None,
-            folder: None,
-        };
-        selected.stop.store(false, Ordering::Relaxed);
-        let (path, status, stop) = (
-            selected.path.clone(),
-            selected.status.clone(),
-            selected.stop.clone(),
-        );
-        std::thread::spawn(move || run_build(folder_id, path, command, status, stop));
-    } else if action != "status" {
-        return Err("Unknown build action.".into());
-    }
-    let result = selected.status.lock().map_err(|e| e.to_string())?.clone();
-    Ok(result)
+pub fn cancel_website_import(state: ImportState<'_>) -> NativeResult<()> {
+    state.lock().map_err(message)?.clear();
+    Ok(())
 }
-fn run_build(
-    id: Uuid,
-    path: PathBuf,
-    args: Vec<String>,
-    status: Arc<Mutex<BuildStatus>>,
-    stop: Arc<AtomicBool>,
-) {
-    let result = (|| -> Result<(), String> {
-        let mut command =
-            desegnos_storage::system_tools::ToolSearch::default().build_command(&path, &args)?;
-        command
-            .current_dir(&path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("CI", "1")
-            .env("npm_config_offline", "true")
-            .env("COREPACK_ENABLE_NETWORK", "0");
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|e| desegnos_storage::system_tools::spawn_message(&args[0], &e))?;
-        let readers: Vec<Box<dyn Read + Send>> = vec![
-            Box::new(child.stdout.take().expect("stdout")),
-            Box::new(child.stderr.take().expect("stderr")),
-        ];
-        for reader in readers {
-            let status = status.clone();
-            std::thread::spawn(move || {
-                // Limit each read, including a tool that emits an unbroken line.
-                let mut reader = BufReader::new(reader);
-                loop {
-                    let mut bytes = vec![];
-                    match reader.by_ref().take(4096).read_until(b'\n', &mut bytes) {
-                        Ok(0) | Err(_) => break,
-                        Ok(_) => {}
-                    }
-                    let line = String::from_utf8_lossy(&bytes)
-                        .trim()
-                        .chars()
-                        .filter(|c| !c.is_control())
-                        .take(500)
-                        .collect::<String>();
-                    if !line.is_empty()
-                        && let Ok(mut state) = status.lock()
-                    {
-                        state.line = line;
-                    }
-                }
-            });
-        }
-        let start = Instant::now();
-        loop {
-            if stop.load(Ordering::Relaxed) || start.elapsed() >= Duration::from_secs(300) {
-                #[cfg(unix)]
-                {
-                    use rustix::process::{Pid, Signal, kill_process_group};
-                    // The unreaped child owns this process group; no external kill program.
-                    let _ = kill_process_group(Pid::from_child(&child), Signal::KILL);
-                }
-                // Uses the native process handle on Windows, even with no taskkill/PATH.
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(if stop.load(Ordering::Relaxed) {
-                    "Build stopped."
-                } else {
-                    "Build timed out after 5 minutes."
-                }
-                .into());
-            }
-            if let Some(exit) = child
-                .try_wait()
-                .map_err(|_| "Couldn't read the build status.")?
-            {
-                if !exit.success() {
-                    return Err(format!("Build failed ({exit})."));
-                }
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        Ok(())
-    })();
-    let folder = detect_website_folder(&path)
-        .ok()
-        .flatten()
-        .map(|website| FolderSelection {
-            id,
-            name: path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned(),
-            website: Some(website),
+
+fn image_mime(name: &str) -> Option<&'static str> {
+    match name.rsplit('.').next()?.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "gif" => Some("image/gif"),
+        "svg" => Some("image/svg+xml"),
+        "avif" => Some("image/avif"),
+        _ => None,
+    }
+}
+
+fn decode_path(path: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut chars = path.bytes();
+    while let Some(byte) = chars.next() {
+        bytes.push(if byte == b'%' {
+            let high = (chars.next()? as char).to_digit(16)?;
+            let low = (chars.next()? as char).to_digit(16)?;
+            (high * 16 + low) as u8
+        } else {
+            byte
         });
-    if let Ok(mut state) = status.lock() {
-        state.running = false;
-        state.error = result.err();
-        state.folder = folder;
-        if state.error.is_none() {
-            state.line = "Build complete.".into();
+    }
+    let value = String::from_utf8(bytes).ok()?;
+    if value.is_empty()
+        || value.contains(['\\', '\0'])
+        || value.chars().any(char::is_control)
+        || value.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return None;
+    }
+    Some(value)
+}
+
+fn local_image(folder: &Path, base_url: &str, source: &str) -> Option<Vec<u8>> {
+    let url = Url::parse(source).ok()?;
+    let base = Url::parse(base_url).ok()?;
+    let rest = url.path().strip_prefix(base.path())?.trim_start_matches('/');
+    let path = decode_path(rest)?;
+    let mut file = folder.to_path_buf();
+    for part in path.split('/') {
+        file.push(part);
+    }
+    let canonical = file.canonicalize().ok()?;
+    if !canonical.starts_with(folder) {
+        return None;
+    }
+    let metadata = fs::metadata(&canonical).ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_CAPTURE_IMAGE_BYTES as u64 {
+        return None;
+    }
+    fs::read(canonical).ok()
+}
+
+fn data_uri(mime: &str, bytes: &[u8]) -> String {
+    format!("data:{mime};base64,{}", STANDARD.encode(bytes))
+}
+
+fn element_count(page: &desegnos_core::Page) -> usize {
+    fn count(elements: &[desegnos_core::Element]) -> usize {
+        elements
+            .iter()
+            .map(|element| 1 + count(&element.children))
+            .sum()
+    }
+    count(&page.elements)
+}
+
+/// Turn the browser captures into canvas elements and apply the whole import as one undo step.
+#[tauri::command]
+pub async fn import_website_pages(
+    window: WebviewWindow,
+    state: ImportState<'_>,
+    workspace: WorkspaceState<'_>,
+    captures: Vec<WebCapture>,
+) -> NativeResult<WebsiteImportResultView> {
+    trusted(&window)?;
+    if captures.is_empty() {
+        return Err("Render at least one page before importing it.".into());
+    }
+    if captures.len() > 60 {
+        return Err("A website import renders at most 30 pages.".into());
+    }
+    let (folder, base_url, pages) = {
+        let state = state.lock().map_err(message)?;
+        let source = state
+            .source
+            .as_ref()
+            .ok_or("Read a website or choose a folder before importing.")?;
+        (
+            source.folder.clone(),
+            source.base_url.clone(),
+            source.pages.iter().map(|page| page.route.clone()).collect::<Vec<_>>(),
+        )
+    };
+    let allowed = pages.into_iter().collect::<BTreeSet<_>>();
+    for capture in &captures {
+        let Some(rest) = capture.url.strip_prefix(&base_url) else {
+            return Err("A captured page is not part of the website being imported.".into());
+        };
+        let route = if rest.is_empty() {
+            "/".to_owned()
+        } else {
+            format!("/{rest}")
+        };
+        if !allowed.contains(&route) {
+            return Err("A captured page is not part of the website being imported.".into());
         }
     }
+    let sources = desegnos_core::web_capture_image_sources(&captures);
+    if sources.len() > MAX_IMPORTED_PICTURES {
+        return Err(format!(
+            "This import uses {} pictures; the limit is {MAX_IMPORTED_PICTURES}. Choose a smaller site.",
+            sources.len()
+        ));
+    }
+    #[cfg(feature = "native-tests")]
+    let fixture = std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN")
+        .ok()
+        .and_then(|value| desegnos_ai::WebUrl::parse(&value).ok());
+    #[cfg(not(feature = "native-tests"))]
+    let fixture: Option<desegnos_ai::WebUrl> = None;
+    let mut picture_ids = BTreeMap::new();
+    let mut pictures = BTreeMap::new();
+    let mut total = 0usize;
+    let mut warnings = Vec::new();
+    for source in sources {
+        let resolved = if source.starts_with("data:image/") {
+            parse_data_uri(&source)
+        } else if source.starts_with(&base_url) {
+            let path = Url::parse(&source).map(|url| url.path().to_owned()).unwrap_or_else(|_| source.clone());
+            local_image(&folder, &base_url, &source)
+                .and_then(|bytes| image_mime(&path).map(|mime| (mime.to_owned(), bytes)))
+        } else {
+            match desegnos_ai::fetch_website_image(&source, fixture.as_ref()).await {
+                Ok((bytes, mime)) => Some((mime, bytes)),
+                Err(reason) => {
+                    warnings.push(reason);
+                    None
+                }
+            }
+        };
+        let Some((mime, bytes)) = resolved else {
+            continue;
+        };
+        if bytes.is_empty() || bytes.len() > MAX_CAPTURE_IMAGE_BYTES {
+            warnings.push(format!("A picture over 8 MiB was left out: {source}"));
+            continue;
+        }
+        total = total.saturating_add(bytes.len());
+        if total > MAX_IMPORTED_PICTURE_TOTAL {
+            warnings.push("Picture downloads reached the import size limit.".into());
+            break;
+        }
+        let uri = data_uri(&mime, &bytes);
+        let (picture, stored) = desegnos_core::Project::prepare_picture(&uri, 1440).map_err(message)?;
+        picture_ids.insert(source, picture);
+        pictures.insert(picture, stored);
+    }
+    let project = workspace
+        .lock()
+        .map_err(message)?
+        .project()
+        .map_err(message)?
+        .clone();
+    let imported = desegnos_core::import_website(&captures, &picture_ids, &project).map_err(message)?;
+    let page_count = imported.pages.len();
+    let layers = imported
+        .pages
+        .iter()
+        .map(element_count)
+        .sum::<usize>();
+    warnings.extend(imported.warnings.iter().cloned());
+    let picture_count = pictures.len();
+    let view = workspace
+        .lock()
+        .map_err(message)?
+        .import_website(imported, pictures)?;
+    state.lock().map_err(message)?.clear();
+    Ok(WebsiteImportResultView {
+        workspace: view,
+        pages: page_count,
+        layers,
+        pictures: picture_count,
+        warnings,
+    })
+}
+
+fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
+    let (header, encoded) = uri.strip_prefix("data:")?.split_once(";base64,")?;
+    let bytes = STANDARD.decode(encoded).ok()?;
+    Some((header.to_owned(), bytes))
 }

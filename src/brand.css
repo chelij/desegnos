@@ -129,7 +129,6 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: var(--weight-semibol
 /* Request text keeps its explicit authoring borders in both themes. */
 .free-workspace .annotation textarea { border: 2px dashed var(--annotation-border); border-radius: 0; }
 .free-workspace .annotation.selected textarea { border-color: var(--annotation-focus); }
-.free-workspace .screen-guide { border-radius: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   :root { --duration-fast: 0ms; --duration-base: 0ms; }

@@ -167,7 +167,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         </div>
         {usesChatgpt ? <>
           {view.chatgpt.storageError && <ProblemBanner message={userError(view.chatgpt.storageError)} />}
-          {view.chatgpt.message && !['ChatGPT connected.', 'Signed out.', 'Secure storage repaired.'].includes(view.chatgpt.message) && <ProblemBanner message={userError(view.chatgpt.message)} />}
+          {view.chatgpt.message && !['ChatGPT connected.', 'Signed out. Remote access was revoked.', 'Secure storage repaired.'].includes(view.chatgpt.message) && <ProblemBanner message={userError(view.chatgpt.message)} />}
           {account?.connected && !account.planEnabled && <ProblemBanner message="Your ChatGPT plan is not enabled for Desegnos." />}
           {account?.storageRepairRequired && <ProblemBanner message="Your saved sign-in details need attention." action={{ label: 'Repair secure storage', disabled: busy || pending, onClick: () => { void action('retry_chatgpt_secure_storage', { accountId: account.id }); } }} />}
           {pending ? <button type="button" disabled={busy} onClick={() => { void action('cancel_chatgpt_sign_in'); }}>Cancel sign-in</button> : !connected && <button type="button" className="primary" disabled={busy} onClick={() => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: account?.id ?? null }); }}>Sign in with ChatGPT</button>}

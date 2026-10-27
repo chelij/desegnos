@@ -1,82 +1,173 @@
-export type EditorShortcut = 'new' | 'open' | 'save' | 'saveAs' | 'undo' | 'redo' | 'selectSimilar' | 'zoomIn' | 'zoomOut' | 'fit' | 'actualSize' | 'doubleSize' | 'nextPage' | 'previousPage' | 'closePageTab' | 'remove' | 'help' | 'selectTool' | 'requestTool' | 'rectangleTool' | 'circleTool' | 'freehandTool' | 'panTool' | 'askAI' | 'undoElement' | 'cutLayer' | 'copyLayer' | 'pasteLayer' | 'layerForward' | 'layerBackward' | 'layerFront' | 'layerBack';
+// One keymap for the canvas: tool strip tooltips, the menu and the keyboard help all read it,
+// so a binding can never be added in one place and forgotten in another.
+export type ShortcutAction =
+  | 'selectTool' | 'frameTool' | 'boundaryTool' | 'pointerTool' | 'textTool' | 'panTool'
+  | 'rectTool' | 'ellipseTool' | 'lineTool' | 'imageTool' | 'noteTool' | 'insert'
+  | 'copy' | 'cut' | 'paste' | 'pasteChoice' | 'duplicate'
+  | 'undo' | 'redo' | 'link' | 'unlink' | 'group' | 'ungroup' | 'delete' | 'renameLayer'
+  | 'forward' | 'backward' | 'front' | 'back'
+  | 'selectAll' | 'selectChild' | 'selectParent' | 'nudge' | 'nudgeFar'
+  | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'fitAll' | 'fitSelection' | 'hidePanels'
+  | 'play' | 'preview' | 'askAI' | 'export'
+  | 'new' | 'open' | 'save' | 'saveAs' | 'closeProject'
+  | 'help';
+
+export type ShortcutGroup = 'File' | 'Edit' | 'Arrange' | 'Selection' | 'Tools' | 'View' | 'Run' | 'Help';
 export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented?: boolean; isComposing?: boolean };
 
-export const SHORTCUT_HELP = [
-  ['New project', 'Ctrl/Cmd+N'], ['Open project', 'Ctrl/Cmd+O'], ['Save', 'Ctrl/Cmd+S'], ['Save as', 'Ctrl/Cmd+Shift+S'],
-  ['Copy / cut / paste selected layer', 'Ctrl/Cmd+C / Ctrl/Cmd+X / Ctrl/Cmd+V outside text'], ['Bring forward / send backward', 'Ctrl/Cmd+] / Ctrl/Cmd+['], ['Bring to front / send to back', 'Ctrl/Cmd+Shift+] / Ctrl/Cmd+Shift+['],
-  ['Undo', 'Ctrl/Cmd+Z'], ['Undo changes to the selected element only', 'Alt+Z'], ['Redo', 'Ctrl/Cmd+Shift+Z · Ctrl+Y'],
-  ['Zoom in / out', 'Ctrl/Cmd++ / Ctrl/Cmd+− · Ctrl+wheel'], ['Fit screen guide', 'Ctrl/Cmd+0'], ['Actual size', 'Ctrl/Cmd+1'], ['200% view', 'Ctrl/Cmd+2'],
-  ['Next / previous page', 'Ctrl+Tab / Ctrl+Shift+Tab · Ctrl+Page Down / Page Up'], ['Close page tab', 'Ctrl/Cmd+W'],
-  ['Select an element', 'Single-click · Shift/Ctrl/Cmd-click to add'], ['Select similar', 'Ctrl/Cmd+Shift+A'], ['Marquee select', 'Alt-drag on empty canvas · add Shift to keep'], ['Edit selected element', 'F2'], ['Move selected element', 'Arrow keys · Shift for 10 px'], ['Delete selected element', 'Delete / Backspace'],
-  ['Move / resize element', 'Drag selection / its corners'], ['Element actions', 'Right-click'],
-  ['Edit text in place', 'Double-click website text · Enter to save · Escape to cancel'],
-  ['Select / Add request / Pan', 'V / R / H'], ['Ask AI about selection', 'Ctrl/Cmd+K'],
-  ['Rectangle / Circle / Freehand request', 'Shift+R / C / L'], ['Perfect circle', 'Shift while drawing a circle'],
-  ['Open a request', 'Double-click empty canvas · Add request tool'],
-  ['Pan canvas', 'Drag empty space · Space+drag · Middle drag'], ['Draw an area', 'Shift+drag'],
-  ['New request in view', 'Enter on blank canvas · Shift+Enter'], ['Next element / parent', 'Enter / Alt+Enter on generated canvas'],
-  ['Move / resize request', 'Arrow keys on handles · Alt for 1 px'], ['Remove selected request', 'Delete / Backspace outside text'],
-  ['Cancel gesture / close dialog', 'Escape'], ['Keyboard shortcuts', 'F1 · ? outside text'],
-] as const;
+type KeyCombo = { key?: string; code?: string; mod?: boolean; shift?: boolean; alt?: boolean };
+type Binding = {
+  action: ShortcutAction;
+  label: string;
+  group: ShortcutGroup;
+  /** The first entry is shown in menus and tooltips. */
+  keys: KeyCombo[];
+  display: string;
+  /** Actions that still make sense while the caret is in a text field. */
+  inText?: boolean;
+};
 
-// Compact hints for icon buttons. Values mirror SHORTCUT_HELP so a tooltip names the
-// same key the editor listens for; keep them in step when a binding changes.
-export const TOOL_SHORTCUTS = {
-  newProject: 'Ctrl/Cmd+N', openProject: 'Ctrl/Cmd+O', save: 'Ctrl/Cmd+S', saveAs: 'Ctrl/Cmd+Shift+S',
-  copy: 'Ctrl/Cmd+C', cut: 'Ctrl/Cmd+X', paste: 'Ctrl/Cmd+V',
-  forward: 'Ctrl/Cmd+]', backward: 'Ctrl/Cmd+[', front: 'Ctrl/Cmd+Shift+]', back: 'Ctrl/Cmd+Shift+[',
-  undo: 'Ctrl/Cmd+Z', undoElement: 'Alt+Z', redo: 'Ctrl/Cmd+Shift+Z',
-  zoomIn: 'Ctrl/Cmd++', zoomOut: 'Ctrl/Cmd+−', fit: 'Ctrl/Cmd+0', actualSize: 'Ctrl/Cmd+1',
-  nextPage: 'Ctrl+Tab', previousPage: 'Ctrl+Shift+Tab', closePage: 'Ctrl/Cmd+W',
-  selectSimilar: 'Ctrl/Cmd+Shift+A', editElement: 'F2', remove: 'Delete', askAI: 'Ctrl/Cmd+K',
-  selectTool: 'V', requestTool: 'R', panTool: 'H',
-  rectangleTool: 'Shift+R', circleTool: 'C', freehandTool: 'L', help: 'F1',
-} as const;
+const plain = (key: string): KeyCombo => ({ key, shift: false });
+const mod = (key: string): KeyCombo => ({ key, mod: true, shift: false });
+const modShift = (key: string): KeyCombo => ({ key, mod: true, shift: true });
+const altMod = (key: string): KeyCombo => ({ key, mod: true, shift: false, alt: true });
+const shiftCode = (code: string): KeyCombo => ({ code, shift: true });
+
+export const KEYMAP: Binding[] = [
+  // File
+  { action: 'new', label: 'New project', group: 'File', keys: [mod('n')], display: 'Ctrl/Cmd+N' },
+  { action: 'open', label: 'Open project', group: 'File', keys: [mod('o')], display: 'Ctrl/Cmd+O' },
+  { action: 'save', label: 'Save', group: 'File', keys: [mod('s')], display: 'Ctrl/Cmd+S', inText: true },
+  { action: 'saveAs', label: 'Save as', group: 'File', keys: [modShift('s')], display: 'Ctrl/Cmd+Shift+S', inText: true },
+  { action: 'closeProject', label: 'Close project', group: 'File', keys: [mod('w')], display: 'Ctrl/Cmd+W' },
+
+  // Edit
+  { action: 'undo', label: 'Undo', group: 'Edit', keys: [mod('z')], display: 'Ctrl/Cmd+Z' },
+  { action: 'redo', label: 'Redo', group: 'Edit', keys: [modShift('z')], display: 'Shift+Ctrl/Cmd+Z' },
+  { action: 'cut', label: 'Cut', group: 'Edit', keys: [mod('x')], display: 'Ctrl/Cmd+X' },
+  { action: 'copy', label: 'Copy', group: 'Edit', keys: [mod('c')], display: 'Ctrl/Cmd+C' },
+  { action: 'paste', label: 'Paste', group: 'Edit', keys: [mod('v')], display: 'Ctrl/Cmd+V' },
+  { action: 'pasteChoice', label: 'Paste with linked or unlinked choice', group: 'Edit', keys: [modShift('v')], display: 'Shift+Ctrl/Cmd+V' },
+  { action: 'duplicate', label: 'Duplicate', group: 'Edit', keys: [mod('d')], display: 'Ctrl/Cmd+D' },
+  { action: 'link', label: 'Link layers', group: 'Edit', keys: [altMod('k')], display: 'Ctrl/Cmd+Alt+K' },
+  { action: 'unlink', label: 'Unlink layers', group: 'Edit', keys: [altMod('b')], display: 'Ctrl/Cmd+Alt+B' },
+  { action: 'delete', label: 'Delete selection', group: 'Edit', keys: [{ key: 'Delete', shift: false }, { key: 'Backspace', shift: false }], display: 'Delete or Backspace' },
+  { action: 'renameLayer', label: 'Rename selected layer', group: 'Edit', keys: [{ key: 'F2', shift: false }], display: 'F2' },
+
+  // Arrange
+  { action: 'forward', label: 'Bring forward', group: 'Arrange', keys: [mod(']'), { code: 'BracketRight', mod: true, shift: false }], display: 'Ctrl/Cmd+]' },
+  { action: 'backward', label: 'Send backward', group: 'Arrange', keys: [mod('['), { code: 'BracketLeft', mod: true, shift: false }], display: 'Ctrl/Cmd+[' },
+  { action: 'front', label: 'Bring to front', group: 'Arrange', keys: [modShift(']'), { code: 'BracketRight', mod: true, shift: true }], display: 'Shift+Ctrl/Cmd+]' },
+  { action: 'back', label: 'Send to back', group: 'Arrange', keys: [modShift('['), { code: 'BracketLeft', mod: true, shift: true }], display: 'Shift+Ctrl/Cmd+[' },
+  { action: 'group', label: 'Group', group: 'Arrange', keys: [mod('g')], display: 'Ctrl/Cmd+G' },
+  { action: 'ungroup', label: 'Ungroup', group: 'Arrange', keys: [modShift('g')], display: 'Shift+Ctrl/Cmd+G' },
+
+  // Selection
+  { action: 'selectAll', label: 'Select all', group: 'Selection', keys: [mod('a')], display: 'Ctrl/Cmd+A' },
+  { action: 'selectChild', label: 'Select child', group: 'Selection', keys: [{ key: 'Enter', shift: false }], display: 'Enter' },
+  { action: 'selectParent', label: 'Select parent', group: 'Selection', keys: [{ key: 'Enter', shift: true }], display: 'Shift+Enter' },
+  { action: 'nudge', label: 'Nudge', group: 'Selection', keys: [
+    { key: 'ArrowLeft', shift: false }, { key: 'ArrowRight', shift: false }, { key: 'ArrowUp', shift: false }, { key: 'ArrowDown', shift: false },
+  ], display: 'Arrow keys' },
+  { action: 'nudgeFar', label: 'Far nudge', group: 'Selection', keys: [
+    { key: 'ArrowLeft', shift: true }, { key: 'ArrowRight', shift: true }, { key: 'ArrowUp', shift: true }, { key: 'ArrowDown', shift: true },
+  ], display: 'Shift+Arrow keys' },
+
+  // Tools
+  { action: 'selectTool', label: 'Select tool', group: 'Tools', keys: [plain('v')], display: 'V' },
+  { action: 'frameTool', label: 'Frame tool', group: 'Tools', keys: [plain('f')], display: 'F' },
+  { action: 'boundaryTool', label: 'Boundary tool', group: 'Tools', keys: [plain('b')], display: 'B' },
+  { action: 'pointerTool', label: 'Pointer tool', group: 'Tools', keys: [plain('p')], display: 'P' },
+  { action: 'textTool', label: 'Text tool', group: 'Tools', keys: [plain('t')], display: 'T' },
+  { action: 'panTool', label: 'Pan tool', group: 'Tools', keys: [plain('h')], display: 'H' },
+  { action: 'rectTool', label: 'Rectangle tool', group: 'Tools', keys: [plain('r')], display: 'R' },
+  { action: 'ellipseTool', label: 'Ellipse tool', group: 'Tools', keys: [plain('o')], display: 'O' },
+  { action: 'lineTool', label: 'Line tool', group: 'Tools', keys: [plain('l')], display: 'L' },
+  { action: 'imageTool', label: 'Image tool', group: 'Tools', keys: [{ key: 'k', mod: true, shift: true, alt: false }], display: 'Shift+Ctrl/Cmd+K' },
+  { action: 'noteTool', label: 'Note tool', group: 'Tools', keys: [plain('n')], display: 'N' },
+  { action: 'insert', label: 'Insert any element', group: 'Tools', keys: [mod('i')], display: 'Ctrl/Cmd+I' },
+
+  // View
+  { action: 'zoomIn', label: 'Zoom in', group: 'View', keys: [{ key: '=', mod: true }, { key: '+', mod: true }, { code: 'Equal', mod: true }, { code: 'NumpadAdd', mod: true }], display: 'Ctrl/Cmd+=' },
+  { action: 'zoomOut', label: 'Zoom out', group: 'View', keys: [{ key: '-', mod: true }, { key: '_', mod: true }, { code: 'Minus', mod: true }, { code: 'NumpadSubtract', mod: true }], display: 'Ctrl/Cmd+-' },
+  { action: 'zoomReset', label: 'Zoom to 100%', group: 'View', keys: [{ code: 'Digit0', mod: true }, { key: '0', mod: true }], display: 'Ctrl/Cmd+0' },
+  { action: 'fitAll', label: 'Fit all boundaries', group: 'View', keys: [shiftCode('Digit1')], display: 'Shift+1' },
+  { action: 'fitSelection', label: 'Fit the selection', group: 'View', keys: [shiftCode('Digit2')], display: 'Shift+2' },
+  { action: 'hidePanels', label: 'Hide or show panels', group: 'View', keys: [plain('Tab')], display: 'Tab' },
+
+  // Run
+  { action: 'play', label: 'Play', group: 'Run', keys: [{ key: ' ', code: 'Space', shift: true }], display: 'Shift+Space' },
+  { action: 'preview', label: 'Preview export', group: 'Run', keys: [{ key: 'Enter', mod: true }], display: 'Ctrl/Cmd+Enter', inText: true },
+  { action: 'askAI', label: 'Ask AI on selection', group: 'Run', keys: [mod('k')], display: 'Ctrl/Cmd+K' },
+  { action: 'export', label: 'Export', group: 'Run', keys: [mod('e')], display: 'Ctrl/Cmd+E' },
+
+  // Help
+  { action: 'help', label: 'Keyboard shortcuts', group: 'Help', keys: [{ key: 'F1', shift: false }], display: 'F1' },
+];
+
+const BINDING = new Map(KEYMAP.map(binding => [binding.action, binding]));
+
+/** The compact label a menu or tooltip shows for an action. */
+export function shortcutLabel(action: ShortcutAction): string {
+  return BINDING.get(action)?.display ?? '';
+}
+
+/** A tooltip with its shortcut, e.g. "Ask AI · Ctrl/Cmd+K". */
+export function withShortcut(label: string, action: ShortcutAction) {
+  return `${label} · ${shortcutLabel(action)}`;
+}
+
+export const TOOL_SHORTCUTS: Record<string, string> = {
+  newProject: shortcutLabel('new'), openProject: shortcutLabel('open'), save: shortcutLabel('save'), saveAs: shortcutLabel('saveAs'),
+  copy: shortcutLabel('copy'), cut: shortcutLabel('cut'), paste: shortcutLabel('paste'), pasteChoice: shortcutLabel('pasteChoice'), duplicate: shortcutLabel('duplicate'),
+  forward: shortcutLabel('forward'), backward: shortcutLabel('backward'), front: shortcutLabel('front'), back: shortcutLabel('back'),
+  undo: shortcutLabel('undo'), redo: shortcutLabel('redo'), link: shortcutLabel('link'), unlink: shortcutLabel('unlink'),
+  group: shortcutLabel('group'), ungroup: shortcutLabel('ungroup'),
+  zoomIn: shortcutLabel('zoomIn'), zoomOut: shortcutLabel('zoomOut'), zoomReset: shortcutLabel('zoomReset'), fit: shortcutLabel('fitAll'), fitSelection: shortcutLabel('fitSelection'),
+  closeProject: shortcutLabel('closeProject'), closePage: shortcutLabel('closeProject'),
+  editElement: shortcutLabel('renameLayer'), remove: shortcutLabel('delete'), askAI: shortcutLabel('askAI'),
+  selectTool: shortcutLabel('selectTool'), frameTool: shortcutLabel('frameTool'), boundaryTool: shortcutLabel('boundaryTool'), pointerTool: shortcutLabel('pointerTool'),
+  textTool: shortcutLabel('textTool'), panTool: shortcutLabel('panTool'), rectTool: shortcutLabel('rectTool'), rectangleTool: shortcutLabel('rectTool'),
+  ellipseTool: shortcutLabel('ellipseTool'), lineTool: shortcutLabel('lineTool'), imageTool: shortcutLabel('imageTool'), noteTool: shortcutLabel('noteTool'),
+  insertTool: shortcutLabel('insert'), play: shortcutLabel('play'), preview: shortcutLabel('preview'), export: shortcutLabel('export'), help: shortcutLabel('help'),
+  selectAll: shortcutLabel('selectAll'), selectChild: shortcutLabel('selectChild'), selectParent: shortcutLabel('selectParent'),
+};
 
 export type ToolShortcut = keyof typeof TOOL_SHORTCUTS;
 
-/** A tooltip with its shortcut, e.g. "Ask AI · Ctrl/Cmd+K". */
-export function withShortcut(label: string, action?: ToolShortcut) {
-  return action ? `${label} · ${TOOL_SHORTCUTS[action]}` : label;
+function comboMatches(combo: KeyCombo, event: ShortcutInput) {
+  const command = event.ctrlKey || event.metaKey;
+  if (!!combo.mod !== command) return false;
+  if (!!combo.alt !== event.altKey) return false;
+  if (combo.shift !== undefined && combo.shift !== event.shiftKey) return false;
+  if (combo.code && event.code === combo.code) return true;
+  if (combo.key !== undefined) {
+    // WebKitGTK reports Shift+Tab as Unidentified with the physical Tab code.
+    const key = event.key === 'Unidentified' && event.code === 'Tab' ? 'Tab' : event.key;
+    if (key.toLowerCase() === combo.key.toLowerCase()) return true;
+  }
+  return false;
 }
 
-export function editorShortcut(event: ShortcutInput, editingText: boolean): EditorShortcut | null {
+/** The action a key event performs, or null. Text fields keep their own editing keys. */
+export function shortcutFor(event: ShortcutInput, editingText: boolean): ShortcutAction | null {
   if (event.defaultPrevented || event.isComposing) return null;
-  if (event.altKey) return !editingText && !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.key.toLowerCase() === 'z' || event.code === 'KeyZ') ? 'undoElement' : null;
-  // WebKitGTK reports Shift+Tab as Unidentified with the physical Tab code.
-  const key = (event.key === 'Unidentified' && event.code === 'Tab' ? 'Tab' : event.key).toLowerCase();
-  const command = event.ctrlKey || event.metaKey;
-  if (command) {
-    if (!editingText && !event.shiftKey && key === 'x') return 'cutLayer';
-    if (!editingText && !event.shiftKey && key === 'c') return 'copyLayer';
-    if (!editingText && !event.shiftKey && key === 'v') return 'pasteLayer';
-    if (!editingText && (key === '[' || key === '{' || event.code === 'BracketLeft')) return event.shiftKey ? 'layerBack' : 'layerBackward';
-    if (!editingText && (key === ']' || key === '}' || event.code === 'BracketRight')) return event.shiftKey ? 'layerFront' : 'layerForward';
-    if (!editingText && !event.shiftKey && key === 'k') return 'askAI';
-    if (!editingText && event.shiftKey && key === 'a') return 'selectSimilar';
-    if (key === 's') return event.shiftKey ? 'saveAs' : 'save';
-    if (!event.shiftKey && key === 'w') return 'closePageTab';
-    if (!event.shiftKey && key === 'n') return 'new';
-    if (!event.shiftKey && key === 'o') return 'open';
-    if (key === '+' || key === '=') return 'zoomIn';
-    if (key === '-' || key === '_') return 'zoomOut';
-    if (!event.shiftKey && key === '0') return 'fit';
-    if (!event.shiftKey && key === '1') return 'actualSize';
-    if (!event.shiftKey && key === '2') return 'doubleSize';
-    if (event.ctrlKey && key === 'tab') return event.shiftKey ? 'previousPage' : 'nextPage';
-    if (event.ctrlKey && !event.shiftKey && key === 'pagedown') return 'nextPage';
-    if (event.ctrlKey && !event.shiftKey && key === 'pageup') return 'previousPage';
-    if (!editingText && key === 'z') return event.shiftKey ? 'redo' : 'undo';
-    if (!editingText && !event.shiftKey && key === 'y') return 'redo';
-    return null;
+  for (const binding of KEYMAP) {
+    if (editingText && !binding.inText) continue;
+    if (binding.keys.some(combo => comboMatches(combo, event))) return binding.action;
   }
-  if (!editingText && !event.shiftKey && key === 'v') return 'selectTool';
-  if (!editingText && !event.shiftKey && key === 'r') return 'requestTool';
-  if (!editingText && event.shiftKey && key === 'r') return 'rectangleTool';
-  if (!editingText && !event.shiftKey && key === 'c') return 'circleTool';
-  if (!editingText && !event.shiftKey && key === 'l') return 'freehandTool';
-  if (!editingText && !event.shiftKey && key === 'h') return 'panTool';
-  if (!editingText && (key === 'f1' || key === '?')) return 'help';
-  if (!editingText && !event.shiftKey && (key === 'delete' || key === 'backspace')) return 'remove';
   return null;
 }
+
+export type ShortcutHelpGroup = { group: ShortcutGroup; items: { label: string; keys: string }[] };
+
+/** The keyboard help is generated from the keymap, grouped in reading order. */
+export const SHORTCUT_GROUPS: ShortcutHelpGroup[] = (() => {
+  const order: ShortcutGroup[] = ['Tools', 'Edit', 'Arrange', 'Selection', 'View', 'Run', 'File', 'Help'];
+  return order.map(group => ({
+    group,
+    items: KEYMAP.filter(binding => binding.group === group).map(binding => ({ label: binding.label, keys: binding.display })),
+  })).filter(entry => entry.items.length > 0);
+})();
+
+export const SHORTCUT_HELP = SHORTCUT_GROUPS.flatMap(entry => entry.items.map(item => [item.label, item.keys] as const));

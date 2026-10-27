@@ -35,31 +35,19 @@ try {
   }
   const prepared = { jobId: 'job', status: 'prepared', attempts: [] };
 
-  await test('draft repair prepares a targeted job and starts it without exposing retained code', async () => {
+  await test('preparing targets explicit layers or reference items and then starts the job', async () => {
     const calls = [];
     const render = setup(async (command, args) => { calls.push({ command, args }); return prepared; });
-    await render().repairDraft('saved-job', 'blocked-draft');
+    await render().prepare(['element-1'], ['reference-1']);
     assert.deepEqual(calls, [
-      { command: 'prepare_generation', args: { repairJobId: 'saved-job', repairDraftId: 'blocked-draft' } },
+      { command: 'prepare_generation', args: { elementIds: ['element-1'], referenceIds: ['reference-1'] } },
       { command: 'start_generation', args: { jobId: 'job' } },
     ]);
-  });
-
-  await test('apply anyway targets one area and accepts the updated workspace', async () => {
-    const calls = [], accepted = [];
-    const workspace = { project: { revision: 42 } };
-    const render = setup(async (command, args) => { calls.push({ command, args }); return { job: prepared, workspace }; }, value => accepted.push(value));
-    await render().draftAction('saved-job', 'draft', 'apply', undefined, 'area');
-    assert.deepEqual(calls, [{ command: 'generation_draft', args: { jobId: 'saved-job', draftId: 'draft', action: 'apply', confirmedRevision: undefined, regionId: 'area' } }]);
-    assert.deepEqual(accepted, [workspace]);
-  });
-
-  await test('runtime repair uses the standard lifecycle with only its current request targeted', async () => {
-    const calls = [];
-    const render = setup(async (command, args) => { calls.push({ command, args }); return prepared; });
-    await render().prepare(undefined, ['runtime-repair']);
-    assert.deepEqual(calls, [
-      { command: 'prepare_generation', args: { regionIds: ['runtime-repair'] } },
+    const plain = [];
+    const renderPlain = setup(async (command, args) => { plain.push({ command, args }); return prepared; });
+    await renderPlain().prepare();
+    assert.deepEqual(plain, [
+      { command: 'prepare_generation', args: undefined },
       { command: 'start_generation', args: { jobId: 'job' } },
     ]);
   });

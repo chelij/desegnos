@@ -10,9 +10,7 @@ import { javascript } from '@codemirror/lang-javascript';
 import { tags } from '@lezer/highlight';
 import { htmlMetadata, metadataChanges, mapHtmlMetadata, metadataEcho, metadataHistory, replaceMetadata } from './codeMirrorMetadata';
 import type { HtmlProjection } from './editorHtml';
-import type { SiteContent } from './types';
-
-type Tab = keyof SiteContent;
+type Tab = 'html' | 'css' | 'javascript';
 export type CodeLineMark = { line: number; className: string; title?: string };
 export type CodeSaveSnapshot = { text: string; projection: HtmlProjection; changes: ChangeSet };
 export type CodeEditorHandle = { reveal: (line: number) => void; snapshot: () => CodeSaveSnapshot; rebase: (projection: HtmlProjection, snapshot: CodeSaveSnapshot) => HtmlProjection; release: (snapshot: CodeSaveSnapshot) => void; replaceSource: (projection: HtmlProjection) => void };

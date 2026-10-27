@@ -3,7 +3,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 
 // The core validates the typed layer packet separately. This adapter bounds
 // platform text transfers without exposing general clipboard commands to JS.
-const MAX_CLIPBOARD_BYTES: usize = 8 * desegnos_core::MAX_SITE_SOURCE_BYTES;
+const MAX_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
 
 fn check_size(text: &str) -> Result<(), String> {
     if text.len() > MAX_CLIPBOARD_BYTES {
@@ -30,18 +30,6 @@ pub fn write(app: &AppHandle, text: String) -> Result<(), String> {
         .map_err(|_| "This item could not be copied. Try again.".into())
 }
 
-/// Invoke from a blocking worker, outside any workspace lock. The official
-/// adapter warns that reading WebView-owned text on the GUI thread can deadlock
-/// Linux. Its API returns a complete String, so the byte limit applies after
-/// the platform transfer and before the caller parses any layer packet.
-pub fn read(app: &AppHandle) -> Result<String, String> {
-    let text = app
-        .clipboard()
-        .read_text()
-        .map_err(|_| "The clipboard could not be read. Copy the item again.")?;
-    check_size(&text)?;
-    Ok(text)
-}
 
 #[cfg(test)]
 mod tests {

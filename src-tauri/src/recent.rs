@@ -92,10 +92,25 @@ fn lock(directory: &Path) -> Result<File, String> {
     let lock = options
         .open(directory.join("recent-projects.lock"))
         .map_err(|error| error.to_string())?;
-    lock.try_lock().map_err(|_| {
-        "Another window is updating recent projects. Try again to update the list.".to_owned()
-    })?;
-    Ok(lock)
+    // A child process forked by another thread can inherit this descriptor for the instant
+    // before exec closes it, so a single try can race. Retry briefly before reporting a real
+    // writer, and stay bounded so the UI is never held for long.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(std::fs::TryLockError::WouldBlock)
+                if std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Another window is updating recent projects. Try again to update the list. {error}"
+                ));
+            }
+        }
+    }
 }
 
 fn write(directory: &Path, entries: &[RecentProject]) -> Result<(), String> {

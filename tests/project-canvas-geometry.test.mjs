@@ -1,27 +1,30 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { compileModules } from './typescript.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-const temporary = await mkdtemp(join(root, '.project-canvas-geometry-'));
+const modules = await compileModules(['src/projectCanvasGeometry.ts']);
 try {
-  const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022',
-    '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/projectCanvasGeometry.ts'], { cwd: root, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  // Node needs the extension the browser build leaves out.
-  for (const name of await readdir(temporary)) {
-    if (!name.endsWith('.js')) continue;
-    const path = join(temporary, name);
-    await writeFile(path, (await readFile(path, 'utf8')).replace(/from '(\.\/[^']+)'/g, (_, value) => `from '${value.endsWith('.js') ? value : value + '.js'}'`));
-  }
-  const { boundaryHeight, layoutBoundaries, unionBounds, sameBoundaries, fitCamera, zoomCameraAt, panCamera,
-    snapshotCacheKey, snapshotContentKey, planSnapshots, rememberSnapshot, updateSnapshotHeight,
-    BOUNDARY_GAP, MIN_BOUNDARY_HEIGHT, MAX_BOUNDARY_HEIGHT, FIT_PADDING } = await import(pathToFileURL(join(temporary, 'projectCanvasGeometry.js')).href);
-  const { MIN_ZOOM, ZOOM_LEVELS } = await import(pathToFileURL(join(temporary, 'canvasGeometry.js')).href);
+  const geometry = await modules.load('projectCanvasGeometry.js');
+  const {
+    boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapToBoundaryGrid, canvasRectFromPage, pageRectFromCanvas,
+    pushApartBoundaries, boundaryMoves, boundariesByPosition, boundaryKey, dotGrid, unionBounds, sameBoundaries,
+    fitCamera, zoomCameraAt, panCamera, drawnFrameRect, referenceNoteRect, movedReferenceRect, resizedReferenceRect,
+    convertedReferenceRects, referenceFrameRect, pushApartReference, referenceMoves, insideRect, boundaryAt,
+    insideAnyBoundary, referenceItemAt, canvasTargetKey, selectedPointers, selectedReference, selectedElementIds,
+    selectedElementTargets, hasCanvasTarget, toggleCanvasTarget, sizeTarget, nearestEdgeAnchors, pointerEndpointKey,
+    samePointerEndpoint, pointerEndpointRect, pointerRoute, pointerAt, pointSegmentDistance, pointerVisible,
+    viewportWorldRect, screenPoint, pointerBroken, pointerLabel, pointerEndpointName, automaticLinks,
+    BOUNDARY_GAP, BOUNDARY_PUSH_GAP, BOUNDARY_SNAP, MIN_BOUNDARY_HEIGHT, MAX_BOUNDARY_HEIGHT, MIN_BOUNDARY_WIDTH,
+    MIN_BOUNDARY_DRAW_HEIGHT, MIN_FRAME_SIZE, FIT_PADDING, CANVAS_DOT_SPACING, CANVAS_DOT_MIN_SCREEN, FRAME_SNAP,
+    MIN_REFERENCE_WIDTH, MIN_REFERENCE_HEIGHT, MIN_REFERENCE_ITEM_SIZE, REFERENCE_NOTE_MIN_WIDTH,
+    REFERENCE_NOTE_MIN_HEIGHT, REFERENCE_ATTACHMENT_WIDTH, REFERENCE_ATTACHMENT_HEIGHT, REFERENCE_ATTACHMENT_GAP,
+    POINTER_HIT_PX,
+  } = geometry;
+  const { MIN_ZOOM, ZOOM_LEVELS } = await modules.load('canvasGeometry.js');
+
+  const size = (id, x, y, width, height, kind = 'page') => ({ id, label: id, x, y, width, height, kind });
+  const box = (x, y, width = 400, height = 300) => ({ x, y, width, height });
+  const boundary = (sizeId, rect, pageId = `p-${sizeId}`) => ({ pageId, sizeId, label: sizeId, kind: 'page', rect });
 
   await test('boundary heights clamp to a sane range', () => {
     assert.equal(boundaryHeight(900), 900);
@@ -32,120 +35,418 @@ try {
     assert.equal(boundaryHeight(20000), MAX_BOUNDARY_HEIGHT);
   });
 
-  await test('pages lay out left to right, home first, tops aligned', () => {
+  await test('boundaries lay out home first, one per linked size, keeping stored spots', () => {
     const laid = layoutBoundaries([
-      { id: 'second', width: 800, height: 0 },
-      { id: 'third', width: 390, height: 844 },
-      { id: 'home', width: 1440, height: 900 },
+      { id: 'second', sizes: [size('second', Number.NaN, Number.NaN, 800, 0)] },
+      { id: 'home', sizes: [size('home', 200, -100, 1440, 900), size('home-phone', 1800, 40, 390, 844, 'screen')] },
     ], 'home');
-    assert.deepEqual(laid.map(item => item.pageId), ['home', 'second', 'third']);
-    assert.deepEqual(laid.map(item => item.rect), [
-      { x: 0, y: 0, width: 1440, height: 900 },
-      { x: 1440 + BOUNDARY_GAP, y: 0, width: 800, height: MIN_BOUNDARY_HEIGHT },
-      { x: 1440 + BOUNDARY_GAP + 800 + BOUNDARY_GAP, y: 0, width: 390, height: 844 },
-    ]);
+    assert.deepEqual(laid.map(item => item.pageId), ['home', 'home', 'second']);
+    assert.deepEqual(laid[0].rect, { x: 200, y: -100, width: 1440, height: 900 });
+    assert.equal(laid[0].kind, 'page');
+    assert.deepEqual(laid[1].rect, { x: 1800, y: 40, width: 390, height: 844 });
+    assert.equal(laid[1].kind, 'screen');
+    // The default-sized second boundary follows the rightmost placed boundary.
+    const right = Math.max(200 + 1440, 1800 + 390) + BOUNDARY_GAP;
+    assert.deepEqual(laid[2].rect, { x: right, y: 0, width: 800, height: MIN_BOUNDARY_HEIGHT });
+    assert.equal(boundaryKey(laid[0]), 'home');
     assert.equal(BOUNDARY_GAP, 160);
-    assert.deepEqual(layoutBoundaries([{ id: 'only', width: 0, height: 300 }], 'only')[0].rect, { x: 0, y: 0, width: 0, height: 300 });
+  });
+
+  await test('a boundary without a stored position follows the others and screens keep their exact height', () => {
+    const laid = layoutBoundaries([
+      { id: 'home', sizes: [size('home', 0, 0, 1000, 1200)] },
+      { id: 'phone', sizes: [size('phone', Number.NaN, Number.NaN, 390, 3000, 'screen')] },
+    ], 'home');
+    assert.deepEqual(laid[0].rect, { x: 0, y: 0, width: 1000, height: 1200 });
+    assert.deepEqual(laid[1].rect, { x: 1160, y: 0, width: 390, height: 3000 });
+  });
+
+  await test('drawn boundaries snap to 8px and keep their minimum size', () => {
+    assert.equal(BOUNDARY_SNAP, 8);
+    assert.equal(MIN_BOUNDARY_WIDTH, 240);
+    assert.equal(MIN_BOUNDARY_DRAW_HEIGHT, 160);
+    assert.equal(snapToBoundaryGrid(13), 16);
+    assert.equal(snapToBoundaryGrid(Number.NaN), 0);
+    assert.deepEqual(drawnBoundaryRect({ x: 3, y: 5 }, { x: 100, y: 60 }), { x: 0, y: 8, width: 240, height: 160 });
+    const large = drawnBoundaryRect({ x: 0, y: 0 }, { x: 1000, y: 700 });
+    assert.deepEqual(large, { x: 0, y: 0, width: 1000, height: 704 });
+    assert.deepEqual(drawnBoundaryRect({ x: 1000, y: 700 }, { x: 0, y: 0 }), large);
+  });
+
+  await test('a moved boundary pushes neighbours aside and the push chains', () => {
+    const before = [
+      boundary('a', box(0, 0)),
+      boundary('b', box(400, 0)),
+      boundary('c', box(800, 0)),
+    ];
+    const after = pushApartBoundaries(before, 'a');
+    assert.deepEqual(after.map(item => item.rect), [box(0, 0), box(440, 0), box(880, 0)]);
+    assert.equal(BOUNDARY_PUSH_GAP, 40);
+    assert.deepEqual(before[1].rect, box(400, 0), 'the input is untouched');
+    for (let i = 0; i < after.length; i++) for (let j = i + 1; j < after.length; j++) {
+      const first = after[i].rect, second = after[j].rect;
+      const overlapX = Math.min(first.x + first.width, second.x + second.width) - Math.max(first.x, second.x);
+      const overlapY = Math.min(first.y + first.height, second.y + second.height) - Math.max(first.y, second.y);
+      assert.ok(overlapX <= -BOUNDARY_PUSH_GAP || overlapY <= -BOUNDARY_PUSH_GAP, `${after[i].sizeId} still overlaps ${after[j].sizeId}`);
+    }
+  });
+
+  await test('push-apart separates along the least-overlapping axis and leaves clear boundaries alone', () => {
+    const after = pushApartBoundaries([
+      boundary('a', box(0, 0)),
+      boundary('b', box(380, 10)),
+    ], 'a');
+    assert.deepEqual(after[0].rect, box(0, 0));
+    assert.deepEqual(after[1].rect, box(440, 10));
+
+    const clear = [
+      boundary('a', box(0, 0)),
+      boundary('b', box(1000, 0)),
+    ];
+    assert.deepEqual(pushApartBoundaries(clear, 'a'), clear);
+    assert.deepEqual(pushApartBoundaries(clear, 'missing'), clear);
+  });
+
+  await test('only boundaries whose stored placement changed need saving', () => {
+    const previous = [boundary('a', box(0, 0)), boundary('b', box(400, 0))];
+    assert.deepEqual(boundaryMoves(previous, previous), []);
+    const moved = [{ ...previous[0] }, { ...previous[1], rect: box(440, 0), kind: 'screen' }];
+    assert.deepEqual(boundaryMoves(moved, previous), [{ pageId: 'p-b', sizeId: 'b', x: 440, y: 0, kind: 'screen' }]);
+    const added = [...previous, boundary('c', box(900, 0))];
+    assert.deepEqual(boundaryMoves(added, previous).map(move => move.sizeId), ['c']);
+  });
+
+  await test('layers list boundaries top-left first', () => {
+    const ordered = boundariesByPosition([
+      boundary('right', box(800, 0)),
+      boundary('bottom', box(0, 500)),
+      boundary('left', box(0, 0)),
+    ]);
+    assert.deepEqual(ordered.map(item => item.sizeId), ['left', 'right', 'bottom']);
+  });
+
+  await test('the dot grid keeps at least six screen pixels between dots and fades out', () => {
+    assert.equal(CANVAS_DOT_SPACING, 8);
+    assert.equal(CANVAS_DOT_MIN_SCREEN, 6);
+    assert.equal(dotGrid({ x: 0, y: 0, zoom: 1 }, false), null);
+    assert.equal(dotGrid({ x: 0, y: 0, zoom: 0 }, true), null);
+    assert.equal(dotGrid({ x: 0, y: 0, zoom: Number.NaN }, true), null);
+    const one = dotGrid({ x: 0, y: 0, zoom: 1 }, true);
+    assert.equal(one.spacing, 8);
+    assert.equal(one.size, 8);
+    assert.equal(one.fade, 1);
+    const half = dotGrid({ x: 0, y: 0, zoom: 0.5 }, true);
+    assert.equal(half.spacing, 16);
+    assert.equal(half.size, 8);
+    const tiny = dotGrid({ x: 3, y: -5, zoom: 0.05 }, true);
+    assert.ok(tiny.spacing * 0.05 >= 6);
+    assert.equal(tiny.fade, 0.5);
+    assert.ok(tiny.x >= 0 && tiny.x < tiny.size);
+    assert.ok(tiny.y >= 0 && tiny.y < tiny.size);
   });
 
   await test('union covers every boundary and comparison catches real changes', () => {
-    const first = layoutBoundaries([{ id: 'a', width: 400, height: 300 }, { id: 'b', width: 200, height: 500 }], 'a');
-    assert.deepEqual(unionBounds(first.map(item => item.rect)), { x: 0, y: 0, width: 400 + BOUNDARY_GAP + 200, height: 500 });
     assert.deepEqual(unionBounds([]), { x: 0, y: 0, width: 0, height: 0 });
-    assert.equal(sameBoundaries(first, layoutBoundaries([{ id: 'a', width: 400, height: 300 }, { id: 'b', width: 200, height: 500 }], 'a')), true);
-    assert.equal(sameBoundaries(first, layoutBoundaries([{ id: 'a', width: 400, height: 300 }, { id: 'b', width: 200, height: 520 }], 'a')), false);
-    assert.equal(sameBoundaries(first, layoutBoundaries([{ id: 'b', width: 400, height: 300 }, { id: 'a', width: 200, height: 500 }], 'a')), false);
+    const one = boundary('a', box(0, 0));
+    const two = boundary('b', box(200, 100, 100, 50));
+    assert.deepEqual(unionBounds([one.rect, two.rect]), { x: 0, y: 0, width: 400, height: 300 });
+    assert.equal(sameBoundaries([one, two], [one, two]), true);
+    assert.equal(sameBoundaries([one, two], [one, { ...two, label: 'B' }]), false);
+    assert.equal(sameBoundaries([one], [one, two]), false);
   });
 
-  await test('fit centers the boundaries inside the padding and never magnifies past 100%', () => {
-    const fitted = fitCamera({ x: 0, y: 0, width: 1600, height: 1000 }, { width: 1200, height: 800 });
-    assert.ok(Math.abs(fitted.zoom - 0.69) < 1e-9);
-    assert.ok(Math.abs(fitted.x - FIT_PADDING) < 1e-9);
-    assert.ok(Math.abs(fitted.y - (800 - 1000 * fitted.zoom) / 2) < 1e-9);
-    const small = fitCamera({ x: 40, y: 20, width: 300, height: 200 }, { width: 1200, height: 800 });
+  await test('fit centers boundaries inside the padding and never magnifies past 100%', () => {
+    const camera = fitCamera({ x: 100, y: 50, width: 800, height: 400 }, { width: 1000, height: 800 });
+    assert.equal(camera.zoom, 1);
+    assert.equal(camera.x, 100 - 100 * 1);
+    assert.equal(camera.y, 200 - 50 * 1);
+    const small = fitCamera({ x: 0, y: 0, width: 100, height: 100 }, { width: 1000, height: 800 });
     assert.equal(small.zoom, 1);
-    assert.equal(small.x, (1200 - 300) / 2 - 40);
-    assert.equal(small.y, (800 - 200) / 2 - 20);
-    const huge = fitCamera({ x: 0, y: 0, width: 10_000_000, height: 1000 }, { width: 1200, height: 800 });
-    assert.equal(huge.zoom, MIN_ZOOM);
+    assert.equal(FIT_PADDING, 48);
+    const tinyViewport = fitCamera({ x: 0, y: 0, width: 100_000, height: 100_000 }, { width: 100, height: 100 });
+    assert.equal(tinyViewport.zoom, MIN_ZOOM);
   });
 
   await test('zoom stays anchored under the cursor and clamps to the edit range', () => {
-    const camera = { x: 40, y: -20, zoom: 0.5 }, point = { x: 120, y: 80 };
-    const world = { x: (point.x - camera.x) / camera.zoom, y: (point.y - camera.y) / camera.zoom };
-    const zoomed = zoomCameraAt(camera, point, 1);
-    assert.deepEqual(zoomed, { zoom: 1, x: -40, y: -120 });
-    assert.deepEqual({ x: (point.x - zoomed.x) / zoomed.zoom, y: (point.y - zoomed.y) / zoomed.zoom }, world);
-    assert.equal(zoomCameraAt(camera, point, 100).zoom, ZOOM_LEVELS.at(-1));
-    assert.equal(zoomCameraAt(camera, point, 0).zoom, MIN_ZOOM);
-    assert.equal(zoomCameraAt(camera, point, Number.NaN).zoom, 0.5);
+    const camera = zoomCameraAt({ x: 10, y: 20, zoom: 1 }, { x: 110, y: 220 }, 2);
+    assert.equal(camera.zoom, 2);
+    assert.equal((110 - 10) * 2 + camera.x, 110);
+    assert.equal((220 - 20) * 2 + camera.y, 220);
+    assert.equal(zoomCameraAt(camera, { x: 0, y: 0 }, 100).zoom, ZOOM_LEVELS.at(-1));
+    assert.equal(zoomCameraAt(camera, { x: 0, y: 0 }, 0).zoom, MIN_ZOOM);
+    assert.equal(zoomCameraAt(camera, { x: 0, y: 0 }, Number.NaN).zoom, 2);
+    assert.deepEqual(panCamera({ x: 1, y: 2, zoom: 1 }, { x: 4, y: 5 }), { x: 5, y: 7, zoom: 1 });
+    assert.deepEqual(panCamera({ x: 1, y: 2, zoom: 1 }, { x: Number.NaN, y: 0 }), { x: 1, y: 2, zoom: 1 });
   });
 
-  await test('pan moves the camera by the drag delta', () => {
-    const camera = { x: 1, y: 2, zoom: 0.5 };
-    assert.deepEqual(panCamera(camera, { x: 10, y: -4 }), { x: 11, y: -2, zoom: 0.5 });
-    assert.deepEqual(camera, { x: 1, y: 2, zoom: 0.5 });
-    assert.equal(panCamera(camera, { x: Number.NaN, y: 0 }), camera);
+  await test('frames convert between canvas and page coordinates through the boundary origin', () => {
+    assert.deepEqual(canvasRectFromPage(box(10, 20), { x: 100, y: 200 }), box(110, 220));
+    assert.deepEqual(pageRectFromCanvas(box(110, 220), { x: 100, y: 200 }), box(10, 20));
   });
 
-  await test('snapshot keys follow page content and viewport, not project revision', () => {
-    const content = { html: '<h1>A</h1>', css: 'h1{color:red}', javascript: '' }, viewport = { width: 1440, height: 900 };
-    const key = snapshotContentKey(content, viewport);
-    assert.equal(snapshotContentKey({ ...content }, { ...viewport }), key);
-    assert.notEqual(snapshotContentKey({ ...content, html: '<h1>B</h1>' }, viewport), key);
-    assert.notEqual(snapshotContentKey({ ...content, css: 'h1{color:blue}' }, viewport), key);
-    assert.notEqual(snapshotContentKey({ ...content, javascript: 'void 0' }, viewport), key);
-    assert.notEqual(snapshotContentKey(content, { width: 390, height: 900 }), key);
-    assert.notEqual(snapshotContentKey(content, { width: 1440, height: 844 }), key);
-    assert.equal(snapshotContentKey(null, viewport), snapshotContentKey(null, { ...viewport }));
-    assert.notEqual(snapshotContentKey(null, viewport), key);
+  await test('a frame drag snaps to 8px, keeps 24px and clamps to its boundary', () => {
+    const area = box(100, 100, 400, 300);
+    assert.equal(FRAME_SNAP, 8);
+    assert.equal(MIN_FRAME_SIZE, 24);
+    assert.deepEqual(drawnFrameRect({ x: 120, y: 120 }, { x: 320, y: 280 }, area), box(120, 120, 200, 160));
+    const reversed = drawnFrameRect({ x: 320, y: 280 }, { x: 120, y: 120 }, area);
+    assert.deepEqual(reversed, box(120, 120, 200, 160));
+    const clamped = drawnFrameRect({ x: 120, y: 120 }, { x: 900, y: 900 }, area);
+    assert.deepEqual(clamped, box(120, 120, 380, 280));
+    const minimal = drawnFrameRect({ x: 120, y: 120 }, { x: 121, y: 121 }, area);
+    assert.deepEqual(minimal, box(120, 120, 24, 24));
+    assert.equal(drawnFrameRect({ x: 10, y: 10 }, { x: 200, y: 200 }, area), null);
+    assert.equal(drawnFrameRect({ x: Number.NaN, y: 120 }, { x: 200, y: 200 }, area), null);
   });
 
-  await test('cached snapshots show immediately and only changed pages are captured', () => {
-    const cache = new Map(), viewport = { width: 1440, height: 900 };
-    const home = { id: 'home', viewport, content: { html: 'home', css: '', javascript: '' } };
-    const about = { id: 'about', viewport, content: { html: 'about', css: '', javascript: '' } };
-    const blank = { id: 'blank', viewport, content: null };
-    const homeKey = snapshotContentKey(home.content, viewport), aboutKey = snapshotContentKey(about.content, viewport);
-    rememberSnapshot(cache, 'p1', 'home', { key: homeKey, html: 'home:snapshot', height: 1200 });
-    rememberSnapshot(cache, 'p1', 'about', { key: 'stale', html: 'about:old', height: 640 });
-    let plan = planSnapshots(cache, 'p1', [home, about, blank]);
-    assert.deepEqual(plan.snapshots, { home: { html: 'home:snapshot' }, about: { html: 'about:old' } });
-    assert.deepEqual(plan.heights, { home: 1200, about: 640 });
-    assert.deepEqual(plan.pending.map(item => item.page.id), ['about']);
-    assert.equal(plan.pending[0].key, aboutKey);
-    rememberSnapshot(cache, 'p1', 'about', { key: aboutKey, html: 'about:snapshot', height: 640 });
-    plan = planSnapshots(cache, 'p1', [home, about, blank]);
-    assert.deepEqual(plan.pending, []);
-    assert.deepEqual(plan.snapshots.about, { html: 'about:snapshot' });
-    plan = planSnapshots(cache, 'p1', [{ ...home, content: { ...home.content, css: 'body{}' } }, about, blank]);
-    assert.deepEqual(plan.pending.map(item => item.page.id), ['home']);
-    assert.deepEqual(plan.snapshots.home, { html: 'home:snapshot' });
-    assert.notEqual(plan.pending[0].key, homeKey);
+  await test('a Frame drag outside boundaries draws a snapped note at least 160 by 80', () => {
+    assert.equal(MIN_REFERENCE_WIDTH, 160);
+    assert.equal(MIN_REFERENCE_HEIGHT, 80);
+    assert.equal(REFERENCE_NOTE_MIN_WIDTH, 200);
+    assert.equal(REFERENCE_NOTE_MIN_HEIGHT, 120);
+    assert.deepEqual(referenceNoteRect({ x: 2, y: 3 }, { x: 100, y: 60 }), { x: 0, y: 0, width: 160, height: 80 });
+    assert.deepEqual(referenceNoteRect({ x: 400, y: 400 }, { x: 200, y: 200 }), { x: 200, y: 200, width: 200, height: 200 });
   });
 
-  await test('cache drops deleted pages and leaves other projects alone', () => {
-    const cache = new Map(), viewport = { width: 800, height: 600 }, content = { html: 'x', css: '', javascript: '' };
-    rememberSnapshot(cache, 'p1', 'home', { key: snapshotContentKey(content, viewport), html: 'p1:home', height: 600 });
-    rememberSnapshot(cache, 'p1', 'gone', { key: snapshotContentKey(content, viewport), html: 'p1:gone', height: 600 });
-    rememberSnapshot(cache, 'p2', 'home', { key: snapshotContentKey(content, viewport), html: 'p2:home', height: 600 });
-    const plan = planSnapshots(cache, 'p1', [{ id: 'home', viewport, content }]);
-    assert.deepEqual(plan.snapshots, { home: { html: 'p1:home' } });
-    assert.equal(cache.has(snapshotCacheKey('p1', 'gone')), false);
-    assert.equal(cache.has(snapshotCacheKey('p1', 'home')), true);
-    assert.equal(cache.has(snapshotCacheKey('p2', 'home')), true);
+  await test('reference items move and resize freely with a minimum size', () => {
+    assert.deepEqual(movedReferenceRect(box(13, 21), { x: 5, y: 6 }), box(16, 24));
+    assert.equal(MIN_REFERENCE_ITEM_SIZE, 48);
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 400, y: 400 }), box(100, 100, 300, 300));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 50, y: 50 }), box(48, 48, 252, 202));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 101, y: 101 }), box(100, 100, 48, 48));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 399, y: 399 }), box(252, 202, 48, 48));
   });
 
-  await test('measured heights update cache entries in place', () => {
-    const cache = new Map(), key = snapshotCacheKey('p1', 'home');
-    rememberSnapshot(cache, 'p1', 'home', { key: 'content', html: 'snapshot', height: 0 });
-    updateSnapshotHeight(cache, 'p1', 'home', 913);
-    assert.deepEqual(cache.get(key), { key: 'content', html: 'snapshot', height: 913 });
-    updateSnapshotHeight(cache, 'p1', 'missing', 500);
-    assert.equal(cache.size, 1);
-    updateSnapshotHeight(cache, 'p1', 'home', 0);
-    assert.equal(cache.get(key).height, 913);
+  await test('a frame dragged out places a note and its attachment cards one row beside it', () => {
+    assert.equal(REFERENCE_ATTACHMENT_WIDTH, 200);
+    assert.equal(REFERENCE_ATTACHMENT_HEIGHT, 140);
+    assert.equal(REFERENCE_ATTACHMENT_GAP, 16);
+    const converted = convertedReferenceRects(box(10, 20, 50, 40), 2);
+    assert.deepEqual(converted.note, box(10, 20, REFERENCE_NOTE_MIN_WIDTH, REFERENCE_NOTE_MIN_HEIGHT));
+    assert.deepEqual(converted.attachments, [
+      box(10 + REFERENCE_NOTE_MIN_WIDTH + 16, 20, 200, 140),
+      box(10 + REFERENCE_NOTE_MIN_WIDTH + 16 + 216, 20, 200, 140),
+    ]);
+    assert.deepEqual(convertedReferenceRects(box(0, 0), 0).attachments, []);
+  });
+
+  await test('a reference item dropped into a boundary keeps its size where it fits and clamps inside', () => {
+    assert.deepEqual(referenceFrameRect(box(110, 110, 100, 60), box(100, 100, 400, 300)), box(112, 112, 100, 60));
+    assert.deepEqual(referenceFrameRect(box(10, 10, 10, 10), box(100, 100, 400, 300)), box(100, 100, 24, 24));
+    assert.deepEqual(referenceFrameRect(box(480, 380, 200, 200), box(100, 100, 400, 300)), box(300, 200, 200, 200));
+  });
+
+  await test('boundaries push reference items aside and items do not push each other', () => {
+    const pushed = pushApartReference([
+      { itemId: 'a', rect: box(200, 0, 100, 100) },
+      { itemId: 'b', rect: box(0, 400, 100, 100) },
+    ], [{ rect: box(0, 0, 400, 300) }]);
+    assert.deepEqual(pushed[0].rect, box(200, -140, 100, 100), 'the shortest axis moves the item out');
+    assert.deepEqual(pushed[1].rect, box(0, 400, 100, 100), 'the second item was already clear');
+    assert.deepEqual(referenceMoves(pushed, pushed), []);
+    const moved = [...pushed];
+    moved[0] = { ...moved[0], rect: box(460, 0, 100, 100) };
+    assert.deepEqual(referenceMoves(moved, pushed), [{ itemId: 'a', x: 460, y: 0 }]);
+  });
+
+  await test('inside and outside detection reads the topmost boundary', () => {
+    assert.equal(insideRect(box(0, 0, 10, 10), { x: 0, y: 0 }), true);
+    assert.equal(insideRect(box(0, 0, 10, 10), { x: 11, y: 5 }), false);
+    assert.equal(insideRect(box(0, 0, 10, 10), { x: Number.NaN, y: 5 }), false);
+    const boundaries = [boundary('below', box(0, 0, 100, 100)), boundary('above', box(50, 50, 100, 100))];
+    assert.equal(boundaryAt(boundaries, { x: 60, y: 60 }).sizeId, 'above');
+    assert.equal(boundaryAt(boundaries, { x: 10, y: 10 }).sizeId, 'below');
+    assert.equal(boundaryAt(boundaries, { x: 400, y: 400 }), null);
+    assert.equal(insideAnyBoundary(boundaries, { x: 60, y: 60 }), true);
+    assert.equal(referenceItemAt([{ itemId: 'note', rect: box(0, 0, 10, 10) }], { x: 5, y: 5 }).itemId, 'note');
+  });
+
+  await test('canvas selection toggles elements, boundaries and pointers with Shift or Ctrl', () => {
+    const elementTarget = { kind: 'element', pageId: 'p', elementId: 'e', sizeId: 's' };
+    const allSizes = { kind: 'element', pageId: 'p', elementId: 'e', sizeId: null };
+    const referenceTarget = { kind: 'reference', itemId: 'r' };
+    const pointerTarget = { kind: 'pointer', pointerId: 'x' };
+    assert.equal(canvasTargetKey(elementTarget), 'element:p:e:s');
+    assert.equal(canvasTargetKey(allSizes), 'element:p:e:all');
+    assert.equal(canvasTargetKey(referenceTarget), 'reference:r');
+    assert.equal(canvasTargetKey(pointerTarget), 'pointer:x');
+    assert.deepEqual(toggleCanvasTarget([elementTarget], pointerTarget, false), [pointerTarget]);
+    assert.deepEqual(toggleCanvasTarget([elementTarget], pointerTarget, true), [elementTarget, pointerTarget]);
+    assert.deepEqual(toggleCanvasTarget([elementTarget, pointerTarget], elementTarget, true), [pointerTarget]);
+    assert.equal(hasCanvasTarget([elementTarget], { ...elementTarget }), true);
+    assert.equal(hasCanvasTarget([allSizes], elementTarget), false);
+    assert.deepEqual(selectedPointers([pointerTarget, referenceTarget]), ['x']);
+    assert.deepEqual(selectedReference([pointerTarget, referenceTarget]), ['r']);
+    assert.deepEqual(selectedElementIds([elementTarget, allSizes]), ['e', 'e']);
+    assert.deepEqual(selectedElementTargets([elementTarget, referenceTarget]), [elementTarget]);
+    assert.deepEqual(sizeTarget(elementTarget), { size_id: 's' });
+    assert.deepEqual(sizeTarget(allSizes), { all_sizes: true });
+  });
+
+  const pointer = (from, to, comment = 'Opens here') => ({ id: 'pointer', from, to, comment, wiring: null });
+  const request = (elementId, rect, pageId = 'home', sizeId = 'home') => ({ pageId, elementId, sizeId, rect });
+
+  await test('pointer lines leave the nearest edge midpoints and route at any distance', () => {
+    const source = box(0, 0, 100, 100);
+    assert.deepEqual(nearestEdgeAnchors(source, box(200, 0, 100, 100)), {
+      from: { x: 100, y: 50 }, to: { x: 200, y: 50 }, fromEdge: 'right', toEdge: 'left',
+    });
+    assert.deepEqual(nearestEdgeAnchors(source, box(-200, 0, 100, 100)), {
+      from: { x: 0, y: 50 }, to: { x: -100, y: 50 }, fromEdge: 'left', toEdge: 'right',
+    });
+    assert.deepEqual(nearestEdgeAnchors(source, box(0, 200, 100, 100)), {
+      from: { x: 50, y: 100 }, to: { x: 50, y: 200 }, fromEdge: 'bottom', toEdge: 'top',
+    });
+    assert.deepEqual(nearestEdgeAnchors(source, box(0, -200, 100, 100)), {
+      from: { x: 50, y: 0 }, to: { x: 50, y: -100 }, fromEdge: 'top', toEdge: 'bottom',
+    });
+  });
+
+  await test('pointer endpoint keys compare the whole endpoint', () => {
+    const element = { kind: 'element', pageId: 'p', elementId: 'e', sizeId: 's' };
+    assert.equal(pointerEndpointKey(element), 'element:p:e:s');
+    assert.equal(pointerEndpointKey({ kind: 'boundary', pageId: 'p', sizeId: null }), 'boundary:p:');
+    assert.equal(samePointerEndpoint(element, { ...element }), true);
+    assert.equal(samePointerEndpoint(element, { ...element, sizeId: 'other' }), false);
+    assert.equal(samePointerEndpoint({ kind: 'url', url: 'https://a.test' }, { kind: 'url', url: 'https://a.test' }), true);
+  });
+
+  await test('pointer routes resolve frames, boundaries and reference cards', () => {
+    const world = {
+      requests: [request('e1', box(0, 0, 100, 100))],
+      boundaries: [{ pageId: 'home', sizeId: 'home', rect: box(0, 0, 800, 600) }, { pageId: 'other', sizeId: 'other', rect: box(1000, 0, 800, 600) }],
+      reference: [{ itemId: 'r1', rect: box(-300, 0, 200, 140), url: 'https://a.test' }],
+    };
+    assert.deepEqual(pointerEndpointRect({ kind: 'element', pageId: 'home', elementId: 'e1' }, world), box(0, 0, 100, 100));
+    assert.deepEqual(pointerEndpointRect({ kind: 'boundary', pageId: 'other' }, world), box(1000, 0, 800, 600));
+    assert.deepEqual(pointerEndpointRect({ kind: 'reference', itemId: 'r1' }, world), box(-300, 0, 200, 140));
+    assert.deepEqual(pointerEndpointRect({ kind: 'url', url: 'https://a.test' }, world), box(-300, 0, 200, 140));
+
+    const route = pointerRoute(pointer(
+      { kind: 'element', pageId: 'home', elementId: 'e1' },
+      { kind: 'boundary', pageId: 'other' },
+    ), world);
+    assert.equal(route.broken, false);
+    assert.equal(route.brokenEnd, null);
+    assert.deepEqual(route.from, { x: 100, y: 50 });
+    assert.deepEqual(route.to, { x: 1000, y: 300 });
+    assert.deepEqual(route.source, box(0, 0, 100, 100));
+    assert.deepEqual(route.target, box(1000, 0, 800, 600));
+  });
+
+  await test('broken pointers survive deletion and fall back to a boundary or a stub', () => {
+    const world = {
+      requests: [request('e1', box(0, 0, 100, 100))],
+      boundaries: [{ pageId: 'home', sizeId: 'home', rect: box(0, 0, 800, 600) }],
+      reference: [],
+    };
+    const missingElement = pointerRoute(pointer(
+      { kind: 'element', pageId: 'home', elementId: 'e1' },
+      { kind: 'element', pageId: 'home', elementId: 'gone' },
+    ), world);
+    assert.equal(missingElement.broken, true);
+    assert.equal(missingElement.brokenEnd, 'to');
+    assert.deepEqual(missingElement.target, box(0, 0, 800, 600), 'the page boundary keeps the line visible');
+
+    const stub = pointerRoute(pointer(
+      { kind: 'element', pageId: 'home', elementId: 'e1' },
+      { kind: 'reference', itemId: 'gone' },
+    ), world);
+    assert.equal(stub.broken, true);
+    assert.equal(stub.brokenEnd, 'to');
+    assert.equal(stub.target, null);
+    assert.deepEqual(stub.to, { x: 100 + 120, y: 100 + 120 });
+
+    assert.equal(pointerRoute(pointer(
+      { kind: 'boundary', pageId: 'gone' },
+      { kind: 'reference', itemId: 'gone' },
+    ), { requests: [], boundaries: [], reference: [] }), null);
+  });
+
+  await test('pointer hit testing uses the line with a six screen pixel tolerance', () => {
+    assert.equal(POINTER_HIT_PX, 6);
+    assert.equal(pointSegmentDistance({ x: 5, y: 5 }, { x: 0, y: 0 }, { x: 10, y: 0 }), 5);
+    assert.equal(pointSegmentDistance({ x: 5, y: 5 }, { x: 0, y: 0 }, { x: 0, y: 0 }), Math.hypot(5, 5));
+    const items = [
+      { id: 'far', route: { from: { x: 0, y: 0 }, to: { x: 100, y: 0 } } },
+      { id: 'near', route: { from: { x: 0, y: 20 }, to: { x: 100, y: 20 } } },
+    ];
+    assert.equal(pointerAt(items, { x: 50, y: 21 }, 5).id, 'near');
+    assert.equal(pointerAt(items, { x: 50, y: 30 }, 5), null);
+    assert.equal(pointerAt([{ id: 'same', route: { from: { x: 0, y: 0 }, to: { x: 100, y: 0 } } },
+      { id: 'later', route: { from: { x: 0, y: 0 }, to: { x: 100, y: 0 } } }], { x: 50, y: 0 }, 1).id, 'later');
+  });
+
+  await test('pointers whose two ends are outside the viewport are culled', () => {
+    const viewport = box(0, 0, 100, 100);
+    assert.equal(pointerVisible(box(0, 0, 10, 10), null, viewport), true);
+    assert.equal(pointerVisible(box(200, 200, 10, 10), box(300, 300, 10, 10), viewport), false);
+    assert.equal(pointerVisible(box(200, 200, 10, 10), box(50, 50, 10, 10), viewport), true);
+    assert.deepEqual(screenPoint({ x: 10, y: 20 }, { x: 5, y: 6, zoom: 2 }), { x: 25, y: 46 });
+    assert.deepEqual(viewportWorldRect({ x: -100, y: -50, zoom: 2 }, { width: 1000, height: 800 }), { x: 50, y: 25, width: 500, height: 400 });
+  });
+
+  const project = {
+    pages: [
+      {
+        id: 'home', name: 'Home', path: '/', sizes: [{ id: 'home', label: 'Desktop', x: 0, y: 0, width: 800, height: 600, kind: 'page' }],
+        elements: [{ id: 'e1', kind: 'text', text: 'Home link', name: null, url: '/about/', children: [], rect: box(0, 0, 100, 40), overrides: {}, visible: true }],
+      },
+      {
+        id: 'about', name: 'About', path: '/about', sizes: [{ id: 'about', label: 'Desktop', x: 1000, y: 0, width: 800, height: 600, kind: 'page' }],
+        elements: [{ id: 'e2', kind: 'text', text: 'External', name: null, url: 'https://example.test', children: [], rect: box(0, 0, 100, 40), overrides: {}, visible: true }],
+      },
+    ],
+    reference: [
+      { id: 'note', rect: box(-300, 0, 200, 140), kind: { kind: 'note', text: 'Read me' } },
+      { id: 'card', rect: box(-300, 200, 200, 140), kind: { kind: 'link', url: 'https://example.com', title: 'Example' } },
+    ],
+    linked: {},
+  };
+
+  await test('pointer broken checks read the current project', () => {
+    assert.equal(pointerBroken(pointer({ kind: 'boundary', pageId: 'home' }, { kind: 'boundary', pageId: 'about' }), project), false);
+    assert.equal(pointerBroken(pointer({ kind: 'element', pageId: 'home', elementId: 'e1' }, { kind: 'boundary', pageId: 'about' }), project), false);
+    assert.equal(pointerBroken(pointer({ kind: 'element', pageId: 'home', elementId: 'gone' }, { kind: 'boundary', pageId: 'about' }), project), true);
+    assert.equal(pointerBroken(pointer({ kind: 'boundary', pageId: 'home', sizeId: 'gone' }, { kind: 'boundary', pageId: 'about' }), project), true);
+    assert.equal(pointerBroken(pointer({ kind: 'boundary', pageId: 'home' }, { kind: 'reference', itemId: 'gone' }), project), true);
+    assert.equal(pointerBroken(pointer({ kind: 'boundary', pageId: 'home' }, { kind: 'url', url: 'https://example.com' }), project), false);
+    assert.equal(pointerBroken(pointer({ kind: 'boundary', pageId: 'home' }, { kind: 'url', url: 'https://missing.test' }), project), true);
+    assert.equal(pointerBroken(pointer({ kind: 'boundary', pageId: 'gone' }, { kind: 'boundary', pageId: 'about' }), project), true);
+  });
+
+  await test('pointer names fall back to the page, layer and reference labels', () => {
+    const boundaryPointer = pointer({ kind: 'boundary', pageId: 'home' }, { kind: 'reference', itemId: 'note' });
+    assert.equal(pointerEndpointName(boundaryPointer.from, project, 'source'), 'Home');
+    assert.equal(pointerEndpointName(boundaryPointer.to, project, 'target'), 'Read me');
+    assert.equal(pointerLabel(boundaryPointer, project), 'Opens here');
+    const unnamed = pointer({ kind: 'element', pageId: 'home', elementId: 'e1' }, { kind: 'element', pageId: 'home', elementId: 'gone' }, '');
+    assert.equal(pointerEndpointName(unnamed.from, project, 'source'), 'Home link');
+    assert.equal(pointerEndpointName(unnamed.to, project, 'target'), 'Missing target');
+    assert.equal(pointerLabel(unnamed, project), 'Home link → Missing target');
+    assert.equal(pointerEndpointName({ kind: 'reference', itemId: 'card' }, project, 'target'), 'Example');
+    assert.equal(pointerEndpointName({ kind: 'url', url: 'https://a.test' }, project, 'target'), 'https://a.test');
+  });
+
+  await test('automatic link lines follow a layer link to another boundary once', () => {
+    const boundaries = [
+      boundary('home', box(0, 0, 800, 600), 'home'),
+      boundary('about', box(1000, 0, 800, 600), 'about'),
+    ];
+    const boxes = [
+      request('e1', box(0, 0, 100, 40), 'home', 'home'),
+      request('e1', box(0, 0, 100, 40), 'home', 'home'),
+      request('e2', box(1000, 0, 100, 40), 'about', 'about'),
+    ];
+    const links = automaticLinks(project, boundaries, boxes);
+    assert.equal(links.length, 1, 'one line per page pair');
+    assert.equal(links[0].fromPageId, 'home');
+    assert.equal(links[0].toPageId, 'about');
+    assert.deepEqual(links[0].source, box(0, 0, 100, 40));
+    assert.deepEqual(links[0].target, box(1000, 0, 800, 600));
+    assert.deepEqual(links[0].route, nearestEdgeAnchors(box(0, 0, 100, 40), box(1000, 0, 800, 600)));
+    assert.deepEqual(automaticLinks(project, boundaries, []), []);
   });
 } finally {
-  await rm(temporary, { recursive: true, force: true });
+  await modules.cleanup();
 }

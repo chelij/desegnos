@@ -1,56 +1,63 @@
 # Desegnos
 
-Create a website by describing what belongs on the page. Place requests on the canvas, generate a design with your AI connection, then edit and export it. Desegnos is a Rust desktop app with an open canvas and no sidebars.
+A visual canvas with AI. Place elements exactly where you want them on an infinite canvas, by hand or by describing them in a frame. Everything stays visual while you work; at export the AI builds real HTML, CSS and JavaScript from the design, and slides and images render directly.
 
-For a source-level guide to the codebase, see the [project map](docs/PROJECT_MAP.md).
+Desegnos is a Tauri desktop app: React 19 and TypeScript for the editor, Rust for the project model, storage, AI providers and export.
 
-Getting started: [Install and build your first site](docs/INSTALL_AND_FIRST_SITE.md).
+- [Product direction](PRODUCT.md)
+- [Canvas concept](CANVAS.md)
+- [Editor design](DESIGN.md)
+- [Glossary](GLOSSARY.md)
+- [Project map](docs/PROJECT_MAP.md)
 
-Security: [Report vulnerabilities privately](SECURITY.md).
+## What the app does
 
-## Create your first website
+**One canvas per project.** Boundaries are the outputs: a page, app screen, slide or image. Everything inside a boundary ships at export. Everything outside every boundary is reference for the AI and never ships. Boundaries sit side by side, never overlap, and linked sizes (phone, tablet, desktop) share their elements with per-size overrides.
 
-1. Choose **Blank website**, **Use my existing brand**, or **Open project**. Recent projects appear on the start screen.
-2. Name your project and choose a Web or Mobile screen guide. New pages start light; the appearance control changes that later.
-3. Choose **Add request** and click where you want something. Describe it in the box. Add as many requests as you need, on any page.
-4. Open **AI settings**. Connect an OpenAI API key or sign in with your ChatGPT plan, then **Test access**. Choose a model and save your settings.
-5. Choose **Flexible** for more interpretation or **Precise** to follow your request and placement closely. Click **Generate**. Progress appears above the canvas, and **Cancel** stops waiting.
-6. Review the result on the canvas. **Keep**, **Undo**, **Try again**, and **Details** are beside the result. Click an element to select it; double-click text to edit it. Drag a selected element to move it or a corner to resize it. Use **Ask AI** for a generated change.
-7. **Save** keeps an editable `.desegnos` project. **Export website** writes a website you can open in a browser and share.
+**Elements, layers and frames.** Boxes, text, shapes, lines, images, buttons, links, form controls, video, embeds and code blocks are visual elements. A box can lay its children out freely, in a stack or in a grid. A layer is one element or a group, with its own AI request history and context. A frame is a box whose request the AI fills.
 
-Your project brief grows as you work. Open **Project brief** to review the purpose, audience, brand choices, and design feedback, or make a deliberate exception to a choice.
+**Pointers.** A pointer is a line from a layer or boundary to its target. Its comment is the instruction. The line grants the AI permission to read and change the target within the project. Simple pointers run visually in Play; the rest compile at export.
 
-## Use an existing brand
+**Play and Preview.** Play makes a boundary clickable and runs simple pointers on the canvas. Preview export builds the real page in the background and runs it over the boundary in a sandbox. Escape returns to the design.
 
-Choose **Use my existing brand**, then select a Desegnos project, website folder, or ZIP. Review the files before **Analyze brand** sends the selected text and supported logos to your connected AI. Desegnos reads the source without changing it.
+**Import.** Import context reads a website, folder or ZIP as untrusted brand evidence. **Import website…** renders a site's pages in a hidden, script-disabled frame and converts them into elements: containers become boxes, text becomes text, images join the project picture store, controls become their kinds, and links between imported pages draw automatic link lines. Scripts become reference notes and recognisable behaviours become pointers with comments, left unclassified.
 
-Review each finding and its sources, and choose which logos to keep. **Create project** starts a blank page with only your approved brand choices and portable logos. It does not copy the old website onto the canvas.
+**Projects and history.** Several projects can be open as project tabs. A project is one `.desegnos` SQLite file holding the design and its version history. Saves create labelled versions; History restores one as a single undo step; Alternatives are named branches. Exports stay ordinary folders outside the project.
 
-## Canvas controls
+**Keyboard.** Every tool and action has a shortcut from one keymap in [src/shortcuts.ts](src/shortcuts.ts). The tool strip tooltips, the menu and **Menu → Keyboard shortcuts** read the same table. Shortcuts stay out of text fields except where saving and preview still make sense.
 
-The floating canvas toolbar offers **Select**, **Add request**, **Pan**, and zoom. Double-click empty space to add a request, or Shift-drag to mark an area. Ctrl/Cmd+wheel zooms around the pointer. The grid starts on; **Grid and rulers** controls spacing and snapping.
+## Run it
 
-Single-click selects an element and shows its outline and controls. Right-click opens its actions. Local text, link, image, style, move, and resize edits use no AI request. **Undo** and **Redo** work from the toolbar, menu, or Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z. **Menu → Keyboard shortcuts** lists the shortcuts.
-
-## Your AI connection and files
-
-API keys and sign-in tokens stay in secure device storage or the current session, separate from your project. API requests use your OpenAI billing; ChatGPT requests use the selected account's eligible plan or credits. The API budget is a conservative estimate, not a guaranteed billing cap. Cancelling submitted work may still use credits or incur charges.
-
-## Run and build
-
-Run `npm run release:local` to typecheck and rebuild the frontend, then build the release executable (fast local settings; add `-- --dist` for the fully optimized build used for publishing) with embedded UI and the default dialog features, skipping installer bundles. The Linux shell entry point `./scripts/build-release.sh` calls the same Node script and can find Node through mise when needed. The script prints the binary's path, size and timestamp. On Linux it also runs a five-second startup check on guarded Xvfb with private temporary app data, saving its screenshot and logs under `test-results/startup/`. Windows and macOS skip that Linux-only check and need manual startup verification.
-
-The default executable is `target/release/desegnos` (`target/release/desegnos.exe` on Windows); the script also respects Cargo's target directory and `CARGO_BUILD_TARGET`. Development commands:
+Requirements: Node.js, a Rust toolchain, and the desktop dependencies for Tauri (WebKitGTK 4.1, a desktop portal and a Secret Service provider on Linux).
 
 ```sh
-pnpm install --frozen-lockfile
-pnpm build
-pnpm desktop build --debug --no-bundle
-pnpm desktop build --no-bundle
+npm install
+npm run dev        # Vite frontend at 127.0.0.1:1420
+npm run desktop    # Tauri desktop app
 ```
 
-The [generation benchmark](docs/GENERATION_BENCHMARK.md) provides 18 fixed owner-run scenarios. Its offline checks make no AI requests; live quality remains unverified until you run and rate the results.
+Checks:
 
-For protocol, storage, security, recovery, dependencies, and verification details, see the [technical guide](docs/USER_TECHNICAL.md). The [release plan](RELEASE_PLAN.md) tracks remaining work. The editor uses GPL-3.0-only; see [LICENSE](LICENSE).
+```sh
+npm run typecheck
+npm run build
+node scripts/cargo.mjs check --workspace --all-targets
+```
 
-Projects use `.desegnos`. Only current formats are supported; the owner manages existing app data manually. Current-format crash recovery and previous-file backups remain enabled.
+Build a local release with `npm run release:local`. Linux is the tested platform; Windows and macOS builds are unsigned previews.
+
+## Project layout
+
+```text
+crates/desegnos-core/     Project model, canvas elements, generation, export plans, website import.
+crates/desegnos-storage/  .desegnos SQLite project, versions, safe writing, import snapshots.
+crates/desegnos-ai/       Providers, credentials, ChatGPT, image APIs, safe website fetching.
+src-tauri/                Desktop commands, workspace, generation, export, local static server.
+src/                      React editor: canvas, dock, menus, dialogs, import, keyboard map.
+src/projectCanvas/        Boundaries, elements, frames, reference, pointers and canvas helpers.
+docs/                     Contracts, guides and the project map.
+```
+
+Only current project formats are supported. Keys, sign-in tokens and crash reports stay separate from project files. See [SECURITY.md](SECURITY.md) for reporting a vulnerability.
+
+Desegnos is licensed under GPL-3.0-only; see [LICENSE](LICENSE).

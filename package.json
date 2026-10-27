@@ -13,12 +13,9 @@
     "release:local": "node scripts/build-release.mjs",
     "test": "node scripts/cargo.mjs test --workspace",
     "check:rust": "node scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",
-    "test:native": "node scripts/native-test.mjs",
-    "test:canvas": "node tests/canvas-geometry.test.mjs && node tests/project-canvas-geometry.test.mjs",
+    "test:canvas": "node tests/project-canvas-geometry.test.mjs && node tests/canvas-model.test.mjs",
     "test:vault": "node scripts/test-vault.mjs",
-    "test:generation": "node tests/generation-cancellation.test.mjs",
-    "test:preview": "node tests/preview-frames.test.mjs && node tests/frame-overlay-lifecycle.test.mjs && node tests/frozen-preview.test.mjs",
-    "test:editor": "node tests/selection-projection.test.mjs && node tests/code-mirror-state.test.mjs && node tests/code-draft-lifecycle.test.mjs && node tests/generation-problems.test.mjs && node tests/generation-session.test.mjs && node tests/frame-adoption.test.mjs && node tests/notice-summary.test.mjs"
+    "test:editor": "node tests/code-mirror-state.test.mjs && node tests/crash-report.test.mjs && node tests/generation-cancellation.test.mjs && node tests/generation-conversation.test.mjs && node tests/generation-problems.test.mjs && node tests/generation-session.test.mjs && node tests/generation-status.test.mjs && node tests/identity-review.test.mjs && node tests/import-flow.test.mjs && node tests/notice-summary.test.mjs && node tests/notice-system.test.mjs && node tests/problem-banner.test.mjs && node tests/recovery-banner.test.mjs && node tests/update-check.test.mjs && node tests/visible-actions.test.mjs && node tests/workspace-surfaces.test.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",

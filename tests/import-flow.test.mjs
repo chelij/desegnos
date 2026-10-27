@@ -15,76 +15,80 @@ try {
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--types', 'vite/client', '--jsx', 'react-jsx', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/ImportContext.tsx'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const code = (await readFile(join(temporary, 'ImportContext.js'), 'utf8')).replace(/^import .*;$/gm, '').replace(/^export /gm, '');
-  function setup(connected = true, previous = false, ownSite = false) {
+  function setup(connected = true, previous = false, initialSource = null) {
     let cursor = 0;
     const state = [], dependencies = [], effects = [], calls = [], kept = [];
     const useState = initial => { const index = cursor++; if (!(index in state)) state[index] = initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; };
     const useRef = initial => { const index = cursor++; return state[index] ??= { current: initial }; };
     const useEffect = (effect, deps) => { const index = cursor++; if (!dependencies[index] || deps.some((dep, i) => dep !== dependencies[index][i])) { dependencies[index] = deps; effects.push(effect); } };
-    const source = { id: 'shared', name: 'Studio', files: [{ id: 'html', name: 'index.html', textBytes: 50 }], skipped: [], photos: [], pages: [] };
-    const candidate = { findings: [{ topic: 'Brand name', value: 'Studio', confidence: 'high', evidence: ['html'] }], logoAssetIds: [], content: [], warnings: [] };
+    const source = { id: 'shared', name: 'Studio', files: [{ id: 'html', name: 'index.html', textBytes: 50, asset: null }], skipped: [], photos: [], pages: [], content: [] };
+    const candidate = { summary: 'A studio site', brandName: 'Studio', tone: 'Calm', findings: [{ topic: 'Brand name', value: 'Studio', confidence: 'high', evidence: ['html'] }], logoAssetIds: [], content: [], warnings: [] };
+    const analysis = { jobId: 'analysis', sourceId: 'shared', source, fileIds: ['html'], status: 'complete', message: '', receivedBytes: 0, candidate, error: null, authentication: 'apiKey', chatgptAccountId: null };
     const native = async (command, args) => {
       calls.push({ command, args });
-      if (command === 'get_identity_analysis') return previous ? { jobId: 'previous', source, fileIds: ['html'], status: 'complete', candidate } : null;
-      if (command === 'prepare_identity_selection') return { fits: true, fileIds: ['html'] };
-      if (command === 'analyze_identity') return { jobId: 'analysis', source, status: 'complete', candidate };
+      if (command === 'get_identity_analysis') return previous ? { ...analysis, jobId: 'previous' } : null;
+      if (command === 'prepare_identity_selection') return { fits: true, fileIds: ['html'], message: null, needsSettings: false };
+      if (command === 'pick_identity_source') return source;
+      if (command === 'fetch_identity_source') return source;
+      if (command === 'analyze_identity') return analysis;
       return source;
     };
     const jsx = (type, props) => ({ type, props });
-    const bindings = { useState, useEffect, useRef, useMemo: fn => fn(), useCallback: fn => fn, native, _jsx: jsx, _jsxs: jsx, _Fragment: 'fragment', ImportWebsite: 'page-review', WebsiteChoice: 'website-choice', Notice: 'notice', ProblemBanner: 'problem', userError: String, needsAiSettings: () => false, groupIdentityPages: () => [], selectedPageContent: () => ({ photos: [], items: [] }), findingSection: () => 'Other', parseColours: () => [], parseFonts: () => [], parseTone: () => [] };
+    const bindings = { useState, useEffect, useRef, useMemo: fn => fn(), useCallback: fn => fn, native, _jsx: jsx, _jsxs: jsx, _Fragment: 'fragment', Icon: 'icon', Notice: 'notice', ProblemBanner: 'problem', userError: String, needsAiSettings: () => false, groupIdentityPages: () => [], selectedPageContent: () => ({ photos: [], items: [] }), findingSection: () => 'Other', parseColours: () => [], parseFonts: () => [], parseTone: () => [] };
     const Component = new Function(...Object.keys(bindings), `${code}\nreturn ImportContext;`)(...Object.values(bindings));
-    const render = () => {
+    const render = (overrides = {}) => {
       cursor = 0;
-      const tree = Component({ initialSource: ownSite ? source : null, busy: false, settings: { credential: { configured: connected }, settings: {}, providers: [], chatgpt: { accounts: [] } }, openSettings() {}, importInto: async (...args) => kept.push(args), close() { throw Error('Merged panel must stay open'); }, pages: { homePageId: 'home', revision: 1, beforePick() {}, apply() {} } });
+      const tree = Component({ initialSource, busy: false, settings: { credential: { configured: connected }, configurationError: null, settings: {}, providers: [], authentication: 'apiKey', chatgpt: { accounts: [], activeAccountId: null } }, openSettings() {}, importInto: async (...args) => kept.push(args), importWebsite: overrides.importWebsite, close() { throw Error('Merged panel must stay open'); }, ...overrides });
       effects.splice(0).forEach(effect => effect());
       return tree;
     };
     return { render, calls, kept };
   }
-  await test('one folder selection supplies page review and brand analysis; keeping brand leaves pages available', async () => {
+  await test('one folder selection supplies brand analysis and keeping choices submits it', async () => {
     const { render, calls, kept } = setup();
     button(render(), 'Choose folder…').props.onClick(); await settle();
     let tree = render(); await settle(); tree = render();
-    assert.equal(all(tree).find(node => node.type === 'page-review').props.sourceId, 'shared');
+    assert.ok(button(tree, 'Read my brand'));
     button(tree, 'Read my brand').props.onClick(); await settle(); tree = render();
+    assert.ok(button(tree, 'Keep brand choices'));
     tree.props.onSubmit({ preventDefault() {} }); await settle(); tree = render();
     assert.equal(kept.length, 1);
-    assert.ok(all(tree).find(node => node.type === 'page-review'));
+    assert.equal(kept[0][0], 'analysis');
     assert.equal(calls.filter(call => /pick|fetch/.test(call.command)).length, 1);
     assert.deepEqual(calls.find(call => call.command === 'analyze_identity').args, { sourceId: 'shared', fileIds: ['html'] });
   });
-  await test('pages remain available without AI and brand offers the connection action', async () => {
+  await test('a folder pick still offers the brand connection action without AI', async () => {
     const { render } = setup(false);
     button(render(), 'Choose ZIP or HTML files…').props.onClick(); await settle();
+    render(); await settle();
     const tree = render();
-    assert.ok(all(tree).find(node => node.type === 'page-review'));
     assert.ok(button(tree, 'Connect AI'));
     assert.equal(button(tree, 'Read my brand'), undefined);
   });
-  await test('resuming a previous brand keeps its review without requesting unavailable original page files', async () => {
-    const { render } = setup(true, true);
+  await test('resuming a previous brand keeps its review without asking for source files again', async () => {
+    const { render, calls } = setup(true, true);
     render(); await settle();
-    button(render(), 'Continue with my previous brand').props.onClick();
+    button(render(), 'Continue with my previous brand').props.onClick(); await settle();
     const tree = render();
     assert.ok(button(tree, 'Keep brand choices'));
-    assert.equal(all(tree).find(node => node.type === 'page-review'), undefined);
+    assert.doesNotMatch(JSON.stringify(tree), /Choose another location/);
+    assert.equal(calls.filter(call => call.command === 'pick_identity_source' || call.command === 'fetch_identity_source').length, 0);
   });
-  await test('own website source opens Pages review immediately without a picker or AI', async () => {
-    const { render, calls } = setup(false, false, true);
-    const tree = render(); await settle();
-    assert.equal(all(tree).find(node => node.type === 'page-review').props.sourceId, 'shared');
+  await test('an existing website source opens the brand flow immediately and offers page import', async () => {
+    let pageImport = 0;
+    const { render, calls } = setup(true, false, { id: 'own', name: 'Own site', files: [], skipped: [], photos: [], pages: [], content: [] });
+    const tree = render({ importWebsite: () => { pageImport += 1; } }); await settle();
     assert.equal(calls.filter(call => /pick|fetch/.test(call.command)).length, 0);
-    const app = await readFile(join(root, 'src/App.tsx'), 'utf8');
-    assert.match(app, /native<import\('\.\/types'\)\.IdentitySource>\('project_site_import_source'\)/);
-    assert.match(app, /initialSource=\{importSource\}/);
-    assert.match(app, /'overwrite_project_site', \{ projectId: workspace.project.id, revision: workspace.project.revision \}/);
-    assert.match(app, /Saved\. Outside edits were moved to \.desegnos-outside-edits\./);
+    assert.ok(button(tree, 'Read my brand'));
+    button(tree, 'Import a website as pages…').props.onClick();
+    assert.equal(pageImport, 1);
   });
-  await test('menu has one import entry and preserves project-folder and start-brand routes', async () => {
+  await test('the menu keeps brand and website imports as separate routes', async () => {
     const app = await readFile(join(root, 'src/App.tsx'), 'utf8');
-    assert.equal((app.match(/label: 'Import…'/g) ?? []).length, 1);
-    assert.doesNotMatch(app, /Import website…|Import context…|showWebsiteImport/);
+    assert.equal((app.match(/label: 'Import context…'/g) ?? []).length, 1);
+    assert.equal((app.match(/label: 'Import website…'/g) ?? []).length, 1);
+    assert.match(app, /function startBrandImport\(\).*setShowImport\(true\)/);
+    assert.match(app, /function startWebsiteImport\(\).*setShowWebsiteImport\(true\)/);
     assert.match(app, /label: 'Open project folder…'.*open\(true\)/);
-    assert.match(app, /function startBrandImport\(\).*setImportAsNew\(true\)/);
   });
 } finally { await rm(temporary, { recursive: true, force: true }); }

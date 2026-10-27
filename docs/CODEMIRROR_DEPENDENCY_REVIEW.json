@@ -1,6 +1,6 @@
 {
   "reviewedOn": "2026-10-20",
-  "purpose": "CLEANUP_SPEC C9 explicitly requires CodeMirror 6 for editable HTML/CSS/JavaScript source",
+  "purpose": "CodeMirror 6 edits the Code block element; Desegnos has no page source editor",
   "scope": "Editor UI only; bundled offline; no native capabilities, remote scripts, telemetry or generated-site runtime imports. Package installation used --ignore-scripts.",
   "provenance": "Official @codemirror and @lezer package scopes and their upstream repositories; direct versions exact-pinned and all resolved versions/integrities frozen in pnpm-lock.yaml. GitHub archives link to active code.haverbeke.berlin repositories.",
   "primaryDocumentation": [

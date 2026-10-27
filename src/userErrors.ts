@@ -21,13 +21,13 @@ export function generationError(reason: string, request = 'this request', affect
   if (/\barea ids?\b/i.test(reason)) return "The AI's reply was incomplete. Try again.";
   if (/duplicate|(?:ids?|names?).*unique|unique.*(?:ids?|names?)|same.*(?:id|name)/i.test(reason)) return 'Two items ended up with the same name, so editing one could change the other.';
   if (/JSON|schema|parse|reply|response|format|writing mistake/i.test(reason)) return `The AI did not produce a usable page for “${subject}”.`;
-  if (/dynamic|executable|script|JavaScript|shared behavior|CSS outside|CSS selector|stylesheet|sharedCss|outside|scope|another region|overlap/i.test(reason)) return `“${subject}” would also change ${affected ?? 'content outside this area'}.`;
-  if (/target|selector|missing.*(?:element|region)|not found/i.test(reason)) return `The page item needed for “${subject}” could not be found.`;
+  if (/dynamic|executable|script|JavaScript|shared behavior|CSS outside|CSS selector|stylesheet|sharedCss|outside|scope|another layer|overlap/i.test(reason)) return `“${subject}” would also change ${affected ?? 'content outside this area'}.`;
+  if (/target|selector|missing.*(?:element|layer)|not found/i.test(reason)) return `The page item needed for “${subject}” could not be found.`;
   return `The AI could not complete “${subject}” as requested.`;
 }
 
 // Diagnostics name implementation details; a model's own explanation is already prose.
-const technical = /[\n\r<>`{}\[\]\\/#:;]|\b[\da-f]{8}-[\da-f-]{27,}\b|\b\w*(?:Error|Exception)\b|\b(?:scopes?|dossiers?|candidates?|schemas?|salvaged|revisions?|regions?|stack|root|DOM|CSS|HTML|JavaScript|finite|MiB|identity|analysis|selector|attribute|validation|checkpoint|journal|persist|mutex|poisoned|executable|stacking|painting|packet|manifest|digest|provenance|credential|vault|keyring)\b|\b\w+\.\w+|(?:^|\s)[.#][\w-]+|\w+\(/i;
+const technical = /[\n\r<>`{}\[\]\\/#:;]|\b[\da-f]{8}-[\da-f-]{27,}\b|\b\w*(?:Error|Exception)\b|\b(?:scopes?|dossiers?|candidates?|schemas?|salvaged|revisions?|layers?|stack|root|DOM|CSS|HTML|JavaScript|finite|MiB|identity|analysis|selector|attribute|validation|checkpoint|journal|persist|mutex|poisoned|executable|stacking|painting|packet|manifest|digest|provenance|credential|vault|keyring)\b|\b\w+\.\w+|(?:^|\s)[.#][\w-]+|\w+\(/i;
 
 function isPlain(value: string): boolean {
   return value.length <= 160 && !technical.test(value) && /^(?:This |That |That's |The |Your |Choose |Select |Enter |Open |Save |Add |Remove |Wait |Stop |Sign |Allow |Keep |Could|Can|We |No |Only |There |A |An |Desegnos |GitHub |Please |Too |Confirm )/.test(value) && (value.match(/[.!?](?:\s|$)/g)?.length ?? 0) <= 2;
@@ -35,7 +35,7 @@ function isPlain(value: string): boolean {
 
 // Model explanations may use punctuation and questions freely but must not leak internals.
 // App-generated fallback text is also recognised so a rejected reply never looks like a question.
-const modelJargon = /[\n\r<>`{}\[\]\\]|\b[\da-f]{8}-[\da-f-]{27,}\b|\barea [0-9a-f]{8,}[^\s]*|data-desegnos|\bgeneration result\b|\brequired format\b|\brequirements format\b|\bgenerated source\b|\bconflicted page\b|\bomitted a requested area\b|\b(?:regions?|candidates?|schemas?|validat(?:e|ed|es|ion|or)|selectors?|dossiers?|revisions?|excerpts?|DOM|CSS|HTML|JavaScript|stack|finite)\b/i;
+const modelJargon = /[\n\r<>`{}\[\]\\]|\b[\da-f]{8}-[\da-f-]{27,}\b|\barea [0-9a-f]{8,}[^\s]*|data-desegnos|\bgeneration result\b|\brequired format\b|\brequirements format\b|\bgenerated source\b|\bconflicted page\b|\bomitted a requested layer\b|\b(?:regions?|candidates?|schemas?|validat(?:e|ed|es|ion|or)|selectors?|dossiers?|revisions?|excerpts?|DOM|CSS|HTML|JavaScript|stack|finite)\b/i;
 // Case-sensitive: camelCase identifiers such as pageId leak implementation names.
 const camelCase = /\b[a-z]+[A-Z]\w*\b/;
 // App-issued conflict text names the area (and sometimes the page) before its own reason.
@@ -107,7 +107,7 @@ export function userError(error: unknown): string {
     [/ENOENT|no such file|file.*(?:missing|not found|no longer exists)/i, "This file couldn't be found. Choose it again."],
     [/build.*(?:failed|error|unavailable)|unknown build action/i, "The website couldn't be prepared for editing. Try again."],
     [/preview.*(?:invalid|location|document|limit)|invalid preview|source.*preview/i, "This page couldn't be previewed. Try opening it again."],
-    [/candidate|region|selector|data-desegnos-|schema|salvaged|validation|excerpt|<\/?[a-z][^>]*>/i, generationError(value)],
+    [/candidate|layer|element|selector|data-desegnos-|schema|salvaged|validation|excerpt|<\/?[a-z][^>]*>/i, generationError(value)],
     [/stale|revision|project changed|page changed/i, 'The page has changed. Try again.'],
     [/save|persist|journal|checkpoint/i, "Your changes couldn't be saved. Check that you can save files and try again."],
     [/parse|deserialize|UTF-8|JSON|corrupt|invalid.*(?:data|format)/i, "Desegnos couldn't read this file. Choose another file."],

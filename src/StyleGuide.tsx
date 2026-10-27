@@ -22,29 +22,32 @@ function normal(colour: string) {
   return rgb ? `#${rgb.slice(1, 4).map(part => Math.min(255, Number(part)).toString(16).padStart(2, '0')).join('')}` : null;
 }
 
-// Most-used colours and fonts across every page's CSS and inline styles.
+// Most-used colours and fonts across the canvas elements.
 export function siteStyles(project: Project) {
   const colours = new Map<string, number>(); const fonts = new Map<string, number>();
-  for (const page of project.pages) {
-    if (!page.content) continue;
-    const text = `${page.content.css}\n${page.content.html}`;
-    for (const match of text.matchAll(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b|rgba?\([^)]*\)/g)) {
-      const value = normal(match[0]); if (value) colours.set(value, (colours.get(value) ?? 0) + 1);
+  const walk = (elements: import('./types').Element[]) => {
+    for (const element of elements) {
+      for (const value of [element.style.fill, element.style.stroke.color, element.style.shadow.color, element.style.textStyle.color]) {
+        const colour = value ? normal(value) : null;
+        if (colour) colours.set(colour, (colours.get(colour) ?? 0) + 1);
+      }
+      if (element.style.textStyle.fontFamily) fonts.set(element.style.textStyle.fontFamily, (fonts.get(element.style.textStyle.fontFamily) ?? 0) + 1);
+      walk(element.children);
     }
-    for (const match of text.matchAll(/font-family\s*:\s*([^;}"]+(?:"[^"]*"[^;}"]*)*)/gi)) {
-      const value = match[1].replace(/!important/i, '').trim(); if (value && !/^(inherit|initial|unset)$/i.test(value)) fonts.set(value, (fonts.get(value) ?? 0) + 1);
-    }
-  }
+  };
+  for (const page of project.pages) walk(page.elements);
   const top = (map: Map<string, number>, count: number) => [...map].sort((a, b) => b[1] - a[1]).slice(0, count).map(([value]) => value);
   return { colours: top(colours, 10), fonts: top(fonts, 5) };
 }
 
-function samples(project: Project) {
-  const page = project.pages.find(item => item.id === project.homePageId && item.content) ?? project.pages.find(item => item.content);
-  const css = page?.content?.css ?? '';
-  const styles = Array.from(new DOMParser().parseFromString(page?.content?.html ?? '', 'text/html').querySelectorAll('style')).map(node => node.textContent ?? '').join('\n');
-  // Scripts never run here: the frame is sandboxed without allow-scripts.
-  return `<!doctype html><html><head><meta charset="utf-8"><style>${css}\n${styles}\nbody{margin:0;padding:20px}.sg-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:14px}</style></head><body>
+function samples(found: ReturnType<typeof siteStyles>) {
+  const colour = found.colours[0] ?? '#1f2937';
+  const accent = found.colours[1] ?? colour;
+  const heading = found.fonts[0] ?? 'system-ui, sans-serif';
+  const body = found.fonts[1] ?? heading;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+body{margin:0;padding:20px;font-family:${body};color:${colour}}.sg-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:14px}
+h1,h2,h3{font-family:${heading}}button{padding:8px 14px;border-radius:8px;border:0;background:${accent};color:#fff;font:inherit}a{color:${accent}}</style></head><body>
 <h1>Main heading</h1><h2>Section heading</h2><h3>Small heading</h3>
 <p>Body text with <a href="#">a link</a>.</p>
 <div class="sg-row"><button type="button">Button</button><a href="#">Text link</a></div></body></html>`;
@@ -52,7 +55,7 @@ function samples(project: Project) {
 
 export function StyleGuide({ project, apply, openBrief }: { project: Project; apply: (command: Command) => Promise<void>; openBrief: () => void }) {
   const found = useMemo(() => siteStyles(project), [project]);
-  const preview = useMemo(() => samples(project), [project]);
+  const preview = useMemo(() => samples(found), [found]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const rule = (topic: string) => project.decisions.find(decision => decision.scope.kind === 'project' && decision.topic.toLowerCase() === topic.toLowerCase());
@@ -100,7 +103,7 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
       </label>; })}
     </div></section>
     <section aria-label="How your site looks now"><h3>How your site looks now</h3>
-      {project.pages.some(page => page.content) ? <iframe className="sg-samples" title="Text and button samples using your site’s styles" sandbox="" srcDoc={preview} /> : <p className="field-help">No generated pages.</p>}
+      {found.colours.length || found.fonts.length ? <iframe className="sg-samples" title="Text and button samples using your canvas styles" sandbox="" srcDoc={preview} /> : <p className="field-help">Add elements with colour or text styles to see samples.</p>}
     </section>
     <div className="form-actions"><button type="button" onClick={openBrief}>Open project brief</button></div>
   </div>;

@@ -26,6 +26,13 @@ swc_html_parser = { version = "=26.1.0", default-features = false }
 
 url = "=2.5.8"
 diffy = "0.5"
+# Slides, images and vector previews render directly from the element tree: glyph outlines are
+# emitted as paths, so exported files never depend on an installed font.
+ttf-parser = "0.25"
+fontdb = "0.23"
+resvg = { version = "0.45", default-features = false, features = ["raster-images"] }
+tiny-skia = "0.11"
+flate2 = "1"
 
 [lints]
 workspace = true

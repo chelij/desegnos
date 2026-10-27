@@ -1,17 +1,18 @@
 //! Generation image adapter. It receives no credential and never evaluates code.
-use crate::{CancellationToken, OpenAiClient, ProviderResponse};
+
+#[cfg(test)]
 use base64::{Engine, engine::general_purpose::STANDARD};
-use desegnos_core::{
-    DesignCriticism, GenerationCandidate, MAX_DOWNLOADED_IMAGE_BYTES, Project, RequirementsSnapshot,
-};
+#[cfg(test)]
+use desegnos_core::MAX_DOWNLOADED_IMAGE_BYTES;
+#[cfg(test)]
 use image::{ImageFormat, ImageReader, Limits};
 use reqwest::{Client, Url};
 use std::{
-    collections::BTreeMap,
-    io::Cursor,
     net::{IpAddr, SocketAddr},
     time::Duration,
 };
+#[cfg(test)]
+use std::io::Cursor;
 
 pub(crate) fn public_address(ip: IpAddr) -> bool {
     match ip {
@@ -58,6 +59,7 @@ pub(crate) fn permitted_url_under(url: &Url, fixture: Option<&Url>, fixture_path
         && url.as_str().len() <= 4096
 }
 
+#[cfg(test)]
 fn embedded_raster(bytes: &[u8], mime: &str) -> Option<String> {
     if bytes.is_empty() || bytes.len() > MAX_DOWNLOADED_IMAGE_BYTES {
         return None;
@@ -90,6 +92,7 @@ fn embedded_raster(bytes: &[u8], mime: &str) -> Option<String> {
     Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
+#[cfg(test)]
 async fn download(source: &str, fixture: Option<&Url>) -> Option<String> {
     let (bytes, mime) = fetch_public(
         source,
@@ -254,80 +257,6 @@ pub(crate) async fn fetch_public_document(
     Err("redirected too many times")
 }
 
-impl OpenAiClient {
-    /// Resolve the explicitly declared image capability before candidate
-    /// acceptance. Legacy frozen requests never gain network permission.
-    pub async fn download_images(
-        &self,
-        mut response: ProviderResponse,
-        snapshot: &RequirementsSnapshot,
-        project: &Project,
-        cancellation: &CancellationToken,
-    ) -> ProviderResponse {
-        if cancellation.is_cancelled() {
-            return response;
-        }
-        if snapshot.format_version().is_err() {
-            return response;
-        }
-
-        let Ok(mut candidate) = GenerationCandidate::from_reply(&response.text, snapshot, project)
-        else {
-            return response;
-        };
-
-        if candidate.validate(snapshot, project).is_err() {
-            return response;
-        }
-        let Ok(urls) = candidate.image_download_urls() else {
-            return response;
-        };
-        if urls.is_empty() {
-            if let Ok(text) = serde_json::to_string(&candidate) {
-                response.text = text;
-            }
-            return response;
-        }
-        #[cfg(any(test, feature = "test-support"))]
-        let fixture = Url::parse(&self.endpoint)
-            .ok()
-            .filter(|url| url.scheme() == "http");
-        #[cfg(not(any(test, feature = "test-support")))]
-        let fixture: Option<Url> = None;
-        let mut images = BTreeMap::new();
-        let limit = snapshot
-            .capabilities
-            .as_ref()
-            .map_or(4, |capabilities| usize::from(capabilities.image_downloads));
-        for url in urls.into_iter().take(limit) {
-            let result = tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => return response,
-                result = tokio::time::timeout(Duration::from_secs(8), download(&url, fixture.as_ref())) => result.ok().flatten(),
-            };
-            if let Some(image) = result {
-                images.insert(url, image);
-            }
-        }
-        if cancellation.is_cancelled() {
-            return response;
-        }
-        if let Ok(missing) = candidate.embed_downloaded_images(&images) {
-            if missing > 0 && candidate.criticism.len() < desegnos_core::MAX_DESIGN_CRITICISMS {
-                candidate.criticism.push(DesignCriticism { region_id: None,
-                    message: format!("{missing} online image(s) could not be included."),
-                    suggestion: "Clearly labelled image placeholders are shown. Replace them with your own images or try another direct PNG/JPEG link.".into() });
-            }
-            if candidate.validate(snapshot, project).is_ok()
-                && let Ok(text) = serde_json::to_string(&candidate)
-            {
-                response.text = text;
-            }
-        }
-        response
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -395,90 +324,6 @@ mod tests {
         assert!(embedded_raster(output.get_ref(), "image/png").is_some());
         assert!(embedded_raster(output.get_ref(), "image/jpeg").is_none());
         assert!(embedded_raster(&output.get_ref()[..30], "image/png").is_none());
-    }
-
-    #[tokio::test]
-    async fn stop_before_or_during_download_preserves_original_reply_and_project() {
-        use desegnos_core::{GeneratedPage, RegionOutcome, RegionStatus, SiteContent};
-        for before_send in [true, false] {
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let origin = format!("http://{}", listener.local_addr().unwrap());
-            let cancel = CancellationToken::new();
-            let signal = cancel.clone();
-            let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            let seen = requests.clone();
-            let task = tokio::spawn(async move {
-                let (mut socket, _) = listener.accept().await.unwrap();
-                let mut bytes = [0; 4096];
-                assert!(socket.read(&mut bytes).await.unwrap() > 0);
-                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                signal.cancel();
-                std::future::pending::<()>().await;
-                drop(socket);
-            });
-            let mut project: Project = serde_json::from_str(include_str!(
-                "../../desegnos-core/tests/fixtures/current-project.json"
-            ))
-            .unwrap();
-            project.schema_version = desegnos_core::SCHEMA_VERSION;
-            project.pages[0].content = None;
-            let snapshot = project.prepare_requirements().unwrap();
-            let id = project.pages[0].regions[0].id;
-            let candidate = GenerationCandidate {
-                job_id: snapshot.job_id,
-                requirements_sha256: snapshot.sha256.clone(),
-                summary: "Two online pictures".into(),
-                regions: vec![RegionOutcome {
-                    region_id: id,
-                    status: RegionStatus::Implemented,
-                    explanation: "Requested pictures".into(),
-                }],
-                pages: vec![GeneratedPage {
-                    page_id: project.home_page_id,
-                    content: SiteContent {
-                        html: format!(
-                            "<main data-desegnos-region='{id}'><img data-desegnos-download src='{origin}/images/one.png' alt='One'><img data-desegnos-download src='{origin}/images/two.png' alt='Two'></main>"
-                        ),
-                        css: String::new(),
-                        javascript: String::new(),
-                    },
-                }],
-                component_requests: vec![],
-                decision_proposals: vec![],
-                criticism: vec![],
-                outside_changes: vec![],
-
-                documents: vec![],
-            };
-            candidate.validate(&snapshot, &project).unwrap();
-            let response = ProviderResponse {
-                text: serde_json::to_string(&candidate).unwrap(),
-                response_id: "resp_download_stop".into(),
-                usage: None,
-            };
-            let original = project.clone();
-            if before_send {
-                cancel.cancel();
-            }
-            let client = OpenAiClient::for_loopback(&format!("{origin}/v1")).unwrap();
-            let result = tokio::time::timeout(
-                Duration::from_secs(2),
-                client.download_images(response.clone(), &snapshot, &project, &cancel),
-            )
-            .await
-            .unwrap();
-            assert_eq!(
-                result, response,
-                "Stop must not embed any pictures or placeholders"
-            );
-            assert_eq!(project, original);
-            assert_eq!(
-                requests.load(std::sync::atomic::Ordering::SeqCst),
-                usize::from(!before_send)
-            );
-            assert!(cancel.is_cancelled());
-            task.abort();
-        }
     }
 
     #[tokio::test]

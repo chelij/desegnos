@@ -17,14 +17,14 @@ try {
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   const { requestEditorOpen, showsOpener } = await import(pathToFileURL(join(temporary, 'visibleActions.js')).href);
 
-  await test('a request editor is open only for the selected request that holds focus', () => {
-    const open = { selectedRegionId: 'box-1', focusedRegionId: 'box-1' };
+  await test('a request editor is open only for the selected layer that holds focus', () => {
+    const open = { selectedElementId: 'box-1', focusedElementId: 'box-1' };
     assert.equal(requestEditorOpen('box-1', open), true);
-    assert.equal(requestEditorOpen('box-2', open), false, 'another selected box is not being edited');
-    assert.equal(requestEditorOpen('box-1', { selectedRegionId: 'box-1', focusedRegionId: null }), false);
-    assert.equal(requestEditorOpen('box-1', { selectedRegionId: 'box-2', focusedRegionId: 'box-1' }), false);
+    assert.equal(requestEditorOpen('box-2', open), false, 'another selected layer is not being edited');
+    assert.equal(requestEditorOpen('box-1', { selectedElementId: 'box-1', focusedElementId: null }), false);
+    assert.equal(requestEditorOpen('box-1', { selectedElementId: 'box-2', focusedElementId: 'box-1' }), false);
     assert.equal(requestEditorOpen(null, open), false);
-    assert.equal(requestEditorOpen(undefined, { selectedRegionId: null, focusedRegionId: null }), false);
+    assert.equal(requestEditorOpen(undefined, { selectedElementId: null, focusedElementId: null }), false);
   });
 
   await test('an opener is shown only while the surface it opens is closed', () => {
@@ -34,61 +34,33 @@ try {
     assert.equal(showsOpener({ available: false, open: true }), false);
   });
 
-  await test('the app bar leaves out what is already on screen and what cannot change', async () => {
+  await test('the app bar leaves out what is already on screen', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /import \{ requestEditorOpen, showsOpener \} from '\.\/visibleActions';/);
-    // AI log while the log is open, and Details beside it.
-    assert.match(app, /showsOpener\(\{ available: !!project && !!\(generation\.job \|\| generation\.operation\), open: showLog \}\)/);
-    assert.equal((app.match(/showsOpener\(\{ available: true, open: showLog \}\)/g) ?? []).length, 3,
-      'result Details, generation Details and the draft notice all stand down while the log is open');
-    assert.doesNotMatch(app, /aria-pressed=\{showLog\}/);
-    // Panels that are already open, and the project close choice that is already open.
+    assert.match(app, /import \{ showsOpener \} from '\.\/visibleActions';/);
     assert.match(app, /showsOpener\(\{ available: true, open: showImport \}\)/);
     assert.match(app, /showsOpener\(\{ available: !aiConnected, open: showAiSettings \}\)/);
-    assert.match(app, /showsOpener\(\{ available: fixCount > 0, open: showCheck \}\)/);
+    assert.match(app, /showsOpener\(\{ available: !!project && !!\(generation\.job \|\| generation\.operation\), open: showLog \}\)/);
     assert.match(app, /showsOpener\(\{ available: true, open: showGridSettings \}\)/);
-    assert.match(app, /showsOpener\(\{ available: true, open: closeChoice === open\.id \}\)/);
+    assert.ok((app.match(/showsOpener\(\{ available: true, open: showLog \}\)/g) ?? []).length >= 2, 'Details stands down while the log is open');
+    assert.doesNotMatch(app, /aria-pressed=\{showLog\}/);
   });
 
-  await test('Undo and Redo appear only when they would change the page', async () => {
+  await test('Undo and Redo appear only when they would change the canvas', async () => {
     const app = await read('App.tsx');
     assert.match(app, /\{view\?\.canUndo && <button aria-label="Undo last change"/);
     assert.match(app, /\{view\?\.canRedo && <button aria-label="Redo last change"/);
-    assert.doesNotMatch(app, /className="compact"/, 'top-bar buttons share one control size');
     assert.doesNotMatch(app, /disabled=\{!view\?\.can/);
-    // The keyboard shortcut still travels through the same history commands.
-    assert.match(app, /shortcut === 'undo' \? current\.current\?\.canUndo : current\.current\?\.canRedo/);
+    assert.match(app, /action === 'undo' \? current\.current\?\.canUndo : current\.current\?\.canRedo/);
   });
 
-  await test('a result already on the page offers Undo and Details, never a retry', async () => {
-    const app = await read('App.tsx');
-    assert.doesNotMatch(app, /retryResult/);
-    const start = app.indexOf('generation-notice status-applied');
-    const resultBar = app.slice(start, start + 800);
-    assert.match(resultBar, /title="Page updated"/);
-    assert.match(resultBar, /label: 'Undo'/);
-    assert.doesNotMatch(resultBar, /Try again|label: 'Cancel'/);
-  });
-
-  await test('canvas callouts leave out actions that are already done', async () => {
-    const canvas = await read('Canvas.tsx');
-    assert.match(canvas, /requestEditorOpen\(gap\.regionId, \{ selectedRegionId: selected, focusedRegionId: focusRequest \}\)/);
-    assert.equal((canvas.match(/!requestEditorOpen\(problem\.regionId, \{/g) ?? []).length, 2);
-    // Nothing to apply without a draft; the retry beside it stays.
-    assert.match(canvas, /\{problem\.draftId && <button disabled=\{busy \|\| !!error\}/);
-    assert.doesNotMatch(canvas, /disabled=\{busy \|\| !problem\.draftId \|\| !!error\}/);
-    // The element toolbar leaves out Edit while the Edit dialog is already open; F2 and the
-    // context menu still open it.
-    assert.match(canvas, /\{elementDialog !== 'edit' && <button className="ask-ai" title=\{withShortcut\('Change text, links and style', 'editElement'\)\}/);
-    assert.match(canvas, /event\.key === 'F2' && !nudge\.current\.promise && !editingElement\) \{ event\.preventDefault\(\); setElementDialog\('edit'\)/);
-  });
-
-  await test('the AI log and its status bar leave out Change request for the open request', async () => {
+  await test('the AI log and status bar leave out Change request for the open request', async () => {
     const log = await read('GenerationLog.tsx');
-    assert.match(log, /requestEditorOpen\?: \(regionId: string\) => boolean/);
-    assert.match(log, /\{!requestEditorOpen\?\.\(item\.regionId\) && <button type="button" onClick=\{\(\) => editRequest\(item\.regionId\)\}>Change request<\/button>\}/);
+    assert.match(log, /requestEditorOpen\?: \(elementId: string\) => boolean/);
+    assert.match(log, /!requestEditorOpen\?\.\(item\.elementId\)/);
+    assert.match(log, />Change request<\/button>/);
     const generation = await read('Generation.tsx');
-    assert.match(generation, /!requestEditorOpen\?\.\(blocked\.regionId\)/);
+    assert.match(generation, /!requestEditorOpen\?\.\(blocked\.elementId\)/);
+    assert.match(generation, />Change request<\/button>/);
     assert.match(await read('App.tsx'), /requestEditorOpen=\{requestEditorIsOpen\}/);
   });
 
@@ -96,22 +68,21 @@ try {
     const banner = await read('ProblemBanner.tsx');
     assert.match(banner, /export function showsDismissButton\(notice: NoticeKind\): boolean \{/);
     assert.match(banner, /return !isToast\(notice\);/);
-    assert.match(banner, /\{showsDismissButton\(\{ variant, action, secondaryAction \}\) && <button type="button" className="close-button notice-dismiss icon-button sm"/);
+    assert.match(banner, /\{showDismiss && showsDismissButton\(\{ variant, action, secondaryAction \}\) && <button type="button" className="close-button notice-dismiss icon-button sm"/);
   });
 
   await test('a save conflict keeps the close button as its only cancel', async () => {
     const conflict = await read('SaveConflict.tsx');
     assert.doesNotMatch(conflict, /label: 'Cancel'/);
-    assert.match(conflict, /secondaryAction=\{conflict\.canReplace \? \{ label: 'Replace it', onClick: \(\) => choose\('replace'\) \} : undefined\}/);
+    assert.match(conflict, /secondaryAction=\{conflict\.canReplace \? \{ label: 'Replace it'/);
   });
 
   await test('settings and imports offer a save or a pick only while there is something to do', async () => {
     assert.match(await read('AiSettings.tsx'), /\{dirty && <button className="primary" disabled=\{busy \|\| pending \|\| \(!model && !view\.configurationError\)\}>Save AI settings<\/button>\}/);
     const importing = await read('ImportContext.tsx');
     assert.match(importing, /\{!automatic && <button type="button" disabled=\{locked \|\| !!candidate\}/);
-    // Read my brand directly below already retries; only the AI settings fix is its own action.
-    assert.doesNotMatch(importing, /label: 'Try again'/);
-    assert.match(importing, /needsAiSettings\(analysis\.error \|\| ''\) \? \{ label: 'AI settings'/);
+    assert.match(importing, /\{source && !connected && <button type="button" onClick=\{openSettings\}>Connect AI<\/button>\}/);
+    assert.match(importing, /disabled=\{locked \|\| !selection\?\.fits \|\| !connected\}/);
   });
 
   await test('panels leave out actions they have already applied', async () => {
@@ -121,23 +92,24 @@ try {
     assert.match(style, /className="sg-found-colour sg-found-set"/);
   });
 
-  await test('the start screen finishes once and opens a website once', async () => {
+  await test('the start screen finishes once and the website import keeps its single entry', async () => {
     assert.match(await read('Onboarding.tsx'), /\{step < TIPS\.length - 1 && <button type="button" className="link-button" onClick=\{finish\}>Skip tips<\/button>\}/);
-    const choice = await read('WebsiteChoice.tsx');
-    assert.match(choice, /aria-pressed=\{!brand\}[^>]*onClick=\{chooseEdit\}>Edit this website<\/button>/);
-    assert.match(choice, /className="primary"[^>]*onClick=\{\(\) => \{ void edit\(\)/);
-    assert.match(choice, /chooseEdit: \(\) => void;/);
-    // A failed build or open retries from the button that already offers it.
-    assert.doesNotMatch(choice, /label: 'Try again'/);
+    const app = await read('App.tsx');
+    assert.equal((app.match(/label: 'Import context…'/g) ?? []).length, 1);
+    assert.equal((app.match(/label: 'Import website…'/g) ?? []).length, 1);
+    assert.doesNotMatch(app, /label: 'Import…'/);
   });
 
-  await test('hidden controls keep their menu entries and shortcuts', async () => {
+  await test('hidden controls keep their menu entries and keyboard shortcuts', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /\{ id: 'live', label: 'Live view'/);
     assert.match(app, /\{ id: 'settings', label: 'AI settings'/);
-    assert.match(app, /\{ id: 'page-check', label: fixCount \? `Check page \(\$\{fixCount\}\)` : 'Check page'/);
-    assert.match(app, /\{ id: 'import', label: 'Import…'/);
+    assert.match(app, /\{ id: 'import', label: 'Import context…'/);
+    assert.match(app, /\{ id: 'import-website', label: 'Import website…'/);
     assert.match(app, /\{ id: 'dossier', label: 'Project brief'/);
+    const shortcuts = await read('shortcuts.ts');
+    for (const action of ['insert', 'play', 'preview', 'export', 'link', 'unlink', 'group', 'ungroup']) {
+      assert.match(shortcuts, new RegExp(`action: '${action}'`));
+    }
   });
 } finally {
   await rm(temporary, { recursive: true, force: true });

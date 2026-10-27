@@ -79,7 +79,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     catch (error) { if (!signal?.aborted && context.current === id && version === epoch.current) setError(describe(error)); throw error; }
     finally { if (!signal?.aborted && context.current === id && token === action.current) setOperation(null); }
   }
-  async function prepare(draft?: { jobId: string; draftId: string }, regionIds?: string[]) {
+  async function prepare(elementIds?: string[], referenceIds?: string[]) {
     if (running) return;
     setVisible(false); setRunning(true); setStopped(false);
     let finish!: () => void;
@@ -89,7 +89,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     try {
       if (job && ['prepared', 'ready', 'blocked'].includes(job.status)) await perform('discard_generation', 'Preparing your changes…', { jobId: job.jobId }, signal);
       signal.throwIfAborted();
-      const prepared = await perform('prepare_generation', 'Preparing AI instructions…', draft ? { repairJobId: draft.jobId, repairDraftId: draft.draftId } : regionIds ? { regionIds } : undefined, signal);
+      const prepared = await perform('prepare_generation', 'Preparing AI instructions…', elementIds || referenceIds ? { elementIds, referenceIds } : undefined, signal);
       current.jobId = prepared.jobId;
       signal.throwIfAborted();
       automatic.current = prepared.jobId;
@@ -158,23 +158,8 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     appliedAttempts.current.add(key);
     void apply([]).catch(() => {});
   }, [job?.jobId, job?.status, job?.attempts.length, operation]);
-  async function draftAction(jobId: string, draftId: string, action: string, confirmedRevision?: number, regionId?: string) {
-    const id = projectId;
-    try {
-      const value = await call<import('./types').DraftReview>('generation_draft', { jobId, draftId, action, confirmedRevision, regionId });
-      if (context.current === id) {
-        setError('');
-        if (value.workspace) applied(value.workspace);
-        if (jobId === job?.jobId) setJob(value.job);
-      }
-      return value;
-    } catch (error) {
-      if (context.current === id) setError(describe(error));
-      throw error;
-    }
-  }
   const owns = ownsJob(projectId, job, owned);
-  return { draftAction, owns, repairDraft: (jobId: string, draftId: string) => prepare({ jobId, draftId }), job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
+  return { owns, job, visible, operation, error, elapsedSeconds, stopped, canStop: operation === 'Stopping…' || running || activeGeneration(job) || job?.status === 'ready' || operation === 'Starting generation…' || operation === 'Sending approved retry…', open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
     start: () => launch('start_generation', 'Starting generation…'),
     cancel,
     discard: () => perform('discard_generation', 'Discarding candidate…', args()),

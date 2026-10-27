@@ -12,9 +12,6 @@
   box-sizing: border-box; box-shadow: var(--shadow-2);
 }
 .notice { display: flex; align-items: center; gap: var(--space-5); min-height: 48px; min-width: 0; margin: var(--space-3) var(--space-5); border-radius: var(--radius-md); }
-.notice-error { --notice-bg: var(--notice-error-bg); --notice-fg: var(--notice-error-fg); --notice-border: var(--notice-error-border); }
-.notice-warning, .area-problem { --notice-bg: var(--notice-warning-bg); --notice-fg: var(--notice-warning-fg); --notice-border: var(--notice-warning-border); }
-.notice-success { --notice-bg: var(--notice-success-bg); --notice-fg: var(--notice-success-fg); --notice-border: var(--notice-success-border); }
 .notice-copy { display: flex; align-items: baseline; gap: var(--space-4); flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
 .notice-copy strong { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; font-weight: var(--weight-semibold); }
 .notice-copy span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

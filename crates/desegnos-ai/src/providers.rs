@@ -316,53 +316,6 @@ impl ProviderClient {
                 .await
         }
     }
-    #[allow(clippy::too_many_arguments)]
-    pub async fn generate_images(
-        &self,
-        response: ProviderResponse,
-        auth: AuthenticationMethod,
-        settings: &ProviderSettings,
-        snapshot: &RequirementsSnapshot,
-        project: &desegnos_core::Project,
-        key: &ApiKey,
-        cancel: &CancellationToken,
-    ) -> ProviderResponse {
-        if self.id != ProviderId::Openai {
-            return response;
-        }
-        self.openai
-            .generate_images(response, auth, settings, snapshot, project, key, cancel)
-            .await
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub async fn generate_images_with_status(
-        &self,
-        response: ProviderResponse,
-        auth: AuthenticationMethod,
-        settings: &ProviderSettings,
-        snapshot: &RequirementsSnapshot,
-        project: &desegnos_core::Project,
-        key: &ApiKey,
-        cancel: &CancellationToken,
-    ) -> (ProviderResponse, bool) {
-        if self.id != ProviderId::Openai {
-            return (response, false);
-        }
-        self.openai
-            .generate_images_with_status(response, auth, settings, snapshot, project, key, cancel)
-            .await
-    }
-    pub async fn download_images(
-        &self,
-        response: ProviderResponse,
-        snapshot: &RequirementsSnapshot,
-        project: &desegnos_core::Project,
-        cancel: &CancellationToken,
-    ) -> ProviderResponse {
-        self.openai
-            .download_images(response, snapshot, project, cancel)
-            .await
-    }
 }
 
 /// The same complete request check used before sending, without credentials or network access.

@@ -1,5 +1,5 @@
 //! The canvas renders imported sites in srcdoc frames that inherit the editor's policy, and
-//! loads their images, fonts and stylesheets from the preview session.
+//! loads their images, fonts and stylesheets from the loopback preview session.
 
 #[test]
 fn editor_policy_lets_canvas_frames_load_preview_resources() {
@@ -13,12 +13,12 @@ fn editor_policy_lets_canvas_frames_load_preview_resources() {
                 .map(str::trim)
                 .find_map(|part| part.strip_prefix(directive))
                 .unwrap_or_else(|| panic!("{key} has no {directive}"));
-            for source in ["desegnos-preview:", "http://*.desegnos-preview.localhost"] {
-                assert!(
-                    sources.split_whitespace().any(|item| item == source),
-                    "{key} {directive} must allow {source}"
-                );
-            }
+            assert!(
+                sources
+                    .split_whitespace()
+                    .any(|item| item == "http://127.0.0.1:*"),
+                "{key} {directive} must allow the loopback preview server"
+            );
         }
     }
 }

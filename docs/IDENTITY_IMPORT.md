@@ -55,7 +55,7 @@ Collection supports at most 128 usable files, 256 KiB per text file, 2 MiB total
 
 Frozen analysis Markdown has a 512 KiB limit including framing. Oversized selections fail before submission without truncation. Vision accepts PNG/JPEG/WebP, at most four images, with 256 KiB per data URI and 512 KiB in total. SVG is text evidence; GIF and unattached raster images are explicitly excluded from visual inference. Conservative input/output estimates apply before connection.
 
-Projects persist as schema 10. Imported-identity projects use requirements format 6. New saves default to `.desegnos`; existing `.desegnos` files keep their path on Save. Readers accept both archive markers; writers use `desegnos`. OAuth account, host and client IDs stay unchanged.
+Projects persist as one `.desegnos` SQLite database with content-addressed versions. Imported identity is stored in the project and validated with the same schema as the rest of the model. OAuth account, host and client IDs stay unchanged.
 
 Source-format adapters can later extend collection without receiving provider, file-write or project-application authority. Core identity memory and approval remain core responsibilities.
 
@@ -65,4 +65,4 @@ Page review groups photos and existing work by website route. Optional `sourcePa
 
 Optional `ImportedIdentity.pages` maps source pages to actual project page IDs, shared photo IDs and work items. Page assignments select requirements format 16, which nests pictures and work under the affected page's current name/path; only colours, fonts, logos, tone and any older unassigned content remain project-wide.
 
-Desegnos accepts only current persisted formats (project schema 10 and generation requirements format 27). A project of another version is an error. Stored generation jobs and request history of another requirements format are ignored: they stay untouched on disk, are never shown, resubmitted or upgraded, and never make opening a project or preparing a request fail. Current crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.
+Desegnos accepts only the current project format. A project of another version is an error. Stored generation jobs and request history of another requirements format are ignored: they stay untouched on disk, are never shown, resubmitted or upgraded, and never make opening a project or preparing a request fail. Crash recovery, integrity checks, atomic saves and exact `.previous` backups remain enabled.

@@ -69,7 +69,6 @@ fn io(error: impl std::fmt::Display) -> Error {
 }
 pub(crate) fn validate(export: &WebsiteExport) -> Result<()> {
     if export.files.is_empty()
-        || !export.files.contains_key("index.html")
         || export.files.len() > 10_000
         || export.files.values().map(Vec::len).sum::<usize>() > MAX_BYTES
     {
@@ -113,6 +112,50 @@ pub(crate) fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
     }
     Ok(path)
 }
+/// Read one file back from an export folder, for pointer clash checks. The path must be a safe
+/// relative name that resolves to an ordinary file inside the folder.
+pub fn read_export_file(root: &Path, relative: &str) -> Result<Vec<u8>> {
+    let path = checked_path(root, relative)?;
+    let metadata = fs::symlink_metadata(&path).map_err(io)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_BYTES as u64
+    {
+        return Err(Error(
+            "An exported file is missing, replaced or too large to check.".into(),
+        ));
+    }
+    let mut bytes = Vec::new();
+    File::open(path)
+        .map_err(io)?
+        .take(MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(io)?;
+    Ok(bytes)
+}
+
+/// Write an export into an existing private folder, used by preview exports. Every path is
+/// created fresh; an existing file or symbolic link is never replaced.
+pub fn write_export_into(root: &Path, export: &WebsiteExport) -> Result<()> {
+    validate(export)?;
+    let metadata = fs::symlink_metadata(root).map_err(io)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(Error("Choose a real folder for this export.".into()));
+    }
+    for (relative, bytes) in &export.files {
+        let path = checked_path(root, relative)?;
+        if let Some(directory) = path.parent() {
+            fs::create_dir_all(directory).map_err(io)?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(io)?;
+        file.write_all(bytes).map_err(io)?;
+        file.sync_all().map_err(io)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn parent_directory(parent: &Path) -> Result<PathBuf> {
     if !parent.is_absolute()
         || parent
@@ -131,7 +174,8 @@ pub(crate) fn parent_directory(parent: &Path) -> Result<PathBuf> {
     }
     parent.canonicalize().map_err(io)
 }
-fn folder_name(name: &str) -> String {
+/// A new export folder name for this project, unique and safe on every platform.
+pub fn export_folder_name(name: &str) -> String {
     let clean: String = name
         .chars()
         .map(|c| {
@@ -158,9 +202,28 @@ pub fn write_website_export(
     name: &str,
     export: &WebsiteExport,
 ) -> Result<WrittenWebsiteExport> {
+    write_export_at(parent, &export_folder_name(name), export)
+}
+
+/// Write an export into a specific new folder name. The exporter derives the final folder before
+/// writing, so the manifest inside it can name its own destination.
+pub fn write_export_at(
+    parent: &Path,
+    name: &str,
+    export: &WebsiteExport,
+) -> Result<WrittenWebsiteExport> {
     validate(export)?;
+    if name.is_empty()
+        || name.len() > 128
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\\', ':', '\0'])
+        || name.ends_with(['.', ' '])
+    {
+        return Err(Error("An export folder name must be a safe, single name.".into()));
+    }
     let parent = parent_directory(parent)?;
-    let name = folder_name(name);
+    let name = name.to_owned();
     let stage_name = format!(".desegnos-export-{}", Uuid::new_v4());
     write_at(&parent, &stage_name, &name, export)?;
     let path = parent.join(name);
@@ -183,28 +246,6 @@ pub fn write_website_export(
     };
     written.verify()?;
     Ok(written)
-}
-
-/// The same synced, no-replace publication used by export, with a caller-owned name.
-/// Used for live-site staging and the immutable first-import backup.
-pub(crate) fn stage_files(
-    parent: &Path,
-    name: &str,
-    files: BTreeMap<String, Vec<u8>>,
-) -> Result<PathBuf> {
-    let parent = parent_directory(parent)?;
-    let stage_name = format!(".desegnos-export-{}", Uuid::new_v4());
-    write_at(
-        &parent,
-        &stage_name,
-        name,
-        &WebsiteExport {
-            files,
-            page_count: 0,
-            warnings: vec![],
-        },
-    )?;
-    Ok(parent.join(name))
 }
 
 #[cfg(unix)]

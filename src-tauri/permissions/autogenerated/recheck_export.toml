@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-recheck-export"
+description = "Enables the recheck_export command without any pre-configured scope."
+commands.allow = ["recheck_export"]
+
+[[permission]]
+identifier = "deny-recheck-export"
+description = "Denies the recheck_export command without any pre-configured scope."
+commands.deny = ["recheck_export"]

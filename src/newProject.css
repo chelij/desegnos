@@ -6,7 +6,6 @@
 .project-start-choices .start-icon { display: grid; place-items: center; width: 32px; height: 32px; margin-bottom: var(--space-3); border-radius: var(--radius-lg); background: var(--selected); color: var(--accent); }
 .project-start-choices button span { font-size: var(--text-md); line-height: var(--leading-normal); font-weight: var(--weight-regular); color: var(--muted); }
 .project-start-choices button:first-child { border-style: dashed; }
-.new-project-intro { color: var(--muted); line-height: var(--leading-normal); }
 .recent-projects { min-width: 0; padding-top: var(--space-4); }
 .recent-projects h2 { margin-bottom: var(--space-4); font-size: var(--text-lg); }
 .recent-projects ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr)); grid-auto-rows: 62px; gap: var(--space-4); padding: 0; margin: 0; list-style: none; }
@@ -92,12 +91,9 @@
 .identity-logo .identity-card, .identity-photo .identity-card { padding: var(--space-3); justify-content: flex-start; }
 .identity-logo img, .identity-photo img { width: 100%; height: 96px; object-fit: contain; border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--surface-muted); }
 .identity-logo img { padding: var(--space-5); }
-.identity-photo img { object-fit: cover; }
 .identity-logo .identity-card > span:last-child, .identity-photo .identity-card > span:last-child { width: 100%; padding: 0 var(--space-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .identity-warnings { margin: 0; color: var(--muted); font-size: var(--text-sm); }
 .identity-warnings ul { margin-bottom: 0; padding-left: var(--space-6); }
-.page-appearance { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-xs); }
-.page-appearance select { width: auto; min-height: var(--control-sm); height: var(--control-sm); padding: 0 var(--space-5) 0 var(--space-2); font-size: var(--text-xs); }
 
 .dossier-identity-logos { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 180px)); gap: var(--space-5); }
 .dossier-identity-logos figure { margin: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
@@ -124,13 +120,9 @@
 .identity-page-details fieldset { padding: var(--space-4) 0 0; border: 0; }
 .identity-page-details label { display: flex; flex-direction: row; align-items: center; gap: var(--space-4); margin: var(--space-2) 0; overflow-wrap: anywhere; }
 .identity-page-details img { width: 40px; height: 32px; object-fit: cover; border-radius: var(--radius-xs); }
-.identity-page-destination { display: grid; gap: var(--space-4); margin: var(--space-6) 0; }
-.identity-page-destination label { display: flex; flex-direction: row; gap: var(--space-4); align-items: start; }
 
 .identity-page-card input, .identity-page-destination input { flex-shrink: 0; }
 .identity-page-details label > span:last-child { min-width: 0; }
-
-.identity-read-heading h2, .identity-read-heading p { margin: 0; }
 
 .workspace-surface .recovery-list { gap: var(--space-5); }
 .recovery-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4) var(--space-6); min-width: 0; }
@@ -141,3 +133,16 @@
 .recovery-confirmation { flex: 1 1 100%; min-width: 0; }
 .recovery-confirmation p { margin: 0 0 var(--space-4); }
 .workspace-surface:not(.workspace-start) .recovery-list { padding: var(--space-5); }
+
+/* Website import: the hidden renderer and the page list. */
+.website-import { display: grid; gap: var(--space-5); }
+.website-import-source { display: grid; gap: var(--space-4); margin: 0; }
+.website-import-frame { position: fixed; left: -20000px; top: 0; width: 1440px; height: 900px; border: 0; opacity: 0; pointer-events: none; }
+.website-import-pages { display: grid; gap: var(--space-4); min-width: 0; }
+.website-import-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.website-import-heading > div { min-width: 0; }
+.website-import-heading .field-help { margin: var(--space-1) 0 0; }
+.website-import-list { display: grid; gap: 1px; margin: 0; padding: 0; list-style: none; max-height: 280px; overflow-y: auto; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+.website-import-list li { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-4); padding: var(--space-2) var(--space-3); background: var(--surface); }
+.website-import-list li span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.website-import-list .muted { flex: none; font-size: var(--text-xs); }

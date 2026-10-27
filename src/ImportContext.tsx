@@ -5,10 +5,7 @@ import { native } from './api';
 import type { AiSettingsView, IdentityAnalysis, IdentitySelection, IdentitySource } from './types';
 import { groupIdentityPages, selectedPageContent, findingSection, parseColours, parseFonts, parseTone, type IdentityFinding } from './identityReview';
 import './newProject.css';
-import { ImportWebsite } from './ImportWebsite';
-import { WebsiteChoice } from './WebsiteChoice';
 import { Icon } from './icons';
-import type { WebsiteFolderSelection } from './types';
 
 // One source supplies the page import and the optional brand review.
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
@@ -35,7 +32,7 @@ function skippedFile(value: string) {
     : reason;
   return `${name}: ${explanation}`;
 }
-type Props = { pages?: { homePageId: string; revision: number; beforePick: () => Promise<void>; apply: (token: string, remove: string[]) => Promise<void> }; initialSource?: IdentitySource | null; initialFolder?: WebsiteFolderSelection | null; editWebsite: (folderId: string) => Promise<void>; busy: boolean; settings: AiSettingsView | null; openSettings: () => void; importInto: (analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) => Promise<void>; close: () => void };
+type Props = { initialSource?: IdentitySource | null; busy: boolean; settings: AiSettingsView | null; openSettings: () => void; importInto: (analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) => Promise<void>; importWebsite?: () => void; close: () => void };
 
 function ReviewCard({ name, checked, disabled, toggle, children, className = '', finding, source, linked }: {
   name: string; checked: boolean; disabled: boolean; toggle: () => void; children: ReactNode; className?: string;
@@ -63,13 +60,7 @@ function ReviewGroup({ name, className = '', disabled, choose, children }: { nam
   </section>;
 }
 
-export function ImportContext({ busy, settings, openSettings, importInto, close, initialFolder, initialSource, editWebsite, pages }: Props) {
-  const [folder, setFolder] = useState<WebsiteFolderSelection | null>(initialFolder ?? null);
-  const [brand, setBrand] = useState(false);
-  const editMode = !!folder?.website && !brand;
-  async function readBrand(value: WebsiteFolderSelection) {
-    await run(async () => { const source = await native<IdentitySource>('website_brand_source', { folderId: value.id }); if (mounted.current) { acceptSource(source); setBrand(true); } });
-  }
+export function ImportContext({ busy, settings, openSettings, importInto, importWebsite, close, initialSource }: Props) {
   const [source, setSource] = useState<IdentitySource | null>(initialSource ?? null);
   const [previousBrand, setPreviousBrand] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
@@ -83,7 +74,6 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
   const [photoIds, setPhotoIds] = useState<string[]>([]);
   const [itemIndices, setItemIndices] = useState<number[]>([]);
   const [pagePaths, setPagePaths] = useState<string[]>([]);
-  const [attachMatching, setAttachMatching] = useState(true);
   const [working, setWorking] = useState(false);
   const [kept, setKept] = useState(false);
   const [error, setError] = useState('');
@@ -181,7 +171,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
     await run(async () => {
       const value = await native<IdentitySource | null>('pick_identity_source', { kind });
       if (!mounted.current || serial !== picker.current || !value) return;
-      setFolder(null); setBrand(true); acceptSource(value);
+      acceptSource(value);
     });
   }
   const [address, setAddress] = useState('');
@@ -191,7 +181,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
     await run(async () => {
       const value = await native<IdentitySource>('fetch_identity_source', { url: address.trim() });
       if (!mounted.current || serial !== picker.current) return;
-      setFolder(null); setBrand(true); acceptSource(value);
+      acceptSource(value);
     });
   }
   function acceptSource(value: IdentitySource) {
@@ -212,7 +202,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
   function submit(event: FormEvent) {
     event.preventDefault();
     if (locked || kept || !analysis || !candidate || !keepable) return;
-    void run(async () => { const kept = selectedPageContent(pageGroups, pagePaths, photoIds, itemIndices); await importInto(analysis.jobId, findings, assets, kept.photos, kept.items, pagePaths, attachMatching); setKept(true); if (!pages) close(); });
+    void run(async () => { const kept = selectedPageContent(pageGroups, pagePaths, photoIds, itemIndices); await importInto(analysis.jobId, findings, assets, kept.photos, kept.items, pagePaths, true); setKept(true); close(); });
   }
   const pageGroups = useMemo(() => groupIdentityPages(source, candidate?.content), [source, candidate]);
   const keepable = findings.length > 0 || assets.length > 0 || pagePaths.length > 0;
@@ -235,23 +225,21 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
   }
   const aiNeedsFixing = !connected || selection?.needsSettings || (analysis?.status === 'failed' && /settings|sign in|connect|account|spending|key|model access|permission/i.test(analysis.error ?? ''));
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
-    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Choose another location', disabled: !!locked, onClick: () => { void pick(folder ? 'folder' : 'file'); } }} />}
-      {folder?.website && <WebsiteChoice folder={folder} brand={brand} disabled={!!locked} update={setFolder}
-        chooseBrand={() => { void readBrand(folder); }} chooseEdit={() => setBrand(false)} edit={async () => { setBrand(false); if (folder.website && (folder.website.fresh || (folder.website.output && folder.website.buildUnavailable))) await run(async () => { await editWebsite(folder.id); close(); }); }} /> }
+    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Choose another location', disabled: !!locked, onClick: () => { void pick('file'); } }} />}
       <section className="identity-import" aria-label="Use my existing brand">
-        {!editMode && <>
+        <>
         <h2>Source</h2>
         <div className="identity-address"><label>Website address<input type="text" inputMode="url" placeholder="example.com" value={address} disabled={locked} onChange={event => setAddress(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (address.trim()) void fetchSite(); } }} /></label>
           <button type="button" disabled={locked || !address.trim()} onClick={() => { void fetchSite(); }}>{working && address.trim() ? 'Opening…' : 'Open website'}</button></div>
         <div className="identity-source-actions"><span className="identity-or">or</span><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose folder…</button><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose ZIP or HTML files…</button></div>
+        {importWebsite && <div className="identity-source-actions"><button type="button" disabled={locked} onClick={importWebsite}>Import a website as pages…</button></div>}
         {source && <h3 className="identity-source-name">{source.name}</h3>}
         {!source && recoveryError && <ProblemBanner message={userError(recoveryError)} action={{ label: 'Try loading again', disabled: !!locked || readingPrevious, onClick: () => { void readPrevious(); } }} />}
         {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setPreviousBrand(true); setFiles(previous.fileIds); setAutomatic(false); setSelection(null); acceptAnalysis(previous); setPrevious(null); }}>Continue with my previous brand</button>}
-        </>}
-        {source && !editMode && pages && !previousBrand && <ImportWebsite key={source.id} sourceId={source.id} {...pages} busy={!!locked} />}
-        {source && !editMode && <h2>Brand and content</h2>}
-        {source && !editMode && !connected && <button type="button" onClick={openSettings}>Connect AI</button>}
-        {source && !editMode && connected && !kept && <>
+        </>
+        {source && <h2>Brand and content</h2>}
+        {source && !connected && <button type="button" onClick={openSettings}>Connect AI</button>}
+        {source && connected && !kept && <>
           {!candidate && <>
           <details className="identity-file-review" key={source.id}><summary>Choose files yourself</summary>
             <p className="field-help">{files.length} file{files.length === 1 ? '' : 's'} picked.</p>
@@ -289,10 +277,6 @@ export function ImportContext({ busy, settings, openSettings, importInto, close,
                 </article>)}
               </ReviewGroup>;
             })}
-            {pageGroups.length > 0 && <fieldset className="identity-page-destination" disabled={!!locked}><legend>Where to put these pages</legend>
-              <label><input type="radio" name="pageDestination" checked={attachMatching} onChange={() => setAttachMatching(true)} />Use existing pages with the same path; add missing pages</label>
-              <label><input type="radio" name="pageDestination" checked={!attachMatching} onChange={() => setAttachMatching(false)} />Add as new pages (Home uses the existing home page)</label>
-            </fieldset>}
             {candidate.warnings.length > 0 && <details className="identity-warnings"><summary>Things to check</summary><ul>{candidate.warnings.map((warning, index) => <li key={index}>{userError(warning)}</li>)}</ul></details>}
             <button type="button" disabled={locked} onClick={() => { setAnalysis(null); setFindings([]); setAssets([]); }}>Change files</button>
           </div>}

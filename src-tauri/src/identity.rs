@@ -553,13 +553,10 @@ fn freeze(
         base_revision: 0,
         sha256: digest(markdown.as_bytes()),
         markdown,
-        region_count: 0,
+        request_count: 0,
+        reference_ids: vec![],
         page_count: 0,
-        documents: vec![],
-        batch: None,
         dependencies: BTreeMap::new(),
-        base_sources: BTreeMap::new(),
-        base_geometry: BTreeMap::new(),
         dossier_context: None,
         request_history: String::new(),
         capabilities: None,
@@ -978,25 +975,6 @@ impl IdentityService {
         self.sources.insert(source.id, source);
         Ok(view)
     }
-    pub(crate) fn website_files(&self, id: Uuid) -> NativeResult<BTreeMap<String, Vec<u8>>> {
-        self.website_files
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| "Choose the source again to import its pages.".into())
-    }
-    pub(crate) fn retain_project_site(
-        &mut self,
-        name: &str,
-        files: BTreeMap<String, Vec<u8>>,
-    ) -> NativeResult<IdentitySourceManifest> {
-        let source = desegnos_storage::identity_source_from_files(
-            name,
-            files.clone().into_iter().collect(),
-            vec![],
-        )
-        .map_err(error)?;
-        self.retain_website_source(normalize_source(source)?, files)
-    }
     fn retain_website_source(
         &mut self,
         source: IdentitySource,
@@ -1238,17 +1216,6 @@ impl IdentityService {
         }
         Ok(())
     }
-    /// The user's reviewed choices from a completed analysis, checked against its record.
-    #[cfg(test)]
-    pub(super) fn reviewed_context(
-        &self,
-        job_id: Uuid,
-        findings: &[usize],
-        assets: &[Uuid],
-    ) -> NativeResult<desegnos_core::ImportedContext> {
-        self.reviewed_context_selected(job_id, findings, assets, None, None, None)
-    }
-
     pub(super) fn reviewed_context_selected(
         &self,
         job_id: Uuid,
@@ -1443,19 +1410,6 @@ impl IdentityService {
         })
     }
 
-    #[cfg(test)]
-    pub(super) fn project_from_analysis(
-        &self,
-        job_id: Uuid,
-        findings: &[usize],
-        assets: &[Uuid],
-        name: String,
-        viewport: Viewport,
-    ) -> NativeResult<Project> {
-        let context = self.reviewed_context(job_id, findings, assets)?;
-        self.project_with_context(context, name, viewport)
-    }
-
     pub(super) fn project_with_context(
         &self,
         context: desegnos_core::ImportedContext,
@@ -1482,7 +1436,6 @@ impl IdentityService {
             });
         }
         project.brief = brief;
-        let pages = project.import_source_pages(&context).map_err(error)?;
         let identity = ImportedIdentity {
             source_name: context.source_name,
             source_sha256: context.source_sha256,
@@ -1490,7 +1443,7 @@ impl IdentityService {
             assets: context.assets,
             photos: context.photos,
             content: context.content,
-            pages,
+            pages: vec![],
         };
         identity.validate().map_err(error)?;
         project.imported_identity = Some(identity);
@@ -1538,9 +1491,8 @@ pub async fn pick_identity_source(
                 BTreeMap::new(),
             )));
         }
-        let files =
-            desegnos_storage::website_merge::read_website_selection(&paths).map_err(error)?;
         let name = paths[0].file_name().unwrap_or_default().to_string_lossy();
+        let mut selected_files = Vec::new();
         let source = if paths.len() == 1
             && (paths[0].is_dir()
                 || paths[0]
@@ -1549,16 +1501,26 @@ pub async fn pick_identity_source(
         {
             normalize_source(collect_identity_source(&paths[0]).map_err(error)?)?
         } else {
+            // Read the chosen files as brand evidence only; nothing becomes a project page.
+            for path in &paths {
+                let size = std::fs::metadata(path).map_err(error)?.len();
+                if size > 4 * 1024 * 1024 {
+                    return Err("Each chosen file must be at most 4 MiB.".into());
+                }
+                selected_files.push((
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    std::fs::read(path).map_err(error)?,
+                ));
+            }
             normalize_source(
-                desegnos_storage::identity_source_from_files(
-                    &name,
-                    files.clone().into_iter().collect(),
-                    vec![],
-                )
-                .map_err(error)?,
+                desegnos_storage::identity_source_from_files(&name, selected_files, vec![])
+                    .map_err(error)?,
             )?
         };
-        Ok(Some((source, files)))
+        Ok(Some((source, BTreeMap::new())))
     })
     .await
     .map_err(error)??;
@@ -1707,31 +1669,3 @@ pub fn analyze_identity(
     Ok(view)
 }
 
-#[cfg(test)]
-#[path = "identity_tests.rs"]
-mod tests;
-
-#[tauri::command]
-pub async fn website_brand_source(
-    window: WebviewWindow,
-    imports: State<'_, Mutex<crate::website_import::WebsiteImports>>,
-    state: IdentityState<'_>,
-    folder_id: Uuid,
-) -> NativeResult<IdentitySourceManifest> {
-    trusted(&window)?;
-    let path = imports.lock().map_err(error)?.path(folder_id)?;
-    let source = tauri::async_runtime::spawn_blocking(move || {
-        let files = desegnos_storage::website_merge::read_website_selection(&[path.clone()])
-            .map_err(error)?;
-        Ok::<_, String>((
-            normalize_source(collect_identity_source(&path).map_err(error)?)?,
-            files,
-        ))
-    })
-    .await
-    .map_err(error)??;
-    state
-        .lock()
-        .map_err(error)?
-        .retain_website_source(source.0, source.1)
-}

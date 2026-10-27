@@ -1,0 +1,291 @@
+//! Project parts and the `.desegnos` database round trip.
+use desegnos_core::{Appearance, Command, ElementKind, Project, Rect, Session, Viewport, digest, empty_element};
+use desegnos_storage::project_db::now_millis;
+use desegnos_storage::{
+    ProjectDatabase, join_project, split_project,
+};
+use std::fs;
+use std::path::PathBuf;
+use uuid::Uuid;
+
+struct TempDir(PathBuf);
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "desegnos-{label}-{}",
+            Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        Self(path)
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.0.join(name)
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn project() -> Project {
+    Project::new(
+        "Storage".into(),
+        Viewport {
+            width: 800,
+            height: 600,
+        },
+        Appearance::Light,
+    )
+    .unwrap()
+}
+
+fn apply(project: &Project, command: Command) -> Project {
+    project.apply(project.revision, command).unwrap()
+}
+
+fn project_with_element() -> Project {
+    let project = project();
+    let page = project.home_page_id;
+    let mut element = empty_element(
+        ElementKind::Text,
+        Rect {
+            x: 20.0,
+            y: 30.0,
+            width: 200.0,
+            height: 40.0,
+        },
+    );
+    element.text = "Saved text".into();
+    apply(
+        &project,
+        Command::InsertElements {
+            page_id: page,
+            parent_id: None,
+            index: 0,
+            elements: vec![element],
+            picture_data_uri: None,
+            size_id: None,
+        },
+    )
+}
+
+#[test]
+fn split_and_join_round_trip_and_unchanged_parts_keep_their_hash() {
+    let project = project_with_element();
+    let parts = split_project(&project).unwrap();
+    assert!(parts.contains_key("settings"));
+    assert!(parts.contains_key("reference"));
+    assert!(parts.contains_key("pointers"));
+    assert!(parts.contains_key("brief"));
+    assert!(parts.contains_key("identity"));
+    assert!(parts.contains_key("dossier"));
+    assert!(
+        parts.keys().any(|name| name.starts_with("boundary/")),
+        "a boundary part is written"
+    );
+    let joined = join_project(&parts).unwrap();
+    assert_eq!(joined, project);
+
+    let again = split_project(&joined).unwrap();
+    assert_eq!(parts, again, "equal content hashes equally");
+
+    // Changing the project name changes only the settings part.
+    let mut renamed = project.clone();
+    renamed.name = "Renamed".into();
+    let renamed_parts = split_project(&renamed).unwrap();
+    let boundary = parts
+        .keys()
+        .find(|name| name.starts_with("boundary/"))
+        .unwrap();
+    assert_eq!(
+        digest(parts[boundary].bytes()),
+        digest(renamed_parts[boundary].bytes())
+    );
+    assert_ne!(
+        digest(parts["settings"].bytes()),
+        digest(renamed_parts["settings"].bytes())
+    );
+
+    // Changing one boundary changes its part and leaves settings alone.
+    let mut edited = project.clone();
+    edited.pages[0].elements[0].text = "Edited text".into();
+    let edited_parts = split_project(&edited).unwrap();
+    assert_ne!(
+        digest(parts[boundary].bytes()),
+        digest(edited_parts[boundary].bytes())
+    );
+    assert_eq!(
+        digest(parts["settings"].bytes()),
+        digest(edited_parts["settings"].bytes())
+    );
+}
+
+fn create_database(directory: &TempDir, project: &Project) -> ProjectDatabase {
+    ProjectDatabase::create(&directory.path("project.desegnos"), project, now_millis() - 60_000)
+        .unwrap()
+}
+
+#[test]
+fn save_amends_recent_versions_and_restore_creates_a_new_one() {
+    let directory = TempDir::new("save");
+    let project = project_with_element();
+    let database = create_database(&directory, &project);
+    let created = database.load().unwrap();
+    assert_eq!(created.project, project);
+    assert_eq!(created.branch, desegnos_storage::DEFAULT_BRANCH);
+    assert_eq!(database.history().unwrap().versions.len(), 1);
+
+    let mut one = project.clone();
+    one.name = "One".into();
+    let saved_one = database.save(&one, &[], Some("First save")).unwrap();
+    assert_ne!(saved_one.id, created.version);
+    assert_eq!(database.load().unwrap().project.name, "One");
+
+    let mut two = project.clone();
+    two.name = "Two".into();
+    let saved_two = database.save(&two, &[], Some("Second save")).unwrap();
+    assert_eq!(
+        saved_two.id, saved_one.id,
+        "a save seconds later amends the previous version"
+    );
+    assert!(saved_two.label.contains("First save"));
+    assert!(saved_two.label.contains("Second save"));
+    let history = database.history().unwrap();
+    assert_eq!(history.versions.len(), 2);
+    assert_eq!(history.versions[0].id, saved_one.id);
+    assert!(history.versions[0].head);
+
+    let restored = database.restore(created.version).unwrap();
+    assert_eq!(restored.name, "Storage");
+    let after = database.load().unwrap();
+    assert_eq!(after.project.name, "Storage");
+    let history = database.history().unwrap();
+    assert_eq!(history.versions.len(), 3);
+    assert_eq!(history.versions[0].label, "Restored a version");
+    assert_eq!(history.versions[0].parent, Some(saved_one.id));
+}
+
+#[test]
+fn restoring_a_version_is_one_undo_step_in_the_session() {
+    let project = project_with_element();
+    let mut renamed = project.clone();
+    renamed.name = "Later".into();
+    let mut session = Session::new(renamed).unwrap();
+    let before = session.history().2;
+    session.restore(project.clone(), |_| Ok(())).unwrap();
+    assert_eq!(session.history().2, before + 1);
+    assert_eq!(session.project().name, "Storage");
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().name, "Later");
+    session.redo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().name, "Storage");
+}
+
+#[test]
+fn alternatives_keep_independent_heads() {
+    let directory = TempDir::new("branches");
+    let database = create_database(&directory, &project());
+    let mut dark = database.load().unwrap().project;
+    dark.name = "Dark".into();
+    database.save(&dark, &[], Some("Main dark")).unwrap();
+
+    let branch = database.create_branch("Dark version").unwrap();
+    assert_eq!(branch, "Dark version");
+    assert_eq!(database.branch().unwrap(), "Dark version");
+    let mut darker = database.load().unwrap().project;
+    darker.name = "Darker".into();
+    database.save(&darker, &[], Some("Darker")).unwrap();
+
+    let main = database.switch_branch(desegnos_storage::DEFAULT_BRANCH).unwrap();
+    assert_eq!(main.project.name, "Dark");
+    assert_eq!(main.branch, desegnos_storage::DEFAULT_BRANCH);
+    let alternative = database.switch_branch("Dark version").unwrap();
+    assert_eq!(alternative.project.name, "Darker");
+    let history = database.history().unwrap();
+    assert_eq!(history.branch, "Dark version");
+    assert!(history.branches.iter().any(|item| item.name == "Dark version" && item.current));
+    assert!(history.branches.iter().any(|item| item.name == "Main" && item.primary));
+
+    assert!(database.delete_branch("Main").is_err(), "the main branch stays");
+    assert!(
+        database.delete_branch("Dark version").is_err(),
+        "the current branch stays"
+    );
+    database.switch_branch("Main").unwrap();
+    database.delete_branch("Dark version").unwrap();
+    assert!(
+        database.switch_branch("Dark version").is_err(),
+        "a deleted alternative is gone"
+    );
+}
+
+#[test]
+fn autosave_is_detected_as_recovery_and_cleared_by_save() {
+    let directory = TempDir::new("autosave");
+    let project = project_with_element();
+    let database = create_database(&directory, &project);
+    assert!(database.autosave_work().unwrap().is_none());
+
+    let mut changed = project.clone();
+    changed.name = "Unsaved".into();
+    database.autosave(&changed, now_millis()).unwrap();
+    let recovery = database.autosave_work().unwrap().expect("unsaved work");
+    assert_eq!(recovery.project.name, "Unsaved");
+    assert_eq!(database.load().unwrap().project.name, "Storage");
+
+    database.save(&changed, &[], Some("Saved after recovery")).unwrap();
+    assert!(database.autosave_work().unwrap().is_none());
+    assert_eq!(database.load().unwrap().project.name, "Unsaved");
+}
+
+#[test]
+fn a_copy_has_one_version_and_no_history() {
+    let directory = TempDir::new("copy");
+    let project = project_with_element();
+    let source = create_database(&directory, &project);
+    let mut changed = project.clone();
+    changed.name = "Copy source".into();
+    source.save(&changed, &[], Some("Before copy")).unwrap();
+
+    let copy_path = directory.path("copy.desegnos");
+    let copy = ProjectDatabase::create(&copy_path, &source.load().unwrap().project, now_millis())
+        .unwrap();
+    let history = copy.history().unwrap();
+    assert_eq!(history.versions.len(), 1);
+    assert_eq!(history.versions[0].label, "Created the project");
+    assert_eq!(copy.load().unwrap().project.name, "Copy source");
+}
+
+#[test]
+fn a_second_writer_is_refused_while_the_file_is_open() {
+    let directory = TempDir::new("lock");
+    let path = directory.path("project.desegnos");
+    let _first = ProjectDatabase::create(&path, &project(), now_millis()).unwrap();
+    let error = match ProjectDatabase::open(&path) {
+        Ok(_) => panic!("a second writer was allowed"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("already open"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn autosave_reads_without_the_writing_lock() {
+    let directory = TempDir::new("recovery");
+    let path = directory.path("project.desegnos");
+    let project = project_with_element();
+    let database = ProjectDatabase::create(&path, &project, now_millis()).unwrap();
+    let mut changed = project.clone();
+    changed.name = "Crash recovery".into();
+    database.autosave(&changed, now_millis()).unwrap();
+    drop(database);
+    let recovered = desegnos_storage::read_autosave(&path).unwrap().unwrap();
+    assert_eq!(recovered.project.name, "Crash recovery");
+    assert_eq!(desegnos_storage::load_project(&path).unwrap().name, "Storage");
+}

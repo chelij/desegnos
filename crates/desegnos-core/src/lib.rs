@@ -1,78 +1,44 @@
-mod across_pages;
-mod area_geometry;
 mod attachments;
-mod code_format;
-mod document;
-mod document_context;
 mod dossier;
-mod editing;
-mod element_fix;
+mod elements;
 mod export;
 mod generation;
-mod generation_draft;
-mod generation_recovery;
-mod generation_scope;
 mod identity;
 mod identity_pages;
 mod image_generation;
-mod images;
-mod layers;
 mod model;
 mod picture_scaling;
-mod preview_source;
+mod pointers;
 mod project_assets;
-mod project_format;
 mod provenance;
-mod region_scripts;
+mod render;
 mod request_history;
 mod requirements;
 mod session;
-mod source;
-mod stable_targets;
-mod stale_merge;
-mod text_merge;
 mod website;
 mod website_import;
-mod website_merge;
-pub use website_merge::{WebsiteImportPage, WebsiteImportReview};
 
-pub use across_pages::*;
 pub use attachments::*;
-pub use code_format::{compact_site_content, format_site_content};
-pub use document::*;
-pub use document_context::*;
 pub use dossier::*;
-pub use editing::*;
-pub use element_fix::{element_fix_schema, result_schema};
+pub use elements::*;
 pub use export::*;
 pub use generation::*;
-pub use generation_draft::*;
-pub use generation_recovery::*;
 pub use identity::*;
 pub use identity_pages::*;
 pub use image_generation::*;
-pub use images::*;
-pub use layers::*;
 pub use model::*;
 pub use picture_scaling::{
     AI_PREVIEW_BYTES, AI_PREVIEW_EDGE, AI_PREVIEW_TOKEN_RESERVE, ai_preview, scaled_for_display,
 };
-pub use preview_source::preview_source_document;
+pub use pointers::*;
 pub use project_assets::*;
-pub use project_format::*;
 pub use provenance::*;
-pub use region_scripts::region_script_runtime;
+pub use render::*;
 pub use request_history::*;
 pub use requirements::*;
 pub use session::*;
-pub use source::*;
-pub use stable_targets::*;
-pub use stale_merge::*;
-pub use text_merge::*;
 pub use website::*;
-pub use website_import::{
-    ImportedWebsite, LivePage, PREVIEW_INLINE_BYTES, PreviewFile, import_website_files,
-};
+pub use website_import::*;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
