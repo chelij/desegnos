@@ -1706,6 +1706,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     const sized = size && page && hasManySizes(page) ? { size_id: editing.sizeId } : {};
     await Promise.resolve(updateElements(editing.pageId, [{ ...patch, ...(patch.rect ? sized : {}) }])).catch(() => {});
     selectElement(editing.pageId, editing.elementId, page && hasManySizes(page) ? editing.sizeId : null);
+    surface.current?.focus({ preventScroll: true });
   }
 
   function cancelEditingText() {
@@ -1729,6 +1730,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       <RequestLayer project={project} boundaries={boundaries} selection={selection} draft={requestDraft}
         draftArea={draftArea} inverse={inverse} selectRequest={selectRequest} />
       <ReferenceLayer project={project} movingItems={movingItems} selection={selection} draftNote={draftNote} />
+      {draft && <div className={`boundary-draft${boundaryKind === 'screen' ? ' screen' : ''}`} style={{ left: draft.x, top: draft.y, width: draft.width, height: draft.height, borderWidth: 2 * inverse }} />}
       {draftElement && <div className={`element-draft${draftElement.line ? ' line' : ''}`} style={{ left: draftElement.rect.x, top: draftElement.rect.y, width: draftElement.rect.width, height: draftElement.rect.height, borderWidth: inverse, transform: draftElement.rotation ? `rotate(${draftElement.rotation}deg)` : undefined }} />}
       {marquee && <div className="element-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.width, height: marquee.height, borderWidth: inverse }} />}
       <PointerLines entries={entries} autoLinks={autoLinks} draft={pointerDraft} camera={camera} viewport={viewport}

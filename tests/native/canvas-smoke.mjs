@@ -165,6 +165,21 @@ class PhysicalPointer {
   click(point, modifiers = []) { return this.raw({ action: 'click', point: this.root(point), modifiers }); }
   move(point) { return this.raw({ action: 'move', point: this.root(point) }); }
   drag(from, to) { return this.raw({ action: 'drag', from: this.root(from), to: this.root(to) }); }
+  /** Drags, holding the button before release, and checks the drag shows `selector` meanwhile. */
+  async dragShowing(from, to, selector) {
+    let done = false;
+    const gesture = this.raw({ action: 'drag', from: this.root(from), to: this.root(to), hold: 800 }).finally(() => { done = true; });
+    let shown = false;
+    while (!done && !shown) {
+      shown = await this.driver.execute(query => {
+        const rect = document.querySelector(query)?.getBoundingClientRect();
+        return !!rect && rect.width > 10 && rect.height > 10;
+      }, selector);
+      if (!shown) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    await gesture;
+    assert.ok(shown, `Nothing visible at ${selector} while dragging`);
+  }
 }
 
 class NativeDialog {
@@ -410,7 +425,7 @@ async function runIsolated() {
       await pointer.focusCanvas();
       await chooseBoundaryKind('Page');
       const spot = await emptyCanvas(480, 420);
-      await mouse.drag(spot.from, spot.to);
+      await mouse.dragShowing(spot.from, spot.to, '.boundary-draft');
       try {
         await waitFor(async () => !!(await boundary()), 'The Boundary drag did not create a boundary');
       } catch (error) {
@@ -434,8 +449,18 @@ async function runIsolated() {
       const box = await boundary();
       const before = await driver.execute(() => document.querySelectorAll('[data-element-kind="box"]').length);
       await chooseTool('Rectangle');
-      await mouse.drag({ x: box.left + 40, y: box.top + 230 }, { x: box.left + Math.min(300, box.width - 40), y: box.top + 300 });
+      await mouse.dragShowing({ x: box.left + 40, y: box.top + 230 }, { x: box.left + Math.min(300, box.width - 40), y: box.top + 300 }, '.element-draft');
       await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element-kind="box"]').length > previous, before), 'The Rectangle drag did not create a rectangle');
+    });
+
+    await step('Ctrl+Z undoes the rectangle and Shift+Ctrl+Z redoes it', async () => {
+      const count = () => driver.execute(() => document.querySelectorAll('[data-element-kind="box"]').length);
+      const before = await count();
+      await pointer.focusCanvas();
+      await pointer.combo('Control', 'z');
+      await waitFor(async () => (await count()) === before - 1, 'Ctrl+Z did not undo the rectangle');
+      await pointer.combo('Control', 'Shift', 'z');
+      await waitFor(async () => (await count()) === before, 'Shift+Ctrl+Z did not redo the rectangle');
     });
 
     await step('Draw an ellipse by clicking the Ellipse button', async () => {
@@ -461,6 +486,10 @@ async function runIsolated() {
       await driver.fill('Edit text', 'Smoke text');
       await driver.press('[aria-label="Edit text"]', '\uE007');
       await waitFor(async () => (await driver.execute(() => document.querySelectorAll('[data-element-kind="text"]').length)) === 1, 'The text layer was not committed');
+      await pointer.combo('Control', 'z');
+      await waitFor(async () => (await driver.execute(() => document.querySelectorAll('[data-element-kind="text"]').length)) === 0, 'Ctrl+Z after typing did not undo the text');
+      await pointer.combo('Control', 'Shift', 'z');
+      await waitFor(async () => (await driver.execute(() => document.querySelectorAll('[data-element-kind="text"]').length)) === 1, 'Shift+Ctrl+Z did not bring the text back');
     });
 
     await step('Request picks two layers, takes typed text and queues a pending request', async () => {
@@ -488,7 +517,7 @@ async function runIsolated() {
       assert.ok(ellipse, 'The ellipse layer is missing');
       await chooseRequestShape('Rectangle');
       const margin = 12;
-      await mouse.drag({ x: ellipse.left - margin, y: ellipse.top - margin }, { x: ellipse.left + ellipse.width + margin, y: ellipse.top + ellipse.height + margin });
+      await mouse.dragShowing({ x: ellipse.left - margin, y: ellipse.top - margin }, { x: ellipse.left + ellipse.width + margin, y: ellipse.top + ellipse.height + margin }, '.request-area.draft');
       await driver.ready('.request-box-editor textarea');
       await driver.fill('Describe the request', 'Turn this ellipse into a badge');
       await driver.press(driver.field('Describe the request'), '\uE007', 'xpath');

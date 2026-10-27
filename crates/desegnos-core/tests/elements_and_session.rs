@@ -685,3 +685,63 @@ fn a_layer_added_in_one_size_is_a_placeholder_elsewhere_until_dismissed() {
     let over = &phone_dismissed.element(added).unwrap().1.overrides[&phone];
     assert!(over.hidden && over.dismissed);
 }
+
+#[test]
+fn placing_text_and_typing_it_is_one_undo_step() {
+    let mut session = Session::new(project()).unwrap();
+    let id = Uuid::new_v4();
+    let page = page_id(session.project());
+    let before = step(&session);
+    let revision = session.project().revision;
+    session
+        .execute(
+            revision,
+            Command::InsertElements {
+                page_id: page,
+                parent_id: None,
+                index: 0,
+                elements: vec![text(id, "")],
+                picture_data_uri: None,
+                size_id: None,
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    // The editor closing ends the step before its text arrives.
+    session.end_history_step();
+    let mut typed = patch(id);
+    typed.text = Some("hello".into());
+    let revision = session.project().revision;
+    session
+        .execute(
+            revision,
+            Command::UpdateElements {
+                page_id: page,
+                patches: vec![typed],
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(step(&session), before + 1);
+    let mut edited = patch(id);
+    edited.text = Some("hello again".into());
+    let revision = session.project().revision;
+    session
+        .execute(
+            revision,
+            Command::UpdateElements {
+                page_id: page,
+                patches: vec![edited],
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    assert_eq!(
+        step(&session),
+        before + 2,
+        "later text edits are their own step"
+    );
+    session.undo(|_| Ok(())).unwrap();
+    session.undo(|_| Ok(())).unwrap();
+    assert!(session.project().page(page).unwrap().elements.is_empty());
+}

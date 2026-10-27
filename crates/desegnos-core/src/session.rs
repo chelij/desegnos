@@ -21,6 +21,7 @@ pub struct Session {
 }
 
 /// Edits to the same thing that pause longer than this start a new history step.
+const NEW_LAYER: &str = "new-layer:";
 const STEP_PAUSE: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Session {
@@ -114,6 +115,15 @@ impl Session {
             } => Some(format!("pointer-comment:{pointer_id}")),
             Command::RenameProject { .. } => Some("project-name".into()),
             Command::SetGridSettings { .. } => Some("grid".into()),
+            // Placing a layer and typing its first text is one step, however long the typing.
+            Command::InsertElements { elements, .. } if elements.len() == 1 => {
+                Some(format!("{NEW_LAYER}{}", elements[0].id))
+            }
+            Command::UpdateElements { patches, .. }
+                if patches.len() == 1 && patches[0].text.is_some() =>
+            {
+                Some(format!("{NEW_LAYER}{}", patches[0].id))
+            }
             _ => None,
         }
     }
@@ -212,10 +222,12 @@ impl Session {
         key: Option<String>,
         now: std::time::Instant,
     ) {
+        let first_text = key.as_deref().is_some_and(|key| key.starts_with(NEW_LAYER));
         let continues = key.is_some()
             && !self.undo.is_empty()
             && self.burst.as_ref().is_some_and(|(current, at)| {
-                Some(current) == key.as_ref() && now.duration_since(*at) < STEP_PAUSE
+                Some(current) == key.as_ref()
+                    && (first_text || now.duration_since(*at) < STEP_PAUSE)
             });
         if continues {
             self.user_revision_floor = candidate.revision;
@@ -225,14 +237,26 @@ impl Session {
         } else {
             self.commit(candidate);
         }
-        self.burst = key.map(|key| (key, now));
+        // Only the first text joins the placing step; later edits are steps of their own.
+        self.burst = if continues && first_text {
+            None
+        } else {
+            key.map(|key| (key, now))
+        };
         self.pending_label = None;
     }
 
     /// End the step in progress: the next edit starts a new one. Called when focus leaves an
     /// editor, a generation result lands, or the project is saved or switched.
     pub fn end_history_step(&mut self) {
-        self.burst = None;
+        // Closing the editor of a just-placed layer still lets its first text join that step.
+        if !self
+            .burst
+            .as_ref()
+            .is_some_and(|(key, _)| key.starts_with(NEW_LAYER))
+        {
+            self.burst = None;
+        }
     }
 
     fn commit(&mut self, candidate: Project) {
@@ -343,7 +367,12 @@ impl Session {
     fn carry_export_metadata(&self, candidate: &mut Project) {
         candidate.last_export = self.project.last_export.clone();
         for pointer in &mut candidate.pointers {
-            if let Some(current) = self.project.pointers.iter().find(|item| item.id == pointer.id) {
+            if let Some(current) = self
+                .project
+                .pointers
+                .iter()
+                .find(|item| item.id == pointer.id)
+            {
                 pointer.wiring = current.wiring.clone();
             }
         }
@@ -416,11 +445,7 @@ mod tests {
     fn undo_restores_the_previous_canvas_placement() {
         let mut session = session();
         let page_id = session.project.home_page_id;
-        let size_id = session
-            .project()
-            .page(page_id)
-            .unwrap()
-            .base_size_id();
+        let size_id = session.project().page(page_id).unwrap().base_size_id();
         let revision = session.project.revision;
         session
             .execute(

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
-import { ChoiceRow, PropertyField } from '../EditorDock';
+import { ChoiceRow } from '../EditorDock';
 import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
 import type { Element, ElementLayout, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, RequestAttachment } from '../types';
@@ -20,19 +20,81 @@ function stylePatches(elements: Element[], change: (style: ElementStyle) => void
   });
 }
 
-function TextEditorField({ value, commit, rows, label }: { value: string; commit: (value: string) => void; rows?: number; label: string }) {
+// Display numbers rounded to at most two decimals; the full value survives untouched until edited.
+const shownNumber = (value: number) => String(Math.round(value * 100) / 100);
+
+function useDraft(value: string) {
   const [draft, setDraft] = useState(value);
   const cancelled = useRef(false);
   useEffect(() => { setDraft(value); }, [value]);
-  return <label className="dock-field">{label}
-    <textarea value={draft} rows={rows ?? 3} maxLength={16384}
-      onChange={event => setDraft(event.target.value)}
-      onBlur={() => { if (cancelled.current) { cancelled.current = false; setDraft(value); return; } if (draft !== value) commit(draft); }}
-      onKeyDown={event => {
-        if (event.key === 'Escape') { event.preventDefault(); cancelled.current = true; setDraft(value); event.currentTarget.blur(); }
-        else if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); if (draft !== value) commit(draft); event.currentTarget.blur(); }
-      }} />
+  const settle = (commit: (draft: string) => void, valid?: (draft: string) => boolean) => {
+    if (cancelled.current) { cancelled.current = false; setDraft(value); return; }
+    if (draft === value) return;
+    if (!valid || valid(draft)) commit(draft); else setDraft(value);
+  };
+  return { draft, setDraft, settle, cancel: () => { cancelled.current = true; setDraft(value); } };
+}
+
+function keyDown(settle: () => void, cancel: () => void) {
+  return (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !(event.currentTarget instanceof HTMLTextAreaElement && event.shiftKey)) {
+      event.preventDefault(); settle(); event.currentTarget.blur();
+    } else if (event.key === 'Escape') {
+      event.preventDefault(); cancel(); event.currentTarget.blur();
+    }
+  };
+}
+
+/** A full-width text input with no visible label; the placeholder names the field. */
+function TextField({ label, placeholder, value, commit, valid, disabled, field }: {
+  label: string; placeholder?: string; value: string; commit: (value: string) => void;
+  valid?: (draft: string) => boolean; disabled?: boolean; field?: string;
+}) {
+  const state = useDraft(value);
+  return <input className="props-input" type="text" aria-label={label} placeholder={placeholder ?? label} data-field={field} spellCheck={false}
+    value={state.draft} disabled={disabled} onChange={event => state.setDraft(event.target.value)}
+    onBlur={() => state.settle(commit, valid)} onKeyDown={keyDown(() => state.settle(commit, valid), state.cancel)} />;
+}
+
+/** Compact number input: a tiny prefix label lives inside the field, spinners are gone. */
+function NumberField({ prefix, label, value, commit, valid, min, max, disabled }: {
+  prefix: string; label: string; value: string | number; commit: (value: string) => void;
+  valid?: (draft: string) => boolean; min?: number; max?: number; disabled?: boolean;
+}) {
+  const formatted = typeof value === 'number' ? shownNumber(value) : value;
+  const state = useDraft(formatted);
+  return <label className="props-num" title={label}>
+    <span className="props-num-prefix" aria-hidden="true">{prefix}</span>
+    <input type="number" inputMode="decimal" step="any" aria-label={label} value={state.draft} min={min} max={max} disabled={disabled}
+      onChange={event => state.setDraft(event.target.value)}
+      onBlur={() => state.settle(commit, valid)} onKeyDown={keyDown(() => state.settle(commit, valid), state.cancel)} />
   </label>;
+}
+
+/** Colour swatch plus hex text in one row; an empty value means no colour. */
+function ColourField({ label, value, commit, fallback = '#ffffff', disabled }: {
+  label: string; value: string; commit: (value: string) => void; fallback?: string; disabled?: boolean;
+}) {
+  const state = useDraft(value);
+  const trimmed = value.trim();
+  const hex = /^#[0-9a-f]{3}$/i.test(trimmed) ? `#${trimmed.slice(1).split('').map(part => part + part).join('')}` : trimmed;
+  const picker = /^#[0-9a-f]{6}$/i.test(hex) ? hex : fallback;
+  return <div className="props-colour">
+    <label className={`props-swatch${trimmed ? '' : ' is-empty'}`} title={`${label} colour`} style={trimmed ? { background: trimmed } : undefined}>
+      <input type="color" value={picker} disabled={disabled} aria-label={`${label} colour`} onChange={event => commit(event.target.value)} />
+    </label>
+    <input className="props-hex" type="text" aria-label={label} placeholder="None" spellCheck={false}
+      value={state.draft} disabled={disabled} onChange={event => state.setDraft(event.target.value)}
+      onBlur={() => state.settle(commit, validColour)} onKeyDown={keyDown(() => state.settle(commit, validColour), state.cancel)} />
+  </div>;
+}
+
+function LongTextField({ label, placeholder, value, commit, rows }: { label: string; placeholder?: string; value: string; commit: (value: string) => void; rows?: number }) {
+  const state = useDraft(value);
+  return <textarea className="props-textarea" value={state.draft} rows={rows ?? 3} maxLength={16384} aria-label={label} placeholder={placeholder ?? label}
+    onChange={event => state.setDraft(event.target.value)}
+    onBlur={() => state.settle(commit)}
+    onKeyDown={keyDown(() => state.settle(commit), state.cancel)} />;
 }
 
 function CodeField({ language, source, commit }: { language: string; source: string; commit: (source: string) => void }) {
@@ -41,7 +103,6 @@ function CodeField({ language, source, commit }: { language: string; source: str
   const projection = useMemo(() => projectCodeSource(text), [text]);
   const tab = language === 'css' ? 'css' : language === 'html' ? 'html' : 'javascript';
   return <div className="dock-code">
-    <span className="dock-field-label">Code</span>
     <CodeEditor key={tab} language={tab} label="Code block" text={text} projection={projection} hiddenMetadata={false} readOnly={false} active
       marks={[]} query="" focusLine={null} change={value => setText(value)} cursor={() => {}} flush={() => { if (text !== source) commit(text); }}
       saveProject={() => {}} find={() => {}} />
@@ -135,7 +196,7 @@ function RequestArea({ element, project, request, setRequest, generate, error }:
   </div>;
 }
 
-export function ElementProperties({ project, page, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error }: {
+export function ElementProperties({ project, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error }: {
   project: Project; page: Page; pageId: string; sizeId: string | null; elements: Element[]; busy: boolean;
   update: (patches: ElementPatch[]) => void;
   rename: (name: string | null) => Promise<void>;
@@ -151,8 +212,8 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   // and clears the same fields from every size.
   const sized = <T,>(patch: T): T & { size_id?: string | null; all_sizes?: boolean } =>
     sizeId === null ? { ...patch, all_sizes: true } : { ...patch, size_id: sizeId };
-  const editingAllSizes = sizeId === null;
   const sameKind = elements.every(element => element.kind === elements[0]?.kind);
+  const kind = sameKind ? elements[0].kind : null;
   const fill = commonValue(elements.map(element => element.style.fill));
   const strokeColour = commonValue(elements.map(element => element.style.stroke.color));
   const strokeWidth = commonValue(elements.map(element => element.style.stroke.width));
@@ -166,7 +227,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   const picture = useRef<HTMLInputElement>(null);
   const [pictureUri, setPictureUri] = useState<string | null>(null);
   const [nameError, setNameError] = useState('');
-  const linked = elements.some(element => !!element.link);
+  const [shadowOpen, setShadowOpen] = useState(false);
   async function commitName(name: string) {
     setNameError('');
     if (name.trim() === (single?.name ?? '')) return;
@@ -191,102 +252,131 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
     setPictureUri(null);
   }, [pictureUri, single?.id]);
   const visual = elements.every(element => element.kind !== 'group');
-  const textVisual = sameKind && elements[0].kind !== 'group';
-  const textKind = sameKind && isTextKind(elements[0].kind);
-  const codeKind = sameKind && elements[0].kind === 'code';
-  const mediaKind = sameKind && (elements[0].kind === 'link' || elements[0].kind === 'video' || elements[0].kind === 'audio' || elements[0].kind === 'embed');
+  const textKind = sameKind && kind !== null && isTextKind(kind);
+  const codeKind = kind === 'code';
+  const mediaKind = kind === 'link' || kind === 'video' || kind === 'audio' || kind === 'embed';
+  const imageKind = kind === 'image';
+  // Text and lines keep their box plain until a stroke or radius is actually set.
+  const showsStrokeWidth = kind === 'line' || (strokeColour ?? '').trim().length > 0 || (kind !== 'text' && (strokeWidth ?? 0) > 0);
+  const showsRadius = kind !== null && kind !== 'text' && kind !== 'line' ? true : (radius ?? 0) > 0;
 
-  return <div className="dock-form">
+  return <div className="dock-form props">
     <div className="dock-layer-title"><strong>{single ? elementKindLabel(single) : `${elements.length} layers`}</strong></div>
-    {page.sizes.length > 1 && <p className="dock-hint">{editingAllSizes ? 'Editing all linked sizes.' : 'Editing this size only.'}</p>}
     {single && <>
-      <PropertyField label="Name" value={single.name ?? ''} disabled={busy} field="layer-name" commit={name => void commitName(name)} />
-      <p className="dock-hint">{linked ? 'Every copy of this linked element changes together.' : 'A name makes this layer a linked element; its copies change together.'}</p>
+      <TextField label="Name" placeholder="Name" field="layer-name" value={single.name ?? ''} disabled={busy} commit={name => void commitName(name)} />
       {nameError && <p className="dock-field-error" role="alert">{nameError}</p>}
     </>}
     {(canLink || canUnlink) && <div className="form-actions">
       {canLink && <button type="button" className="dock-action" disabled={busy} title="Link the selected layers (Ctrl/Cmd+Alt+K)" onClick={link}>Link {elements.length} layers</button>}
       {canUnlink && <button type="button" className="dock-action" disabled={busy} title="Detach this copy (Ctrl/Cmd+Alt+B)" onClick={unlink}>Unlink</button>}
     </div>}
-    {single && <>
-      <div className="dock-pair">
-        <PropertyField label="X" type="number" value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
-        <PropertyField label="Y" type="number" value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
-        <PropertyField label="Width" type="number" min={0} value={single.rect.width} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ width: Number(value) })} />
-        <PropertyField label="Height" type="number" min={0} value={single.rect.height} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ height: Number(value) })} />
+    {(single || (sameKind && kind === 'box')) && <section className="props-section">
+      <h3 className="props-heading">Layout</h3>
+      {single && <div className="props-grid">
+        <NumberField prefix="X" label="X" value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
+        <NumberField prefix="Y" label="Y" value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
+        <NumberField prefix="W" label="Width" min={0} value={single.rect.width} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ width: Number(value) })} />
+        <NumberField prefix="H" label="Height" min={0} value={single.rect.height} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ height: Number(value) })} />
+        <NumberField prefix="°" label="Rotation" value={single.rotation} disabled={busy} valid={validNumber} commit={value => update([{ id: single.id, rotation: Number(value) }])} />
+      </div>}
+      {sameKind && kind === 'box' && <>
+        <div className="props-choice"><ChoiceRow label="Flow" value={layout?.kind ?? 'free'} choices={[['free', 'Free'], ['stack', 'Stack'], ['grid', 'Grid']]} disabled={busy}
+          choose={flow => update(elements.map(element => sized({ id: element.id, layout: flow === 'free' ? { kind: 'free' } : flow === 'stack'
+            ? { kind: 'stack', direction: 'row', gap: 8, padding: 0, align: 'start', justify: 'start', wrap: false }
+            : { kind: 'grid', columns: 2, gap: 8, padding: 0 } })))} /></div>
+        {layout?.kind === 'stack' && <>
+          <div className="props-choice"><ChoiceRow label="Direction" value={layout.direction} choices={[['row', 'Row'], ['column', 'Column']]} disabled={busy}
+            choose={direction => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, direction } })))} /></div>
+          <div className="props-grid">
+            <NumberField prefix="G" label="Gap" min={0} value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
+              commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
+            <NumberField prefix="P" label="Padding" min={0} value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
+              commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
+          </div>
+          <div className="props-choice"><ChoiceRow label="Align" value={layout.align} choices={[['start', 'Start'], ['center', 'Center'], ['end', 'End'], ['stretch', 'Stretch']]} disabled={busy}
+            choose={align => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, align } })))} /></div>
+          <div className="props-choice"><ChoiceRow label="Justify" value={layout.justify} choices={[['start', 'Start'], ['center', 'Center'], ['end', 'End'], ['spaceBetween', 'Between']]} disabled={busy}
+            choose={justify => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, justify } })))} /></div>
+          <label className="check-label"><input type="checkbox" checked={layout.wrap} disabled={busy} onChange={event => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, wrap: event.target.checked } })))} />Wrap</label>
+        </>}
+        {layout?.kind === 'grid' && <div className="props-grid">
+          <NumberField prefix="C" label="Columns" min={1} max={64} value={layout.columns} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 64}
+            commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, columns: Number(value) } })))} />
+          <NumberField prefix="G" label="Gap" min={0} value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
+            commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
+          <NumberField prefix="P" label="Padding" min={0} value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
+            commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
+        </div>}
+      </>}
+    </section>}
+    {visual && <section className="props-section">
+      <h3 className="props-heading">Appearance</h3>
+      {kind !== 'line' && <ColourField label="Fill" value={fill ?? ''} disabled={busy} commit={value => commitStyle(style => { style.fill = value.trim() || null; })} />}
+      <ColourField label="Stroke" value={strokeColour ?? ''} fallback="#000000" disabled={busy} commit={value => commitStyle(style => { style.stroke.color = value.trim() || null; })} />
+      <div className="props-grid">
+        {showsStrokeWidth && <NumberField prefix="S" label="Stroke width" min={0} value={strokeWidth ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+          commit={value => commitStyle(style => { style.stroke.width = Number(value); })} />}
+        {showsRadius && <NumberField prefix="R" label="Radius" min={0} value={radius ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+          commit={value => commitStyle(style => { style.radius = Number(value); })} />}
+        <NumberField prefix="O" label="Opacity" min={0} max={1} value={opacity ?? ''} disabled={busy} valid={value => Number(value) >= 0 && Number(value) <= 1}
+          commit={value => commitStyle(style => { style.opacity = Number(value); })} />
       </div>
-      <PropertyField label="Rotation" type="number" value={single.rotation} disabled={busy} valid={validNumber} commit={value => update([{ id: single.id, rotation: Number(value) }])} />
-    </>}
-    {visual && <div className="dock-pair">
-      <PropertyField label="Fill" value={fill ?? ''} disabled={busy} valid={validColour} commit={value => commitStyle(style => { style.fill = value.trim() || null; })} />
-      <PropertyField label="Stroke" value={strokeColour ?? ''} disabled={busy} valid={validColour} commit={value => commitStyle(style => { style.stroke.color = value.trim() || null; })} />
-      <PropertyField label="Stroke width" type="number" min={0} value={strokeWidth ?? ''} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitStyle(style => { style.stroke.width = Number(value); })} />
-      <PropertyField label="Radius" type="number" min={0} value={radius ?? ''} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitStyle(style => { style.radius = Number(value); })} />
-      <PropertyField label="Opacity" type="number" min={0} max={1} value={opacity ?? ''} disabled={busy} valid={value => Number(value) >= 0 && Number(value) <= 1} commit={value => commitStyle(style => { style.opacity = Number(value); })} />
-      <PropertyField label="Shadow colour" value={shadow?.color ?? ''} disabled={busy} valid={validColour} commit={value => commitStyle(style => { style.shadow.color = value.trim() || null; })} />
-      <PropertyField label="Shadow X" type="number" value={shadow?.x ?? ''} disabled={busy} valid={validNumber} commit={value => commitStyle(style => { style.shadow.x = Number(value); })} />
-      <PropertyField label="Shadow Y" type="number" value={shadow?.y ?? ''} disabled={busy} valid={validNumber} commit={value => commitStyle(style => { style.shadow.y = Number(value); })} />
-      <PropertyField label="Shadow blur" type="number" min={0} value={shadow?.blur ?? ''} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitStyle(style => { style.shadow.blur = Number(value); })} />
-    </div>}
-    {textVisual && <>
-      <div className="dock-pair">
-        <PropertyField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
-        <PropertyField label="Size" type="number" min={1} value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1} commit={value => commitStyle(style => { style.textStyle.size = Number(value); })} />
-        <PropertyField label="Weight" type="number" min={1} max={1000} value={textStyle?.weight ?? ''} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 1000} commit={value => commitStyle(style => { style.textStyle.weight = Number(value); })} />
-        <PropertyField label="Line height" type="number" min={0} value={textStyle?.lineHeight ?? ''} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitStyle(style => { style.textStyle.lineHeight = Number(value); })} />
-        <PropertyField label="Letter spacing" type="number" value={textStyle?.letterSpacing ?? ''} disabled={busy} valid={validNumber} commit={value => commitStyle(style => { style.textStyle.letterSpacing = Number(value); })} />
-        <PropertyField label="Text colour" value={textStyle?.color ?? ''} disabled={busy} valid={validColour} commit={value => commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; })} />
-      </div>
-      <label className="check-label"><input type="checkbox" disabled={busy} checked={!!textStyle?.italic} onChange={event => commitStyle(style => { style.textStyle.italic = event.target.checked; })} />Italic</label>
-      <ChoiceRow label="Align" value={textStyle?.align ?? 'left'} choices={[['left', 'Left'], ['center', 'Center'], ['right', 'Right']]} disabled={busy}
-        choose={align => commitStyle(style => { style.textStyle.align = align; })} />
-    </>}
-    {textKind && sameKind && <TextEditorField label="Text" value={text ?? ''} commit={value => update(elements.map(element => ({ id: element.id, text: value })))} />}
-    {sameKind && (elements[0].kind === 'image' || elements[0].kind === 'link' || elements[0].kind === 'video' || elements[0].kind === 'audio' || elements[0].kind === 'embed') && <>
-      {elements[0].kind === 'image' && single && <div className="dock-field">Picture
-        <div className="dock-inline">{projectPictureUri(project, single.image) && <img className="dock-picture" src={projectPictureUri(project, single.image)!} alt="" />}<span className="dock-value">{pictureName(project, single.image)}</span>
-          <button type="button" className="dock-action" disabled={busy} onClick={() => picture.current?.click()}>Replace</button></div>
+    </section>}
+    {((imageKind && single) || mediaKind) && <section className="props-section">
+      <h3 className="props-heading">Content</h3>
+      {imageKind && single && <div className="dock-inline">
+        {projectPictureUri(project, single.image) && <img className="dock-picture" src={projectPictureUri(project, single.image)!} alt="" />}
+        <span className="dock-value">{pictureName(project, single.image)}</span>
+        <button type="button" className="dock-action" disabled={busy} onClick={() => picture.current?.click()}>Replace</button>
         <input ref={picture} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { choosePicture(event.target.files?.[0]); event.target.value = ''; }} />
       </div>}
-      {mediaKind && <PropertyField label="Address" value={url ?? ''} disabled={busy} valid={validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
-    </>}
-    {sameKind && elements[0].kind === 'box' && <>
-      <ChoiceRow label="Layout" value={layout?.kind ?? 'free'} choices={[['free', 'Free'], ['stack', 'Stack'], ['grid', 'Grid']]} disabled={busy}
-        choose={kind => update(elements.map(element => sized({ id: element.id, layout: kind === 'free' ? { kind: 'free' } : kind === 'stack'
-          ? { kind: 'stack', direction: 'row', gap: 8, padding: 0, align: 'start', justify: 'start', wrap: false }
-          : { kind: 'grid', columns: 2, gap: 8, padding: 0 } })))} />
-      {layout?.kind === 'stack' && <>
-        <ChoiceRow label="Direction" value={layout.direction} choices={[['row', 'Row'], ['column', 'Column']]} disabled={busy}
-          choose={direction => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, direction } })))} />
-        <div className="dock-pair">
-          <PropertyField label="Gap" type="number" min={0} value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
-            commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
-          <PropertyField label="Padding" type="number" min={0} value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
-            commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
-        </div>
-        <ChoiceRow label="Align" value={layout.align} choices={[['start', 'Start'], ['center', 'Center'], ['end', 'End'], ['stretch', 'Stretch']]} disabled={busy}
-          choose={align => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, align } })))} />
-        <ChoiceRow label="Justify" value={layout.justify} choices={[['start', 'Start'], ['center', 'Center'], ['end', 'End'], ['spaceBetween', 'Between']]} disabled={busy}
-          choose={justify => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, justify } })))} />
-        <label className="check-label"><input type="checkbox" checked={layout.wrap} disabled={busy} onChange={event => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, wrap: event.target.checked } })))} />Wrap</label>
-      </>}
-      {layout?.kind === 'grid' && <div className="dock-pair">
-        <PropertyField label="Columns" type="number" min={1} max={64} value={layout.columns} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 64}
-          commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, columns: Number(value) } })))} />
-        <PropertyField label="Gap" type="number" min={0} value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
-          commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
-        <PropertyField label="Padding" type="number" min={0} value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
-          commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
-      </div>}
-    </>}
-    {sameKind && elements[0].kind === 'input' && <ChoiceRow label="Input type" value={elements[0].inputType ?? 'text'} choices={inputTypes.map(type => [type, type[0].toUpperCase() + type.slice(1)] as [InputType, string])} disabled={busy}
-      choose={input_type => update(elements.map(element => ({ id: element.id, input_type })))} />}
-    {sameKind && elements[0].kind === 'select' && <TextEditorField label="Options, one per line" value={(elements[0].options ?? []).join('\n')} rows={5}
-      commit={value => { const options = value.split('\n').map(option => option.trim()).filter(Boolean); if (options.length) update(elements.map(element => ({ id: element.id, options }))); }} />}
-    {codeKind && single && <>
-      <PropertyField label="Language" value={single.language ?? ''} disabled={busy} valid={value => value.trim().length > 0} commit={value => update([{ id: single.id, language: value.trim() }])} />
+      {mediaKind && <TextField label="Address" value={url ?? ''} disabled={busy} valid={validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
+    </section>}
+    {textKind && <section className="props-section">
+      <h3 className="props-heading">Text</h3>
+      <TextField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
+      <div className="props-grid">
+        <NumberField prefix="S" label="Size" min={1} value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1}
+          commit={value => commitStyle(style => { style.textStyle.size = Number(value); })} />
+        <NumberField prefix="W" label="Weight" min={1} max={1000} value={textStyle?.weight ?? ''} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 1000}
+          commit={value => commitStyle(style => { style.textStyle.weight = Number(value); })} />
+        <NumberField prefix="LH" label="Line height" min={0} value={textStyle?.lineHeight ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+          commit={value => commitStyle(style => { style.textStyle.lineHeight = Number(value); })} />
+        <NumberField prefix="LS" label="Letter spacing" value={textStyle?.letterSpacing ?? ''} disabled={busy} valid={validNumber}
+          commit={value => commitStyle(style => { style.textStyle.letterSpacing = Number(value); })} />
+      </div>
+      <ColourField label="Text colour" value={textStyle?.color ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; })} />
+      <label className="check-label"><input type="checkbox" disabled={busy} checked={!!textStyle?.italic} onChange={event => commitStyle(style => { style.textStyle.italic = event.target.checked; })} />Italic</label>
+      <div className="props-choice"><ChoiceRow label="Align" value={textStyle?.align ?? 'left'} choices={[['left', 'Left'], ['center', 'Center'], ['right', 'Right']]} disabled={busy}
+        choose={align => commitStyle(style => { style.textStyle.align = align; })} /></div>
+      {kind === 'input' && <div className="props-choice"><ChoiceRow label="Input type" value={elements[0].inputType ?? 'text'} choices={inputTypes.map(type => [type, type[0].toUpperCase() + type.slice(1)] as [InputType, string])} disabled={busy}
+        choose={input_type => update(elements.map(element => ({ id: element.id, input_type })))} /></div>}
+      {kind === 'select' && <LongTextField label="Options" placeholder="One option per line" rows={5} value={(elements[0].options ?? []).join('\n')}
+        commit={value => { const options = value.split('\n').map(option => option.trim()).filter(Boolean); if (options.length) update(elements.map(element => ({ id: element.id, options }))); }} />}
+      <LongTextField label="Text" placeholder="Text" value={text ?? ''} commit={value => update(elements.map(element => ({ id: element.id, text: value })))} />
+    </section>}
+    {codeKind && single && <section className="props-section">
+      <h3 className="props-heading">Code</h3>
+      <TextField label="Language" value={single.language ?? ''} disabled={busy} valid={value => value.trim().length > 0} commit={value => update([{ id: single.id, language: value.trim() }])} />
       <CodeField language={single.language ?? ''} source={single.source ?? ''} commit={source => update([{ id: single.id, source }])} />
-    </>}
+    </section>}
+    {visual && <section className="props-section">
+      <button type="button" className="props-disclosure" aria-expanded={shadowOpen} aria-label="Shadow" onClick={() => setShadowOpen(open => !open)}>
+        <span>Shadow</span><Icon name={shadowOpen ? 'minus' : 'plus'} size={12} />
+      </button>
+      {shadowOpen && <>
+        <ColourField label="Shadow colour" value={shadow?.color ?? ''} fallback="#000000" disabled={busy}
+          commit={value => commitStyle(style => { style.shadow.color = value.trim() || null; })} />
+        <div className="props-grid">
+          <NumberField prefix="X" label="Shadow X" value={shadow?.x ?? ''} disabled={busy} valid={validNumber}
+            commit={value => commitStyle(style => { style.shadow.x = Number(value); })} />
+          <NumberField prefix="Y" label="Shadow Y" value={shadow?.y ?? ''} disabled={busy} valid={validNumber}
+            commit={value => commitStyle(style => { style.shadow.y = Number(value); })} />
+          <NumberField prefix="B" label="Shadow blur" min={0} value={shadow?.blur ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+            commit={value => commitStyle(style => { style.shadow.blur = Number(value); })} />
+        </div>
+      </>}
+    </section>}
     {single && <RequestArea element={single} project={project} request={request} setRequest={setRequest} generate={generate} error={error} />}
     {!single && <p className="dock-hint">{elements.map(element => elementKindLabel(element)).filter((label, index, all) => all.indexOf(label) === index).join(', ')}</p>}
   </div>;

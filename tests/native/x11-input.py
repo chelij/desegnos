@@ -278,6 +278,10 @@ def main():
                         code = keysym_to_code(display, string_to_keysym(b"Escape"))
                         key(display, code, 1, 0); key(display, code, 0, 0); sync(display, 0)
                         time.sleep(0.04)
+                    hold = request.get("hold", 0)
+                    if type(hold) is not int or not 0 <= hold <= 2000:
+                        raise RuntimeError("Invalid drag hold")
+                    time.sleep(hold / 1000)
                 button(display, pressed_button, 0, 0)
                 pressed = False
                 sync(display, 0)
