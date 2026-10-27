@@ -9,7 +9,6 @@
 /src-tauri/gen/
 *.log
 *.desegnos
-!/benchmarks/generation/projects/*.desegnos
 *.desegnos.lock
 *.previous
 .env

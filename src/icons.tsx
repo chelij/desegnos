@@ -10,7 +10,7 @@ export type IconName =
   | 'link' | 'text' | 'info' | 'properties' | 'arrange-front' | 'arrange-forward'
   | 'arrange-backward' | 'arrange-back' | 'monitor' | 'tablet' | 'phone' | 'canvas'
   | 'rectangle' | 'ellipse' | 'line' | 'image' | 'video' | 'audio' | 'code' | 'note' | 'group'
-  | 'eye' | 'eye-off' | 'lock' | 'unlock' | 'insert' | 'history' | 'pin';
+  | 'eye' | 'eye-off' | 'lock' | 'unlock' | 'insert' | 'history' | 'pin' | 'home' | 'folder';
 
 const paths: Record<IconName, ReactNode> = {
   close: <path d="M4 4l8 8M12 4l-8 8" />,
@@ -70,6 +70,8 @@ const paths: Record<IconName, ReactNode> = {
   lock: <><rect x="3.4" y="7" width="9.2" height="6.2" rx="1" /><path d="M5.6 7V5.4a2.4 2.4 0 0 1 4.8 0V7" /></>,
   unlock: <><rect x="3.4" y="7" width="9.2" height="6.2" rx="1" /><path d="M5.6 7V5.4a2.4 2.4 0 0 1 4.6-.8" /></>,
   insert: <><path d="M8 2.6v10.8M2.6 8h10.8" /><circle cx="8" cy="8" r="6.2" /></>,
+  home: <><path d="M2.2 7.4 8 2.6l5.8 4.8" /><path d="M3.8 6.6v6.8h8.4V6.6" /><path d="M6.4 13.4V9.6h3.2v3.8" /></>,
+  folder: <path d="M2 4.4h4.1l1.4 1.8H14v6.4H2Z" />,
 };
 
 export function Icon({ name, size, className = '', ...rest }: { name: IconName; size?: number } & Omit<SVGProps<SVGSVGElement>, 'name'>) {

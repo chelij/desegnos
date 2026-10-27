@@ -1251,6 +1251,7 @@ function Editor() {
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : onStartPage ? <>
       <SurfaceHost place="start" />
       <StartPage busy={pending > 0} create={template => run(() => newUntitled(template))}
+        openProject={() => run(open)} showStartPageOnLaunch={appSettings.showStartPage} changeShowStartPage={value => run(() => changeShowStartPage(value))}
         recentProjects={recentProjects} openRecent={path => run(() => openRecent(path))}
         forgetRecent={path => run(() => forgetRecent(path))} pinRecent={(path, pinned) => run(() => pinRecent(path, pinned))}
         recovery={view.recoveries.length ? <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /> : null} />
