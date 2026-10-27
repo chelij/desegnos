@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Icon, type IconName } from './icons';
 import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
-import type { Appearance, BoundaryKind, ElementPatch, OutputType, Page, PageSize, Pointer, PointerStateView, Project, ReferenceItem, SizePreset } from './types';
+import type { Appearance, BoundaryKind, ElementPatch, OutputType, Page, PageSize, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, SizePreset } from './types';
 import { ElementLayers } from './projectCanvas/elementLayers';
 import { SIZE_PRESETS, resolveForSize } from './projectCanvas/sizes';
 
@@ -206,19 +206,74 @@ export function ReferenceProperties({ item, update, remove, busy }: {
   </div>;
 }
 
-export function ProjectProperties({ project, rename, setGrid, setGridSettings, busy }: {
+export function ProjectProperties({ project, rename, setGrid, setGridSettings, busy, save }: {
   project: Project; rename: (name: string) => void;
   setGrid: (enabled: boolean) => void; setGridSettings: (patch: { snap?: boolean; rulers?: boolean }) => void;
-  busy: boolean;
+  busy: boolean; save?: () => void;
 }) {
   return <div className="dock-form">
     <PropertyField label="Project" value={project.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => rename(name.trim())} />
+    {save && <button type="button" className="dock-action" disabled={busy} onClick={save}>Save project…</button>}
     <div className="dock-checks">
       <label className="check-label"><input type="checkbox" checked={project.showGrid} disabled={busy} onChange={event => setGrid(event.target.checked)} />Dot grid</label>
       <label className="check-label"><input type="checkbox" checked={project.gridSettings.snap} disabled={busy} onChange={event => setGridSettings({ snap: event.target.checked })} />Snap</label>
       <label className="check-label"><input type="checkbox" checked={project.gridSettings.rulers} disabled={busy} onChange={event => setGridSettings({ rulers: event.target.checked })} />Rulers</label>
     </div>
   </div>;
+}
+
+/** The first save of an untitled project names it and picks its file, inline in the dock. */
+export function UntitledSaveForm({ project, location, busy, chooseLocation, save, cancel }: {
+  project: Project; location: ProjectLocationView | null; busy: boolean;
+  chooseLocation: (name: string) => Promise<string | null>;
+  save: (name: string, path: string) => Promise<void>;
+  cancel: () => void;
+}) {
+  const [name, setName] = useState(project.name === 'Untitled project' ? '' : project.name);
+  const [path, setPath] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState('');
+  const locked = busy || working;
+  const fail = (reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason));
+  async function choose() {
+    if (locked) return;
+    setError('');
+    try {
+      const picked = await chooseLocation(name.trim() || 'Untitled project');
+      if (picked) setPath(picked);
+    } catch (reason) { fail(reason); }
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (locked || !name.trim()) return;
+    setWorking(true); setError('');
+    try {
+      let target = path;
+      if (!target) {
+        target = await chooseLocation(name.trim());
+        if (!target) return;
+        setPath(target);
+      }
+      await save(name.trim(), target);
+    } catch (reason) { fail(reason); }
+    finally { setWorking(false); }
+  }
+  return <form className="dock-form untitled-save" aria-label="Save untitled project" onSubmit={submit}>
+    <h3>Save project</h3>
+    <label className="dock-field">Project name
+      <input autoFocus required maxLength={120} value={name} disabled={locked} autoComplete="off"
+        onFocus={event => event.currentTarget.select()} onChange={event => setName(event.target.value)} />
+    </label>
+    <div className="dock-field">Location
+      <p className="field-help" style={{ overflowWrap: 'anywhere' }}>{path ?? location?.path ?? 'Choose a location…'}</p>
+      <button type="button" className="dock-action" disabled={locked} onClick={() => { void choose(); }}>Choose location…</button>
+    </div>
+    {error && <p className="field-help" role="alert">{error}</p>}
+    <div className="form-actions">
+      <button className="primary" type="submit" disabled={locked || !name.trim()}>{working ? 'Saving…' : 'Save project'}</button>
+      <button type="button" disabled={locked} onClick={cancel}>Cancel</button>
+    </div>
+  </form>;
 }
 
 export function PointerProperties({ pointer, project, state, change, reattach, remove, keepComment, keepCode, keepThis, merge, connectAi, aiConnected, rewriting, busy }: {

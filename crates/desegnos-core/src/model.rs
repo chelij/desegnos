@@ -219,6 +219,106 @@ impl SizePreset {
     }
 }
 
+/// The starter boundaries a new untitled project can begin with.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum CanvasTemplate {
+    #[default]
+    Blank,
+    Website,
+    AppScreen,
+    SlideDeck,
+    SocialImage,
+}
+
+/// Space between the starter boundaries of a template, matching the canvas layout gap.
+const TEMPLATE_GAP: u32 = 160;
+
+impl CanvasTemplate {
+    fn size(width: u32, height: u32, kind: BoundaryKind, x: u32) -> PageSize {
+        PageSize {
+            id: Uuid::new_v4(),
+            label: size_label(width).into(),
+            width,
+            height,
+            kind,
+            x: f64::from(x),
+            y: 0.0,
+        }
+    }
+
+    fn page(
+        &self,
+        name: &str,
+        path: &str,
+        output: OutputType,
+        sizes: Vec<PageSize>,
+        appearance: Appearance,
+    ) -> Page {
+        Page {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            path: path.into(),
+            included: true,
+            output,
+            sizes,
+            appearance,
+            elements: vec![],
+        }
+    }
+
+    fn pages(self, appearance: Appearance) -> Vec<Page> {
+        match self {
+            Self::Blank => vec![],
+            Self::Website => {
+                // Desktop is the base size; Tablet and Phone inherit from it.
+                let desktop = Self::size(1440, 900, BoundaryKind::Page, 0);
+                let tablet =
+                    Self::size(820, 1180, BoundaryKind::Page, desktop.width + TEMPLATE_GAP);
+                let phone = Self::size(
+                    390,
+                    844,
+                    BoundaryKind::Page,
+                    tablet.x as u32 + tablet.width + TEMPLATE_GAP,
+                );
+                vec![self.page(
+                    "Home",
+                    "/",
+                    OutputType::Webpage,
+                    vec![desktop, tablet, phone],
+                    appearance,
+                )]
+            }
+            Self::AppScreen => vec![self.page(
+                "Home",
+                "/",
+                OutputType::AppScreen,
+                vec![Self::size(390, 844, BoundaryKind::Screen, 0)],
+                appearance,
+            )],
+            Self::SlideDeck => (0..3)
+                .map(|index| {
+                    let x = index * (1920 + TEMPLATE_GAP);
+                    self.page(
+                        &format!("Slide {}", index + 1),
+                        &format!("/slide-{}", index + 1),
+                        OutputType::Slide,
+                        vec![Self::size(1920, 1080, BoundaryKind::Screen, x)],
+                        appearance,
+                    )
+                })
+                .collect(),
+            Self::SocialImage => vec![self.page(
+                "Home",
+                "/",
+                OutputType::Image,
+                vec![Self::size(1080, 1080, BoundaryKind::Screen, 0)],
+                appearance,
+            )],
+        }
+    }
+}
+
 /// The name a new size gets from its width, so a boundary reads as Phone, Tablet or Desktop.
 pub fn size_label(width: u32) -> &'static str {
     if width >= 1024 {
@@ -1171,6 +1271,62 @@ impl Project {
         Ok(project)
     }
 
+    /// A new untitled canvas: no boundaries yet, so the first one becomes the home page.
+    pub fn blank(name: String, appearance: Appearance) -> Result<Self> {
+        Self::untitled(name, appearance, CanvasTemplate::Blank)
+    }
+
+    /// A new untitled canvas with the starter boundaries of a template. The boundaries are
+    /// the project's initial state, not an undoable change.
+    pub fn untitled(
+        name: String,
+        appearance: Appearance,
+        template: CanvasTemplate,
+    ) -> Result<Self> {
+        let pages = template.pages(appearance);
+        let home_page_id = pages
+            .first()
+            .map(|page| page.id)
+            .unwrap_or_else(Uuid::new_v4);
+        let viewport = pages
+            .first()
+            .map(|page| Viewport {
+                width: page.base_size().width,
+                height: page.base_size().height,
+            })
+            .unwrap_or(Viewport {
+                width: 1440,
+                height: 900,
+            });
+        let project = Self {
+            schema_version: SCHEMA_VERSION,
+            id: Uuid::new_v4(),
+            name: name.trim().into(),
+            revision: 0,
+            viewport,
+            appearance,
+            show_grid: true,
+            grid_settings: GridSettings::default(),
+            generation_mode: GenerationMode::Fuzzy,
+            home_page_id,
+            pages,
+            brief: Brief::default(),
+            imported_identity: None,
+            pictures: BTreeMap::new(),
+            reference: vec![],
+            pointers: vec![],
+            linked: BTreeMap::new(),
+            decisions: vec![],
+            exceptions: vec![],
+            extensions: BTreeMap::new(),
+            applied_job_ids: vec![],
+            latest_generation: None,
+            last_export: None,
+        };
+        project.validate()?;
+        Ok(project)
+    }
+
     pub fn page(&self, id: Uuid) -> Result<&Page> {
         self.pages
             .iter()
@@ -1614,8 +1770,8 @@ impl Project {
         self.viewport.validate()?;
         self.grid_settings.validate()?;
         ensure(
-            !self.pages.is_empty() && self.pages.len() <= MAX_PAGES,
-            "A project must contain between 1 and 100 pages.",
+            self.pages.len() <= MAX_PAGES,
+            "A project contains at most 100 pages.",
         )?;
         let mut ids = BTreeSet::from([self.id]);
         if let Some(identity) = &self.imported_identity {
@@ -1717,11 +1873,12 @@ impl Project {
             )?;
             validate_request_sizes(&page.elements, &size_ids)?;
         }
-        let home = self.page(self.home_page_id)?;
-        ensure(
-            home.path == "/" && home.included,
-            "The home page must be included and use the root path.",
-        )?;
+        if !self.pages.is_empty() {
+            ensure(
+                self.page(self.home_page_id)?.included,
+                "The home page must be included.",
+            )?;
+        }
         for text in [
             &self.brief.purpose,
             &self.brief.audience,
@@ -1894,10 +2051,14 @@ impl Project {
                     !next.pages.iter().any(|page| page.sizes.iter().any(|item| item.id == size.id)),
                     "This size already exists.",
                 )?;
+                let page_id = Uuid::new_v4();
+                if next.pages.is_empty() {
+                    next.home_page_id = page_id;
+                }
                 next.pages.push(Page {
-                    id: Uuid::new_v4(),
+                    id: page_id,
                     name: name.trim().into(),
-                    path,
+                    path: if next.pages.is_empty() && path != "/" { "/".into() } else { path },
                     included: true,
                     output: OutputType::default(),
                     sizes: vec![size],
@@ -2110,7 +2271,8 @@ impl Project {
                     .iter()
                     .map(|page| page.path.to_ascii_lowercase())
                     .collect();
-                for page in pages {
+                let first = next.pages.is_empty();
+                for (index, page) in pages.into_iter().enumerate() {
                     ensure(
                         !next.pages.iter().any(|existing| existing.id == page.id),
                         "This imported boundary already exists.",
@@ -2119,6 +2281,9 @@ impl Project {
                         paths.insert(page.path.to_ascii_lowercase()),
                         "Two imported pages cannot use the same public path.",
                     )?;
+                    if first && index == 0 {
+                        next.home_page_id = page.id;
+                    }
                     next.pages.push(page);
                 }
                 next.reference.extend(reference);

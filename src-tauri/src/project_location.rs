@@ -8,10 +8,13 @@ use std::{
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+/// App-level settings, kept beside the project files. Older files only hold the default
+/// project location; a missing start-page choice means the start page is shown.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Settings {
     default_project_location: Option<PathBuf>,
+    show_start_page: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -22,14 +25,22 @@ pub struct ProjectLocationView {
     customized: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSettingsView {
+    show_start_page: bool,
+}
+
 pub fn default_from_documents(documents: &Path) -> PathBuf {
     documents.join("Desegnos")
 }
 
-pub fn read(directory: &Path, default: &Path) -> Result<PathBuf, String> {
+fn read_settings(directory: &Path) -> Result<Settings, String> {
     let file = match File::open(directory.join("project-settings.json")) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(default.to_owned()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(Settings::default());
+        }
         Err(error) => return Err(error.to_string()),
     };
     let mut bytes = Vec::new();
@@ -39,9 +50,36 @@ pub fn read(directory: &Path, default: &Path) -> Result<PathBuf, String> {
     if bytes.len() > 65_536 {
         return Err("The project settings file is too large. Its original was preserved.".into());
     }
-    let settings: Settings = serde_json::from_slice(&bytes).map_err(|_| {
-        "Project settings could not be read. Their original was preserved.".to_owned()
-    })?;
+    serde_json::from_slice(&bytes)
+        .map_err(|_| "Project settings could not be read. Their original was preserved.".to_owned())
+}
+
+/// Read, change and write the settings under one lock so two windows cannot drop each
+/// other's choice.
+fn update_settings(
+    directory: &Path,
+    change: impl FnOnce(&mut Settings),
+) -> Result<Settings, String> {
+    // A lock prevents concurrent windows from replacing each other's setting.
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.join("project-settings.lock"))
+        .map_err(|e| e.to_string())?;
+    lock.try_lock()
+        .map_err(|_| "Another window is updating project settings. Try again.".to_owned())?;
+    let mut settings = read_settings(directory)?;
+    change(&mut settings);
+    let json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
+    desegnos_storage::write_markdown(&directory.join("project-settings.json"), &json)
+        .map_err(|e| e.to_string())?;
+    Ok(settings)
+}
+
+pub fn read(directory: &Path, default: &Path) -> Result<PathBuf, String> {
+    let settings = read_settings(directory)?;
     let path = settings
         .default_project_location
         .unwrap_or_else(|| default.to_owned());
@@ -79,6 +117,31 @@ pub fn get_project_location(
 }
 
 #[tauri::command]
+pub fn get_app_settings(
+    state: State<'_, Mutex<crate::workspace::Workspace>>,
+) -> Result<AppSettingsView, String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
+    let settings = read_settings(state.directory())?;
+    Ok(AppSettingsView {
+        show_start_page: settings.show_start_page.unwrap_or(true),
+    })
+}
+
+#[tauri::command]
+pub fn set_show_start_page(
+    state: State<'_, Mutex<crate::workspace::Workspace>>,
+    value: bool,
+) -> Result<AppSettingsView, String> {
+    let state = state.lock().map_err(|e| e.to_string())?;
+    update_settings(state.directory(), |settings| {
+        settings.show_start_page = Some(value);
+    })?;
+    Ok(AppSettingsView {
+        show_start_page: value,
+    })
+}
+
+#[tauri::command]
 pub async fn pick_project_location(app: AppHandle) -> Result<Option<PathBuf>, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<Option<PathBuf>, String> {
         let Some(picked) = crate::file_dialogs::picked(
@@ -108,22 +171,9 @@ pub fn set_project_location(
             return Err("Choose an existing parent folder.".into());
         }
     }
-    // A lock prevents concurrent windows from replacing each other's setting.
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(state.directory().join("project-settings.lock"))
-        .map_err(|e| e.to_string())?;
-    lock.try_lock()
-        .map_err(|_| "Another window is updating project settings. Try again.".to_owned())?;
-    let json = serde_json::to_string(&Settings {
-        default_project_location: path,
-    })
-    .map_err(|e| e.to_string())?;
-    desegnos_storage::write_markdown(&state.directory().join("project-settings.json"), &json)
-        .map_err(|e| e.to_string())?;
+    update_settings(state.directory(), |settings| {
+        settings.default_project_location = path;
+    })?;
     view(&state)
 }
 
@@ -145,6 +195,7 @@ mod tests {
             &settings,
             serde_json::to_vec(&Settings {
                 default_project_location: Some(root.clone()),
+                show_start_page: None,
             })
             .unwrap(),
         )
@@ -152,6 +203,19 @@ mod tests {
         assert_eq!(read(&root, &default).unwrap(), root);
         std::fs::write(&settings, b"{\"defaultProjectLocation\":null}").unwrap();
         assert_eq!(read(&root, &default).unwrap(), default);
+        std::fs::write(
+            &settings,
+            b"{\"defaultProjectLocation\":null,\"showStartPage\":false}",
+        )
+        .unwrap();
+        assert!(!read_settings(&root).unwrap().show_start_page.unwrap());
+        update_settings(&root, |settings| settings.show_start_page = Some(true)).unwrap();
+        let reread = read_settings(&root).unwrap();
+        assert_eq!(reread.show_start_page, Some(true));
+        assert!(
+            reread.default_project_location.is_none(),
+            "the location stays unset"
+        );
         std::fs::write(&settings, b"broken").unwrap();
         assert!(read(&root, &default).is_err());
         assert_eq!(std::fs::read(&settings).unwrap(), b"broken");

@@ -1,5 +1,5 @@
 use desegnos_core::{
-    Appearance, Command, GenerationCandidate, Project, RequirementsSnapshot, Session, Viewport,
+    Appearance, CanvasTemplate, Command, GenerationCandidate, Project, RequirementsSnapshot, Session,
 };
 use desegnos_storage::{
     AutosaveProject, FileStamp, LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure,
@@ -7,7 +7,7 @@ use desegnos_storage::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     path::{Path, PathBuf},
     sync::Mutex,
@@ -80,12 +80,36 @@ fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+/// The number in an untitled project's `Canvas N` name.
+fn canvas_number(name: &str) -> Option<u32> {
+    name.trim()
+        .strip_prefix("Canvas ")?
+        .parse::<u32>()
+        .ok()
+        .filter(|number| *number > 0)
+}
+
+/// The lowest free `Canvas N`; other names and renamed untitled projects keep their number free.
+fn lowest_unused_canvas(names: impl IntoIterator<Item = String>) -> String {
+    let used: BTreeSet<u32> = names
+        .into_iter()
+        .filter_map(|name| canvas_number(&name))
+        .collect();
+    let mut number = 1;
+    while used.contains(&number) {
+        number += 1;
+    }
+    format!("Canvas {number}")
+}
+
 /// Remembers which project file a session had open, so its autosave can be offered after a
 /// crash. The unsaved work itself lives inside the project database.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SessionPointer {
     project_path: PathBuf,
+    #[serde(default)]
+    untitled: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -109,6 +133,8 @@ pub struct WorkspaceView {
     project: Option<Project>,
     path: Option<String>,
     dirty: bool,
+    /// The project has no user-chosen file yet; it can still autosave for recovery.
+    untitled: bool,
     can_undo: bool,
     can_redo: bool,
     history: Option<HistoryView>,
@@ -206,6 +232,8 @@ pub struct Workspace {
     prepared: Option<RequirementsSnapshot>,
     recent_error: Option<String>,
     pending_save: Option<PendingSaveConflict>,
+    /// The active project has no user-chosen project file yet.
+    untitled: bool,
     /// Other open projects, each with its own undo history, file and autosave.
     parked: Vec<OpenProject>,
     /// Open projects in tab order.
@@ -219,11 +247,12 @@ struct OpenProject {
     stamp: Option<FileStamp>,
     ownership: Option<File>,
     saved_revision: Option<u64>,
+    untitled: bool,
 }
 
 impl OpenProject {
     fn dirty(&self) -> bool {
-        Some(self.session.project().revision) != self.saved_revision
+        self.untitled || Some(self.session.project().revision) != self.saved_revision
     }
 }
 
@@ -410,6 +439,7 @@ impl Workspace {
             prepared: None,
             recent_error: None,
             pending_save: None,
+            untitled: false,
             parked: vec![],
             order: vec![],
         };
@@ -447,9 +477,10 @@ impl Workspace {
             .map_err(|error| format!("The session record cannot be read: {error}"))
     }
 
-    fn write_pointer(&self, project_id: Uuid, path: &Path) -> NativeResult<()> {
+    fn write_pointer(&self, project_id: Uuid, path: &Path, untitled: bool) -> NativeResult<()> {
         let pointer = SessionPointer {
             project_path: path.to_owned(),
+            untitled,
         };
         write_markdown(
             &self.pointer_path(project_id),
@@ -458,12 +489,37 @@ impl Workspace {
         .map_err(message)
     }
 
+    fn untitled_path(&self, project_id: Uuid) -> PathBuf {
+        self.directory
+            .join("untitled")
+            .join(format!("{project_id}.desegnos"))
+    }
+
+    /// Delete the recovery database an untitled project kept in the app data folder.
+    fn remove_untitled_database(&self, project_id: Uuid) {
+        let path = self.untitled_path(project_id);
+        let _ = fs::remove_file(&path);
+        for suffix in ["-wal", "-shm"] {
+            let _ = fs::remove_file(path.with_file_name(format!(
+                "{}{suffix}",
+                path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default()
+            )));
+        }
+        let _ = fs::remove_file(path.with_file_name(format!(
+            "{}.lock",
+            path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default()
+        )));
+    }
+
     fn remove_pointer(&self, project_id: Uuid) {
         let _ = fs::remove_file(self.pointer_path(project_id));
     }
 
     /// The unsaved work a crashed or closed session left in this project file.
-    fn read_recovery(&self, project_id: Uuid) -> NativeResult<Option<(AutosaveProject, PathBuf)>> {
+    fn read_recovery(
+        &self,
+        project_id: Uuid,
+    ) -> NativeResult<Option<(AutosaveProject, PathBuf, bool)>> {
         let pointer = self.read_pointer(project_id)?;
         if !pointer.project_path.exists() {
             // The project moved or was deleted; its unsaved work went with it.
@@ -480,7 +536,7 @@ impl Workspace {
                     .into(),
             );
         }
-        Ok(Some((work, pointer.project_path)))
+        Ok(Some((work, pointer.project_path, pointer.untitled)))
     }
 
     fn refresh_recoveries(&mut self) {
@@ -523,7 +579,7 @@ impl Workspace {
                 }
             };
             match self.read_recovery(project_id) {
-                Ok(Some((work, path))) => {
+                Ok(Some((work, path, untitled))) => {
                     let modified = fs::metadata(&path)
                         .and_then(|metadata| metadata.modified())
                         .unwrap_or(SystemTime::UNIX_EPOCH);
@@ -532,7 +588,7 @@ impl Workspace {
                             project_id,
                             name: work.project.name,
                             revision: work.project.revision,
-                            saved_path: Some(path.to_string_lossy().into_owned()),
+                            saved_path: (!untitled).then(|| path.to_string_lossy().into_owned()),
                             edited_at_ms: work
                                 .created_at
                                 .max(0)
@@ -542,7 +598,17 @@ impl Workspace {
                         modified,
                     });
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    // An untitled session that never edited has nothing to offer; its
+                    // recovery database would otherwise accumulate on every launch.
+                    if self
+                        .read_pointer(project_id)
+                        .is_ok_and(|pointer| pointer.untitled)
+                    {
+                        self.remove_pointer(project_id);
+                        self.remove_untitled_database(project_id);
+                    }
+                }
                 Err(error) => errors.push(format!("{project_id}: {error}")),
             }
             drop(ownership);
@@ -569,14 +635,12 @@ impl Workspace {
                 .map(|session| session.project().pointer_states())
                 .unwrap_or_default(),
             project: self.session.as_ref().map(|s| s.project().clone()),
-            path: self
-                .file
-                .as_ref()
+            path: (!self.untitled)
+                .then_some(self.file.as_ref())
+                .flatten()
                 .map(|f| f.path().to_string_lossy().into_owned()),
-            dirty: self
-                .session
-                .as_ref()
-                .is_some_and(|s| Some(s.project().revision) != self.saved_revision),
+            dirty: self.active_dirty(),
+            untitled: self.untitled,
             can_undo: self.session.as_ref().is_some_and(Session::can_undo),
             can_redo: self.session.as_ref().is_some_and(Session::can_redo),
             history: self.session.as_ref().map(|session| {
@@ -614,9 +678,11 @@ impl Workspace {
     }
 
     fn active_dirty(&self) -> bool {
-        self.session
-            .as_ref()
-            .is_some_and(|session| Some(session.project().revision) != self.saved_revision)
+        self.untitled
+            || self
+                .session
+                .as_ref()
+                .is_some_and(|session| Some(session.project().revision) != self.saved_revision)
     }
 
     /// "Discard and continue": the unsaved work is gone, so it is no longer offered for
@@ -633,17 +699,23 @@ impl Workspace {
         Ok(())
     }
 
-    /// Close the active project and activate the next open one in tab order, or the start
-    /// screen when no project remains.
+    /// Close the active project and activate the next open one in tab order. The caller opens
+    /// a fresh untitled canvas when no project remains.
     fn close(&mut self) {
         let position = self.session.as_ref().and_then(|session| {
             let id = session.project().id;
             self.order.iter().position(|other| *other == id)
         });
+        let untitled = if self.untitled {
+            self.session.as_ref().map(|session| session.project().id)
+        } else {
+            None
+        };
         if let Some(session) = &self.session {
             let id = session.project().id;
             self.order.retain(|other| *other != id);
         }
+        self.untitled = false;
         self.session = None;
         self.file = None;
         self.stamp = None;
@@ -652,6 +724,10 @@ impl Workspace {
         self.last_autosave = None;
         self.prepared = None;
         self.pending_save = None;
+        if let Some(id) = untitled {
+            self.remove_untitled_database(id);
+            self.remove_pointer(id);
+        }
         // The tab that followed the closed one, or the one before it when it was last.
         let next = position
             .and_then(|index| {
@@ -711,8 +787,12 @@ impl Workspace {
             }
             self.remove_pointer(target);
         }
+        let untitled = project.untitled;
         // Dropping the entry releases its lock and leaves the saved project on disk.
         drop(project);
+        if untitled {
+            self.remove_untitled_database(target);
+        }
         self.order.retain(|other| *other != target);
         self.refresh_recoveries();
         Ok(())
@@ -760,8 +840,10 @@ impl Workspace {
                 stamp: self.stamp.take(),
                 ownership: self.ownership.take(),
                 saved_revision: self.saved_revision.take(),
+                untitled: self.untitled,
             });
         }
+        self.untitled = false;
         self.prepared = None;
         self.pending_save = None;
         self.last_autosave = None;
@@ -773,6 +855,7 @@ impl Workspace {
         self.stamp = project.stamp;
         self.ownership = project.ownership;
         self.saved_revision = project.saved_revision;
+        self.untitled = project.untitled;
         self.prepared = None;
         self.pending_save = None;
         self.last_autosave = None;
@@ -827,7 +910,7 @@ impl Workspace {
         discard_recovery: bool,
     ) -> OpenResult<()> {
         let revision = loaded.project.revision;
-        self.start_with_recovery(loaded.project, file, Some(revision), discard_recovery)?;
+        self.start_with_recovery(loaded.project, file, Some(revision), discard_recovery, false)?;
         self.remember_recent();
         Ok(())
     }
@@ -883,14 +966,13 @@ impl Workspace {
         }
     }
 
-    fn start(
-        &mut self,
-        project: Project,
-        file: Option<ProjectDatabase>,
-        saved_revision: Option<u64>,
-    ) -> NativeResult<()> {
-        self.start_with_recovery(project, file, saved_revision, false)
-            .map_err(String::from)
+    /// Saving renames a recent entry but does not count as opening it.
+    fn remember_recent_saved(&mut self) {
+        if let (Some(file), Some(session)) = (&self.file, &self.session) {
+            self.recent_error =
+                crate::recent::remember_saved(&self.directory, file.path(), &session.project().name)
+                    .err();
+        }
     }
 
     fn start_with_recovery(
@@ -899,6 +981,7 @@ impl Workspace {
         file: Option<ProjectDatabase>,
         saved_revision: Option<u64>,
         discard_recovery: bool,
+        untitled: bool,
     ) -> OpenResult<()> {
         if let Some(index) = self
             .parked
@@ -948,7 +1031,7 @@ impl Workspace {
             }
             Some(ownership)
         };
-        self.activate(project, file, saved_revision, ownership)
+        self.activate(project, file, saved_revision, ownership, untitled)
             .map_err(Into::into)
     }
 
@@ -958,6 +1041,7 @@ impl Workspace {
         file: Option<ProjectDatabase>,
         saved_revision: Option<u64>,
         ownership: Option<File>,
+        untitled: bool,
     ) -> NativeResult<()> {
         let session = Session::new(project).map_err(message)?;
         let id = session.project().id;
@@ -967,7 +1051,7 @@ impl Workspace {
             None => None,
         };
         if let Some(file) = file.as_ref() {
-            self.write_pointer(id, file.path())?;
+            self.write_pointer(id, file.path(), untitled)?;
         }
         self.pending_save = None;
         if !self.order.contains(&id) {
@@ -982,6 +1066,7 @@ impl Workspace {
             self.ownership = Some(ownership);
         }
         self.saved_revision = saved_revision;
+        self.untitled = untitled;
         self.last_autosave = None;
         self.prepared = None;
         self.refresh_recoveries();
@@ -1023,6 +1108,9 @@ impl Workspace {
 
     fn save_destination(&self, path: Option<PathBuf>) -> NativeResult<SaveDestination> {
         let Some(path) = path else {
+            if self.untitled {
+                return Err("Choose a name and location for this project first.".into());
+            }
             return if self.file.is_some() {
                 Ok(SaveDestination::Current)
             } else {
@@ -1071,11 +1159,11 @@ impl Workspace {
             .map(|file| file.stamp().map_err(message))
             .transpose()?;
         if let Some(file) = self.file.as_ref() {
-            self.write_pointer(project.id, file.path())?;
+            self.write_pointer(project.id, file.path(), false)?;
         }
         self.saved_revision = Some(project.revision);
         self.last_autosave = None;
-        self.remember_recent();
+        self.remember_recent_saved();
         Ok(())
     }
 
@@ -1147,10 +1235,35 @@ impl Workspace {
             .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error))
     }
 
-    fn create_in_folder(&mut self, project: Project, parent: Option<PathBuf>) -> NativeResult<()> {
-        let parent = parent.map(Ok).unwrap_or_else(|| self.project_location())?;
-        let path = desegnos_storage::create_project_folder(&parent, &project.name, project.id)
+    /// The lowest unused `Canvas N` among the open untitled projects.
+    fn next_untitled_name(&self) -> String {
+        let mut names = Vec::new();
+        if self.untitled
+            && let Some(session) = self.session.as_ref()
+        {
+            names.push(session.project().name.clone());
+        }
+        for project in &self.parked {
+            if project.untitled {
+                names.push(project.session.project().name.clone());
+            }
+        }
+        lowest_unused_canvas(names)
+    }
+
+    /// Open an untitled canvas whose recovery database lives in the app data folder until the
+    /// user chooses a project file for it.
+    fn create_untitled(
+        &mut self,
+        appearance: Appearance,
+        template: CanvasTemplate,
+    ) -> NativeResult<()> {
+        let project = Project::untitled(self.next_untitled_name(), appearance, template)
             .map_err(message)?;
+        let path = self.untitled_path(project.id);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(message)?;
+        }
         let file = ProjectDatabase::create(
             &path,
             &project,
@@ -1158,9 +1271,50 @@ impl Workspace {
         )
         .map_err(message)?;
         let revision = project.revision;
-        self.open_tab(|state| state.start(project, Some(file), Some(revision)))?;
-        self.remember_recent();
-        Ok(())
+        self.open_tab(|state| {
+            state
+                .start_with_recovery(project, Some(file), Some(revision), false, true)
+                .map_err(String::from)
+        })
+    }
+
+    /// The first save gives the untitled project its real file; the recovery copy is removed.
+    fn finish_untitled_save(&mut self, project: &Project) {
+        if self.untitled {
+            self.untitled = false;
+            let recovery_path = self.untitled_path(project.id);
+            if self.file.as_ref().is_none_or(|file| file.path() != recovery_path) {
+                self.remove_untitled_database(project.id);
+            }
+        }
+    }
+
+    fn save_untitled_checked(
+        &mut self,
+        project: &Project,
+        path: PathBuf,
+        label: Option<String>,
+    ) -> NativeResult<SaveProjectOutcome> {
+        self.check_snapshot(project)?;
+        self.pending_save = None;
+        let labels = self.take_version_labels();
+        let destination = self.save_destination(Some(path))?;
+        match self.write_destination_checked(
+            destination.clone(),
+            project,
+            &labels,
+            label.as_deref(),
+        ) {
+            Ok(()) => {
+                self.finish_untitled_save(project);
+                Ok(SaveProjectOutcome::Saved {
+                    workspace: Box::new(self.view()),
+                })
+            }
+            Err(failure) => {
+                self.save_conflict(project, destination, *failure, true, labels, label)
+            }
+        }
     }
 
     fn save_snapshot(&mut self, project: &Project, path: Option<PathBuf>) -> NativeResult<()> {
@@ -1168,7 +1322,9 @@ impl Workspace {
         self.pending_save = None;
         let labels = self.take_version_labels();
         let destination = self.save_destination(path)?;
-        self.write_destination(destination, project, &labels, None)
+        self.write_destination(destination, project, &labels, None)?;
+        self.finish_untitled_save(project);
+        Ok(())
     }
 
     /// Write a new project file holding only the current version.
@@ -1267,9 +1423,12 @@ impl Workspace {
             &labels,
             label.as_deref(),
         ) {
-            Ok(()) => Ok(SaveProjectOutcome::Saved {
-                workspace: Box::new(self.view()),
-            }),
+            Ok(()) => {
+                self.finish_untitled_save(project);
+                Ok(SaveProjectOutcome::Saved {
+                    workspace: Box::new(self.view()),
+                })
+            }
             Err(failure) => {
                 self.save_conflict(project, destination, *failure, save_as, labels, label)
             }
@@ -1351,6 +1510,7 @@ impl Workspace {
         match result {
             Ok(()) => {
                 self.finish_save(&project)?;
+                self.finish_untitled_save(&project);
                 Ok(SaveProjectOutcome::Saved {
                     workspace: Box::new(self.view()),
                 })
@@ -1385,7 +1545,7 @@ impl Workspace {
         let _ownership = self
             .acquire_ownership(project_id)?
             .ok_or("This project is already active in another Desegnos window.")?;
-        let (_, path) = self
+        let (_, path, untitled) = self
             .read_recovery(project_id)?
             .ok_or("There are no unsaved changes to recover for this project.")?;
         ProjectDatabase::open(&path)
@@ -1393,6 +1553,9 @@ impl Workspace {
             .discard_autosave()
             .map_err(message)?;
         self.remove_pointer(project_id);
+        if untitled {
+            self.remove_untitled_database(project_id);
+        }
         self.refresh_recoveries();
         Ok(())
     }
@@ -1424,12 +1587,12 @@ impl Workspace {
         let ownership = self
             .acquire_ownership(project_id)?
             .ok_or("This project is already active in another Desegnos window.")?;
-        let (work, path) = self
+        let (work, path, untitled) = self
             .read_recovery(project_id)?
             .ok_or("There are no unsaved changes to recover for this project.")?;
         let file = ProjectDatabase::open(&path).map_err(message)?;
         let saved_revision = file.load().map(|loaded| loaded.project.revision).ok();
-        self.activate(work.project, Some(file), saved_revision, Some(ownership))?;
+        self.activate(work.project, Some(file), saved_revision, Some(ownership), untitled)?;
         Ok(())
     }
 }
@@ -1442,72 +1605,97 @@ pub fn get_workspace(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
 }
 
 #[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub fn create_project(
+pub fn new_untitled_project(
     state: WorkspaceState<'_>,
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
-    name: String,
-    viewport: Viewport,
     appearance: Option<Appearance>,
-    discard: bool,
-    identity: State<'_, Mutex<crate::identity::IdentityService>>,
-    identity_analysis_id: Option<Uuid>,
-    identity_finding_indices: Option<Vec<usize>>,
-    identity_asset_ids: Option<Vec<Uuid>>,
-    identity_photo_ids: Option<Vec<Uuid>>,
-    identity_item_indices: Option<Vec<usize>>,
-    identity_page_paths: Option<Vec<String>>,
-    parent_directory: Option<PathBuf>,
+    template: Option<CanvasTemplate>,
 ) -> NativeResult<WorkspaceView> {
-    // The editor passes its theme; brand import starts light when no appearance is specified.
-    let appearance = appearance.unwrap_or(Appearance::Light);
     generation
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
-    let _ = discard; // New projects open in their own tab group; nothing is replaced.
     let mut state = state.lock().map_err(message)?;
-    let mut project = if let Some(id) = identity_analysis_id {
-        let service = identity.lock().map_err(message)?;
-        let context = service.reviewed_context_selected(
-            id,
-            &identity_finding_indices.unwrap_or_default(),
-            &identity_asset_ids.unwrap_or_default(),
-            identity_photo_ids.as_deref(),
-            identity_item_indices.as_deref(),
-            identity_page_paths.as_deref(),
-        )?;
-        service.project_with_context(context, name, viewport)?
-    } else {
-        if identity_page_paths
-            .as_ref()
-            .is_some_and(|paths| !paths.is_empty())
-            || identity_photo_ids
-                .as_ref()
-                .is_some_and(|values| !values.is_empty())
-            || identity_item_indices
-                .as_ref()
-                .is_some_and(|values| !values.is_empty())
-            || identity_finding_indices
-                .as_ref()
-                .is_some_and(|values| !values.is_empty())
-            || identity_asset_ids
-                .as_ref()
-                .is_some_and(|values| !values.is_empty())
-        {
-            return Err(
-                "Choose a completed identity analysis before importing its findings or images."
-                    .into(),
-            );
-        }
-        Project::new(name, viewport, appearance).map_err(message)?
-    };
-    project.appearance = appearance;
-    for page in &mut project.pages {
-        page.appearance = appearance;
-    }
-    state.create_in_folder(project, parent_directory)?;
+    state.create_untitled(
+        appearance.unwrap_or(Appearance::Light),
+        template.unwrap_or_default(),
+    )?;
     Ok(state.view())
+}
+
+/// The first save of an untitled project: name it and write the chosen `.desegnos` file.
+#[tauri::command]
+pub fn save_untitled_project(
+    state: WorkspaceState<'_>,
+    name: String,
+    path: PathBuf,
+    label: Option<String>,
+) -> NativeResult<SaveProjectOutcome> {
+    let mut state = state.lock().map_err(message)?;
+    if !state.untitled {
+        return Err("This project already has a file. Use Save instead.".into());
+    }
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 120 {
+        return Err("Enter a project name of up to 120 characters.".into());
+    }
+    let current = state.project()?.clone();
+    if current.name != name {
+        let revision = current.revision;
+        state
+            .session
+            .as_mut()
+            .ok_or("Create or open a project first.")?
+            .execute(
+                revision,
+                Command::RenameProject {
+                    name: name.to_owned(),
+                },
+                |_| Ok(()),
+            )
+            .map_err(message)?;
+    }
+    if let Some(session) = state.session.as_mut() {
+        session.end_history_step();
+    }
+    let project = state.project()?.clone();
+    state.save_untitled_checked(&project, path, label)
+}
+
+/// Pick the project file for an untitled project's first save.
+#[tauri::command]
+pub async fn pick_project_save_path(
+    app: AppHandle,
+    state: WorkspaceState<'_>,
+    name: String,
+) -> NativeResult<Option<PathBuf>> {
+    let directory = {
+        let state = state.lock().map_err(message)?;
+        state.project_location().ok()
+    };
+    let suggested = format!(
+        "{}.desegnos",
+        desegnos_storage::sanitize_project_name(&name)
+    );
+    let picked = tauri::async_runtime::spawn_blocking(move || {
+        let mut dialog = app
+            .dialog()
+            .file()
+            .add_filter(
+                "Desegnos website",
+                &desegnos_storage::PROJECT_FILE_EXTENSIONS,
+            )
+            .set_file_name(suggested);
+        if let Some(directory) = directory {
+            dialog = dialog.set_directory(directory);
+        }
+        crate::file_dialogs::picked(dialog.blocking_save_file())
+    })
+    .await
+    .map_err(message)??;
+    picked
+        .map(|picked| picked.into_path().map_err(message))
+        .transpose()
 }
 
 #[tauri::command]
@@ -2304,4 +2492,26 @@ pub fn compact_history(
         .ok_or("Create or open a project first.")?;
     file.compact(desegnos_storage::project_db::now_millis())
         .map_err(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::lowest_unused_canvas;
+
+    #[test]
+    fn untitled_names_take_the_lowest_free_canvas_number() {
+        assert_eq!(lowest_unused_canvas(Vec::new()), "Canvas 1");
+        assert_eq!(
+            lowest_unused_canvas(["Canvas 1".into(), "Canvas 3".into()]),
+            "Canvas 2"
+        );
+        assert_eq!(
+            lowest_unused_canvas(["Canvas 2".into(), "Canvas 1".into()]),
+            "Canvas 3"
+        );
+        assert_eq!(
+            lowest_unused_canvas(["Sketch".into(), "Canvas x".into()]),
+            "Canvas 1"
+        );
+    }
 }

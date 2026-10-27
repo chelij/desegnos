@@ -39,7 +39,7 @@ try {
     assert.match(app, /import \{ showsOpener \} from '\.\/visibleActions';/);
     assert.match(app, /showsOpener\(\{ available: true, open: showImport \}\)/);
     assert.match(app, /showsOpener\(\{ available: !aiConnected, open: showAiSettings \}\)/);
-    assert.match(app, /showsOpener\(\{ available: !!project && !!\(generation\.job \|\| generation\.operation\), open: showLog \}\)/);
+    assert.match(app, /showsOpener\(\{ available: !onStartPage && !!project && !!\(generation\.job \|\| generation\.operation\), open: showLog \}\)/);
     assert.match(app, /showsOpener\(\{ available: true, open: showGridSettings \}\)/);
     assert.ok((app.match(/showsOpener\(\{ available: true, open: showLog \}\)/g) ?? []).length >= 2, 'Details stands down while the log is open');
     assert.doesNotMatch(app, /aria-pressed=\{showLog\}/);
@@ -92,12 +92,30 @@ try {
     assert.match(style, /className="sg-found-colour sg-found-set"/);
   });
 
-  await test('the start screen finishes once and the website import keeps its single entry', async () => {
+  await test('first-run tips finish once and the website import keeps its single entry', async () => {
     assert.match(await read('Onboarding.tsx'), /\{step < TIPS\.length - 1 && <button type="button" className="link-button" onClick=\{finish\}>Skip tips<\/button>\}/);
     const app = await read('App.tsx');
     assert.equal((app.match(/label: 'Import context…'/g) ?? []).length, 1);
     assert.equal((app.match(/label: 'Import website…'/g) ?? []).length, 1);
     assert.doesNotMatch(app, /label: 'Import…'/);
+  });
+
+  await test('the editor opens untitled and New opens another tab', async () => {
+    const app = await read('App.tsx');
+    assert.doesNotMatch(app, /NewProject|showNew/);
+    assert.match(app, /case 'new': event\.preventDefault\(\); void newUntitled\(\)/);
+    assert.match(app, /id: 'open-recent', label: 'Open recent'/);
+    assert.match(app, /save_untitled_project/);
+    assert.match(app, /id: 'import-website', label: 'Import website…'/);
+  });
+
+  await test('Home is a page and project controls leave the bar while it is shown', async () => {
+    const app = await read('App.tsx');
+    assert.match(app, /const onStartPage = !project \|\| showStartPage;/);
+    assert.match(app, /id: 'home', label: 'Home'/);
+    assert.match(app, /\{!onStartPage && project && <button className="project-title"/);
+    assert.match(app, /id: 'show-start-page', label: 'Show start page on launch'/);
+    assert.match(app, /id: 'preferences', label: 'Preferences'/);
   });
 
   await test('hidden controls keep their menu entries and keyboard shortcuts', async () => {

@@ -10,6 +10,28 @@ use std::{
 pub struct RecentProject {
     pub path: PathBuf,
     pub name: String,
+    /// Pinned projects are listed first and survive the ten-entry limit.
+    #[serde(default)]
+    pub pinned: bool,
+    /// When the project was last opened or first saved; older lists fall back to the file time.
+    #[serde(default)]
+    pub opened_at_ms: u64,
+}
+
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn file_time(path: &Path) -> u64 {
+    std::fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 pub fn read(directory: &Path) -> Result<Vec<RecentProject>, String> {
@@ -41,15 +63,31 @@ pub fn read(directory: &Path) -> Result<Vec<RecentProject>, String> {
             "The recent-project list contains invalid entries. Its original is preserved.".into(),
         );
     }
+    let mut entries: Vec<RecentProject> = entries
+        .into_iter()
+        .map(|mut entry| {
+            if entry.opened_at_ms == 0 {
+                entry.opened_at_ms = file_time(&entry.path);
+            }
+            entry
+        })
+        .collect();
+    // Pinned projects lead the list in every reader, not only after the next write.
+    entries.sort_by_key(|entry| !entry.pinned);
     Ok(entries)
 }
 
 pub fn remember(directory: &Path, path: &Path, name: &str) -> Result<(), String> {
-    remember_destination(directory, path, name, None)
+    remember_destination(directory, path, name, None, true)
+}
+
+/// A save keeps the last-opened time of an existing entry; it only refreshes the name.
+pub fn remember_saved(directory: &Path, path: &Path, name: &str) -> Result<(), String> {
+    remember_destination(directory, path, name, None, false)
 }
 
 pub fn moved(directory: &Path, path: &Path, name: &str, former: &Path) -> Result<(), String> {
-    remember_destination(directory, path, name, Some(former))
+    remember_destination(directory, path, name, Some(former), false)
 }
 
 fn remember_destination(
@@ -57,6 +95,7 @@ fn remember_destination(
     path: &Path,
     name: &str,
     former: Option<&Path>,
+    opened: bool,
 ) -> Result<(), String> {
     let _lock = lock(directory)?;
     let path = path.canonicalize().map_err(|error| error.to_string())?;
@@ -75,8 +114,28 @@ fn remember_destination(
         .take(120)
         .collect();
     let mut entries = read(directory)?;
+    let existing = entries
+        .iter()
+        .find(|entry| entry.path == path || Some(entry.path.as_path()) == former)
+        .cloned();
     entries.retain(|entry| entry.path != path && Some(entry.path.as_path()) != former);
-    entries.insert(0, RecentProject { path, name });
+    let opened_at_ms = existing
+        .as_ref()
+        .filter(|_| !opened)
+        .map(|entry| entry.opened_at_ms)
+        .unwrap_or_else(now_millis);
+    let pinned = existing.as_ref().is_some_and(|entry| entry.pinned);
+    entries.insert(
+        0,
+        RecentProject {
+            path,
+            name,
+            pinned,
+            opened_at_ms,
+        },
+    );
+    // Pinned entries stay at the top and are never evicted by newer unpinned ones.
+    entries.sort_by_key(|entry| !entry.pinned);
     entries.truncate(10);
     write(directory, &entries)
 }
@@ -131,6 +190,22 @@ pub fn forget(directory: &Path, path: &Path) -> Result<Vec<RecentProject>, Strin
     Ok(entries)
 }
 
+pub fn set_pinned(
+    directory: &Path,
+    path: &Path,
+    pinned: bool,
+) -> Result<Vec<RecentProject>, String> {
+    let _lock = lock(directory)?;
+    let mut entries = read(directory)?;
+    let Some(entry) = entries.iter_mut().find(|entry| entry.path == path) else {
+        return Err("This project is no longer in the recent list.".into());
+    };
+    entry.pinned = pinned;
+    entries.sort_by_key(|entry| !entry.pinned);
+    write(directory, &entries)?;
+    Ok(entries)
+}
+
 #[tauri::command]
 pub fn forget_recent_project(
     window: tauri::WebviewWindow,
@@ -142,6 +217,20 @@ pub fn forget_recent_project(
     }
     let state = state.lock().map_err(|error| error.to_string())?;
     forget(state.directory(), &path)
+}
+
+#[tauri::command]
+pub fn set_recent_project_pin(
+    window: tauri::WebviewWindow,
+    state: tauri::State<'_, std::sync::Mutex<crate::workspace::Workspace>>,
+    path: PathBuf,
+    pinned: bool,
+) -> Result<Vec<RecentProject>, String> {
+    if window.label() != "editor" {
+        return Err("Only the editor can pin recent projects.".into());
+    }
+    let state = state.lock().map_err(|error| error.to_string())?;
+    set_pinned(state.directory(), &path, pinned)
 }
 
 #[cfg(test)]
@@ -190,6 +279,77 @@ mod tests {
         std::fs::write(&catalogue, b"damaged catalogue").unwrap();
         assert!(forget(&directory, &project).is_err());
         assert_eq!(std::fs::read(&catalogue).unwrap(), b"damaged catalogue");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn pins_are_persisted_first_and_survive_the_ten_entry_limit() {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-pins-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = |index: usize| directory.join(format!("{index}.desegnos"));
+        for index in 0..10 {
+            std::fs::write(path(index), b"project").unwrap();
+            remember(&directory, &path(index), &format!("Site {index}")).unwrap();
+        }
+        let pinned = set_pinned(&directory, &path(9), true).unwrap();
+        assert!(pinned[0].pinned);
+        assert_eq!(pinned[0].path, path(9));
+
+        for index in 10..13 {
+            std::fs::write(path(index), b"project").unwrap();
+            remember(&directory, &path(index), &format!("Site {index}")).unwrap();
+        }
+        let entries = read(&directory).unwrap();
+        assert_eq!(entries.len(), 10);
+        assert_eq!(entries[0].path, path(9), "a pin is never evicted");
+        assert!(entries[0].pinned);
+
+        remember_saved(&directory, &path(12), "Renamed").unwrap();
+        let entry = read(&directory)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry.path == path(12))
+            .unwrap();
+        assert_eq!(entry.name, "Renamed");
+
+        let unpinned = set_pinned(&directory, &path(9), false).unwrap();
+        assert!(!unpinned.iter().any(|entry| entry.pinned));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn saving_keeps_the_last_opened_time_and_legacy_entries_gain_a_file_time() {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-opened-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let project = directory.join("Site.desegnos");
+        std::fs::write(&project, b"project").unwrap();
+        let catalogue = directory.join("recent-projects.json");
+        std::fs::write(
+            &catalogue,
+            serde_json::to_vec(&vec![RecentProject {
+                path: project.clone(),
+                name: "Old site".into(),
+                pinned: false,
+                opened_at_ms: 111,
+            }])
+            .unwrap(),
+        )
+        .unwrap();
+        remember_saved(&directory, &project, "Renamed site").unwrap();
+        assert_eq!(read(&directory).unwrap()[0].opened_at_ms, 111);
+        remember(&directory, &project, "Renamed site").unwrap();
+        assert!(read(&directory).unwrap()[0].opened_at_ms > 111);
+
+        std::fs::write(
+            &catalogue,
+            b"[{\"path\":\"/tmp/missing.desegnos\",\"name\":\"Legacy\"}]",
+        )
+        .unwrap();
+        let legacy = read(&directory).unwrap();
+        assert_eq!(legacy[0].name, "Legacy");
+        assert!(!legacy[0].pinned);
         std::fs::remove_dir_all(directory).unwrap();
     }
 

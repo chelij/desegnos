@@ -87,7 +87,7 @@ try {
     const app = await readFile(join(root, 'src/App.tsx'), 'utf8');
     assert.equal((app.match(/label: 'Import context…'/g) ?? []).length, 1);
     assert.equal((app.match(/label: 'Import website…'/g) ?? []).length, 1);
-    assert.match(app, /function startBrandImport\(\).*setShowImport\(true\)/);
+    assert.match(app, /label: 'Import context…'.*setShowImport\(true\)/);
     assert.match(app, /function startWebsiteImport\(\).*setShowWebsiteImport\(true\)/);
     assert.match(app, /label: 'Open project folder…'.*open\(true\)/);
   });

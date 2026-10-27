@@ -14,7 +14,7 @@ code are excluded. Build folders are used only if no original sources are found.
 framing, output allowance, image sizes and spending limit. Files are not truncated. Photo reading samples at most eight thumbnails within 96 KiB; all collected photos
 remain available to keep. Unread photos keep their filenames until described later.
 
-Current import review lets the user choose findings, logos, photos and existing work. Photos and work start selected. `import_context` and `create_project` accept optional
+Current import review lets the user choose findings, logos, photos and existing work. Photos and work start selected. `import_context` accepts optional
 `identityPhotoIds` and `identityItemIndices`; empty lists exclude those categories,
 while omitted fields preserve existing callers' all-selected behavior. Every choice
 is validated against the completed analysis. Any single selected category can enable
@@ -30,7 +30,7 @@ final URL supplies the base for relative links. Each retained page carries its p
 source URL so analysis can report actual destinations and summaries. Source pages
 are read without executing scripts or sending account credentials.
 
-New projects offer **New blank page** and **Import identity from project**, followed by Web/Mobile, resolution and name. Both create one empty light page. Page appearance can change afterward. Import preserves approved identity rather than copying the original site.
+New projects start as an untitled blank canvas. **Menu → Import context…** reads brand evidence and adds the approved findings to that project's brief; the first Save then names the project and writes its file. Import preserves approved identity rather than copying the original site.
 
 ## Authority and storage
 

@@ -10,7 +10,7 @@ export type IconName =
   | 'link' | 'text' | 'info' | 'properties' | 'arrange-front' | 'arrange-forward'
   | 'arrange-backward' | 'arrange-back' | 'monitor' | 'tablet' | 'phone' | 'canvas'
   | 'rectangle' | 'ellipse' | 'line' | 'image' | 'video' | 'audio' | 'code' | 'note' | 'group'
-  | 'eye' | 'eye-off' | 'lock' | 'unlock' | 'insert' | 'history';
+  | 'eye' | 'eye-off' | 'lock' | 'unlock' | 'insert' | 'history' | 'pin';
 
 const paths: Record<IconName, ReactNode> = {
   close: <path d="M4 4l8 8M12 4l-8 8" />,
@@ -32,6 +32,7 @@ const paths: Record<IconName, ReactNode> = {
   moon: <path d="M13 9.6A5.7 5.7 0 0 1 6.4 3a5.7 5.7 0 1 0 6.6 6.6Z" />,
   layers: <><path d="M2 5.2 8 2l6 3.2-6 3.2Z" /><path d="M2 8.2 8 11.4l6-3.2M2 11.2 8 14.4l6-3.2" /></>,
   history: <><circle cx="8" cy="8" r="5.75" /><path d="M8 4.75V8l2.25 1.6" /></>,
+  pin: <><path d="M6.2 2.5h3.6l-.5 3 2.2 2.2H4.5l2.2-2.2Z" /><path d="M8 7.7v5.8" /></>,
   copy: <><path d="M5.5 5.5h8v8h-8Z" /><path d="M10.5 5.5v-3h-8v8h3" /></>,
   paste: <><path d="M6 3.5H4.5v10h7v-10H10" /><path d="M5.5 2.5h5v2h-5Z" /><path d="M6.2 7h3.6M6.2 9.8h2.6" /></>,
   'font-smaller': <><path d="M1.8 12.2 4.8 4l3 8.2M2.9 9.3h3.8" /><path d="M11 12h3.2" /></>,

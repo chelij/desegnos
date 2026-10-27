@@ -9,12 +9,12 @@ import { native, edit } from './api';
 import { ToolStrip, type EditorTool, type ProjectTool } from './EditorTools';
 import { WorkspaceSurface, WorkspaceSurfaces, SurfaceHost, isTextField } from './WorkspaceSurface';
 import { ProjectCanvas, type ProjectCanvasHandle } from './ProjectCanvas';
-import { isPendingRecovery, type PendingRecovery, type RecoveryChoices } from './RecoveryBanner';
+import { RecoveryChoice, isPendingRecovery, type PendingRecovery, type RecoveryChoices } from './RecoveryBanner';
 import { SaveConflictDialog, type SaveConflict, type SaveOutcome, type SaveChoice } from './SaveConflict';
 import brandLight from './assets/brand/desegnos-wordmark-light.svg';
 import brandDark from './assets/brand/desegnos-wordmark-dark.svg';
-import { NewProject } from './NewProject';
 import { ProjectLocationSettings } from './ProjectLocation';
+import { StartPage } from './StartPage';
 import type { ProjectLocationView } from './types';
 import { Notes, type DossierSection } from './Notes';
 import { MenuButton, type MenuItem } from './Menus';
@@ -29,7 +29,7 @@ import { isNestedLayer } from './projectCanvas/links';
 import { setPasteDefault, usePasteDefault } from './pastePreference';
 import { ElementProperties } from './projectCanvas/elementProperties';
 import { elementPath, findElementIn } from './projectCanvas/elementGeometry';
-import { BoundaryProperties, CanvasLayers, EditorDock, PointerProperties, ProjectProperties, ReferenceProperties, usePanelState } from './EditorDock';
+import { BoundaryProperties, CanvasLayers, EditorDock, PointerProperties, ProjectProperties, ReferenceProperties, UntitledSaveForm, usePanelState } from './EditorDock';
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
 import { showsOpener } from './visibleActions';
@@ -43,7 +43,7 @@ import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './delet
 import { useHistory } from './useHistory';
 import { HistoryPanel } from './HistoryPanel';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AiSettingsView, Appearance, BoundaryKind, Brief, Command, CompactReport, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, Page, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, RecoveryInfo, ReferenceItem, RequestAttachment, RequestRecord, SizePreset, Viewport, WorkspaceView, RecentProjectsView, RecentProject, ExportCheck, ExportJobView, OutputType } from './types';
+import type { AiSettingsView, AppSettingsView, Appearance, BoundaryKind, Brief, CanvasTemplate, Command, CompactReport, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, Page, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, RecoveryInfo, ReferenceItem, RequestAttachment, RequestRecord, SizePreset, WorkspaceView, RecentProjectsView, RecentProject, ExportCheck, ExportJobView, OutputType } from './types';
 import { baseSizeId, resolveForSize } from './projectCanvas/sizes';
 import { elementBoundsHeight } from './projectCanvas/elementGeometry';
 import { ExportPanel } from './projectCanvas/exportPanel';
@@ -52,6 +52,7 @@ import type { PreviewState } from './ProjectCanvas';
 
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
+type UntitledSaveRequest = { name: string };
 type Confirmation = { title: string; message: string; action: () => Promise<void>; skippable?: boolean; confirmLabel?: string };
 
 const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
@@ -133,6 +134,8 @@ function Editor() {
   const [panels, panelActions] = usePanelState();
   const [rulerUnit, setRulerUnit] = useState<'pixels' | 'percent'>(readRulerUnit);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
+  const [appSettings, setAppSettings] = useState<AppSettingsView>({ showStartPage: true });
+  const [showStartPage, setShowStartPage] = useState(true);
   const [projectLocation, setProjectLocation] = useState<ProjectLocationView | null>(null);
   const [showProjectLocation, setShowProjectLocation] = useState(false);
   const [showExport, setShowExport] = useState(false);
@@ -147,7 +150,7 @@ function Editor() {
   const [previewRevision, setPreviewRevision] = useState<number | null>(null);
   const checkTimer = useRef<number | null>(null);
   const [pendingImages, setPendingImages] = useState(0);
-  const [showNew, setShowNew] = useState(false);
+  const [untitledSave, setUntitledSave] = useState<UntitledSaveRequest | null>(null);
   const [pendingRecovery, setPendingRecovery] = useState<PendingRecovery | null>(null);
   async function requestProjectOpen<T>(operation: () => Promise<T>): Promise<T | null> {
     setPendingRecovery(null);
@@ -155,7 +158,6 @@ function Editor() {
     catch (error) {
       if (!isPendingRecovery(error)) throw error;
       setError(''); setPendingRecovery(error);
-      if (current.current?.project) setShowNew(true);
       return null;
     }
   }
@@ -165,8 +167,7 @@ function Editor() {
   const [showImport, setShowImport] = useState(false);
   const [showWebsiteImport, setShowWebsiteImport] = useState(false);
   const [importSource, setImportSource] = useState<import('./types').IdentitySource | null>(null);
-  function startBrandImport() { setImportSource(null); setShowNew(false); setShowImport(true); }
-  function startWebsiteImport() { setShowImport(false); setShowNew(false); setShowWebsiteImport(true); }
+  function startWebsiteImport() { setShowImport(false); setShowWebsiteImport(true); }
   const [showLog, setShowLog] = useState(false);
   const [logFocus, setLogFocus] = useState(0);
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
@@ -193,6 +194,8 @@ function Editor() {
   const [saveConflict, setSaveConflict] = useState<SaveConflict | null>(null);
   const saveChoice = useRef<((choice: SaveChoice) => void) | null>(null);
   const saveFlight = useRef<Promise<WorkspaceView | null> | null>(null);
+  const untitledSaveFlight = useRef<Promise<WorkspaceView | null> | null>(null);
+  const untitledSaveResolve = useRef<((workspace: WorkspaceView | null) => void) | null>(null);
   const generationRef = useRef<GenerationJobView | null>(null);
   const generationOwns = useRef(false);
 
@@ -259,11 +262,12 @@ function Editor() {
   }, true, quiet), [queue, accept]);
   const createCanvasBoundary = useCallback(async (bounds: Rect, kind: BoundaryKind, moves: BoundaryMove[], reference: ReferenceMove[]) => {
     const added = await mutate(project => {
-      const name = canvasPageName(project.pages);
+      const first = project.pages.length === 0;
+      const name = first ? 'Home' : canvasPageName(project.pages);
       const width = Math.round(bounds.width), height = Math.round(bounds.height);
       const size: PageSize = { id: crypto.randomUUID(), label: sizeName(width), width, height, kind, x: bounds.x, y: bounds.y };
       return {
-        type: 'add_canvas_page' as const, name, path: suggestedPagePath(name, project.pages.map(page => page.path)),
+        type: 'add_canvas_page' as const, name, path: first ? '/' : suggestedPagePath(name, project.pages.map(page => page.path)),
         size,
         moves: moves.map(({ pageId, sizeId, x, y, kind }) => ({ page_id: pageId, size_id: sizeId, x, y, kind })),
         reference: reference.map(({ itemId, x, y }) => ({ item_id: itemId, x, y })),
@@ -455,7 +459,17 @@ function Editor() {
   }, [mutate]);
   const load = useCallback(async () => {
     setLoading(true); setError('');
-    try { const loaded = await native<WorkspaceView>('get_workspace'); accept(loaded); if (loaded.project) setZoom(initialZoom(loaded.project.viewport.width, loaded.project.viewport.height)); }
+    try {
+      // The start-page choice decides whether launch opens a canvas or waits on Home.
+      const settings = await native<AppSettingsView>('get_app_settings').catch(() => ({ showStartPage: true }));
+      setAppSettings(settings);
+      let loaded = await native<WorkspaceView>('get_workspace');
+      if (!loaded.project && !settings.showStartPage) loaded = await native<WorkspaceView>('new_untitled_project', {});
+      accept(loaded);
+      setShowStartPage(settings.showStartPage && !loaded.project);
+      if (!settings.showStartPage && loaded.recoveries.length) setShowRecovery(true);
+      if (loaded.project) setZoom(initialZoom(loaded.project.viewport.width, loaded.project.viewport.height));
+    }
     catch (error) { setError(errorMessage(error)); }
     finally { setLoading(false); }
   }, [accept]);
@@ -512,7 +526,37 @@ function Editor() {
   }, [settle]);
 
   function chooseSaveConflict(choice: SaveChoice) { const resolve = saveChoice.current; saveChoice.current = null; setSaveConflict(null); resolve?.(choice); }
+  function closeUntitledSave(workspace: WorkspaceView | null) {
+    untitledSaveResolve.current?.(workspace);
+    untitledSaveResolve.current = null;
+    setUntitledSave(null);
+  }
+  function requestUntitledSave(): Promise<WorkspaceView | null> {
+    if (untitledSaveFlight.current) return untitledSaveFlight.current;
+    const project = current.current?.project;
+    if (!project) return Promise.resolve(null);
+    if (panels.hidden) panelActions.toggleHidden();
+    if (panels.collapsed) panelActions.setCollapsed(false);
+    setUntitledSave({ name: project.name === 'Untitled project' ? '' : project.name });
+    const promise = new Promise<WorkspaceView | null>(resolve => { untitledSaveResolve.current = resolve; });
+    untitledSaveFlight.current = promise.finally(() => { untitledSaveFlight.current = null; });
+    return untitledSaveFlight.current;
+  }
+  async function saveUntitledProject(name: string, path: string) {
+    await settle();
+    let outcome = await queue(() => native<SaveOutcome>('save_untitled_project', { name, path, label: versionLabel() || null }));
+    while (outcome.status === 'conflict') {
+      const conflict = outcome.conflict;
+      const choice = await new Promise<SaveChoice>(resolve => { saveChoice.current = resolve; setSaveConflict(conflict); });
+      outcome = await queue(() => native<SaveOutcome>('resolve_save_conflict', { token: conflict.token, choice }));
+    }
+    if (outcome.status === 'cancelled') throw new Error('Save cancelled.');
+    accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent().catch(() => {});
+    savedPosition.current = { sessionId: outcome.workspace.history?.sessionId ?? null, position: outcome.workspace.history?.position ?? 0 };
+    closeUntitledSave(outcome.workspace);
+  }
   function save(saveAs = false): Promise<WorkspaceView | null> {
+    if (current.current?.untitled) return requestUntitledSave();
     if (saveFlight.current) return saveFlight.current;
     const operation = async () => {
       await settle();
@@ -539,8 +583,10 @@ function Editor() {
   async function closeProject() {
     await replace('close this project', async discard => {
       await queue(async () => {
-        accept(await native<WorkspaceView>('close_project', { discard }));
+        const next = await native<WorkspaceView>('close_project', { discard });
+        accept(next);
         setSelected(null); setCanvasSelection([]); setCanvasFocus(null); setNotice('Project closed.');
+        if (!next.project) setShowStartPage(true);
       });
     });
   }
@@ -549,6 +595,7 @@ function Editor() {
     await settle();
     await queue(async () => {
       accept(await native<WorkspaceView>('switch_project', { projectId }));
+      setShowStartPage(false);
       setSelected(null); setCanvasSelection([]); setCanvasFocus(null); setNotice('Switched project.');
     }).catch(() => {});
   }
@@ -576,9 +623,8 @@ function Editor() {
   async function importContext(analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) {
     await settle();
     await queue(async workspace => {
-      const next = !workspace?.project
-        ? await native<WorkspaceView>('create_project', { name: 'Imported brand', viewport: { width: 1440, height: 900 }, discard: false, identityAnalysisId: analysisId, identityFindingIndices: findings, identityAssetIds: assets, identityPhotoIds: photos, identityItemIndices: items, identityPagePaths: pages })
-        : await native<WorkspaceView>('import_context', { revision: workspace.project.revision, identityAnalysisId: analysisId, identityFindingIndices: findings, identityAssetIds: assets, identityPhotoIds: photos, identityItemIndices: items, identityPagePaths: pages, attachMatchingPages: attachMatching });
+      if (!workspace?.project) throw new Error('Create or open a project first.');
+      const next = await native<WorkspaceView>('import_context', { revision: workspace.project.revision, identityAnalysisId: analysisId, identityFindingIndices: findings, identityAssetIds: assets, identityPhotoIds: photos, identityItemIndices: items, identityPagePaths: pages, attachMatchingPages: attachMatching });
       accept(next);
       setNotice('Context added to the project brief.');
     });
@@ -588,7 +634,7 @@ function Editor() {
     await openAlongside(async discard => {
       await queue(async () => {
         const opened = await requestProjectOpen(() => native<WorkspaceView | null>('open_project', { discard, folder, path: path ?? null, discardRecovery }));
-        if (opened) { accept(opened); setSelected(null); setNotice('Project opened.'); setShowNew(false); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
+        if (opened) { accept(opened); setShowStartPage(false); setSelected(null); setNotice('Project opened.'); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
       });
     });
   }
@@ -597,7 +643,7 @@ function Editor() {
       await queue(async () => {
         const opened = await requestProjectOpen(() => native<WorkspaceView>('open_recent_project', { path, discard }));
         if (!opened) return;
-        accept(opened); setSelected(null); setShowNew(false); setNotice('Project opened.');
+        accept(opened); setShowStartPage(false); setSelected(null); setNotice('Project opened.');
         if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height));
         void refreshRecent().catch(() => {});
       }, false);
@@ -607,6 +653,15 @@ function Editor() {
     await queue(async () => {
       setRecentProjects(await native<RecentProject[]>('forget_recent_project', { path }));
     }, false);
+  }
+  async function pinRecent(path: string, pinned: boolean) {
+    await queue(async () => {
+      setRecentProjects(await native<RecentProject[]>('set_recent_project_pin', { path, pinned }));
+    }, false);
+  }
+  async function changeShowStartPage(value: boolean) {
+    try { setAppSettings(await native<AppSettingsView>('set_show_start_page', { value })); }
+    catch (error) { setError(errorMessage(error)); }
   }
   // The only update request: a manual read of the newest release, with no install step.
   async function checkForUpdates() {
@@ -784,14 +839,15 @@ function Editor() {
     window.addEventListener('keydown', escape);
     return () => window.removeEventListener('keydown', escape);
   }, [preview, play]);
-  async function create(name: string, viewport: Viewport, parentDirectory?: string) {
-    await openAlongside(async discard => {
-      await queue(async () => {
-        accept(await native<WorkspaceView>('create_project', { name, viewport, parentDirectory: parentDirectory ?? null, appearance: resolvedTheme, discard }));
-        setSelected(null); setShowNew(false); setNotice('Blank project created.');
-        setZoom(initialZoom(viewport.width, viewport.height));
-        void refreshRecent().catch(() => {});
-      });
+  async function newUntitled(template: CanvasTemplate = 'blank') {
+    await settle();
+    await queue(async () => {
+      const next = await native<WorkspaceView>('new_untitled_project', { appearance: resolvedTheme, template });
+      accept(next);
+      setShowStartPage(false);
+      setSelected(null); setCanvasSelection([]); setCanvasFocus(null); setNotice('New untitled project.');
+      if (next.project) setZoom(initialZoom(next.project.viewport.width, next.project.viewport.height));
+      requestAnimationFrame(() => canvasRef.current?.fit());
     });
   }
   async function recover(projectId: string) {
@@ -799,8 +855,9 @@ function Editor() {
       await queue(async () => {
         const recovered = await native<WorkspaceView>('recover_project', { projectId, discard });
         accept(recovered);
+        setShowStartPage(false);
         if (recovered.project) setZoom(initialZoom(recovered.project.viewport.width, recovered.project.viewport.height));
-        setSelected(null); setShowRecovery(false); setShowNew(false); setPendingRecovery(null);
+        setSelected(null); setShowRecovery(false); setPendingRecovery(null);
         setNotice('Project recovered.');
       });
     });
@@ -842,6 +899,8 @@ function Editor() {
       }
       const action = shortcutFor(event, editingText);
       if (!action) return;
+      // Home is a page: project commands wait until its canvas is open again.
+      if ((showStartPage || !current.current?.project) && !['new', 'open', 'help'].includes(action)) return;
       const project = current.current?.project;
       if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels'].includes(action)) return;
       switch (action) {
@@ -851,7 +910,7 @@ function Editor() {
         case 'selectAll': case 'selectChild': case 'selectParent': case 'nudge': case 'nudgeFar': case 'delete':
           return;
         case 'help': event.preventDefault(); setShowShortcuts(true); return;
-        case 'new': event.preventDefault(); setShowNew(true); return;
+        case 'new': event.preventDefault(); void newUntitled().catch(() => {}); return;
         case 'open': event.preventDefault(); void open().catch(() => {}); return;
         case 'renameLayer': {
           const field = document.querySelector<HTMLInputElement>('[data-field="layer-name"]');
@@ -902,6 +961,7 @@ function Editor() {
   });
 
   const project = view?.project ?? null;
+  const onStartPage = !project || showStartPage;
   const pointerStates = view?.pointerStates ?? [];
   const pointerStateMap = Object.fromEntries((checkedStates && checkedProject === project?.id ? checkedStates : pointerStates).map(item => [item.id, item])) as Record<string, PointerStateView>;
   const requestedAreas = project ? project.pages.reduce((count, page) => count + pendingCount(page.elements), 0) : 0;
@@ -1054,33 +1114,45 @@ function Editor() {
     setConfirmation({ title: plural ? 'Remove these items?' : 'Remove this item?', message: plural ? 'Remove these layers, reference items and pointers?' : 'Remove this item?', action, skippable: true });
   }
   const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
+  const canEditProject = !!project && !onStartPage;
 
   const menuItems: MenuItem[] = [
-    { id: 'new', label: 'New project', shortcut: shortcutLabel('new'), action: () => setShowNew(true) },
+    { id: 'home', label: 'Home', disabled: showStartPage || !project, action: () => setShowStartPage(true) },
+    { id: 'back-to-canvas', label: 'Back to canvas', disabled: !project || !showStartPage, action: () => setShowStartPage(false) },
+    { id: 'new', label: 'New project', shortcut: shortcutLabel('new'), action: () => run(newUntitled) },
     { id: 'open', label: 'Open project…', shortcut: shortcutLabel('open'), action: () => run(open) },
+    { id: 'open-recent', label: 'Open recent', disabled: recentProjects.length === 0, children: recentProjects.length ? [
+      ...recentProjects.map((entry, index) => ({ id: `open-recent-${index}`, label: entry.name, action: () => run(() => openRecent(entry.path)) })),
+      { id: 'open-recent-separator', label: '', separator: true },
+      { id: 'forget-recent', label: 'Forget recent project', children: recentProjects.map((entry, index) => ({ id: `forget-recent-${index}`, label: entry.name, action: () => run(() => forgetRecent(entry.path)) })) },
+    ] : [] },
     { id: 'open-folder', label: 'Open project folder…', action: () => run(() => open(true)) },
-    { id: 'save', label: 'Save', shortcut: shortcutLabel('save'), disabled: !project, action: () => run(() => save()) },
-    { id: 'close-project', label: 'Close project', shortcut: shortcutLabel('closeProject'), disabled: !project, action: () => run(closeProject) },
-    { id: 'save-as', label: 'Save as', shortcut: shortcutLabel('saveAs'), disabled: !project, action: () => run(() => save(true)) },
-    { id: 'save-copy', label: 'Save a copy without history…', disabled: !project || pending > 0, action: () => run(saveCopy) },
-    { id: 'compact-history', label: 'Compact history', disabled: !project || pending > 0, action: () => run(compactHistory) },
+    { id: 'save', label: 'Save', shortcut: shortcutLabel('save'), disabled: !canEditProject, action: () => run(() => save()) },
+    { id: 'close-project', label: 'Close project', shortcut: shortcutLabel('closeProject'), disabled: !canEditProject, action: () => run(closeProject) },
+    { id: 'save-as', label: 'Save as', shortcut: shortcutLabel('saveAs'), disabled: !canEditProject, action: () => run(() => save(true)) },
+    { id: 'save-copy', label: 'Save a copy without history…', disabled: !canEditProject || pending > 0, action: () => run(saveCopy) },
+    { id: 'compact-history', label: 'Compact history', disabled: !canEditProject || pending > 0, action: () => run(compactHistory) },
     ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => setShowRecovery(true) }] : []),
     { id: 'file-divider', label: '', separator: true },
-    { id: 'export', label: 'Export…', shortcut: shortcutLabel('export'), disabled: !project, action: openExportPanel },
-    { id: 'open-browser', label: 'Open in browser', disabled: !project || !project.lastExport, action: () => run(openInBrowser) },
+    { id: 'export', label: 'Export…', shortcut: shortcutLabel('export'), disabled: !canEditProject, action: openExportPanel },
+    { id: 'open-browser', label: 'Open in browser', disabled: !canEditProject || !project?.lastExport, action: () => run(openInBrowser) },
     { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
     { id: 'ai-divider', label: '', separator: true },
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
-    { id: 'mode', label: 'AI style', disabled: !project || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
-    { id: 'style-guide', label: 'Style guide', disabled: !project, action: () => setShowStyleGuide(true) },
-    { id: 'import', label: 'Import context…', disabled: !project, action: () => { setImportSource(null); setShowImport(true); } },
-    { id: 'import-website', label: 'Import website…', disabled: !project, action: () => startWebsiteImport() },
-    { id: 'dossier', label: 'Project brief', disabled: !project, action: () => setShowNotes('overview') },
+    { id: 'mode', label: 'AI style', disabled: !canEditProject || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
+    { id: 'style-guide', label: 'Style guide', disabled: !canEditProject, action: () => setShowStyleGuide(true) },
+    { id: 'import', label: 'Import context…', disabled: !canEditProject, action: () => { setImportSource(null); setShowImport(true); } },
+    { id: 'import-website', label: 'Import website…', disabled: !canEditProject, action: () => startWebsiteImport() },
+    { id: 'dossier', label: 'Project brief', disabled: !canEditProject, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
-    { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
-    { id: 'project-location', label: 'Default project location', action: () => setShowProjectLocation(true) },
-    { id: 'ask-delete', label: 'Ask before deleting', checked: askDelete, action: () => setAskBeforeDelete(!askDelete) },
-    { id: 'paste-default', label: 'Ask on paste', checked: !pasteMode, action: () => setPasteDefault(null) },
+    { id: 'preferences', label: 'Preferences', children: [
+      { id: 'show-start-page', label: 'Show start page on launch', checked: appSettings.showStartPage, action: () => run(() => changeShowStartPage(!appSettings.showStartPage)) },
+      { id: 'preferences-divider', label: '', separator: true },
+      { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
+      { id: 'project-location', label: 'Default project location', action: () => setShowProjectLocation(true) },
+      { id: 'ask-delete', label: 'Ask before deleting', checked: askDelete, action: () => setAskBeforeDelete(!askDelete) },
+      { id: 'paste-default', label: 'Ask on paste', checked: !pasteMode, action: () => setPasteDefault(null) },
+    ] },
     { id: 'check-updates', label: 'Check for updates…', disabled: checkingUpdates, action: () => { void checkForUpdates(); } },
     { id: 'help', label: 'Keyboard shortcuts', shortcut: shortcutLabel('help'), action: () => setShowShortcuts(true) },
   ];
@@ -1142,8 +1214,8 @@ function Editor() {
   return <div className="application editor-shell">
     {closeRequest && <WorkspaceSurface place="banner" title="Close Desegnos?" close={() => { closeRequest.resolve(false); setCloseRequest(null); }}><p>{closeRequest.message}</p><div className="form-actions"><button onClick={() => { closeRequest.resolve(true); setCloseRequest(null); }}>Close Desegnos</button><button onClick={() => { closeRequest.resolve(false); setCloseRequest(null); }}>Keep editing</button></div></WorkspaceSurface>}
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
-      {project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot" />}</button>}
-      {project && !!view?.openProjects?.length && <nav className="project-tabs" aria-label="Open projects">
+      {!onStartPage && project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot" />}</button>}
+      {!onStartPage && project && !!view?.openProjects?.length && <nav className="project-tabs" aria-label="Open projects">
         {view.openProjects.map((entry, index) => <div className={entry.active ? 'project-tab active' : 'project-tab'} key={entry.id}>
           <button type="button" className="project-tab-name" title={entry.name} aria-current={entry.active ? 'page' : undefined} onClick={() => run(() => switchProjectTab(entry.id))}>
             <span className="project-dot" style={{ background: PROJECT_COLOURS[index % PROJECT_COLOURS.length] }} aria-hidden="true" />
@@ -1155,20 +1227,20 @@ function Editor() {
       </nav>}
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       <div className="shell-primary-actions">
-        <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
+        <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={!onStartPage && project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => onStartPage || !project ? setTheme(resolvedTheme === 'dark' ? 'light' : 'dark') : run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
         {project && showsOpener({ available: true, open: showImport }) && <button type="button" onClick={() => { setImportSource(null); setShowImport(true); }}>Import…</button>}
-        {project && <>{view?.canUndo && <button aria-label="Undo last change" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}>Undo</button>}{view?.canRedo && <button aria-label="Redo last change" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}>Redo</button>}
+        {!onStartPage && project && <>{view?.canUndo && <button aria-label="Undo last change" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}>Undo</button>}{view?.canRedo && <button aria-label="Redo last change" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}>Redo</button>}
           <button type="button" className={showHistory ? 'history-toggle active' : 'history-toggle'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}>History</button></>}
-        {project && <button type="button" className={playIsActive(play) ? 'history-toggle active' : undefined} aria-pressed={playIsActive(play)} title={withShortcut('Play', 'play')} onClick={() => togglePlay()}>Play</button>}
-        {project && <button type="button" title={withShortcut('Preview export', 'preview')} onClick={previewSelectedBoundary}>Preview</button>}
-        {project && <button type="button" className={showExport ? 'history-toggle active' : undefined} aria-pressed={showExport} title={withShortcut('Export', 'export')} onClick={() => openExportPanel()}>Export…</button>}
+        {!onStartPage && project && <button type="button" className={playIsActive(play) ? 'history-toggle active' : undefined} aria-pressed={playIsActive(play)} title={withShortcut('Play', 'play')} onClick={() => togglePlay()}>Play</button>}
+        {!onStartPage && project && <button type="button" title={withShortcut('Preview export', 'preview')} onClick={previewSelectedBoundary}>Preview</button>}
+        {!onStartPage && project && <button type="button" className={showExport ? 'history-toggle active' : undefined} aria-pressed={showExport} title={withShortcut('Export', 'export')} onClick={() => openExportPanel()}>Export…</button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
-        {showsOpener({ available: !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" onClick={() => setShowLog(true)}>AI log</button>}
-        {project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : () => generate()}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
+        {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" onClick={() => setShowLog(true)}>AI log</button>}
+        {!onStartPage && project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : () => generate()}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
       </div>
     </header>
     <SurfaceHost place="banner" />
-    {!project && <NoticeHost />}
+    {onStartPage && <NoticeHost />}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />}
     {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={openFailure.message} action={{ label: 'Copy link', onClick: () => { const url = openFailure.url; void native('copy_text', { text: url }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure(null)} />}
     {updateResult && <Notice variant={updateResult.variant} message={updateResult.message} action={updateResult.download ? { label: 'Download', onClick: () => { const url = updateResult.download; if (url) void openRelease(url); } } : undefined} dismiss={() => setUpdateResult(null)} />}
@@ -1176,10 +1248,13 @@ function Editor() {
     {notices.map(item => <Notice key={item.id} variant="info" message={item.message} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
     <CrashReportNotice />
     {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <ProblemBanner message={userError(view.recoveryError)} dismiss={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} />}
-    {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : !project ? <main className="startup">
+    {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : onStartPage ? <>
       <SurfaceHost place="start" />
-      {!showNew && <NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} recovery={recovery} />}
-    </main> : <>
+      <StartPage busy={pending > 0} create={template => run(() => newUntitled(template))}
+        recentProjects={recentProjects} openRecent={path => run(() => openRecent(path))}
+        forgetRecent={path => run(() => forgetRecent(path))} pinRecent={(path, pinned) => run(() => pinRecent(path, pinned))}
+        recovery={view.recoveries.length ? <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /> : null} />
+    </> : <>
       <div className="editor-body">
       {!panels.hidden && <ToolStrip tool={canvasTool} onTool={chooseTool}
         zoom={canvasZoom}
@@ -1218,7 +1293,12 @@ function Editor() {
           ? <HistoryPanel projectId={project.id} refreshKey={`${project.id}:${view?.dirty ? 'dirty' : 'saved'}:${view?.history?.version ?? 0}:${historyEpoch}`}
               apply={accept} notice={setNotice} error={setError} />
           : undefined}
-        properties={selectedPointer
+        properties={<>
+          {untitledSave && view?.untitled && <UntitledSaveForm key={project.id} project={project} location={projectLocation} busy={pending > 0}
+            cancel={() => closeUntitledSave(null)}
+            chooseLocation={name => native<string | null>('pick_project_save_path', { name })}
+            save={saveUntitledProject} />}
+          {selectedPointer
           ? <PointerProperties pointer={selectedPointer} project={project} state={selectedPointerState} busy={pending > 0} rewriting={false}
               aiConnected={aiConnected} connectAi={() => setShowAiSettings(true)}
               change={comment => updateCanvasPointer(selectedPointer.id, { comment })}
@@ -1247,34 +1327,36 @@ function Editor() {
                 removeSize={size => {
                   setConfirmation({ title: `Remove the ${size.label} size?`, message: 'Its layers stay in the other sizes; their overrides for this size are removed.', action: async () => { removeCanvasPageSize(selectedBoundary.id, size.id); } });
                 }} />
-            : <ProjectProperties project={project} busy={pending > 0} rename={renameProject} setGrid={showDotGrid} setGridSettings={changeGridFlags} />}
+            : <ProjectProperties project={project} busy={pending > 0} rename={renameProject} setGrid={showDotGrid} setGridSettings={changeGridFlags}
+                save={view?.untitled ? () => run(() => save()) : undefined} />}
+        </>}
         layers={<CanvasLayers project={project} boundaries={canvasBoundaries} selection={canvasSelection} focused={canvasFocus} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer}
           selectElement={selectCanvasElement} updateElements={(pageId, sizeId, patches) => void updateCanvasElements(pageId, patches.map(patch => ({ ...patch, size_id: sizeId })))}
           moveElement={moveCanvasElementTo} removeLinked={removeLinkedDefinition} />} />
       </div>
       <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 ? `${canvasSelection.length} selected` : ''}</span><div className="canvas-status-actions">{playIsActive(play) && <StatusChip tone="info" role="status" className="play-chip" onClick={() => setPlay(idlePlay)} ariaLabel="Stop Play">Playing · Esc to stop</StatusChip>}{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
     </>}
-    {showShortcuts && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help">{SHORTCUT_GROUPS.map(group => <section key={group.group}><h3>{group.group}</h3><dl>{group.items.map(({ label, keys }) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></section>)}<p className="field-help">Hold Space while dragging to pan. Alt+drag duplicates the selected layers. Escape stops Play, closes a preview, or cancels the current gesture.</p></div></WorkspaceSurface>}
-    {showNew && <WorkspaceSurface place={project ? 'panel' : 'start'} title="New project" startHeading={false} close={() => setShowNew(false)}><NewProject importBrand={startBrandImport} busy={pending > 0} create={create} open={open} openFolder={() => open(true)} location={projectLocation} changeLocation={changeProjectLocation} recentProjects={recentProjects} openRecent={openRecent} forgetRecent={forgetRecent} recovery={recovery} /></WorkspaceSurface>}
-    {showProjectLocation && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
-    {showRecovery && view && <WorkspaceSurface place={project ? 'panel' : 'start'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
+    {showShortcuts && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help">{SHORTCUT_GROUPS.map(group => <section key={group.group}><h3>{group.group}</h3><dl>{group.items.map(({ label, keys }) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></section>)}<p className="field-help">Hold Space while dragging to pan. Alt+drag duplicates the selected layers. Escape stops Play, closes a preview, or cancels the current gesture.</p></div></WorkspaceSurface>}
+    {recovery && <WorkspaceSurface place="banner" title="Unsaved changes" close={recovery.dismiss}><RecoveryChoice {...recovery} /></WorkspaceSurface>}
+    {showProjectLocation && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
+    {showRecovery && view && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
-    {showImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importSource?.id ?? ''}`} initialSource={importSource} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} importWebsite={startWebsiteImport} close={() => setShowImport(false)} /></WorkspaceSurface>}
-    {showWebsiteImport && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Import website" close={() => setShowWebsiteImport(false)}><WebsiteImport busy={pending > 0} onImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setShowWebsiteImport(false); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => setShowWebsiteImport(false)} /></WorkspaceSurface>}
-    {showStyleGuide && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Style guide" close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></WorkspaceSurface>}
-    {showNotes && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Project brief" close={() => setShowNotes(null)}><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
-    {showGridSettings && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Grid and rulers" close={() => setShowGridSettings(false)}><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
+    {showImport && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importSource?.id ?? ''}`} initialSource={importSource} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} importWebsite={startWebsiteImport} close={() => setShowImport(false)} /></WorkspaceSurface>}
+    {showWebsiteImport && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import website" close={() => setShowWebsiteImport(false)}><WebsiteImport busy={pending > 0} onImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setShowWebsiteImport(false); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => setShowWebsiteImport(false)} /></WorkspaceSurface>}
+    {showStyleGuide && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Style guide" close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></WorkspaceSurface>}
+    {showNotes && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project brief" close={() => setShowNotes(null)}><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
+    {showGridSettings && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Grid and rulers" close={() => setShowGridSettings(false)}><GridForm rulerUnit={rulerUnit} changeRulerUnit={setRulerUnit} settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
       if (visible !== project.showGrid) await mutate({ type: 'set_grid', enabled: visible });
       await mutate({ type: 'set_grid_settings', settings }); setShowGridSettings(false);
     }} /></WorkspaceSurface>}
-    {showRename && project && <WorkspaceSurface place={project ? 'panel' : 'start'} title="Rename project" close={() => setShowRename(false)}><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); setShowRename(false); }} /></WorkspaceSurface>}
+    {showRename && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Rename project" close={() => setShowRename(false)}><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); setShowRename(false); }} /></WorkspaceSurface>}
     {saveConflict && <SaveConflictDialog conflict={saveConflict} choose={chooseSaveConflict} />}
     {replacement && <WorkspaceSurface place="banner" title="Save your changes?" close={() => setReplacement(null)}><div className="dialog-body"><p>Save “{project?.name}” before you {replacement.label}?</p><p className="muted">Discard continues without saving these changes to the project file.</p><div className="form-actions">
       <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(() => {}); }}>Save and continue</button>
       <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(() => {}); }}>Discard and continue</button><button onClick={() => setReplacement(null)}>Keep editing</button>
     </div></div></WorkspaceSurface>}
     {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className={confirmation.confirmLabel ? undefined : 'danger'} disabled={pending > 0} onClick={() => { if (confirmation.skippable && skipNextAsk) setAskBeforeDelete(false); void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>{confirmation.confirmLabel ?? 'Delete'}</button><button onClick={() => setConfirmation(null)}>Cancel</button>{confirmation.skippable && <details><summary>Options</summary><label className="check-label"><input type="checkbox" checked={skipNextAsk} onChange={event => setSkipNextAsk(event.target.checked)} />Don’t ask again</label></details>}</div></WorkspaceSurface>}
-    {showAiSettings && <WorkspaceSurface place={project ? 'panel' : 'start'} title="AI settings" close={() => setShowAiSettings(false)}><AiSettings current={aiSettings} refresh={refreshAiSettings} update={updateAiSettings} manageUsage={manageChatgptUsage} pollingError={aiPollingError} /></WorkspaceSurface>}
+    {showAiSettings && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="AI settings" close={() => setShowAiSettings(false)}><AiSettings current={aiSettings} refresh={refreshAiSettings} update={updateAiSettings} manageUsage={manageChatgptUsage} pollingError={aiPollingError} /></WorkspaceSurface>}
   </div>;
 }
 

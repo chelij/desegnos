@@ -3,7 +3,6 @@ import { native } from './api';
 import { Notice, ProblemBanner } from './ProblemBanner.js';
 import { EXTRACTOR_SCRIPT } from './websiteImportExtract';
 import type { WebCapture, WebsiteImportPageView, WebsiteImportResultView, WebsiteImportSourceView } from './types';
-import './newProject.css';
 import './shell.css';
 
 type Props = {

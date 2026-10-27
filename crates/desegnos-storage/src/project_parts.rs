@@ -196,7 +196,6 @@ pub fn join_project(parts: &BTreeMap<String, PartData>) -> Result<Project> {
             "The saved project is missing a boundary.".to_string(),
         )?;
     }
-    ensure(!pages.is_empty(), "The saved project has no boundaries.".to_string())?;
     root.insert(
         "pages".into(),
         Value::Array(pages.into_iter().map(|(_, page)| page).collect()),

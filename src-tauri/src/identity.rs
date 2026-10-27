@@ -8,10 +8,7 @@ use desegnos_ai::{
     AuthenticationMethod, CancellationToken, ErrorKind, IdentityImage, ProviderId,
     ProviderProgress, ProviderResponse, ProviderSettings, SubmissionOutcome, TokenUsage,
 };
-use desegnos_core::{
-    Appearance, Brief, Decision, IdentityAsset, ImportedIdentity, Project, RequirementsSnapshot,
-    Scope, Viewport, digest, fenced_json,
-};
+use desegnos_core::{IdentityAsset, RequirementsSnapshot, digest, fenced_json};
 use desegnos_storage::{
     IdentitySource, IdentitySourceAsset, collect_identity_source, write_markdown,
 };
@@ -1410,46 +1407,6 @@ impl IdentityService {
         })
     }
 
-    pub(super) fn project_with_context(
-        &self,
-        context: desegnos_core::ImportedContext,
-        name: String,
-        viewport: Viewport,
-    ) -> NativeResult<Project> {
-        let mut project = Project::new(name, viewport, Appearance::Light).map_err(error)?;
-        let mut brief = Brief::default();
-        for (topic, value) in &context.findings {
-            let normalized = topic.to_lowercase();
-            if normalized == "brand name" {
-                brief.brand_name = value.clone();
-            }
-            if normalized == "tone" {
-                brief.tone = value.clone();
-            }
-            project.decisions.push(Decision {
-                id: Uuid::new_v4(),
-                topic: topic.clone(),
-                value: value.clone(),
-                scope: Scope::Project,
-                protected: false,
-                accepted_at_revision: 0,
-            });
-        }
-        project.brief = brief;
-        let identity = ImportedIdentity {
-            source_name: context.source_name,
-            source_sha256: context.source_sha256,
-            summary: context.summary,
-            assets: context.assets,
-            photos: context.photos,
-            content: context.content,
-            pages: vec![],
-        };
-        identity.validate().map_err(error)?;
-        project.imported_identity = Some(identity);
-        project.validate().map_err(error)?;
-        Ok(project)
-    }
 }
 
 #[derive(Deserialize)]

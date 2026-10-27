@@ -1,5 +1,5 @@
 //! Project parts and the `.desegnos` database round trip.
-use desegnos_core::{Appearance, Command, ElementKind, Project, Rect, Session, Viewport, digest, empty_element};
+use desegnos_core::{Appearance, BoundaryKind, Command, ElementKind, PageSize, Project, Rect, Session, Viewport, digest, empty_element};
 use desegnos_storage::project_db::now_millis;
 use desegnos_storage::{
     ProjectDatabase, join_project, split_project,
@@ -71,6 +71,46 @@ fn project_with_element() -> Project {
             size_id: None,
         },
     )
+}
+
+#[test]
+fn a_blank_untitled_canvas_saves_and_its_first_boundary_becomes_home() {
+    let blank = Project::blank("Untitled project".into(), Appearance::Light).unwrap();
+    assert!(blank.pages.is_empty());
+    let parts = split_project(&blank).unwrap();
+    assert_eq!(join_project(&parts).unwrap(), blank);
+
+    let directory = TempDir::new("blank");
+    let path = directory.path("blank.desegnos");
+    {
+        let database = ProjectDatabase::create(&path, &blank, now_millis()).unwrap();
+        drop(database);
+    }
+    let loaded = ProjectDatabase::open(&path).unwrap().load().unwrap();
+    assert_eq!(loaded.project, blank, "an empty canvas keeps its file");
+
+    let first = apply(
+        &blank,
+        Command::AddCanvasPage {
+            name: "Home".into(),
+            path: "/".into(),
+            size: PageSize {
+                id: Uuid::new_v4(),
+                label: "Desktop".into(),
+                width: 1440,
+                height: 900,
+                kind: BoundaryKind::Page,
+                x: 0.0,
+                y: 0.0,
+            },
+            moves: vec![],
+            reference: vec![],
+        },
+    );
+    assert_eq!(first.home_page_id, first.pages[0].id);
+    assert_eq!(first.pages[0].path, "/");
+    let parts = split_project(&first).unwrap();
+    assert_eq!(join_project(&parts).unwrap(), first);
 }
 
 #[test]

@@ -73,8 +73,10 @@ export type Project = { pictures?: Record<string, string>; schemaVersion: number
   lastExport?: ExportRecord | null;
   decisions: Decision[]; exceptions: DesignException[]; appliedJobIds: string[]; extensions: Record<string, { schemaVersion: number; data: unknown }> };
 export type RecoveryInfo = { projectId: string; name: string; revision: number; savedPath: string | null; editedAtMs: number };
-export type RecentProject = { path: string; name: string };
+export type RecentProject = { path: string; name: string; pinned: boolean; openedAtMs: number };
 export type RecentProjectsView = { projects: RecentProject[]; error: string | null };
+export type AppSettingsView = { showStartPage: boolean };
+export type CanvasTemplate = 'blank' | 'website' | 'appScreen' | 'slideDeck' | 'socialImage';
 export type ProjectLocationView = { path: string; systemDefault: string; customized: boolean };
 export type ExportPageView = { pageId: string; name: string; path: string; output: OutputType; file: string };
 export type ExportResultView = { label: string; path: string; fileCount: number; pageCount: number; previewUrl: string | null };
@@ -90,7 +92,7 @@ export type BranchSummary = { name: string; head: number; current: boolean; prim
 export type ProjectHistoryView = { branch: string; primaryBranch: string; branches: BranchSummary[]; versions: VersionSummary[] };
 export type CompactReport = { removedVersions: number; removedBlobs: number };
 export type OpenProjectSummary = { id: string; name: string; dirty: boolean; active: boolean; pages: { id: string; name: string }[] };
-export type WorkspaceView = { documentsKey?: string; openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
+export type WorkspaceView = { untitled?: boolean; documentsKey?: string; openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
   pointerStates?: PointerStateView[];
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;

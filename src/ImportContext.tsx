@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type
 import { native } from './api';
 import type { AiSettingsView, IdentityAnalysis, IdentitySelection, IdentitySource } from './types';
 import { groupIdentityPages, selectedPageContent, findingSection, parseColours, parseFonts, parseTone, type IdentityFinding } from './identityReview';
-import './newProject.css';
 import { Icon } from './icons';
 
 // One source supplies the page import and the optional brand review.
@@ -226,7 +225,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, import
   const aiNeedsFixing = !connected || selection?.needsSettings || (analysis?.status === 'failed' && /settings|sign in|connect|account|spending|key|model access|permission/i.test(analysis.error ?? ''));
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Choose another location', disabled: !!locked, onClick: () => { void pick('file'); } }} />}
-      <section className="identity-import" aria-label="Use my existing brand">
+      <section className="identity-import" aria-label="Brand evidence">
         <>
         <h2>Source</h2>
         <div className="identity-address"><label>Website address<input type="text" inputMode="url" placeholder="example.com" value={address} disabled={locked} onChange={event => setAddress(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (address.trim()) void fetchSite(); } }} /></label>

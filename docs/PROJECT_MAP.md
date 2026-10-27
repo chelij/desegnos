@@ -87,14 +87,14 @@ docs/                        Contracts, guides and this map.
 | File | Owns |
 | --- | --- |
 | [main.rs](../src-tauri/src/main.rs) | Service initialization, command registry, plugins and window lifecycle. |
-| [workspace.rs](../src-tauri/src/workspace.rs) | `Workspace`, `WorkspaceView`, open projects/tabs, the project database per tab, autosave, recovery, save conflicts, history/alternatives, folders and recents. |
+| [workspace.rs](../src-tauri/src/workspace.rs) | `Workspace`, `WorkspaceView`, open projects/tabs, untitled projects and their recovery databases, autosave, recovery, save conflicts, history/alternatives, folders and recents. |
 | [generation.rs](../src-tauri/src/generation.rs) | `GenerationService`: prepare/submit/finish/cancel/retry, usage, job persistence, settings and the apply seam. |
 | [website_import.rs](../src-tauri/src/website_import.rs) | Fetches or reads a website, serves the snapshot, resolves captured pictures into the project store and applies the import as one undo step. |
 | [local_site.rs](../src-tauri/src/local_site.rs) | `LocalSite` and `ImportSite`: token-prefixed GET/HEAD static servers for previews and imported pages. |
 | [identity.rs](../src-tauri/src/identity.rs) | `IdentityService`: brand source selection/fetching, analysis and approved context. |
 | [export.rs](../src-tauri/src/export.rs) | `ExportService`: frozen-revision export, preview servers, pointer checks and open-in-browser. |
 | [chatgpt.rs](../src-tauri/src/chatgpt.rs) | `ChatgptState`, account epochs and auth commands. |
-| [project_location.rs](../src-tauri/src/project_location.rs), [recent.rs](../src-tauri/src/recent.rs) | Default project parent and recent-project catalogue. |
+| [project_location.rs](../src-tauri/src/project_location.rs), [recent.rs](../src-tauri/src/recent.rs) | App settings in `project-settings.json` (default project parent, show start page on launch) and the recent-project catalogue with pins and last-opened times. |
 | [clipboard.rs](../src-tauri/src/clipboard.rs), [image_drop.rs](../src-tauri/src/image_drop.rs), [request_zip.rs](../src-tauri/src/request_zip.rs) | Clipboard, window image drops and attachment ZIP adapters. |
 | [system_open.rs](../src-tauri/src/system_open.rs), [file_dialogs.rs](../src-tauri/src/file_dialogs.rs), [portal.rs](../src-tauri/src/portal.rs), [linux_startup.rs](../src-tauri/src/linux_startup.rs) | OS opening, dialogs/portal detection and Linux graphics startup. |
 | [data_location.rs](../src-tauri/src/data_location.rs), [crash_report.rs](../src-tauri/src/crash_report.rs), [updates.rs](../src-tauri/src/updates.rs), [usage.rs](../src-tauri/src/usage.rs) | Data folder selection, crash reports, update checks and local usage logs. |
@@ -118,14 +118,14 @@ docs/                        Contracts, guides and this map.
 | [CodeEditor.tsx](../src/CodeEditor.tsx), [codeMirrorMetadata.ts](../src/codeMirrorMetadata.ts), [editorHtml.ts](../src/editorHtml.ts) | CodeMirror used by `code` elements. No page source editor exists. |
 | [useGeneration.ts](../src/useGeneration.ts), [Generation.tsx](../src/Generation.tsx), [GenerationLog.tsx](../src/GenerationLog.tsx), [generationProblems.ts](../src/generationProblems.ts), [generationSession.ts](../src/generationSession.ts) | Job lifecycle/polling, feedback/details, request history and notices. |
 | [AiSettings.tsx](../src/AiSettings.tsx) | Provider/model/key/sign-in settings and access checks. |
-| [NewProject.tsx](../src/NewProject.tsx), [ProjectLocation.tsx](../src/ProjectLocation.tsx), [Onboarding.tsx](../src/Onboarding.tsx) | Start screen, project creation/location and first-use tips. |
+| [StartPage.tsx](../src/StartPage.tsx), [ProjectLocation.tsx](../src/ProjectLocation.tsx), [Onboarding.tsx](../src/Onboarding.tsx) | Home: Blank canvas and template tiles, recovery and recent projects with pin/remove. Default project location, first-use tips and the start-page launch setting. New projects are untitled tabs whose first save names them inline in the dock. |
 | [Notes.tsx](../src/Notes.tsx), [StyleGuide.tsx](../src/StyleGuide.tsx) | Project brief/decisions/exceptions and the project style view. |
 | [ProblemBanner.tsx](../src/ProblemBanner.tsx), [userErrors.ts](../src/userErrors.ts), [noticeSummary.ts](../src/noticeSummary.ts) | Notice queue/host, error translation and change summaries. |
 | [RecoveryBanner.tsx](../src/RecoveryBanner.tsx), [SaveConflict.tsx](../src/SaveConflict.tsx) | Recovery choices and checked-save conflict resolution. |
 | [WorkspaceSurface.tsx](../src/WorkspaceSurface.tsx), [Menus.tsx](../src/Menus.tsx), [visibleActions.ts](../src/visibleActions.ts) | Surfaces/focus, menus and opener visibility. |
 | [HistoryPanel.tsx](../src/HistoryPanel.tsx), [useHistory.ts](../src/useHistory.ts), [DraftText.tsx](../src/DraftText.tsx), [deletePreference.ts](../src/deletePreference.ts), [pastePreference.ts](../src/pastePreference.ts), [usage.ts](../src/usage.ts), [CrashReport.tsx](../src/CrashReport.tsx) | History/alternatives, history labels, text drafts, preferences, usage and crash surfaces. |
 | [types.ts](../src/types.ts) | TypeScript mirror of native payloads, including website captures and import views. |
-| [styles.css](../src/styles.css), [brand.css](../src/brand.css), [shell.css](../src/shell.css), [canvas.css](../src/canvas.css), [ui.css](../src/ui.css), [dialogs.css](../src/dialogs.css), [notice.css](../src/notice.css), [newProject.css](../src/newProject.css) | Shell, canvas, dialogs, notices, import and start-screen presentation. |
+| [styles.css](../src/styles.css), [brand.css](../src/brand.css), [shell.css](../src/shell.css), [canvas.css](../src/canvas.css), [ui.css](../src/ui.css), [dialogs.css](../src/dialogs.css), [notice.css](../src/notice.css), [startPage.css](../src/startPage.css) | Shell, canvas, dialogs, notices, Home and import presentation. |
 
 ## Key flows
 
@@ -146,10 +146,10 @@ docs/                        Contracts, guides and this map.
 ### Project tabs, save and recovery
 
 1. [workspace.rs](../src-tauri/src/workspace.rs) keeps the active `Session` plus parked projects, each with its own `ProjectDatabase`.
-2. Opening or creating a project adds a tab; `switch_project` and `close_project` change the active canvas without replacing the others.
-3. Edits stay in memory; while a project is dirty they reach the hidden autosave branch every few seconds, so a crash keeps them inside the project file.
-4. `save_project_checked` writes one transaction, labelling the version from the undo labels since the last save. Stamp conflicts resolve through [SaveConflict.tsx](../src/SaveConflict.tsx).
-5. A newer autosave offers recovery in the start screen or [RecoveryBanner.tsx](../src/RecoveryBanner.tsx). History and alternatives are shown in the dock by [HistoryPanel.tsx](../src/HistoryPanel.tsx).
+2. Launch shows Home unless **Menu → Preferences → Show start page on launch** is off, which opens a blank untitled canvas instead. Closing the last tab returns to Home. `new_untitled_project` adds an untitled tab named with the lowest unused `Canvas N`, with no boundaries or with a template's starter boundaries; `switch_project` and `close_project` change the active canvas without replacing the others.
+3. An untitled project keeps its recovery database in the app data folder. Edits stay in memory; while a project is dirty they reach the hidden autosave branch every few seconds, so a crash keeps them on disk.
+4. `save_untitled_project` asks for a name and file, writes one transaction and removes the recovery copy. `save_project_checked` does the same for projects that already have a file. Stamp conflicts resolve through [SaveConflict.tsx](../src/SaveConflict.tsx).
+5. A newer autosave is offered through [RecoveryBanner.tsx](../src/RecoveryBanner.tsx) and the recovery list on launch. History and alternatives are shown in the dock by [HistoryPanel.tsx](../src/HistoryPanel.tsx).
 
 ### Import (brand evidence and website elements)
 

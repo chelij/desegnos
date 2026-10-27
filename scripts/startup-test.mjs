@@ -160,7 +160,7 @@ async function isolated() {
   assert.ok(config, 'The normal editor configuration is missing');
   const report = { passed: false, binary, binarySha256: await hashFile(binary), display: process.env.DISPLAY, serverPid, displayResources,
     startup: 'Fresh normal binary with private XDG storage and no automation client or invoke calls.',
-    screenshot: 'startup.png', visualReview: 'Required: inspect the real screenshot for Blank website and Use my existing brand, with project name/platform fields hidden until a choice. No DOM assertions are claimed.',
+    screenshot: 'startup.png', visualReview: 'Required: inspect the real screenshot for a blank untitled canvas with the tool strip and dock, with no start screen. No DOM assertions are claimed.',
     webdriver: { port: await unusedPort(), samples: [] }, startedAt: new Date().toISOString() };
   const log = createWriteStream(join(evidence, 'app.log'), { flags: 'wx' });
   let app;

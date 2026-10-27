@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-new-untitled-project"
+description = "Enables the new_untitled_project command without any pre-configured scope."
+commands.allow = ["new_untitled_project"]
+
+[[permission]]
+identifier = "deny-new-untitled-project"
+description = "Denies the new_untitled_project command without any pre-configured scope."
+commands.deny = ["new_untitled_project"]
