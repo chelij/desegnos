@@ -21,9 +21,20 @@ export const isBaseSize = (page: Page, sizeId: string | null | undefined): boole
 export const presetLabel = (preset: SizePreset, width = 0, height = 0): string =>
   preset === 'phone' ? 'Phone' : preset === 'tablet' ? 'Tablet' : preset === 'desktop' ? 'Desktop' : `${Math.round(width)} × ${Math.round(height)}`;
 
+const PRESET_NAMES: Record<SizePreset, string> = { phone: 'Phone', tablet: 'Tablet', desktop: 'Desktop', custom: 'Custom' };
+
+/**
+ * A size only claims a preset name while its width still matches that preset; an edited width
+ * reads as Custom, so a stored label can never describe a size the user no longer has.
+ */
+export function sizeLabel(width: number): string {
+  const preset = SIZE_PRESETS.find(item => item.width === Math.round(width));
+  return preset ? PRESET_NAMES[preset.preset] : 'Custom';
+}
+
 /** The name a boundary shows: a page with one size reads as the page, more sizes add the size. */
 export function boundaryName(page: Page, size: PageSize): string {
-  return page.sizes.length > 1 ? `${page.name} · ${size.label}` : page.name;
+  return page.sizes.length > 1 ? `${page.name} · ${sizeLabel(size.width)}` : page.name;
 }
 
 function applyOverrides(elements: Element[], sizeId: string) {

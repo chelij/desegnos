@@ -78,7 +78,7 @@
 .project-canvas.tool-pan { cursor: grab; }
 .project-canvas.tool-pointer { cursor: crosshair; }
 .project-canvas.tool-select .page-boundary { cursor: default; }
-.project-canvas .page-boundary-name { cursor: move; }
+.project-canvas .boundary-label-name { cursor: move; }
 .project-canvas.panning, .project-canvas.pan-ready { cursor: grabbing; }
 .project-canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
 .project-canvas-layer { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
@@ -87,12 +87,14 @@
 .project-canvas .page-boundary.selected { outline: 2px solid var(--annotation-focus); outline-offset: 2px; }
 .project-canvas .page-boundary iframe { display: block; border: 0; pointer-events: none; background: var(--site-light); }
 :root[data-theme="dark"] .project-canvas .page-boundary iframe { background: var(--site-dark); }
-.project-canvas .page-boundary-name {
-  position: absolute; left: 0; bottom: calc(100% + var(--space-2)); max-width: 100%;
-  overflow: hidden; color: var(--muted); font-size: var(--text-xs); line-height: 1.4;
-  text-overflow: ellipsis; white-space: nowrap;
+/* Boundary names live in screen pixels above each corner, so small type stays crisp at any zoom. */
+.project-canvas-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.project-canvas .boundary-label { position: absolute; display: flex; justify-content: flex-start; transform: translateY(-100%); padding-bottom: 3px; pointer-events: none; }
+.project-canvas .boundary-label-name {
+  overflow: hidden; color: var(--muted); font-size: 11px; font-weight: var(--weight-medium);
+  line-height: 15px; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; pointer-events: auto;
 }
-.project-canvas .page-boundary.selected .page-boundary-name { color: var(--text); }
+.project-canvas .boundary-label:hover .boundary-label-name, .project-canvas .boundary-label.selected .boundary-label-name { color: var(--text); }
 .project-canvas .boundary-draft {
   position: absolute; pointer-events: none;
   border: 2px dashed var(--annotation-focus);

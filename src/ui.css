@@ -113,7 +113,7 @@ button.status-chip { height: 20px; min-height: 20px; padding: 0 var(--space-4); 
 /* One heading scale: panel titles are sentence case; section labels are quiet sentence case. */
 .surface-title, .layers-popover h2, .page-check h2 { font-family: var(--font-ui); font-size: var(--text-md); font-weight: var(--weight-semibold); letter-spacing: normal; text-transform: none; color: var(--text); }
 .layers-popover h2, .page-check h2 { margin: 0; }
-.layers-popover h3, .page-check h3, .log-who, .first-run-tips .tip-count, .style-guide h4,
+.layers-popover h3, .page-check h3, .log-who, .style-guide h4,
 .notes-section > h3, .notes-entry > h3, .identity-section-heading h3, .dossier-overview > section > h3, .dossier-generated > h4 {
   font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: .02em; text-transform: none; color: var(--muted);
 }

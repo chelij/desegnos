@@ -92,9 +92,9 @@ try {
     assert.match(style, /className="sg-found-colour sg-found-set"/);
   });
 
-  await test('first-run tips finish once and the website import keeps its single entry', async () => {
-    assert.match(await read('Onboarding.tsx'), /\{step < TIPS\.length - 1 && <button type="button" className="link-button" onClick=\{finish\}>Skip tips<\/button>\}/);
+  await test('no first-run tip tour covers the canvas and the website import keeps its single entry', async () => {
     const app = await read('App.tsx');
+    assert.doesNotMatch(app, /FirstRunTips|Onboarding/);
     assert.equal((app.match(/label: 'Import context…'/g) ?? []).length, 1);
     assert.equal((app.match(/label: 'Import website…'/g) ?? []).length, 1);
     assert.doesNotMatch(app, /label: 'Import…'/);
@@ -113,7 +113,9 @@ try {
     const app = await read('App.tsx');
     assert.match(app, /const onStartPage = !project \|\| showStartPage;/);
     assert.match(app, /id: 'home', label: 'Home'/);
-    assert.match(app, /\{!onStartPage && project && <button className="project-title"/);
+    // The project name lives in its tab; the bar never repeats it beside the tabs.
+    assert.doesNotMatch(app, /className="project-title"/);
+    assert.match(app, /aria-label="Open projects"/);
     assert.match(app, /id: 'show-start-page', label: 'Show start page on launch'/);
     assert.match(app, /id: 'preferences', label: 'Preferences'/);
   });

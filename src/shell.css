@@ -1,11 +1,12 @@
 /* ------------------------------------------------------------------ */
 /* Editor chrome: top bar, page tabs, menus, canvas tools, panels.     */
 /* ------------------------------------------------------------------ */
-.editor-shell .app-bar { gap: var(--space-4); min-height: 44px; padding: 0 var(--space-5); flex-wrap: wrap; }
-.editor-shell .wordmark { flex-shrink: 0; padding-inline: var(--space-2); }
-.editor-shell .project-title { max-width: min(260px, 25vw); min-width: 0; height: var(--control-md); padding-inline: var(--space-3); }
-.editor-shell .project-title > span:first-child { overflow: hidden; text-overflow: ellipsis; }
-.shell-primary-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-left: auto; }
+.editor-shell .app-bar { gap: var(--space-3); min-height: 44px; padding: 0 var(--space-4); flex-wrap: nowrap; overflow: hidden; }
+.editor-shell .wordmark { flex: none; padding-inline: var(--space-1); }
+.shell-primary-actions { display: flex; flex: none; flex-wrap: nowrap; align-items: center; gap: var(--space-1); margin-left: auto; }
+.shell-primary-actions > button { flex: none; }
+.shell-primary-actions > button.icon-button { width: var(--control-md); padding: 0; }
+.shell-primary-actions > .ai-shortcut { padding-inline: var(--space-4); }
 .editor-shell .generation-controls { margin-left: 0; gap: var(--space-2); }
 .editor-shell .generation-mode button { min-width: 52px; }
 .editor-shell .app-bar button { white-space: nowrap; }
@@ -63,15 +64,13 @@
 .project-details dl { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(0, 3fr); gap: var(--space-5) var(--space-6); margin: 0; font-size: var(--text-md); }
 .project-details dt { color: var(--muted); }
 .project-details dd { margin: 0; overflow-wrap: anywhere; }@media (max-width: 820px) {
-  .editor-shell .app-bar { gap: var(--space-3); }
-  .editor-shell .project-title { max-width: 180px; }
-  .shell-primary-actions { gap: var(--space-2); }
-  .shell-primary-actions > button { padding-inline: var(--space-4); }
+  .editor-shell .app-bar { gap: var(--space-2); }
+  .shell-primary-actions > button { padding-inline: var(--space-3); }
+  .shell-primary-actions > button.icon-button { padding: 0; }
   .editor-shell .generation-controls { gap: var(--space-2); }
 }@media (max-width: 540px) {
-  .editor-shell .app-bar { padding: 0 var(--space-4); }
-  .editor-shell .project-title { max-width: min(190px, 45vw); }
-  .shell-primary-actions { justify-content: flex-end; width: 100%; }
+  .editor-shell .app-bar { padding: 0 var(--space-3); }
+  .shell-primary-actions { justify-content: flex-end; }
   .editor-shell .generation-controls { margin-left: auto; }
   .editor-shell .status-bar > span:first-child { flex-basis: 100%; }
   .canvas-status-actions { width: 100%; justify-content: flex-end; }
@@ -134,13 +133,6 @@
 .tok-tag { color: #0b62a8; } .tok-attr { color: #8a3ffc; } .tok-string { color: #1a7f37; } .tok-comment { color: var(--muted); font-style: italic; }
 :root[data-theme="dark"] .tok-tag { color: #6cb6ff; } :root[data-theme="dark"] .tok-attr { color: #d2a8ff; } :root[data-theme="dark"] .tok-string { color: #7ee787; }
 
-/* First-run tips: a small card in the canvas corner, shown once per device. */
-.first-run-tips { position: absolute; z-index: 8; top: 44px; right: var(--space-6); width: min(300px, calc(100% - 32px)); padding: var(--space-5) var(--space-6); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-raised); color: var(--text); box-shadow: var(--shadow-3); font-size: var(--text-md); }
-.first-run-tips p { margin: var(--space-3) 0 0; line-height: var(--leading-normal); }
-.first-run-tips .tip-count { margin: 0 0 var(--space-2); font-size: var(--text-xs); color: var(--muted); letter-spacing: var(--tracking-label); text-transform: uppercase; }
-.first-run-tips .tip-actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-3); margin-top: var(--space-5); }
-.first-run-tips .link-button { border-color: transparent; background: transparent; color: var(--muted); font-size: var(--text-sm); }
-
 /* Page check: placeholders and basic issues, opened from the status bar chip or the Menu. */
 .page-check { position: absolute; z-index: 9; right: var(--space-6); bottom: var(--space-6); width: min(380px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-raised); color: var(--text); box-shadow: var(--shadow-3); font-size: var(--text-md); }
 .page-check > header { display: flex; align-items: center; justify-content: space-between; height: var(--control-lg); min-height: var(--control-lg); padding-bottom: var(--space-2); margin-bottom: var(--space-1); border-bottom: 1px solid var(--border-soft); }
@@ -155,11 +147,9 @@
 .page-check-close { color: var(--muted); }
 .page-check-empty, .page-check-note { color: var(--muted); font-size: var(--text-sm); margin: var(--space-4) 0 0; }
 .canvas-status-actions > .check-chip, .canvas-status-actions > .clash-chip { color: var(--notice-warning-fg); border-color: var(--notice-warning-border); background: var(--notice-warning-bg); border-radius: var(--radius-pill); padding-inline: var(--space-4); }
-.history-menu > button, .history-toggle { height: var(--control-md); min-height: var(--control-md); padding-inline: var(--space-4); font-size: var(--text-sm); }
-.history-toggle.active { border-color: var(--accent); color: var(--accent); }
+.history-menu > button { height: var(--control-md); min-height: var(--control-md); padding-inline: var(--space-4); font-size: var(--text-sm); }
 
 /* History lists the versions of the current branch; it lives in the dock, never in a dialog. */
-.dock-panel-history { flex: 0 1 auto; max-height: 48%; }
 .history-panel { display: flex; flex-direction: column; gap: var(--space-4); }
 .history-branch { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .history-branch select { flex: 1; min-width: 0; }
@@ -371,15 +361,19 @@
 }
 .dock-resizer { position: absolute; left: -3px; top: 0; bottom: 0; z-index: 2; width: 6px; cursor: col-resize; touch-action: none; }
 .dock-resizer:hover, .dock-resizer:active { background: color-mix(in srgb, var(--accent) 45%, transparent); }
-.dock-panels { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
-.dock-panel { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--border-soft); }
-.dock-panel:last-child { flex: 1; border-bottom: 0; }
-.dock-panel-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); height: var(--control-lg); min-height: var(--control-lg); padding: 0 var(--space-3) 0 var(--space-5); border-bottom: 1px solid var(--border-soft); }
+.dock-panels { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
+.dock-panel { display: flex; flex: 1 1 0; flex-direction: column; min-height: 160px; border-bottom: 1px solid var(--border-soft); }
+.dock-panel.is-collapsed { flex: 0 0 auto; min-height: 0; }
+.dock-panel:last-child { border-bottom: 0; }
+.dock-panel-header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-3); height: var(--control-lg); min-height: var(--control-lg); padding: 0 var(--space-3) 0 var(--space-5); border-bottom: 1px solid var(--border-soft); }
 .dock-panel-header h2 { margin: 0; font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--muted); }
 .dock-panel-header .icon-button { color: var(--muted); }
 .dock-panel-header .icon-button:hover:not(:disabled) { color: var(--text); }
-.dock-panel-body { min-height: 0; padding: var(--space-4) var(--space-5) var(--space-5); overflow-y: auto; }
-.dock-panel:last-child .dock-panel-body { flex: 1; }
+.dock-panel-header .icon.expanded { transform: rotate(90deg); }
+.dock-panel-body { flex: 1; min-height: 0; padding: var(--space-4) var(--space-5) var(--space-5); overflow-y: auto; }
+.dock-splitter { position: relative; flex: 0 0 7px; cursor: row-resize; touch-action: none; }
+.dock-splitter::before { content: ''; position: absolute; inset: 2px 40%; border-radius: var(--radius-xs); background: var(--border); opacity: .6; }
+.dock-splitter:hover::before, .dock-splitter:active::before { background: var(--accent); opacity: 1; }
 .editor-dock.collapsed { flex-basis: 46px; width: 46px; align-items: center; gap: var(--space-1); padding-top: var(--space-3); }
 .dock-icon { display: grid; place-items: center; width: 32px; height: 32px; min-height: 32px; padding: 0; border-color: transparent; background: transparent; color: var(--text); }
 .dock-icon:hover:not(:disabled) { background: var(--surface-muted); }
@@ -447,9 +441,9 @@
 .export-panel-files { margin: var(--space-1) 0 0; padding-inline-start: var(--space-5); color: var(--muted); font-size: var(--text-xs); }
 
 /* Project tabs: one compact tab per open project, with a colour dot and close control. */
-.editor-shell .project-tabs { display: flex; align-items: center; gap: 2px; min-width: 0; max-width: min(52vw, 720px); overflow-x: auto; scrollbar-width: none; }
+.editor-shell .project-tabs { display: flex; flex: 1 1 auto; align-items: center; gap: 2px; min-width: 0; max-width: none; overflow-x: auto; scrollbar-width: none; }
 .editor-shell .project-tabs::-webkit-scrollbar { display: none; }
-.editor-shell .project-tab { display: inline-flex; align-items: center; min-width: 0; height: var(--control-md); border: 1px solid transparent; border-radius: var(--radius-xs); }
+.editor-shell .project-tab { display: inline-flex; flex: none; align-items: center; min-width: 0; height: var(--control-md); border: 1px solid transparent; border-radius: var(--radius-xs); }
 .editor-shell .project-tab.active { border-color: var(--border); background: var(--surface-raised); }
 .editor-shell .project-tab-name { display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 180px; padding: 0 var(--space-2) 0 var(--space-3); border: 0; background: transparent; }
 .editor-shell .project-tab-label { overflow: hidden; text-overflow: ellipsis; }

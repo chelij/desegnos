@@ -33,7 +33,6 @@ import { BoundaryProperties, CanvasLayers, EditorDock, PointerProperties, Projec
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
 import { showsOpener } from './visibleActions';
-import { FirstRunTips } from './Onboarding';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
 import { WebsiteImport } from './WebsiteImport';
@@ -1131,6 +1130,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     { id: 'close-project', label: 'Close project', shortcut: shortcutLabel('closeProject'), disabled: !canEditProject, action: () => run(closeProject) },
     { id: 'save-as', label: 'Save as', shortcut: shortcutLabel('saveAs'), disabled: !canEditProject, action: () => run(() => save(true)) },
     { id: 'save-copy', label: 'Save a copy without history…', disabled: !canEditProject || pending > 0, action: () => run(saveCopy) },
+    { id: 'rename-project', label: 'Rename project…', disabled: !canEditProject, action: () => setShowRename(true) },
     { id: 'compact-history', label: 'Compact history', disabled: !canEditProject || pending > 0, action: () => run(compactHistory) },
     ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => setShowRecovery(true) }] : []),
     { id: 'file-divider', label: '', separator: true },
@@ -1214,7 +1214,6 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   return <div className="application editor-shell">
     {closeRequest && <WorkspaceSurface place="banner" title="Close Desegnos?" close={() => { closeRequest.resolve(false); setCloseRequest(null); }}><p>{closeRequest.message}</p><div className="form-actions"><button onClick={() => { closeRequest.resolve(true); setCloseRequest(null); }}>Close Desegnos</button><button onClick={() => { closeRequest.resolve(false); setCloseRequest(null); }}>Keep editing</button></div></WorkspaceSurface>}
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
-      {!onStartPage && project && <button className="project-title" onClick={() => setShowRename(true)} title="Rename project"><span>{project.name}</span>{view?.dirty && <span aria-label="Unsaved changes" className="dirty-dot" />}</button>}
       {!onStartPage && project && !!view?.openProjects?.length && <nav className="project-tabs" aria-label="Open projects">
         {view.openProjects.map((entry, index) => <div className={entry.active ? 'project-tab active' : 'project-tab'} key={entry.id}>
           <button type="button" className="project-tab-name" title={entry.name} aria-current={entry.active ? 'page' : undefined} onClick={() => run(() => switchProjectTab(entry.id))}>
@@ -1228,14 +1227,14 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       <div className="shell-primary-actions">
         <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={!onStartPage && project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => onStartPage || !project ? setTheme(resolvedTheme === 'dark' ? 'light' : 'dark') : run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
-        {project && showsOpener({ available: true, open: showImport }) && <button type="button" onClick={() => { setImportSource(null); setShowImport(true); }}>Import…</button>}
-        {!onStartPage && project && <>{view?.canUndo && <button aria-label="Undo last change" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}>Undo</button>}{view?.canRedo && <button aria-label="Redo last change" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}>Redo</button>}
-          <button type="button" className={showHistory ? 'history-toggle active' : 'history-toggle'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}>History</button></>}
-        {!onStartPage && project && <button type="button" className={playIsActive(play) ? 'history-toggle active' : undefined} aria-pressed={playIsActive(play)} title={withShortcut('Play', 'play')} onClick={() => togglePlay()}>Play</button>}
-        {!onStartPage && project && <button type="button" title={withShortcut('Preview export', 'preview')} onClick={previewSelectedBoundary}>Preview</button>}
-        {!onStartPage && project && <button type="button" className={showExport ? 'history-toggle active' : undefined} aria-pressed={showExport} title={withShortcut('Export', 'export')} onClick={() => openExportPanel()}>Export…</button>}
+        {project && showsOpener({ available: true, open: showImport }) && <button type="button" className="icon-button" aria-label="Import context" title="Import context" onClick={() => { setImportSource(null); setShowImport(true); }}><Icon name="folder" /></button>}
+        {!onStartPage && project && <>{view?.canUndo && <button aria-label="Undo last change" type="button" className="icon-button" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}><Icon name="undo" /></button>}{view?.canRedo && <button aria-label="Redo last change" type="button" className="icon-button" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}><Icon name="redo" /></button>}
+          <button type="button" className={showHistory ? 'icon-button active' : 'icon-button'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
+        {!onStartPage && project && <button type="button" className={playIsActive(play) ? 'icon-button active' : 'icon-button'} aria-pressed={playIsActive(play)} aria-label="Play" title={withShortcut('Play', 'play')} onClick={() => togglePlay()}><Icon name="play" /></button>}
+        {!onStartPage && project && <button type="button" className="icon-button" aria-label="Preview export" title={withShortcut('Preview export', 'preview')} onClick={previewSelectedBoundary}><Icon name="monitor" /></button>}
+        {!onStartPage && project && <button type="button" className={showExport ? 'icon-button active' : 'icon-button'} aria-pressed={showExport} aria-label="Export" title={withShortcut('Export', 'export')} onClick={() => openExportPanel()}><Icon name="download" /></button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
-        {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" onClick={() => setShowLog(true)}>AI log</button>}
+        {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" className="icon-button" aria-label="AI log" title="AI conversation" onClick={() => setShowLog(true)}><Icon name="note" /></button>}
         {!onStartPage && project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : () => generate()}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
       </div>
     </header>
@@ -1276,7 +1275,6 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         play={play} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
         preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} />
       {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} requestEditorOpen={requestEditorIsOpen} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : draftCount > 0 && showsOpener({ available: true, open: showLog }) ? <Notice priority="result" message={`${draftCount} ${draftCount === 1 ? 'draft' : 'drafts'}`} action={{ label: 'Details', onClick: openGeneration }} /> : null}
-      <FirstRunTips />
       </div>
       {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} resultApplied={false} requestEditorOpen={requestEditorIsOpen} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} manageUsage={manageChatgptUsage} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => setShowLog(false)} />}
       <SurfaceHost place="panel" />

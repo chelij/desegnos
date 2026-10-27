@@ -6,6 +6,7 @@ import { isTextField } from './WorkspaceSurface';
 import { automaticLinks, boundaryAt, boundaryKey, boundaryMoves, canvasRectFromPage, canvasTargetKey, dotGrid, drawnBoundaryRect, drawnFrameRect, fitCamera, insideAnyBoundary, layoutBoundaries, referenceFrameRect, referenceItemAt, referenceMoves, referenceNoteRect, movedReferenceRect, nearestEdgeAnchors, pageRectFromCanvas, panCamera, pointerRoute, pushApartBoundaries, pushApartReference, resizedReferenceRect, sameBoundaries, samePointerEndpoint, selectedPointers, viewportWorldRect, type Boundary, type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point, type ReferenceBox, type ReferenceMove, type RequestBox } from './projectCanvasGeometry';
 import type { BoundaryKind, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, Page, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem } from './types';
 import type { ProjectTool } from './EditorTools';
+import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { BoundaryLayer } from './projectCanvas/boundaries';
 import { elementBoxes, elementBoxesNow, FrameLayer, FrameRequestEditor, type FrameDraft, type RequestPatch } from './projectCanvas/frames';
 import { ReferenceLayer, ReferenceNoteEditor, shownReference } from './projectCanvas/reference';
@@ -1504,6 +1505,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     <PointerComments entries={entries} camera={camera} selected={selectedPointerIds} pointerStates={pointerStates} interactive={tool === 'select'} onSelect={choosePointer}
       change={(pointerId, comment) => updatePointer(pointerId, { comment })}
       autoFocusId={createdPointer.current} close={() => { createdPointer.current = null; surface.current?.focus({ preventScroll: true }); }} />
+    <BoundaryLabels project={project} boundaries={boundaries} moving={moving} focused={focused} selection={selection} camera={camera} openPage={openPage} />
     <PointerHandles entries={entries} camera={camera} selectedId={selectedPointerId} armed={armedPointer} onStart={startReattach} />
     {!editing && <ElementSelectionOverlay surface={surface} project={project} selection={selectedElementTargets} camera={camera}
       version={Object.entries(movingElements).map(([id, rect]) => `${id}:${rect.x},${rect.y},${rect.width},${rect.height}`).join('|')} onResizeStart={startElementResize} />}

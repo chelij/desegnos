@@ -75,8 +75,6 @@ p { margin-bottom: var(--space-5); }
 .application { height: 100dvh; display: flex; flex-direction: column; min-width: 0; }
 .app-bar { display: flex; align-items: center; gap: var(--space-5); min-height: 44px; padding: 0 var(--space-5); background: var(--surface); border-bottom: 1px solid var(--border-soft); flex-shrink: 0; }
 .wordmark { font-size: var(--text-lg); font-weight: var(--weight-bold); letter-spacing: -0.35px; }
-.project-title { display: flex; align-items: center; justify-content: flex-start; gap: var(--space-4); max-width: 260px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-color: transparent; background: transparent; font-weight: var(--weight-semibold); text-align: left; padding-inline: var(--space-3); }
-.project-title:hover:not(:disabled) { background: var(--surface-muted); }
 .dirty-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
 .startup { overflow: auto; flex: 1; display: flex; flex-direction: column; align-items: center; padding: var(--space-8) var(--space-7) var(--space-9); }
 .startup > h1 { margin-top: var(--space-8); }
@@ -193,7 +191,6 @@ p { margin-bottom: var(--space-5); }
 @media (max-width: 1120px) {
   .app-bar { gap: var(--space-4); }
   .workspace-toolbar { gap: var(--space-4); flex-wrap: wrap; }
-  .project-title { max-width: 180px; }
   .canvas-scroll { padding: var(--space-6) var(--space-8) var(--space-9); }
   .theme-picker { font-size: 0; gap: 0; }
   .theme-picker select { font-size: var(--text-sm); }
@@ -204,7 +201,6 @@ p { margin-bottom: var(--space-5); }
   .canvas-guidance { flex: 1; }
   .generation-controls { margin-left: auto; }
   .status-bar { flex-wrap: wrap; gap: var(--space-1); }
-  .project-title { max-width: 160px; }
   .file-actions { margin-left: auto; }
 }
 @media (max-width: 540px) {
@@ -259,7 +255,8 @@ p { margin-bottom: var(--space-5); }
 /* Sizes: one row per linked size, then the presets that add another. */
 .dock-sizes { display: flex; flex-direction: column; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border-soft); }
 .dock-size-row { display: flex; flex-direction: column; gap: var(--space-1); padding: var(--space-2); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--surface-muted); }
-.dock-size-name { color: var(--text); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.dock-size-name { display: flex; align-items: center; gap: var(--space-3); color: var(--text); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.dock-size-tag { padding: 0 var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-xs); color: var(--muted); font-size: 10px; font-weight: var(--weight-medium); line-height: 14px; letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .dock-size-actions { display: flex; align-items: center; gap: var(--space-2); }
 .dock-inline-size { display: flex; align-items: center; gap: var(--space-1); color: var(--muted); font-size: var(--text-xs); }
 .dock-size-add { display: flex; flex-direction: column; gap: var(--space-1); }

@@ -49,9 +49,6 @@ export function BoundaryLayer({ project, boundaries, focused, selection, moving,
       return <div key={sizeId} className={`page-boundary${highlighted ? ' selected' : ''}${focusedHere ? ' focused' : ''}${kind === 'screen' ? ' screen' : ''}`}
         data-boundary={pageId} data-size={sizeId}
         style={{ left: shown.x, top: shown.y, width: shown.width, height: shown.height }} onDoubleClick={() => openPage(pageId)}>
-        <span className="page-boundary-name" data-boundary-handle={sizeId} title={`Move ${page.name}`} onDoubleClick={event => { event.stopPropagation(); openPage(pageId); }}>
-          {page.sizes.length > 1 ? `${page.name} · ${label}` : page.name}
-        </span>
         <ElementTree project={project} pageId={pageId} sizeId={sizeId} elements={elements} boundary={{ pageId, sizeId, label, kind, rect: shown }} editingId={editingId} movingRects={movingElements} />
         {ghosts.map(({ element, rect: ghost }) => <div key={`placeholder:${element.id}`} className="element-placeholder" role="button" tabIndex={0}
           aria-label={`Include ${element.name ?? element.kind} in this size`} title="Include in this size, or dismiss"

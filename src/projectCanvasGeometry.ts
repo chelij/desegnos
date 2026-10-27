@@ -1,5 +1,5 @@
 import { clamp, MIN_ZOOM, ZOOM_LEVELS } from './canvasGeometry';
-import { resolveForSize } from './projectCanvas/sizes';
+import { resolveForSize, sizeLabel } from './projectCanvas/sizes';
 import type { BoundaryKind, PageSize, Pointer, PointerSource, PointerTarget, Project, Rect, Viewport } from './types';
 
 export type Point = { x: number; y: number };
@@ -49,7 +49,7 @@ export function layoutBoundaries(pages: BoundaryPage[], homePageId: string, gap 
       const placedHere = placeable(size);
       const height = size.kind === 'screen' ? fixedHeight(size.height) : boundaryHeight(size.height);
       rows.push({
-        pageId: page.id, sizeId: size.id, label: size.label, kind: size.kind,
+        pageId: page.id, sizeId: size.id, label: sizeLabel(size.width), kind: size.kind,
         rect: placedHere ? { x: size.x, y: size.y, width, height } : { x, y: 0, width, height },
       });
       if (!placedHere) x += width + gap;

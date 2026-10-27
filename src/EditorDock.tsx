@@ -1,17 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Icon, type IconName } from './icons';
 import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
 import type { Appearance, BoundaryKind, ElementPatch, OutputType, Page, PageSize, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, SizePreset } from './types';
 import { ElementLayers } from './projectCanvas/elementLayers';
-import { SIZE_PRESETS, resolveForSize } from './projectCanvas/sizes';
+import { SIZE_PRESETS, resolveForSize, sizeLabel } from './projectCanvas/sizes';
 
 const DOCK_WIDTH_KEY = 'desegnos.dock-width';
 const DOCK_COLLAPSED_KEY = 'desegnos.dock-collapsed';
 const PANELS_HIDDEN_KEY = 'desegnos.panels-hidden';
+const PANEL_WEIGHTS_KEY = 'desegnos.dock-panel-weights';
+const PANEL_COLLAPSED_KEY = 'desegnos.dock-panel-collapsed';
 export const MIN_DOCK_WIDTH = 224;
 export const MAX_DOCK_WIDTH = 480;
 const DEFAULT_DOCK_WIDTH = 272;
+/** Every expanded panel keeps enough height to read its own controls. */
+export const MIN_PANEL_HEIGHT = 160;
 
 export type PanelState = { width: number; collapsed: boolean; hidden: boolean };
 export type PanelActions = { setWidth: (width: number) => void; setCollapsed: (collapsed: boolean) => void; toggleHidden: () => void };
@@ -43,19 +47,53 @@ export function usePanelState(): [PanelState, PanelActions] {
   return [{ width, collapsed, hidden }, actions];
 }
 
-function DockSection({ name, collapse, children, className }: { name: string; collapse: () => void; children: ReactNode; className?: string }) {
-  return <section className={className ? `dock-panel ${className}` : 'dock-panel'} aria-label={name}>
+function DockSection({ name, open, toggle, children, grow, register }: {
+  name: string; open: boolean; toggle: () => void; children: ReactNode;
+  grow: number; register: (node: HTMLElement | null) => void;
+}) {
+  return <section ref={register} className={open ? 'dock-panel' : 'dock-panel is-collapsed'} aria-label={name} style={open ? { flexGrow: grow } : undefined}>
     <header className="dock-panel-header">
       <h2>{name}</h2>
-      <button type="button" className="icon-button sm" aria-label={`Collapse ${name.toLowerCase()}`} title="Collapse panels" onClick={collapse}><Icon name="chevron-right" /></button>
+      <button type="button" className="icon-button sm" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${name.toLowerCase()}`} title={open ? `Collapse ${name}` : `Expand ${name}`} onClick={toggle}><Icon name="chevron-right" className={open ? 'expanded' : undefined} /></button>
     </header>
-    <div className="dock-panel-body">{children}</div>
+    {open && <div className="dock-panel-body">{children}</div>}
   </section>;
 }
+
+function readWeights(): Record<string, number> {
+  try {
+    const raw: unknown = JSON.parse(readString(PANEL_WEIGHTS_KEY) ?? '{}');
+    if (!raw || typeof raw !== 'object') return {};
+    return Object.fromEntries(Object.entries(raw).filter(([, value]) => typeof value === 'number' && Number.isFinite(value) && value > 0));
+  } catch { return {}; }
+}
+
+function readCollapsedPanels(): ReadonlySet<string> {
+  try {
+    const raw: unknown = JSON.parse(readString(PANEL_COLLAPSED_KEY) ?? '[]');
+    return new Set(Array.isArray(raw) ? raw.filter((key): key is string => typeof key === 'string') : []);
+  } catch { return new Set(); }
+}
+
+const DOCK_ICONS: Record<string, IconName> = { history: 'history', export: 'external', properties: 'properties', layers: 'layers' };
+/** Properties carries the most fields, so it starts taller than History and Layers. */
+const DEFAULT_PANEL_WEIGHTS: Record<string, number> = { history: 0.8, export: 0.9, properties: 1.6, layers: 1.1 };
 
 export function EditorDock({ state, actions, properties, layers, history, exportPanel }: {
   state: PanelState; actions: PanelActions; properties: ReactNode; layers: ReactNode; history?: ReactNode; exportPanel?: ReactNode;
 }) {
+  const panels = [
+    ...(history ? [{ key: 'history', name: 'History', content: history }] : []),
+    ...(exportPanel ? [{ key: 'export', name: 'Export', content: exportPanel }] : []),
+    { key: 'properties', name: 'Properties', content: properties },
+    { key: 'layers', name: 'Layers', content: layers },
+  ];
+  const [weights, setWeights] = useState<Record<string, number>>(readWeights);
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(readCollapsedPanels);
+  const nodes = useRef(new Map<string, HTMLElement>());
+  useEffect(() => { store(PANEL_WEIGHTS_KEY, JSON.stringify(weights)); }, [weights]);
+  useEffect(() => { store(PANEL_COLLAPSED_KEY, JSON.stringify([...collapsed])); }, [collapsed]);
+
   function startResize(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
     const edge = event.currentTarget.parentElement?.getBoundingClientRect().right;
@@ -66,20 +104,63 @@ export function EditorDock({ state, actions, properties, layers, history, export
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', stop);
   }
+
+  // A splitter trades height between its two neighbouring panels and stops at the readable minimum.
+  function startPanelResize(event: ReactPointerEvent<HTMLDivElement>, aboveKey: string, belowKey: string) {
+    event.preventDefault();
+    const aboveNode = nodes.current.get(aboveKey);
+    const belowNode = nodes.current.get(belowKey);
+    if (!aboveNode || !belowNode) return;
+    const startY = event.clientY;
+    const startAbove = aboveNode.getBoundingClientRect().height;
+    const startBelow = belowNode.getBoundingClientRect().height;
+    const pair = startAbove + startBelow;
+    const move = (next: PointerEvent) => {
+      const dy = Math.max(MIN_PANEL_HEIGHT - startAbove, Math.min(pair - MIN_PANEL_HEIGHT - startBelow, next.clientY - startY));
+      const heights: Record<string, number> = {};
+      for (const panel of panels) {
+        const node = nodes.current.get(panel.key);
+        if (node && !collapsed.has(panel.key)) heights[panel.key] = node.getBoundingClientRect().height;
+      }
+      heights[aboveKey] = startAbove + dy;
+      heights[belowKey] = startBelow - dy;
+      setWeights(heights);
+    };
+    const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  }
+
+  function togglePanel(key: string) {
+    const next = new Set(collapsed);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    // Collapsing every panel is the same thing as the dock's icon strip.
+    if (panels.every(panel => next.has(panel.key))) { setCollapsed(new Set()); actions.setCollapsed(true); }
+    else setCollapsed(next);
+  }
+
+  function expandDock() {
+    setCollapsed(new Set());
+    actions.setCollapsed(false);
+  }
+
   if (state.hidden) return null;
   if (state.collapsed) return <aside className="editor-dock collapsed" aria-label="Panels">
-    <button type="button" className="dock-icon" aria-label="Show Properties" title="Properties" onClick={() => actions.setCollapsed(false)}><Icon name="properties" /></button>
-    <button type="button" className="dock-icon" aria-label="Show Layers" title="Layers" onClick={() => actions.setCollapsed(false)}><Icon name="layers" /></button>
-    {history && <button type="button" className="dock-icon" aria-label="Show History" title="History" onClick={() => actions.setCollapsed(false)}><Icon name="history" /></button>}
-    {exportPanel && <button type="button" className="dock-icon" aria-label="Show Export" title="Export" onClick={() => actions.setCollapsed(false)}><Icon name="external" /></button>}
+    {panels.map(panel => <button key={panel.key} type="button" className="dock-icon" aria-label={`Show ${panel.name}`} title={panel.name} onClick={expandDock}><Icon name={DOCK_ICONS[panel.key] ?? 'properties'} /></button>)}
   </aside>;
   return <aside className="editor-dock" style={{ width: state.width }} aria-label="Panels">
     <div className="dock-resizer" role="separator" aria-orientation="vertical" aria-label="Resize panels" onPointerDown={startResize} />
     <div className="dock-panels">
-      {history && <DockSection name="History" className="dock-panel-history" collapse={() => actions.setCollapsed(true)}>{history}</DockSection>}
-      {exportPanel && <DockSection name="Export" className="dock-panel-export" collapse={() => actions.setCollapsed(true)}>{exportPanel}</DockSection>}
-      <DockSection name="Properties" collapse={() => actions.setCollapsed(true)}>{properties}</DockSection>
-      <DockSection name="Layers" collapse={() => actions.setCollapsed(true)}>{layers}</DockSection>
+      {panels.map((panel, index) => {
+        const open = !collapsed.has(panel.key);
+        const previous = panels[index - 1];
+        return <Fragment key={panel.key}>
+          {previous && open && !collapsed.has(previous.key) && <div className="dock-splitter" role="separator" aria-orientation="horizontal"
+            aria-label={`Resize ${previous.name} and ${panel.name}`} onPointerDown={event => startPanelResize(event, previous.key, panel.key)} />}
+          <DockSection name={panel.name} open={open} toggle={() => togglePanel(panel.key)} grow={weights[panel.key] ?? DEFAULT_PANEL_WEIGHTS[panel.key] ?? 1}
+            register={node => { if (node) nodes.current.set(panel.key, node); else nodes.current.delete(panel.key); }}>{panel.content}</DockSection>
+        </Fragment>;
+      })}
     </div>
   </aside>;
 }
@@ -147,7 +228,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
     <div className="dock-sizes" role="group" aria-label="Sizes">
       <span className="dock-field-label">Sizes</span>
       {page.sizes.map((size, index) => <div key={size.id} className="dock-size-row" data-size-row={size.id}>
-        <span className="dock-size-name">{size.label}{index === 0 ? ' · base' : ''}</span>
+        <span className="dock-size-name">{sizeLabel(size.width)}{index === 0 && <span className="dock-size-tag">Base</span>}</span>
         <div className="dock-pair">
           <PropertyField label="Width" type="number" min={1} max={32768} value={size.width} disabled={busy} valid={width => wholeSize(width, 1, 32768)}
             commit={width => { const value = Math.round(Number(width)); if (value >= 1 && value <= 32768) updateSize(size.id, { width: value }); }} />
@@ -156,7 +237,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
         </div>
         <div className="dock-size-actions">
           <label className="dock-inline-size">Kind
-            <select value={size.kind} disabled={busy} aria-label={`Kind of ${size.label}`} onChange={event => updateSize(size.id, { kind: event.target.value as BoundaryKind })}>
+            <select value={size.kind} disabled={busy} aria-label={`Kind of ${sizeLabel(size.width)}`} onChange={event => updateSize(size.id, { kind: event.target.value as BoundaryKind })}>
               <option value="page">Page</option><option value="screen">Screen</option>
             </select>
           </label>
