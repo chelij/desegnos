@@ -24,13 +24,16 @@ export function useCanvasCamera(surface: { current: HTMLDivElement | null }, bou
   const space = useRef(false);
   const touched = useRef(false);
 
-  // Fit until the first pan or zoom, so measured snapshot heights still settle the view.
+  // Fit once when a project opens; after that the view only moves when the user moves it,
+  // so drawing never shifts what is on screen.
+  const fittedProject = useRef<string | null>(null);
   useEffect(() => {
     const node = surface.current;
-    if (touched.current || !node || !boundaries.length) return;
+    if (fittedProject.current === projectId || !node) return;
     const box = node.getBoundingClientRect();
     if (box.width < 1 || box.height < 1) return;
-    setCamera(fitCamera(unionBounds(boundaries.map(item => item.rect)), { width: box.width, height: box.height }));
+    fittedProject.current = projectId;
+    if (boundaries.length) setCamera(fitCamera(unionBounds(boundaries.map(item => item.rect)), { width: box.width, height: box.height }));
   }, [boundaries, projectId]);
 
   useEffect(() => {

@@ -439,10 +439,13 @@ async function runIsolated() {
     await step('Draw a Screen boundary from the Boundary flyout', async () => {
       await chooseBoundaryKind('Screen');
       const before = (await boundaries()).length;
+      const firstBefore = (await boundaries())[0];
       const spot = await emptyCanvas(280, 140);
       await mouse.drag(spot.from, spot.to);
       await waitFor(async () => (await boundaries()).length === before + 1, 'The Screen boundary drag did not create a boundary');
       assert.ok((await boundaries()).some(item => item.screen), 'The new boundary is not a Screen boundary');
+      const firstAfter = (await boundaries())[0];
+      assert.ok(Math.abs(firstAfter.left - firstBefore.left) < 2 && Math.abs(firstAfter.top - firstBefore.top) < 2, 'Drawing a boundary moved the view');
     });
 
     await step('Draw a rectangle by clicking the Rectangle button', async () => {
@@ -451,6 +454,9 @@ async function runIsolated() {
       await chooseTool('Rectangle');
       await mouse.dragShowing({ x: box.left + 40, y: box.top + 230 }, { x: box.left + Math.min(300, box.width - 40), y: box.top + 300 }, '.element-draft');
       await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element-kind="box"]').length > previous, before), 'The Rectangle drag did not create a rectangle');
+      const drawn = await driver.execute(() => { const nodes = document.querySelectorAll('[data-element-kind="box"]'); const r = nodes[nodes.length - 1].getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
+      const expected = { left: box.left + 40, top: box.top + 230 };
+      assert.ok(Math.abs(drawn.left - expected.left) < 4 && Math.abs(drawn.top - expected.top) < 4, `The rectangle landed at ${JSON.stringify(drawn)}, not where it was drawn ${JSON.stringify(expected)}`);
     });
 
     await step('Ctrl+Z undoes the rectangle and Shift+Ctrl+Z redoes it', async () => {
