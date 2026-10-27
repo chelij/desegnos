@@ -39,7 +39,7 @@ export function capturePreview(url: string, sessionId: string, host: HTMLElement
     const runner = document.createElement('iframe');
     runner.sandbox.add('allow-scripts', 'allow-forms');
     runner.referrerPolicy = 'no-referrer'; runner.tabIndex = -1;
-    // Same viewport as the canvas, including viewport-relative styles and frame sizes.
+    // The host is the page viewport, so viewport-relative styles and frame sizes match it.
     runner.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;visibility:hidden;pointer-events:none';
     const token = crypto.randomUUID();
     const cancel = () => { cleanup(); reject(new Error('Preview preparation cancelled.')); };

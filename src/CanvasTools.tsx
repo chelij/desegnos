@@ -9,9 +9,9 @@ import { withShortcut } from './shortcuts';
 
 export type CanvasTool = 'select' | 'request' | 'pan';
 export type RequestShapeKind = RegionShape['kind'];
-export function CanvasTools({ tool, setTool, requestShape, setRequestShape, zoom, setZoom, fit, layersOpen, toggleLayers }: {
+export function CanvasTools({ tool, setTool, requestShape, setRequestShape, zoom, setZoom, fit, layersOpen, toggleLayers, projectCanvas }: {
   requestShape: RequestShapeKind; setRequestShape: (shape: RequestShapeKind) => void;
-  tool: CanvasTool; setTool: (tool: CanvasTool) => void; zoom: number; setZoom: (value: number) => void; fit: () => void; layersOpen: boolean; toggleLayers: () => void;
+  tool: CanvasTool; setTool: (tool: CanvasTool) => void; zoom: number; setZoom: (value: number) => void; fit: () => void; layersOpen: boolean; toggleLayers: () => void; projectCanvas?: () => void;
 }) {
   return <FloatingBar className="canvas-tools" role="toolbar" aria-label="Canvas tools">
     {([
@@ -25,6 +25,7 @@ export function CanvasTools({ tool, setTool, requestShape, setRequestShape, zoom
       ['rect', 'Rectangle', 'Shift+R'], ['ellipse', 'Circle', 'C'], ['freehand', 'Freehand', 'L'],
     ] as const).map(([kind, label, shortcut]) => ({ id: kind, label, shortcut, checked: requestShape === kind, action: () => { setRequestShape(kind); setTool('request'); } }))} />
     <button type="button" data-layers-trigger aria-label="Layers" title="Layers" aria-haspopup="dialog" aria-expanded={layersOpen} onClick={toggleLayers}><LayerIcon /><span>Layers</span></button>
+    {projectCanvas && <button type="button" aria-label="Project canvas" title="Project canvas" onClick={projectCanvas}><Icon name="canvas" /><span>Project canvas</span></button>}
     <span className="tool-divider" aria-hidden="true" />
     <button type="button" className="icon-button sm" aria-label="Zoom out" title={withShortcut('Zoom out', 'zoomOut')} disabled={zoom <= MIN_ZOOM} onClick={() => setZoom(steppedZoom(zoom, -1))}><Icon name="minus" /></button>
     <MenuButton label={zoomLabel(zoom)} ariaLabel="Canvas zoom" title="Canvas zoom" items={ZOOM_LEVELS.map(value => ({ id: `zoom-${value}`, label: zoomLabel(value), checked: zoom === value, action: () => setZoom(value) }))} />

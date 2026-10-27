@@ -8,7 +8,7 @@ export type IconName =
   | 'font-smaller' | 'font-larger' | 'padding-less' | 'padding-more'
   | 'align-left' | 'align-center' | 'align-right' | 'text-color' | 'fill-color'
   | 'link' | 'text' | 'info' | 'arrange-front' | 'arrange-forward'
-  | 'arrange-backward' | 'arrange-back' | 'monitor' | 'tablet' | 'phone';
+  | 'arrange-backward' | 'arrange-back' | 'monitor' | 'tablet' | 'phone' | 'canvas';
 
 const paths: Record<IconName, ReactNode> = {
   close: <path d="M4 4l8 8M12 4l-8 8" />,
@@ -48,6 +48,7 @@ const paths: Record<IconName, ReactNode> = {
   'arrange-backward': <><path d="M2 6.5 8 3.8l6 2.7-6 2.7Z" /><path d="M11.8 12V7.6M9.4 9.6l2.4 2.4 2.4-2.4" /></>,
   'arrange-back': <><path d="M2 4.5 8 1.8l6 2.7-6 2.7Z" /><path d="M11.8 13V8.6M9.4 10.6l2.4 2.4 2.4-2.4" /></>,
   monitor: <><rect x="1.8" y="3" width="12.4" height="8" rx="1" /><path d="M5.5 13.5h5M8 11v2.5" /></>,
+  canvas: <><rect x="1.8" y="2.8" width="5" height="10.4" rx="1" /><rect x="9.2" y="2.8" width="5" height="10.4" rx="1" /></>,
   tablet: <><rect x="3" y="1.8" width="10" height="12.4" rx="1.2" /><path d="M7 12.2h2" /></>,
   phone: <><rect x="4.3" y="1.8" width="7.4" height="12.4" rx="1.4" /><path d="M7 12.2h2" /></>,
 };

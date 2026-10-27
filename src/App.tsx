@@ -11,6 +11,7 @@ import { native, edit } from './api';
 import { Canvas, type CanvasHandle, type RequestPatch } from './Canvas';
 import { CanvasTools, type CanvasTool, type RequestShapeKind } from './CanvasTools';
 import { WorkspaceSurface, WorkspaceSurfaces, SurfaceHost, isTextField } from './WorkspaceSurface';
+import { ProjectCanvas } from './ProjectCanvas';
 import { isPendingRecovery, type PendingRecovery, type RecoveryChoices } from './RecoveryBanner';
 import { SaveConflictDialog, type SaveConflict, type SaveOutcome, type SaveChoice } from './SaveConflict';
 import { documentKey, nativeTarget, regionTargets, sameTargets } from './elementTargets';
@@ -91,6 +92,8 @@ function Editor() {
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [pageId, setPageId] = useState<string | null>(null);
+  const [projectCanvas, setProjectCanvas] = useState(false);
+  const canvasProject = useRef<string | null>(null);
   // Open page tabs per project, persisted separately from the website output.
   const [openPages, setOpenPages] = useState<Record<string, string[]>>({});
   const [closeChoice, setCloseChoice] = useState<string | null>(null);
@@ -748,6 +751,26 @@ function Editor() {
     return () => window.removeEventListener('keydown', exit, true);
   }, [tool]);
   useEffect(() => { setLive(false); setShowLog(false); setOfferRestyle(false); setResultReview(null); setExported(null); setTool('select'); setCodeView(activeProjectId ? readCodeView(activeProjectId) : 'design'); }, [activeProjectId]);
+  // A project opens on its project canvas; opening a page moves to that page's editor.
+  useEffect(() => {
+    const id = view?.project?.id ?? null;
+    if (!id) { canvasProject.current = null; setProjectCanvas(false); return; }
+    if (canvasProject.current === id) return;
+    canvasProject.current = id;
+    setProjectCanvas(true);
+  }, [view?.project?.id]);
+  // Escape with nothing selected leaves the page for the project canvas. The canvas
+  // handles its own Escape first; this covers focus outside it.
+  useEffect(() => {
+    const leave = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || isTextField(event.target)) return;
+      if (projectCanvas || tool !== 'select' || selected || activeLayer || live || !view?.project) return;
+      if (document.querySelector('.editor-menu')) return;
+      setProjectCanvas(true);
+    };
+    window.addEventListener('keydown', leave);
+    return () => window.removeEventListener('keydown', leave);
+  }, [projectCanvas, tool, selected, activeLayer, live, view?.project?.id]);
   useEffect(() => { setLivePath(page?.path ?? '/'); }, [live, page?.id]);
   async function changeCodeView(value: CodeView) { if (value === codeView) return; await synchronize(); setCodeView(value); if (value !== 'code') requestAnimationFrame(() => recenter('fit')); try { if (activeProjectId) localStorage.setItem(`desegnos.code-view.${activeProjectId}`, value); } catch {} }
   function dragDivider(event: ReactPointerEvent<HTMLDivElement>) {
@@ -882,7 +905,7 @@ function Editor() {
       return { ...previous, [projectId]: next };
     });
   }
-  function activatePage(id: string) { openPageTab(id); setPageId(id); }
+  function activatePage(id: string) { openPageTab(id); setPageId(id); setProjectCanvas(false); }
   function closePageTabInStrip(id: string) {
     const projectId = current.current?.project?.id;
     if (!projectId) return;
@@ -1269,7 +1292,7 @@ function Editor() {
       <div className="design-pane">
       <SurfaceHost place="canvas" />
       <NoticeHost />
-      {page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} pages={project.pages} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveDevice={live && page?.content ? liveDevice : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} editElements={editElementsNative} copyElements={copyElementsNative} findAcrossPages={findAcrossPages} editAcrossPages={editAcrossPages} resolveGenerationFix={resolveGenerationFix} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => addRegion(rect, shape)} ensureElementId={ensureElementIdNative} setFrameTarget={setFrameTargetNative} frameDocuments={frameDocuments} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={(selection, chosen) => pickElement(selection, chosen)} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} allowWholePage={allowWholePageAndRetry} />}
+      {projectCanvas && project ? <ProjectCanvas project={project} openPage={id => run(() => selectPage(id))} /> : page && <Canvas generation={generation} fixRuntimeErrors={errors => run(() => fixRuntimeErrors(errors))} aiDisabled={working || !aiConnected || pending > 0} observationsVersion={observationsVersion} archiveReports={archiveReports} projectId={project.id} pendingImagesChanged={count => { setPendingImages(count); if (count) setNotice('Picture ready. Click Generate to resize and apply.'); }} projectImages={projectImages} ref={canvas} canUndo={!!view?.canUndo} canRedo={!!view?.canRedo} undo={() => run(() => travel('undo_project'))} redo={() => run(() => travel('redo_project'))} toggleGrid={() => run(() => mutate(current => ({ type: 'set_grid', enabled: !current.showGrid })))} configureGrid={() => setShowGridSettings(true)} page={page} pages={project.pages} layersOpen={showLayers} setLayersOpen={setShowLayers} selectionChanged={setActiveLayer} multiChanged={setMultiCount} liveDevice={live && page?.content ? liveDevice : null} onLiveLocation={setLivePath} repick={repickRequest} attach={(regionId, files, links) => run(() => attachToRequest(regionId, files, links))} detach={(regionId, attachmentId) => { const owner = project.pages.find(item => item.regions.some(region => region.id === regionId)); if (owner) run(() => mutate({ type: 'remove_region_attachment', page_id: owner.id, region_id: regionId, attachment_id: attachmentId })); }} fixOnPhones={selection => run(() => fixOnPhones(selection))} arrangeRequest={arrangeRequest} copyNative={copyLayerNative} cutNative={cutLayerNative} pasteNative={pasteLayerNative} tool={tool} requestShape={requestShape} rulerUnit={rulerUnit} highlighted={highlightResult ? generation.job?.areas.filter(area => area.pageId === page.id) ?? [] : []} grid={project.showGrid} gridSettings={project.gridSettings} viewAction={canvasView} changing={working && generation.job && ['prepared', 'generating', 'ready', 'applying'].includes(generation.job.status) ? generation.job?.areas?.filter(area => area.pageId === page.id) ?? [] : []} zoom={zoom} refreshElementBounds={refreshElementBounds} openSource={target => openFoundSource(page.id, target)} inspectElement={inspectElement} editElement={editElement} undoElement={undoElementNative} editElements={editElementsNative} copyElements={copyElementsNative} findAcrossPages={findAcrossPages} editAcrossPages={editAcrossPages} resolveGenerationFix={resolveGenerationFix} changeZoom={setZoom} selected={selected} focusRequest={focusPrompt ? selected : null} select={selectRequest} add={(rect, shape) => addRegion(rect, shape)} ensureElementId={ensureElementIdNative} setFrameTarget={setFrameTargetNative} frameDocuments={frameDocuments} setTargetRemoval={(regionId, allowed) => run(() => mutate({ type: 'set_region_target_removal', page_id: page.id, region_id: regionId, allow_target_removal: allowed }))} deleteElements={deleteElements} pickElement={(selection, chosen) => pickElement(selection, chosen)} change={(id, patch) => changeRegion(page.id, id, patch)} remove={id => removeRegion(id)} allowWholePage={allowWholePageAndRetry} onProjectCanvas={() => setProjectCanvas(true)} />}
       {resultReview && !showGenerationStatus ? <Notice className="generation-notice status-applied" variant="success" priority="result" title="Page updated"
         message={summarizeOutsideChanges(generation.job?.validationEvents ?? [], generation.job?.candidate?.outsideChanges ?? [])}
         action={{ label: 'Undo', disabled: pending > 0, onClick: () => run(() => rejectResult()) }}
@@ -1295,7 +1318,7 @@ function Editor() {
         <button type="button" className="primary live-exit" onClick={() => setLive(false)}>Exit live</button>
       </FloatingBar>}
       {showCheck && <PageCheckPanel items={checks} busy={pending > 0 || working} close={() => setShowCheck(false)} show={item => run(() => showCheckItem(item))} fix={item => run(() => fixCheckItem(item))} source={item => run(async () => { const found = await showCheckItem(item); if (found) openFoundSource(item.pageId, found.element); })} />}
-      <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} requestShape={requestShape} setRequestShape={setRequestShape} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} />
+      {!projectCanvas && <CanvasTools layersOpen={showLayers} toggleLayers={() => setShowLayers(value => !value)} tool={tool} setTool={setTool} requestShape={requestShape} setRequestShape={setRequestShape} zoom={zoom} setZoom={setZoom} fit={() => recenter('fit')} projectCanvas={() => setProjectCanvas(true)} />}
       </div>
       {codeView !== 'design' && <>
         {codeView === 'split' && <div className="code-divider" role="separator" aria-orientation="vertical" aria-label="Resize code pane" onPointerDown={dragDivider} />}

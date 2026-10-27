@@ -14,7 +14,7 @@
     "test": "node scripts/cargo.mjs test --workspace",
     "check:rust": "node scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",
     "test:native": "node scripts/native-test.mjs",
-    "test:canvas": "node tests/canvas-geometry.test.mjs",
+    "test:canvas": "node tests/canvas-geometry.test.mjs && node tests/project-canvas-geometry.test.mjs",
     "test:vault": "node scripts/test-vault.mjs",
     "test:generation": "node tests/generation-cancellation.test.mjs",
     "test:preview": "node tests/preview-frames.test.mjs && node tests/frame-overlay-lifecycle.test.mjs && node tests/frozen-preview.test.mjs",

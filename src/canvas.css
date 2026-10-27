@@ -243,3 +243,31 @@
 .request-pages-panel .request-pages-group { font-weight: var(--weight-semibold); }
 .request-pages-list { margin: var(--space-1) 0 0; padding: 0; list-style: none; }
 .request-pages-list label.host-page { font-weight: var(--weight-semibold); }
+
+/* Project canvas: every page as a snapshot boundary on one pan/zoom surface. */
+.project-canvas {
+  position: relative;
+  display: block;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--canvas-bed);
+  cursor: grab;
+  outline: none;
+  touch-action: none;
+}
+.project-canvas.panning, .project-canvas.pan-ready { cursor: grabbing; }
+.project-canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
+.project-canvas-layer { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+.project-canvas .page-boundary { position: absolute; background: var(--site-light); box-shadow: 0 0 0 1px var(--border), var(--shadow-1); }
+:root[data-theme="dark"] .project-canvas .page-boundary { background: var(--site-dark); }
+.project-canvas .page-boundary.selected { outline: 2px solid var(--annotation-focus); outline-offset: 2px; }
+.project-canvas .page-boundary iframe { display: block; border: 0; pointer-events: none; background: var(--site-light); }
+:root[data-theme="dark"] .project-canvas .page-boundary iframe { background: var(--site-dark); }
+.project-canvas .page-boundary-name {
+  position: absolute; left: 0; bottom: calc(100% + var(--space-2)); max-width: 100%;
+  overflow: hidden; color: var(--muted); font-size: var(--text-xs); line-height: 1.4;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.project-canvas .page-boundary.selected .page-boundary-name { color: var(--text); }
