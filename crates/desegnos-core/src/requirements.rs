@@ -88,10 +88,10 @@ pub struct RequirementsSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<GenerationCapabilities>,
     /// Reference items the user selected for this request, in addition to pointed-to items.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub reference_ids: Vec<Uuid>,
     /// Small previews of attached pictures, sent beside the requirements file.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub images: Vec<RequestImage>,
 }
 

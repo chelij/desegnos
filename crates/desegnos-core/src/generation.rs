@@ -29,8 +29,10 @@ fn default_style() -> ElementStyle {
 
 /// A new element the AI wants in a layer. The core assigns its id.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ElementDraft {
+    /// Flat kind and its kind-specific fields, matching the editor's element type.
+    #[serde(flatten)]
     pub kind: ElementKind,
     pub rect: crate::Rect,
     #[serde(default)]
@@ -1069,32 +1071,17 @@ pub fn candidate_schema() -> serde_json::Value {
         object(json!({"kind":{"type":"string","enum":["stack"]},"direction":{"type":"string","enum":["row","column"]},"gap":{"type":"number"},"padding":{"type":"number"},"align":{"type":"string","enum":["start","center","end","stretch"]},"justify":{"type":"string","enum":["start","center","end","spaceBetween"]},"wrap":{"type":"boolean"}})),
         object(json!({"kind":{"type":"string","enum":["grid"]},"columns":{"type":"integer","minimum":1,"maximum":64},"gap":{"type":"number"},"padding":{"type":"number"}}))
     ]});
-    let kind = json!({"oneOf":[
-        object(json!({"kind":{"type":"string","enum":["box"]}})),
-        object(json!({"kind":{"type":"string","enum":["group"]}})),
-        object(json!({"kind":{"type":"string","enum":["text"]}})),
-        object(json!({"kind":{"type":"string","enum":["ellipse"]}})),
-        object(json!({"kind":{"type":"string","enum":["line"]}})),
-        object(json!({"kind":{"type":"string","enum":["image"]}})),
-        object(json!({"kind":{"type":"string","enum":["button"]}})),
-        object(json!({"kind":{"type":"string","enum":["link"]}})),
-        object(json!({"kind":{"type":"string","enum":["input"]},"inputType":{"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]}})),
-        object(json!({"kind":{"type":"string","enum":["textarea"]}})),
-        object(json!({"kind":{"type":"string","enum":["select"]},"options":{"type":"array","minItems":1,"maxItems":100,"items":text(120)}})),
-        object(json!({"kind":{"type":"string","enum":["checkbox"]}})),
-        object(json!({"kind":{"type":"string","enum":["radio"]}})),
-        object(json!({"kind":{"type":"string","enum":["video"]}})),
-        object(json!({"kind":{"type":"string","enum":["audio"]}})),
-        object(json!({"kind":{"type":"string","enum":["embed"]}})),
-        object(json!({"kind":{"type":"string","enum":["code"]},"language":text(40),"source":text(200_000)}))
-    ]});
-    let draft = object(json!({
+    let kind = json!({"type":"string","enum":["box","group","text","ellipse","line","image","button","link","input","textarea","select","checkbox","radio","video","audio","embed","code"]});
+    let draft = partial_object(json!({
         "kind":kind,"rect":rect,"name":nullable(text(120)),
         "rotation":{"type":"number"},"visible":{"type":"boolean"},"locked":{"type":"boolean"},
         "style":style,"text":text(16_384),"image":nullable(uuid.clone()),
         "imageRequest":nullable(text(120)),"url":nullable(text(2048)),"layout":layout,
+        "inputType":{"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]},
+        "options":{"type":"array","minItems":1,"maxItems":100,"items":text(120)},
+        "language":text(40),"source":text(200_000),
         "children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}
-    }));
+    }), &["kind","rect","name","rotation","visible","locked","style","text","image","imageRequest","url","layout","children"]);
     let update = partial_object(json!({
         "elementId":uuid.clone(),"rect":rect,"rotation":{"type":"number"},"style":style,
         "text":text(16_384),"url":text(2048),"layout":layout,"visible":{"type":"boolean"},

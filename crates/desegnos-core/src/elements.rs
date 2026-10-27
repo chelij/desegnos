@@ -242,7 +242,7 @@ impl ElementLayout {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PendingRequest {
     pub prompt: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub attachments: Vec<RequestAttachment>,
     pub requested_at: String,
     /// The linked size the request was written in, so the AI can answer for that size.
@@ -418,9 +418,11 @@ impl ElementOverride {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct Element {
     pub id: Uuid,
+    /// Flat kind and its kind-specific fields, matching the editor's element type.
+    #[serde(flatten)]
     pub kind: ElementKind,
     /// Set to name a layer.
     #[serde(deserialize_with = "crate::required_nullable")]
@@ -441,7 +443,7 @@ pub struct Element {
     pub url: Option<String>,
     pub layout: ElementLayout,
     /// Per-size changes, keyed by the page size they apply to. Text and kind are never per size.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub overrides: BTreeMap<Uuid, ElementOverride>,
     pub children: Vec<Element>,
     pub meta: ElementMeta,

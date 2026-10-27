@@ -5,6 +5,7 @@ import { installHistorySteps } from './historySteps';
 import App from './App';
 import './styles.css';
 import './brand.css';
+import './canvas.css';
 import './notice.css';
 import './ui.css';
 

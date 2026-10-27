@@ -114,7 +114,7 @@ fn candidate(snapshot: &desegnos_core::RequirementsSnapshot, target: Uuid, page:
             "operations": [{
                 "kind": "replaceChildren",
                 "children": [{
-                    "kind": {"kind": "text"},
+                    "kind": "text",
                     "rect": rect(10.0, 10.0, 200.0, 40.0),
                     "text": "Hello"
                 }]

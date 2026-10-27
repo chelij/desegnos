@@ -166,7 +166,7 @@ pub struct GenerationJobView {
     base_revision: u64,
     requirements: RequirementsSnapshot,
     /// Format 25: one frozen packet per sequential part.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     batches: Vec<GenerationBatch>,
     /// Format 25: every editable document without sources, used to validate and apply the
     /// merged result of all parts.

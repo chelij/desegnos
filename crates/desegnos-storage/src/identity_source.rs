@@ -40,9 +40,9 @@ pub struct IdentitySource {
     pub files: Vec<IdentitySourceFile>,
     pub skipped: Vec<String>,
     /// Pictures that are not logos (portfolio, products, people), resized for the project.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub photos: Vec<IdentitySourcePhoto>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub pages: Vec<desegnos_core::SourcePage>,
 }
 

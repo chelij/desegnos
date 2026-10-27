@@ -542,7 +542,7 @@ pub struct ExportRecord {
     pub destination: String,
     pub exported_at: String,
     pub pages: Vec<ExportedPage>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub pointers: BTreeMap<Uuid, ExportedPointer>,
 }
 
@@ -599,7 +599,7 @@ pub struct Pointer {
     pub from: PointerSource,
     pub to: PointerTarget,
     pub comment: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub wiring: Option<PointerWiring>,
     /// A simple action the comment asks for, and the comment it was classified from.
     #[serde(default, deserialize_with = "crate::required_nullable", skip_serializing_if = "Option::is_none")]
@@ -889,18 +889,18 @@ pub struct Project {
     pub brief: Brief,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub imported_identity: Option<crate::ImportedIdentity>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub pictures: BTreeMap<Uuid, std::sync::Arc<str>>,
     /// Everything outside every boundary: reference the AI can read that never ships.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub reference: Vec<ReferenceItem>,
     /// Lines from a frame or boundary to what its comment may read or change. A pointer
     /// outlives what it references so a deleted target can be reattached.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub pointers: Vec<Pointer>,
     /// Named elements every copy shares. Copies store their own position, parent and request
     /// history; a definition outlives its last copy.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(default)]
     pub linked: BTreeMap<Uuid, LinkedDefinition>,
     pub decisions: Vec<Decision>,
     pub exceptions: Vec<DesignException>,

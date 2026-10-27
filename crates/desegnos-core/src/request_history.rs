@@ -23,7 +23,7 @@ pub struct EarlierRequest {
     pub validation_rejection: Option<String>,
     pub summary: String,
     /// The complete original scope of the job-wide summary.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub summary_targets: Vec<(Uuid, Uuid)>,
 }
 

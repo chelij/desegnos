@@ -63,7 +63,7 @@ pub struct ImportedItem {
     /// A public https address or a site path such as /projects/robot; empty when unknown.
     pub url: String,
     pub summary: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub source_pages: Vec<SourcePageRef>,
 }
 
@@ -103,7 +103,7 @@ pub struct ProjectPhoto {
     pub width: u32,
     pub height: u32,
     pub description: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub source_pages: Vec<SourcePageRef>,
 }
 
@@ -159,11 +159,11 @@ pub struct ImportedIdentity {
     pub source_sha256: String,
     pub summary: String,
     pub assets: Vec<IdentityAsset>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub photos: Vec<ProjectPhoto>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub content: Vec<ImportedItem>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub pages: Vec<ImportedPageContext>,
 }
 

@@ -95,7 +95,7 @@ pub struct ExportPlan {
     pub schema: serde_json::Value,
     pub request_count: usize,
     pub page_count: usize,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub warnings: Vec<String>,
 }
 

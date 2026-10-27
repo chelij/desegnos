@@ -96,7 +96,6 @@ struct IdentityFileManifest {
     name: String,
     text_bytes: usize,
     source_page: Option<desegnos_core::SourcePageRef>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     asset: Option<IdentitySourceAsset>,
 }
 impl From<&IdentitySource> for IdentitySourceManifest {
@@ -192,9 +191,7 @@ pub struct AnalysisView {
     pub received_bytes: usize,
     pub authentication: Option<AuthenticationMethod>,
     pub chatgpt_account_id: Option<Uuid>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub candidate: Option<IdentityCandidate>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]

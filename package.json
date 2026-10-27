@@ -15,7 +15,8 @@
     "check:rust": "node scripts/cargo.mjs clippy --workspace --all-targets -- -D warnings",
     "test:canvas": "node tests/project-canvas-geometry.test.mjs && node tests/canvas-model.test.mjs",
     "test:vault": "node scripts/test-vault.mjs",
-    "test:editor": "node tests/code-mirror-state.test.mjs && node tests/crash-report.test.mjs && node tests/generation-cancellation.test.mjs && node tests/generation-conversation.test.mjs && node tests/generation-problems.test.mjs && node tests/generation-session.test.mjs && node tests/generation-status.test.mjs && node tests/identity-review.test.mjs && node tests/import-flow.test.mjs && node tests/notice-summary.test.mjs && node tests/notice-system.test.mjs && node tests/problem-banner.test.mjs && node tests/recovery-banner.test.mjs && node tests/start-page.test.mjs && node tests/update-check.test.mjs && node tests/visible-actions.test.mjs && node tests/workspace-surfaces.test.mjs"
+    "test:editor": "node tests/code-mirror-state.test.mjs && node tests/crash-report.test.mjs && node tests/generation-cancellation.test.mjs && node tests/generation-conversation.test.mjs && node tests/generation-problems.test.mjs && node tests/generation-session.test.mjs && node tests/generation-status.test.mjs && node tests/identity-review.test.mjs && node tests/import-flow.test.mjs && node tests/notice-summary.test.mjs && node tests/notice-system.test.mjs && node tests/problem-banner.test.mjs && node tests/recovery-banner.test.mjs && node tests/start-page.test.mjs && node tests/update-check.test.mjs && node tests/visible-actions.test.mjs && node tests/workspace-surfaces.test.mjs && node tests/editor-shell-ssr.test.mjs",
+    "test:smoke": "node tests/native/canvas-smoke.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",

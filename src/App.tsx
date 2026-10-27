@@ -97,17 +97,17 @@ function pendingElementIds(elements: Element[]): string[] {
   ]);
 }
 
-export default function App() {
-  return <NoticeProvider><WorkspaceSurfaces><EditorCrashBoundary><Editor /></EditorCrashBoundary></WorkspaceSurfaces></NoticeProvider>;
+export default function App({ initialView }: { initialView?: WorkspaceView } = {}) {
+  return <NoticeProvider><WorkspaceSurfaces><EditorCrashBoundary><Editor initialView={initialView} /></EditorCrashBoundary></WorkspaceSurfaces></NoticeProvider>;
 }
 
-function Editor() {
+function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const [closeRequest, setCloseRequest] = useState<{ message: string; resolve: (answer: boolean) => void } | null>(null);
-  const [view, setView] = useState<WorkspaceView | null>(null);
-  const current = useRef<WorkspaceView | null>(null);
+  const [view, setView] = useState<WorkspaceView | null>(initialView ?? null);
+  const current = useRef<WorkspaceView | null>(initialView ?? null);
   const tail = useRef<Promise<void>>(Promise.resolve());
   const [pending, setPending] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialView);
   const [error, setError] = useState('');
   const [openFailure, setOpenFailure] = useState<{ message: string; url: string } | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
@@ -135,7 +135,7 @@ function Editor() {
   const [rulerUnit, setRulerUnit] = useState<'pixels' | 'percent'>(readRulerUnit);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettingsView>({ showStartPage: true });
-  const [showStartPage, setShowStartPage] = useState(true);
+  const [showStartPage, setShowStartPage] = useState(!initialView);
   const [projectLocation, setProjectLocation] = useState<ProjectLocationView | null>(null);
   const [showProjectLocation, setShowProjectLocation] = useState(false);
   const [showExport, setShowExport] = useState(false);
