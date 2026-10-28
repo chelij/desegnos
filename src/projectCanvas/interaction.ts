@@ -3,6 +3,7 @@ import {
   canvasTargetKey, fitCamera, MAX_ZOOM, referenceItemAt, referenceNoteRect, movedReferenceRect, panCamera,
   resizedReferenceRect, samePointerEndpoint, zoomCameraAt, type Boundary, type CanvasCamera, type CanvasTarget,
   type ElementTarget, type Point,
+  CLICK_NOTE_SIZE,
 } from '../projectCanvasGeometry';
 import { steppedZoom } from '../canvasGeometry';
 import type { Element, ElementKind, ElementMove, ElementPatch, Page, Pointer, PointerSource, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestTarget } from '../types';
@@ -475,7 +476,7 @@ export function createCanvasInteraction(context: () => Context) {
     }
     if (active.kind === 'draw-note') {
       const id = crypto.randomUUID();
-      const rect = active.rect;
+      const rect = active.moved ? active.rect : { x: active.rect.x, y: active.rect.y, ...CLICK_NOTE_SIZE };
       busy.current = true;
       void addReference({ id, rect, kind: { kind: 'note', text: '' } }).then(() => { createdItem.current = id; selectReference(id); }).catch(() => {}).finally(() => { busy.current = false; });
       return;

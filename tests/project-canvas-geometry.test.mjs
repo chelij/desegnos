@@ -31,7 +31,7 @@ try {
     assert.equal(boundaryHeight(0), MIN_BOUNDARY_HEIGHT);
     assert.equal(boundaryHeight(-40), MIN_BOUNDARY_HEIGHT);
     assert.equal(boundaryHeight(Number.NaN), MIN_BOUNDARY_HEIGHT);
-    assert.equal(boundaryHeight(12), MIN_BOUNDARY_HEIGHT);
+    assert.equal(boundaryHeight(12), 12);
     assert.equal(boundaryHeight(20000), MAX_BOUNDARY_HEIGHT);
   });
 
@@ -61,13 +61,13 @@ try {
     assert.deepEqual(laid[1].rect, { x: 1160, y: 0, width: 390, height: 3000 });
   });
 
-  await test('drawn boundaries snap to 8px and keep their minimum size', () => {
+  await test('drawn boundaries snap to 8px with no minimum size', () => {
     assert.equal(BOUNDARY_SNAP, 8);
-    assert.equal(MIN_BOUNDARY_WIDTH, 240);
-    assert.equal(MIN_BOUNDARY_DRAW_HEIGHT, 160);
+    assert.equal(MIN_BOUNDARY_WIDTH, 1);
+    assert.equal(MIN_BOUNDARY_DRAW_HEIGHT, 1);
     assert.equal(snapToBoundaryGrid(13), 16);
     assert.equal(snapToBoundaryGrid(Number.NaN), 0);
-    assert.deepEqual(drawnBoundaryRect({ x: 3, y: 5 }, { x: 100, y: 60 }), { x: 0, y: 8, width: 240, height: 160 });
+    assert.deepEqual(drawnBoundaryRect({ x: 3, y: 5 }, { x: 100, y: 60 }), { x: 0, y: 8, width: 104, height: 56 });
     const large = drawnBoundaryRect({ x: 0, y: 0 }, { x: 1000, y: 700 });
     assert.deepEqual(large, { x: 0, y: 0, width: 1000, height: 704 });
     assert.deepEqual(drawnBoundaryRect({ x: 1000, y: 700 }, { x: 0, y: 0 }), large);
@@ -184,37 +184,37 @@ try {
     assert.deepEqual(pageRectFromCanvas(box(110, 220), { x: 100, y: 200 }), box(10, 20));
   });
 
-  await test('a frame drag snaps to 8px, keeps 24px and clamps to its boundary', () => {
+  await test('a frame drag snaps to 8px and clamps to its boundary', () => {
     const area = box(100, 100, 400, 300);
     assert.equal(FRAME_SNAP, 8);
-    assert.equal(MIN_FRAME_SIZE, 24);
+    assert.equal(MIN_FRAME_SIZE, 1);
     assert.deepEqual(drawnFrameRect({ x: 120, y: 120 }, { x: 320, y: 280 }, area), box(120, 120, 200, 160));
     const reversed = drawnFrameRect({ x: 320, y: 280 }, { x: 120, y: 120 }, area);
     assert.deepEqual(reversed, box(120, 120, 200, 160));
     const clamped = drawnFrameRect({ x: 120, y: 120 }, { x: 900, y: 900 }, area);
     assert.deepEqual(clamped, box(120, 120, 380, 280));
     const minimal = drawnFrameRect({ x: 120, y: 120 }, { x: 121, y: 121 }, area);
-    assert.deepEqual(minimal, box(120, 120, 24, 24));
+    assert.deepEqual(minimal, box(120, 120, 1, 1));
     assert.equal(drawnFrameRect({ x: 10, y: 10 }, { x: 200, y: 200 }, area), null);
     assert.equal(drawnFrameRect({ x: Number.NaN, y: 120 }, { x: 200, y: 200 }, area), null);
   });
 
-  await test('a Frame drag outside boundaries draws a snapped note at least 160 by 80', () => {
-    assert.equal(MIN_REFERENCE_WIDTH, 160);
-    assert.equal(MIN_REFERENCE_HEIGHT, 80);
-    assert.equal(REFERENCE_NOTE_MIN_WIDTH, 200);
-    assert.equal(REFERENCE_NOTE_MIN_HEIGHT, 120);
-    assert.deepEqual(referenceNoteRect({ x: 2, y: 3 }, { x: 100, y: 60 }), { x: 0, y: 0, width: 160, height: 80 });
+  await test('a Frame drag outside boundaries draws a snapped note of any size', () => {
+    assert.equal(MIN_REFERENCE_WIDTH, 1);
+    assert.equal(MIN_REFERENCE_HEIGHT, 1);
+    assert.equal(REFERENCE_NOTE_MIN_WIDTH, 1);
+    assert.equal(REFERENCE_NOTE_MIN_HEIGHT, 1);
+    assert.deepEqual(referenceNoteRect({ x: 2, y: 3 }, { x: 100, y: 60 }), { x: 0, y: 0, width: 104, height: 64 });
     assert.deepEqual(referenceNoteRect({ x: 400, y: 400 }, { x: 200, y: 200 }), { x: 200, y: 200, width: 200, height: 200 });
   });
 
-  await test('reference items move and resize freely with a minimum size', () => {
+  await test('reference items move and resize freely', () => {
     assert.deepEqual(movedReferenceRect(box(13, 21), { x: 5, y: 6 }), box(16, 24));
-    assert.equal(MIN_REFERENCE_ITEM_SIZE, 48);
+    assert.equal(MIN_REFERENCE_ITEM_SIZE, 1);
     assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 400, y: 400 }), box(100, 100, 300, 300));
     assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 50, y: 50 }), box(48, 48, 252, 202));
-    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 101, y: 101 }), box(100, 100, 48, 48));
-    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 399, y: 399 }), box(252, 202, 48, 48));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 101, y: 101 }), box(100, 100, 4, 4));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 399, y: 399 }), box(299, 249, 1, 1));
   });
 
   await test('a frame dragged out places a note and its attachment cards one row beside it', () => {
@@ -222,17 +222,17 @@ try {
     assert.equal(REFERENCE_ATTACHMENT_HEIGHT, 140);
     assert.equal(REFERENCE_ATTACHMENT_GAP, 16);
     const converted = convertedReferenceRects(box(10, 20, 50, 40), 2);
-    assert.deepEqual(converted.note, box(10, 20, REFERENCE_NOTE_MIN_WIDTH, REFERENCE_NOTE_MIN_HEIGHT));
+    assert.deepEqual(converted.note, box(10, 20, 50, 40));
     assert.deepEqual(converted.attachments, [
-      box(10 + REFERENCE_NOTE_MIN_WIDTH + 16, 20, 200, 140),
-      box(10 + REFERENCE_NOTE_MIN_WIDTH + 16 + 216, 20, 200, 140),
+      box(10 + 50 + 16, 20, 200, 140),
+      box(10 + 50 + 16 + 216, 20, 200, 140),
     ]);
     assert.deepEqual(convertedReferenceRects(box(0, 0), 0).attachments, []);
   });
 
   await test('a reference item dropped into a boundary keeps its size where it fits and clamps inside', () => {
     assert.deepEqual(referenceFrameRect(box(110, 110, 100, 60), box(100, 100, 400, 300)), box(112, 112, 100, 60));
-    assert.deepEqual(referenceFrameRect(box(10, 10, 10, 10), box(100, 100, 400, 300)), box(100, 100, 24, 24));
+    assert.deepEqual(referenceFrameRect(box(10, 10, 10, 10), box(100, 100, 400, 300)), box(100, 100, 10, 10));
     assert.deepEqual(referenceFrameRect(box(480, 380, 200, 200), box(100, 100, 400, 300)), box(300, 200, 200, 200));
   });
 

@@ -17,10 +17,10 @@ export const BOUNDARY_GAP = 160;
 export const BOUNDARY_PUSH_GAP = 40;
 export const BOUNDARY_SNAP = 8;
 export const FRAME_SNAP = 8;
-export const MIN_FRAME_SIZE = 24;
-export const MIN_BOUNDARY_WIDTH = 240;
-export const MIN_BOUNDARY_DRAW_HEIGHT = 160;
-export const MIN_BOUNDARY_HEIGHT = 200;
+export const MIN_FRAME_SIZE = 1;
+export const MIN_BOUNDARY_WIDTH = 1;
+export const MIN_BOUNDARY_DRAW_HEIGHT = 1;
+export const MIN_BOUNDARY_HEIGHT = 1;
 export const MAX_BOUNDARY_HEIGHT = 6000;
 export const MAX_ZOOM = ZOOM_LEVELS.at(-1) ?? 4;
 export const FIT_MAX_ZOOM = 1;
@@ -66,7 +66,7 @@ function fixedHeight(height: number): number {
   return Number.isFinite(height) && height > 0 ? Math.round(height) : MIN_BOUNDARY_HEIGHT;
 }
 
-// Canvas units snap to 8px; a drag always yields a boundary at least 240 by 160.
+// Canvas units snap to 8px.
 export function snapToBoundaryGrid(value: number): number {
   return Number.isFinite(value) ? Math.round(value / BOUNDARY_SNAP) * BOUNDARY_SNAP : 0;
 }
@@ -100,7 +100,7 @@ function frameBox(rect: Rect, boundary: Rect): Rect {
   return { x, y, width, height };
 }
 
-// Frames stay inside the boundary they were drawn in; the size never drops below 24px.
+// Frames stay inside the boundary they were drawn in.
 // A drag that starts inside a boundary draws a snapped frame; starting outside draws nothing.
 export function drawnFrameRect(start: Point, end: Point, boundary: Rect): Rect | null {
   if (!Number.isFinite(start.x) || !Number.isFinite(start.y) || !Number.isFinite(end.x) || !Number.isFinite(end.y)) return null;
@@ -228,11 +228,13 @@ export type ReferenceMove = { itemId: string; x: number; y: number };
 export type ElementTarget = { kind: 'element'; pageId: string; elementId: string; sizeId: string | null };
 export type CanvasTarget = { kind: 'reference'; itemId: string } | { kind: 'pointer'; pointerId: string } | { kind: 'request'; requestId: string } | ElementTarget;
 
-export const MIN_REFERENCE_WIDTH = 160;
-export const MIN_REFERENCE_HEIGHT = 80;
-export const MIN_REFERENCE_ITEM_SIZE = 48;
-export const REFERENCE_NOTE_MIN_WIDTH = 200;
-export const REFERENCE_NOTE_MIN_HEIGHT = 120;
+export const MIN_REFERENCE_WIDTH = 1;
+export const MIN_REFERENCE_HEIGHT = 1;
+// A click with the Frame tool outside boundaries places a note this size.
+export const CLICK_NOTE_SIZE = { width: 160, height: 80 };
+export const MIN_REFERENCE_ITEM_SIZE = 1;
+export const REFERENCE_NOTE_MIN_WIDTH = 1;
+export const REFERENCE_NOTE_MIN_HEIGHT = 1;
 export const REFERENCE_ATTACHMENT_WIDTH = 200;
 export const REFERENCE_ATTACHMENT_HEIGHT = 140;
 export const REFERENCE_ATTACHMENT_GAP = 16;
@@ -254,8 +256,7 @@ export function referenceItemAt<T extends { rect: Rect }>(items: T[], point: Poi
   return boundaryAt(items, point);
 }
 
-// The Frame tool outside every boundary draws a note; a drag smaller than the minimum still
-// leaves a readable card at the pointer.
+// The Frame tool outside every boundary draws a note of whatever size was dragged.
 export function referenceNoteRect(start: Point, end: Point): Rect {
   const clampPoint = (point: Point) => ({ x: snapToFrameGrid(point.x), y: snapToFrameGrid(point.y) });
   const from = clampPoint(start), to = clampPoint(end);
