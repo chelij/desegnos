@@ -487,7 +487,6 @@ impl CanvasTemplate {
         path: &str,
         output: OutputType,
         sizes: Vec<PageSize>,
-        appearance: Appearance,
     ) -> Page {
         Page {
             id: Uuid::new_v4(),
@@ -496,12 +495,12 @@ impl CanvasTemplate {
             included: true,
             output,
             sizes,
-            appearance,
+            background: "#ffffff".into(),
             elements: vec![],
         }
     }
 
-    fn pages(self, appearance: Appearance) -> Vec<Page> {
+    fn pages(self) -> Vec<Page> {
         match self {
             Self::Blank => vec![],
             Self::Website => {
@@ -520,7 +519,6 @@ impl CanvasTemplate {
                     "/",
                     OutputType::Webpage,
                     vec![desktop, tablet, phone],
-                    appearance,
                 )]
             }
             Self::AppScreen => vec![self.page(
@@ -528,7 +526,6 @@ impl CanvasTemplate {
                 "/",
                 OutputType::AppScreen,
                 vec![Self::size(390, 844, BoundaryKind::Screen, 0)],
-                appearance,
             )],
             Self::SlideDeck => (0..3)
                 .map(|index| {
@@ -538,7 +535,6 @@ impl CanvasTemplate {
                         &format!("/slide-{}", index + 1),
                         OutputType::Slide,
                         vec![Self::size(1920, 1080, BoundaryKind::Screen, x)],
-                        appearance,
                     )
                 })
                 .collect(),
@@ -547,7 +543,6 @@ impl CanvasTemplate {
                 "/",
                 OutputType::Image,
                 vec![Self::size(1080, 1080, BoundaryKind::Screen, 0)],
-                appearance,
             )],
         }
     }
@@ -1087,12 +1082,29 @@ pub struct Page {
     pub output: OutputType,
     /// Linked sizes, base first. Every size draws its own boundary on the canvas.
     pub sizes: Vec<PageSize>,
-    pub appearance: Appearance,
+    pub background: String,
     /// Root layers of this boundary, back to front.
     pub elements: Vec<Element>,
 }
 
 impl Page {
+    pub fn color_scheme(&self) -> &'static str {
+        let hex = normalized_swatch(&self.background);
+        let channel = |index| {
+            let value = u8::from_str_radix(&hex[index..index + 2], 16).unwrap_or(255) as f64 / 255.0;
+            if value <= 0.04045 {
+                value / 12.92
+            } else {
+                ((value + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        if channel(1) * 0.2126 + channel(3) * 0.7152 + channel(5) * 0.0722 < 0.179 {
+            "dark"
+        } else {
+            "light"
+        }
+    }
+
     /// The base size: its element values are the ones the other sizes inherit.
     pub fn base_size(&self) -> &PageSize {
         self.sizes.first().expect("a validated page has a size")
@@ -1361,7 +1373,7 @@ pub enum Command {
         page_id: Uuid,
         name: String,
         path: String,
-        appearance: Appearance,
+        background: String,
         included: bool,
     },
     /// Change what a boundary ships as.
@@ -1781,7 +1793,7 @@ impl Project {
                     x: 0.0,
                     y: 0.0,
                 }],
-                appearance,
+                background: "#ffffff".into(),
                 elements: vec![],
             }],
             brief: Brief::default(),
@@ -1816,7 +1828,7 @@ impl Project {
         appearance: Appearance,
         template: CanvasTemplate,
     ) -> Result<Self> {
-        let pages = template.pages(appearance);
+        let pages = template.pages();
         let home_page_id = pages
             .first()
             .map(|page| page.id)
@@ -2565,6 +2577,7 @@ impl Project {
         for page in &self.pages {
             ensure(ids.insert(page.id), "Project identifiers must be unique.")?;
             validate_text(&page.name, "Page name", 120, true)?;
+            ensure(valid_swatch(&page.background), "Boundary background must be a hex colour.")?;
             validate_path(&page.path)?;
             ensure(
                 paths.insert(page.path.to_lowercase()),
@@ -2751,13 +2764,14 @@ impl Project {
                 page_id,
                 name,
                 path,
-                appearance,
+                background,
                 included,
             } => {
                 let p = next.page_mut(page_id)?;
                 p.name = name.trim().into();
                 p.path = path;
-                p.appearance = appearance;
+                ensure(valid_swatch(&background), "Boundary background must be a hex colour.")?;
+                p.background = normalized_swatch(&background);
                 p.included = included;
             }
             Command::SetPageOutput { page_id, output } => {
@@ -2828,7 +2842,7 @@ impl Project {
                     included: true,
                     output: OutputType::default(),
                     sizes: vec![size],
-                    appearance: next.appearance,
+                    background: "#ffffff".into(),
                     elements: vec![],
                 });
                 for placement in moves {

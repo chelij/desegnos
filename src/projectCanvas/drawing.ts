@@ -6,7 +6,7 @@ import {
 import type { BoundaryKind, Element, ElementKind, Project, Rect } from '../types';
 import { hasManySizes } from './sizes';
 import { elementLocalRect } from './elementGeometry';
-import { createElement, createTextElement, forAppearance, withPickedColours, elementChildrenOf } from './elementGeometry';
+import { createElement, createTextElement, forBackground, withPickedColours, elementChildrenOf } from './elementGeometry';
 import { DrawElementDrag, Drag, boxParentAt } from './interactionTypes';
 
 type Context = {
@@ -56,8 +56,8 @@ export function createDrawingActions(context: () => Context) {
   async function placeElement(kind: ElementKind, pageId: string, sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect, picture?: string, rotation?: number) {
     const { project, createdElement, editingAllSizes, insertElements, selectElement } = context();
     const page = project.pages.find(item => item.id === pageId);
-    const element = withPickedColours(forAppearance(kind === 'text' ? createTextElement(rect)
-      : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.appearance ?? 'light'));
+    const element = withPickedColours(forBackground(kind === 'text' ? createTextElement(rect)
+      : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.background ?? '#ffffff'));
     const local = elementRectAt(sizeId, parentId, parentOrigin, boundary, rect);
     element.rect = { ...local, width: rect.width, height: rect.height };
     if (kind === 'line' && rotation !== undefined) element.rotation = rotation;

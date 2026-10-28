@@ -101,7 +101,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       </nav>}
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       <div className="shell-primary-actions">
-        <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={!onStartPage && project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and canvas' : 'Dark mode for the editor and canvas') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => onStartPage || !project ? setTheme(resolvedTheme === 'dark' ? 'light' : 'dark') : run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
+        <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={!onStartPage && project ? (resolvedTheme === 'dark' ? 'Light mode for the editor' : 'Dark mode for the editor') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => onStartPage || !project ? setTheme(resolvedTheme === 'dark' ? 'light' : 'dark') : run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
         {project && showsOpener({ available: true, open: showImport }) && <button type="button" className="icon-button" aria-label="Import context" title="Import context" onClick={() => { setImportSource(null); setShowImport(true); }}><Icon name="folder" /></button>}
         {!onStartPage && project && <>{view?.canUndo && <button aria-label="Undo last change" type="button" className="icon-button" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}><Icon name="undo" /></button>}{view?.canRedo && <button aria-label="Redo last change" type="button" className="icon-button" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}><Icon name="redo" /></button>}
           <button type="button" className={showHistory ? 'icon-button active' : 'icon-button'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
@@ -162,6 +162,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
               chooseDestination={() => run(chooseExportDestination)} runExport={() => runExport()} sendExport={() => run(sendExport)}
               cancelExport={() => run(cancelExport)} retryExport={() => run(sendExport)}
               openFolder={openExportFolder} openInBrowser={() => run(openInBrowser)} previewExport={pageId => runExport(pageId)}
+              selectBoundary={selectCanvasBoundary} setIncluded={(pageId, included) => updateCanvasPage(pageId, { included })}
+              setOutput={(pageId, output) => void mutate({ type: 'set_page_output', page_id: pageId, output })}
               close={() => setShowExport(false)} />
           : undefined}
         history={showHistory && project
@@ -197,8 +199,6 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                 generate={() => generate(selectedElements.map(element => element.id))} error={setError} />
           : selectedBoundary
             ? <BoundaryProperties page={selectedBoundary} busy={pending > 0} commit={patch => updateCanvasPage(selectedBoundary.id, patch)}
-                setOutput={output => void mutate({ type: 'set_page_output', page_id: selectedBoundary.id, output })}
-                preview={() => previewSelectedBoundary()}
                 updateSize={(sizeId, patch) => updateCanvasPageSize(selectedBoundary.id, sizeId, patch)}
                 addSize={(preset, width, height) => addCanvasPageSize(selectedBoundary.id, preset, width, height)}
                 removeSize={size => {

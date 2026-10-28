@@ -36,7 +36,7 @@ import { usePanelState } from '../EditorDock';
 import { announcedDraftCount, announcesStatus } from '../generationSession.js';
 import { type PaletteCommand } from '../CommandPalette';
 import { activeGeneration, useGeneration } from '../useGeneration';
-import type { AiSettingsView, AppSettingsView, Appearance, BoundaryKind, Brief, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, NamedView, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestAttachment, SizePreset, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
+import type { AiSettingsView, AppSettingsView, BoundaryKind, Brief, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, NamedView, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestAttachment, SizePreset, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
 import { baseSizeId, resolveForSize } from '../projectCanvas/sizes';
 import { idlePlay, playClick, type PlayState } from '../projectCanvas/play';
 
@@ -345,14 +345,14 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     await mutate({ type: 'attach_reference_context', request_ids: requestIds, item_ids: itemIds });
   }, [mutate]);
   const reportCanvasZoom = useCallback((zoom: number) => setCanvasZoom(zoom), []);
-  const updateCanvasPage = useCallback((pageId: string, patch: { name?: string; path?: string; appearance?: Appearance; included?: boolean }) => {
+  const updateCanvasPage = useCallback((pageId: string, patch: { name?: string; path?: string; background?: string; included?: boolean }) => {
     void mutate(project => {
       const page = project.pages.find(item => item.id === pageId);
       if (!page) return null;
-      const name = patch.name ?? page.name, path = patch.path ?? page.path, appearance = patch.appearance ?? page.appearance;
+      const name = patch.name ?? page.name, path = patch.path ?? page.path, background = patch.background ?? page.background;
       const included = patch.included ?? page.included;
-      if (name === page.name && path === page.path && appearance === page.appearance && included === page.included) return null;
-      return { type: 'update_page', page_id: pageId, name, path, appearance, included };
+      if (name === page.name && path === page.path && background === page.background && included === page.included) return null;
+      return { type: 'update_page', page_id: pageId, name, path, background, included };
     }).catch(() => {});
   }, [mutate]);
   const updateCanvasPageSize = useCallback((pageId: string, sizeId: string, patch: { label?: string; width?: number; height?: number; kind?: BoundaryKind }) => {
@@ -662,10 +662,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }, [mutate]);
   async function switchAppearance(next: 'light' | 'dark') {
     setTheme(next);
-    const target = current.current?.project; if (!target) return;
-    for (const item of target.pages.filter(entry => entry.appearance !== next)) {
-      await mutate(project => { const page = project.pages.find(entry => entry.id === item.id); return page && page.appearance !== next ? { type: 'update_page', page_id: page.id, name: page.name, path: page.path, appearance: next, included: page.included } : null; });
-    }
   }
   // One undoable step covers a whole canvas selection, so removing never interrupts the work.
   function removeCanvasSelection(referenceIds: string[], pointerIds: string[] = [], requestIds: string[] = [], elementIds: { pageId: string; elementId: string }[] = []) {

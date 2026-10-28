@@ -297,10 +297,18 @@ fn pointer_attribute(id: Uuid, markers: &BTreeMap<Uuid, Vec<Uuid>>) -> String {
         .unwrap_or_default()
 }
 
+fn color_scheme<'a>(page: &crate::Page, ai: Option<&'a str>) -> &'a str {
+    match ai {
+        Some(scheme @ ("light" | "dark")) => scheme,
+        _ => page.color_scheme(),
+    }
+}
+
 pub(super) fn render(
     project: &Project,
     plan: &ExportPlan,
     behaviours: &BTreeMap<Uuid, ExportBehaviour>,
+    schemes: &[ExportReplyPage],
     files: &mut BTreeMap<String, Vec<u8>>,
 ) {
     let mut markers: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
@@ -329,6 +337,7 @@ pub(super) fn render(
             .iter()
             .find(|page| page.id == planned.page_id)
             .expect("planned page");
+        let scheme = color_scheme(page, schemes.iter().find(|entry| entry.page_id == page.id).map(|entry| entry.color_scheme.as_str()));
         let mut sizes: Vec<_> = page.sizes.iter().collect();
         sizes.sort_by_key(|size| (size.width, size.id));
         let mut html = String::new();
@@ -339,7 +348,7 @@ pub(super) fn render(
             "html,body{{margin:0;padding:0;}}\n.desegnos-viewport{{container-type:inline-size;width:100%;max-width:{}px;margin:0 auto;}}\n.desegnos-page{{position:relative;width:100%;isolation:isolate;}}\n",
             sizes.last().map_or(1, |size| size.width)
         );
-        css.push_str(":root{");
+        css.push_str(&format!(":root{{color-scheme:{scheme};"));
         for colour in &project.styles.colours { css.push_str(&format!("--colour-{}:{};", colour.id, colour.value)); }
         for text in &project.styles.text {
             css.push_str(&format!("--text-{}-font-family:{};--text-{}-font-size:{}px;--text-{}-font-weight:{};--text-{}-line-height:{};--text-{}-letter-spacing:{}px;--text-{}-font-style:{};", text.id, font_family(&text.font_family), text.id, text.size, text.id, text.weight, text.id, text.line_height, text.id, text.letter_spacing, text.id, if text.italic { "italic" } else { "normal" }));
@@ -362,7 +371,7 @@ pub(super) fn render(
             };
             css.push_str(&format!("/* size:{} */\n.desegnos-page{{--desegnos-unit:calc(100cqw / {});height:{};overflow:{};background:{};color:{};}}\n",
                 size.id, size.width, length(height), if matches!(size.kind, crate::BoundaryKind::Screen) { "auto" } else { "visible" },
-                if matches!(page.appearance, crate::Appearance::Dark) { "#111111" } else { "#ffffff" }, if matches!(page.appearance, crate::Appearance::Dark) { "#ffffff" } else { "#111111" }));
+                page.background, if page.color_scheme() == "dark" { "#ffffff" } else { "#111111" }));
             let mut sorted = BTreeMap::new();
             rules(&elements, &ElementLayout::Free, &mut sorted);
             for (id, rule) in sorted {
@@ -374,7 +383,7 @@ pub(super) fn render(
         }
         let stem = planned.file.trim_end_matches(".html");
         let document = format!(
-            "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"{stem}.css\"><script src=\"behaviours.js\" defer></script></head><body><div class=\"desegnos-viewport\"><main class=\"desegnos-page\" data-desegnos-id=\"{}\"{}>\n{html}</main></div></body></html>\n",
+            "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"{scheme}\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"{stem}.css\"><script src=\"behaviours.js\" defer></script></head><body><div class=\"desegnos-viewport\"><main class=\"desegnos-page\" data-desegnos-id=\"{}\"{}>\n{html}</main></div></body></html>\n",
             escape(&page.name),
             page.id,
             pointer_attribute(page.id, &markers)
@@ -414,6 +423,43 @@ mod tests {
                 height: 40.0,
             },
         )
+    }
+
+    #[test]
+    fn deterministic_color_scheme_and_background_follow_luminance() {
+        let mut project = project();
+        for (background, scheme) in [("#ffffff", "light"), ("#f7f7f5", "light"), ("#e9e9e9", "light"), ("#1f1f1f", "dark"), ("#121212", "dark"), ("#000000", "dark"), ("#fff", "light")] {
+            project.pages[0].background = background.into();
+            let bundle = direct_export_bundle(&project, &[]).unwrap();
+            let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+            let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
+            assert!(css.contains(&format!(":root{{color-scheme:{scheme};}}")));
+            assert!(css.contains(&format!("background:{background};")));
+            assert!(html.contains(&format!("<meta name=\"color-scheme\" content=\"{scheme}\">")));
+        }
+    }
+
+    #[test]
+    fn parsed_ai_color_scheme_overrides_luminance_and_invalid_values_fall_back() {
+        let mut project = project();
+        for background in ["#ffffff", "#121212"] {
+            project.pages[0].background = background.into();
+            let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+            assert!(plan.markdown.contains("background and content colours"));
+            for (field, expected) in [("light", "light"), ("dark", "dark"), ("invalid", project.pages[0].color_scheme())] {
+                let json = serde_json::json!({
+                    "jobId": plan.job_id, "requirementsSha256": plan.sha256, "summary": "Checked colours",
+                    "pages": [{"pageId": project.pages[0].id, "colorScheme": field}],
+                    "shared": {"css": "", "js": ""}, "pointers": [],
+                });
+                let reply = parse_export_reply(&plan, &json.to_string()).unwrap();
+                let bundle = ai_export_bundle(&project, &plan, &reply).unwrap();
+                let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+                let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
+                assert!(css.contains(&format!("color-scheme:{expected};")));
+                assert!(html.contains(&format!("name=\"color-scheme\" content=\"{expected}\"")));
+            }
+        }
     }
 
     #[test]

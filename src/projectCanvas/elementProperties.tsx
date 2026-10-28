@@ -1,3 +1,4 @@
+import { ColourField } from './ColourField';
 import { useCanvasFont } from './fonts';
 import { ATTACHMENT_ACCEPT, readRequestAttachments } from '../requestAttachments';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -44,24 +45,6 @@ function keyDown(settle: () => void, cancel: () => void) {
       event.preventDefault(); cancel(); event.currentTarget.blur();
     }
   };
-}
-
-/** Colour swatch plus hex text in one row; an empty value means no colour. */
-function ColourField({ label, value, commit, fallback = '#ffffff', disabled }: {
-  label: string; value: string; commit: (value: string) => void; fallback?: string; disabled?: boolean;
-}) {
-  const state = useDraft(value);
-  const trimmed = value.trim();
-  const hex = /^#[0-9a-f]{3}$/i.test(trimmed) ? `#${trimmed.slice(1).split('').map(part => part + part).join('')}` : trimmed;
-  const picker = /^#[0-9a-f]{6}$/i.test(hex) ? hex : fallback;
-  return <div className="props-colour">
-    <label className={`props-swatch${trimmed ? '' : ' is-empty'}`} title={`${label} colour`} style={trimmed ? { background: trimmed } : undefined}>
-      <input type="color" value={picker} disabled={disabled} aria-label={`${label} colour`} onChange={event => commit(event.target.value)} />
-    </label>
-    <input className="props-hex" type="text" aria-label={label} placeholder="None" spellCheck={false}
-      value={state.draft} disabled={disabled} onChange={event => state.setDraft(event.target.value)}
-      onBlur={() => state.settle(commit, validColour)} onKeyDown={keyDown(() => state.settle(commit, validColour), state.cancel)} />
-  </div>;
 }
 
 /** Opacity reads as a percentage, stays stored as 0-1, and previews on a slim slider beside it. */

@@ -39,6 +39,8 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
             pictures: &mut pictures,
             shadows: &mut shadows,
         };
+        set_fill(&mut page.stream, scene.background);
+        let _ = writeln!(page.stream, "0 0 {:.3} {:.3} re f", scene.width * SCALE, scene.height * SCALE);
         page.items(&scene.items);
         streams.push(page.stream);
     }

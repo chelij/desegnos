@@ -82,7 +82,7 @@ export type PointerStateView = { id: string; state: PointerStateKind; clashWith:
 export type ExportedPage = { pageId: string; path: string; output: OutputType };
 export type ExportedPointer = { fingerprint: string; comment: string };
 export type ExportRecord = { id: string; version: number; destination: string; exportedAt: string; pages: ExportedPage[]; pointers: Record<string, ExportedPointer> };
-export type Page = { id: string; name: string; path: string; included: boolean; output: OutputType; sizes: PageSize[]; appearance: Appearance; elements: Element[] };
+export type Page = { id: string; name: string; path: string; included: boolean; output: OutputType; sizes: PageSize[]; background: string; elements: Element[] };
 export type Brief = { purpose: string; audience: string; brandName: string; tone: string };
 export type Scope = { kind: 'project' } | { kind: 'page' | 'element'; id: string };
 export type Decision = { id: string; topic: string; value: string; scope: Scope; protected: boolean; acceptedAtRevision: number };
@@ -181,7 +181,7 @@ export type Command =
   | { type: 'set_grid'; enabled: boolean }
   | { type: 'set_grid_settings'; settings: GridSettings }
   | { type: 'set_generation_mode'; mode: GenerationMode }
-  | { type: 'update_page'; page_id: string; name: string; path: string; appearance: Appearance; included: boolean }
+  | { type: 'update_page'; page_id: string; name: string; path: string; background: string; included: boolean }
   | { type: 'set_page_output'; page_id: string; output: OutputType }
   | { type: 'forget_export_pointer'; pointer_id: string }
   | { type: 'update_page_size'; page_id: string; size_id: string; label?: string; width?: number; height?: number; kind?: BoundaryKind; moves?: Placements; reference?: ReferencePlacement[] }

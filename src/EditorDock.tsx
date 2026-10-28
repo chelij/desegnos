@@ -3,7 +3,8 @@ import { Icon, type IconName } from './icons';
 import { CompactNumberField, CompactTextField, useFieldDraft } from './CompactField';
 import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
-import type { Appearance, BoundaryKind, ElementPatch, NamedView, OutputType, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
+import type { BoundaryKind, ElementPatch, NamedView, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
+import { ColourField } from './projectCanvas/ColourField';
 import { ElementLayers } from './projectCanvas/elementLayers';
 import { SIZE_PRESETS, resolveForSize, sizeLabel } from './projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from './projectCanvas/requests';
@@ -268,11 +269,9 @@ export function ChoiceRow<T extends string>({ label, value, choices, choose, dis
 }
 
 /** Boundary properties: one rhythm — 8px rows inside a section, 16px between sections. */
-export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy, setOutput, preview }: {
+export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy }: {
   page: Page;
-  commit: (patch: { name?: string; path?: string; appearance?: Appearance; included?: boolean }) => void;
-  setOutput: (output: OutputType) => void;
-  preview: () => void;
+  commit: (patch: { name?: string; path?: string; background?: string; included?: boolean }) => void;
   updateSize: (sizeId: string, patch: { label?: string; width?: number; height?: number; kind?: BoundaryKind }) => void;
   addSize: (preset: SizePreset, width?: number, height?: number) => void;
   removeSize: (size: PageSize) => void;
@@ -290,16 +289,10 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
       <CompactTextField label="Name" placeholder="Name" value={page.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => commit({ name: name.trim() })} />
       {hasPath && <CompactTextField prefix="URL" label="Path" placeholder="/path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />}
     </PropsSection>
-    <PropsSection id="boundary-appearance" title="Appearance">
-      <div className="props-choice"><ChoiceRow label="Appearance" hideLabel value={page.appearance} choices={[['light', 'Light'], ['dark', 'Dark']]} names={{ light: 'Light', dark: 'Dark' }} disabled={busy} choose={appearance => commit({ appearance })} /></div>
-    </PropsSection>
-    <PropsSection id="boundary-export" title="Export as">
-      <div className="props-choice"><ChoiceRow label="Output" hideLabel value={page.output} choices={[['webpage', 'Web'], ['appScreen', 'App'], ['slide', 'Slide'], ['image', 'Image']]}
-        names={{ webpage: 'Webpage', appScreen: 'App screen', slide: 'Slide', image: 'Image' }} disabled={busy} choose={setOutput} /></div>
-      <div className="boundary-export-actions">
-        <label className="check-label"><input type="checkbox" checked={page.included} disabled={busy} onChange={event => commit({ included: event.target.checked })} />Include in export</label>
-        {hasPath && <button type="button" className="dock-action" disabled={busy} onClick={preview}>Preview export</button>}
-      </div>
+    <PropsSection id="boundary-background" title="Background">
+      <ColourField label="Background" value={page.background} disabled={busy} valid={validColor} commit={background => commit({ background: background.trim().toLowerCase() })} />
+      <div className="boundary-background-presets">{[['#ffffff', 'White'], ['#f7f7f5', 'Off-white'], ['#e9e9e9', 'Light grey'], ['#1f1f1f', 'Dark grey'], ['#121212', 'Near-black'], ['#000000', 'Black']].map(([colour, name]) =>
+        <button key={colour} type="button" className="props-swatch" style={{ background: colour }} aria-label={`${name} background`} aria-pressed={page.background === colour} disabled={busy} onClick={() => commit({ background: colour })} />)}</div>
     </PropsSection>
     <PropsSection id="boundary-sizes" title="Sizes" group add={() => setCustomOpen(open => !open)} addLabel="Add custom size" addExpanded={customOpen}>
       {page.sizes.map((size, index) => <div key={size.id} className="dock-size-row" data-size-row={size.id}>

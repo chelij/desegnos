@@ -609,7 +609,7 @@ fn collect_project(path: &Path, metadata: &Metadata, collector: &mut Collector) 
         collector
             .page_overrides
             .insert(format!("{prefix}/index.html"), source);
-        collector.add(format!("{prefix}/page.json"), serde_json::to_vec(&serde_json::json!({ "name": page.name, "path": page.path, "appearance": page.appearance, "viewport": page.viewport(), "sizes": page.sizes })).map_err(io)?);
+        collector.add(format!("{prefix}/page.json"), serde_json::to_vec(&serde_json::json!({ "name": page.name, "path": page.path, "background": page.background, "viewport": page.viewport(), "sizes": page.sizes })).map_err(io)?);
     }
     // Newer schema models may carry approved identity assets. Reading through
     // serialization keeps this collector compatible with the current model

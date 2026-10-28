@@ -49,7 +49,7 @@ try {
     layout: { kind: 'free' }, children: [], meta: { requests: [], context: [] }, ...patch,
   });
   const makeSize = (id, label, width, height, kind = 'page') => ({ id, label, width, height, kind, x: 0, y: 0 });
-  const makePage = (id, name, path, sizes, elements) => ({ id, name, path, included: true, output: 'webpage', sizes, appearance: 'light', elements });
+  const makePage = (id, name, path, sizes, elements) => ({ id, name, path, included: true, output: 'webpage', sizes, background: '#ffffff', elements });
   let projectSequence = 0;
   const makeProject = (pages = [], patch = {}) => ({
     schemaVersion: 14, id: `project-${++projectSequence}`, name: 'Test', revision: 1,
@@ -58,6 +58,20 @@ try {
     homePageId: pages[0]?.id ?? 'home', pages, reference: [], pointers: [], linked: {},
     brief: { purpose: '', audience: '', brandName: '', tone: '' }, latestGeneration: null,
     decisions: [], exceptions: [], appliedJobIds: [], extensions: {}, ...patch,
+  });
+
+  await test('new text and shapes use readable defaults for the boundary background', () => {
+    const rect = { x: 0, y: 0, width: 100, height: 40 };
+    for (const background of ['#ffffff', '#f7f7f5', '#e9e9e9', '#fff']) {
+      const text = elementGeometry.forBackground(elementGeometry.createTextElement(rect), background);
+      assert.equal(text.style.textStyle.color, '#1a1a1a');
+    }
+    for (const background of ['#1f1f1f', '#121212', '#000000']) {
+      const text = elementGeometry.forBackground(elementGeometry.createTextElement(rect), background);
+      const line = elementGeometry.forBackground(elementGeometry.createElement('line', rect), background);
+      assert.equal(text.style.textStyle.color, '#f2f2f2');
+      assert.equal(line.style.stroke.color, '#f2f2f2');
+    }
   });
 
   await test('canvas views reuse resolution and indices until the project revision changes', () => {

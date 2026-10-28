@@ -174,9 +174,6 @@ export class WebDriver {
   }
 
   async select(label, value) {
-    if (label === 'Page appearance') {
-      await this.menu(['Page settings']); await this.select('Website appearance', value); return this.button('Save page');
-    }
     if (label === 'Zoom') return this.menu([`${Number(value) * 100}%`], 'Canvas zoom');
     if (label === 'Editor theme') return this.menu(['Editor theme', value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark']);
     if (label === 'Page') return this.page(value);

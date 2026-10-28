@@ -1,10 +1,10 @@
-import type { ExportJobView, Project } from '../types';
+import type { ExportJobView, OutputType, Project } from '../types';
 
 const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
 
 export const OUTPUT_CHOICES: [string, string][] = [
-  ['webpage', 'Webpage'],
-  ['appScreen', 'App screen'],
+  ['webpage', 'Web'],
+  ['appScreen', 'App'],
   ['slide', 'Slide'],
   ['image', 'Image'],
 ];
@@ -19,13 +19,14 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 /** The inline export panel the dock shows when Export is chosen. No modal dialog. */
-export function ExportPanel({ project, destination, busy, job, sending, error, chooseDestination, runExport, sendExport, cancelExport, retryExport, openFolder, openInBrowser, previewExport, close }: {
+export function ExportPanel({ project, destination, busy, job, sending, error, chooseDestination, runExport, sendExport, cancelExport, retryExport, openFolder, openInBrowser, previewExport, selectBoundary, setIncluded, setOutput, close }: {
+  selectBoundary: (pageId: string) => void; setIncluded: (pageId: string, included: boolean) => void; setOutput: (pageId: string, output: OutputType) => void;
   project: Project; destination: string | null; busy: boolean;
   job: ExportJobView | null; sending: boolean; error: string;
   chooseDestination: () => void; runExport: () => void; sendExport: () => void; cancelExport: () => void; retryExport: () => void;
   openFolder: (path: string) => void; openInBrowser: () => void; previewExport: (pageId: string) => void; close: () => void;
 }) {
-  const boundaries = project.pages.filter(page => page.included);
+  const boundaries = project.pages;
   const prepared = job?.status === 'prepared';
   const running = job?.status === 'sending';
   return <div className="dock-form export-panel">
@@ -33,20 +34,22 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
       <span className="dock-field-label">Export</span>
       <button type="button" className="dock-action" onClick={close}>Close</button>
     </div>
-    <label className="dock-field">Folder
-      <input readOnly value={destination ?? 'Choose a folder'} onClick={chooseDestination} />
-    </label>
-    <button type="button" className="dock-action" disabled={busy || running} onClick={chooseDestination}>Choose folder…</button>
-    <div className="export-panel-list" role="group" aria-label="Included boundaries">
-      {boundaries.length === 0 && <p className="muted">Nothing is included, so nothing would ship.</p>}
+    <div className="export-panel-list" role="group" aria-label="Export boundaries">
       {boundaries.map(page => <div key={page.id} className="export-panel-row">
-        <span className="export-panel-name">{page.name} <span className="muted">{page.path}</span></span>
-        <span className="export-panel-output">{OUTPUT_CHOICES.find(([id]) => id === page.output)?.[1] ?? page.output}</span>
+        <input type="checkbox" aria-label={`Include ${page.name} in export`} checked={page.included} disabled={busy || running} onChange={event => setIncluded(page.id, event.target.checked)} />
+        <button type="button" className="dock-action export-panel-name" onClick={() => selectBoundary(page.id)}>{page.name}</button>
+        <select aria-label={`Export ${page.name} as`} value={page.output} disabled={busy || running} onChange={event => setOutput(page.id, event.target.value as OutputType)}>
+          {OUTPUT_CHOICES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
         {page.output === 'slide' || page.output === 'image'
           ? null
           : <button type="button" className="dock-action" disabled={busy || running} onClick={() => previewExport(page.id)}>Preview</button>}
       </div>)}
     </div>
+    <label className="dock-field">Folder
+      <input readOnly value={destination ?? 'Choose a folder'} onClick={chooseDestination} />
+    </label>
+    <button type="button" className="dock-action" disabled={busy || running} onClick={chooseDestination}>Choose folder…</button>
     {error && <p className="dock-error">{error}</p>}
     {job && <div className="export-panel-job" role="status">
       <p><strong>{STATUS_LABELS[job.status] ?? job.status}</strong>{job.status === 'prepared' && job.estimateUsd > 0 ? ` · ${money(job.estimateUsd)} estimate` : ''}</p>
@@ -62,7 +65,7 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
       </div>}
     </div>}
     <div className="form-actions">
-      {!running && <button type="button" className={prepared ? 'dock-action' : 'primary'} disabled={busy || !destination || boundaries.length === 0} onClick={runExport}>{prepared ? 'Start a new export' : 'Export'}</button>}
+      {!running && <button type="button" className={prepared ? 'dock-action' : 'primary'} disabled={busy || !destination || !boundaries.some(page => page.included)} onClick={runExport}>{prepared ? 'Start a new export' : 'Export'}</button>}
       {prepared && <button type="button" className="primary" disabled={sending} onClick={sendExport}>{sending ? 'Sending…' : job?.kind === 'comment' ? 'Send to rewrite the comment' : 'Generate behaviour'}</button>}
       {prepared && <button type="button" className="dock-action" disabled={sending} onClick={cancelExport}>Cancel</button>}
       {running && <button type="button" className="dock-action" onClick={cancelExport}>Cancel</button>}

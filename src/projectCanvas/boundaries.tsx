@@ -40,9 +40,9 @@ const BoundaryView = memo(function BoundaryView({ project, boundary, shown, focu
   const resolved = resolveForSize(project, page, sizeId);
   const ghosts = useMemo(() => visible ? placeholders(resolved, sizeId) : [], [resolved, sizeId, visible]);
   const elements = useMemo(() => visible ? playElements(project, resolved, play) : resolved, [project, resolved, play, visible]);
-  return <div className={`page-boundary${highlighted ? ' selected' : ''}${focused ? ' focused' : ''}${kind === 'screen' ? ' screen' : ''}${page.appearance === 'dark' ? ' dark' : ''}`}
+  return <div className={`page-boundary${highlighted ? ' selected' : ''}${focused ? ' focused' : ''}${kind === 'screen' ? ' screen' : ''}`}
     data-boundary={pageId} data-size={sizeId}
-    style={{ left: shown.x, top: shown.y, width: shown.width, height: shown.height }} onDoubleClick={() => openPage(pageId)}>
+    style={{ background: page.background, left: shown.x, top: shown.y, width: shown.width, height: shown.height }} onDoubleClick={() => openPage(pageId)}>
     {visible && <>
       <ElementTree project={project} pageId={pageId} sizeId={sizeId} elements={elements} boundary={{ pageId, sizeId, label, kind, rect: shown }} editingId={editingId} movingRects={movingElements} />
       {ghosts.map(({ element, rect: ghost }) => <div key={`placeholder:${element.id}`} className="element-placeholder" role="button" tabIndex={0}

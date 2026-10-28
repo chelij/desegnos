@@ -215,7 +215,7 @@ fn check_project(project: &Project) {
                 "included",
                 "output",
                 "sizes",
-                "appearance",
+                "background",
                 "elements",
             ],
         );

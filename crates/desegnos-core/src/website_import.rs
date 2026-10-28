@@ -1167,7 +1167,7 @@ pub fn import_website(
             included: true,
             output: OutputType::Webpage,
             sizes,
-            appearance: project.appearance,
+            background: "#ffffff".into(),
             elements: base_elements,
         };
         for pointer in pointers {

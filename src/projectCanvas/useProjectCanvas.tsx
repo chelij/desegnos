@@ -35,7 +35,7 @@ import { droppedDataUri, droppedFile, droppedFileKind, droppedImageSize, dropped
 import { shortcutFor, viewSlot } from '../shortcuts';
 import { playIsActive } from './play';
 import {
-  unionRects, createElement, createTextElement, forAppearance, withPickedColours, elementChildrenOf,
+  unionRects, createElement, createTextElement, forBackground, withPickedColours, elementChildrenOf,
   elementPath, elementParents, findElementIn, drawRectWithKeys, rectFromPoints,
 } from './elementGeometry';
 import type { ForwardedRef } from 'react';
@@ -357,12 +357,12 @@ export function useProjectCanvas({
               const picture = droppedDataUri(item.file);
               const size = await droppedImageSize(picture);
               const worldRect = pastedImageRect({ x: point.x + offset, y: point.y + offset }, size.width, size.height);
-              const element = withPickedColours(forAppearance(createElement('image', worldRect, { image: null }), page.appearance));
+              const element = withPickedColours(forBackground(createElement('image', worldRect, { image: null }), page.background));
               element.rect = { ...elementLocalRect(worldRect, boundary.rect, { x: 0, y: 0 }), width: worldRect.width, height: worldRect.height };
               elements.push({ element, picture });
             } else {
               const worldRect = { x: Math.round(point.x + offset), y: Math.round(point.y + offset), width: 0, height: 0 };
-              const element = withPickedColours(forAppearance(createTextElement(worldRect, droppedText(item.file)), page.appearance));
+              const element = withPickedColours(forBackground(createTextElement(worldRect, droppedText(item.file)), page.background));
               element.rect = { ...elementLocalRect(worldRect, boundary.rect, { x: 0, y: 0 }), width: 0, height: 0 };
               elements.push({ element });
             }

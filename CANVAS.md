@@ -87,6 +87,8 @@ For websites and app screens, export compiles the resolved element tree and link
 - When an element is added to one size only, the other linked sizes show a faint dashed placeholder where it would go. Click it to include the element in that size, or dismiss it to hide it there.
 - Two kinds of boundary. **Screen** has a fixed size, like an app screen or one-screen page; content beyond it scrolls inside. **Page** has a fixed width and grows taller as elements are added.
 - Boundaries never overlap. Moving or growing one pushes its neighbours aside, so every element belongs to exactly one boundary.
+- Boundary **Background** uses the shared swatch and hex control, with white, off-white, light grey, dark grey, near-black and black presets. New boundaries start at `#ffffff`; new text and lines choose readable defaults from background luminance. The editor theme changes only the editor. Canvas and SVG/PNG/PDF/web exports use the boundary background.
+- The toolbar **Export** panel lists every boundary with Include, name, Web/App/Slide/Image and web/app Preview controls. Click a name to select its boundary; Preview also works for excluded web/app boundaries. Folder and export/send controls follow the list.
 - Any boundary can be deleted, including the first one drawn. The first remaining included boundary becomes the entry that export opens first and the editor focuses.
 
 ## Rendering, Play and Preview export
@@ -94,6 +96,7 @@ For websites and app screens, export compiles the resolved element tree and link
 - The canvas draws elements directly. There are no snapshots of code and no per-page editor; everything is edited on the canvas.
 - **Play** (Shift+Space on a boundary): the boundary becomes clickable and simple pointers run visually. Escape stops.
 - **Preview export**: exports the focused webpage/app-screen boundary in the background, requesting AI behaviour only when needed and runs the real result in place over the boundary, in a sandbox. It shows the last preview until the design changes; Escape returns to the design.
+- Web exports set CSS `color-scheme` on `:root` and a matching meta tag. AI behaviour requests judge light/dark suitability from the boundary background and content colours; direct exports and invalid AI values use background luminance.
 - **Open in browser** serves the last export for a final check in a real browser.
 - **Minimap**: a small overview in the bottom-right corner draws every boundary and reference item with the visible viewport on top; click or drag it to move the view. It hides while the whole canvas fits on screen; Shift+M shows or hides it.
 - **Named views**: Layers lists saved cameras. Click one to glide back to it, double-click to rename it, and use '+' to save the current camera. Ctrl/Cmd+Alt+1–9 saves the current camera to that slot; Alt+1–9 returns to it.

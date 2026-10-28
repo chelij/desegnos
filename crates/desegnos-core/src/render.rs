@@ -539,20 +539,7 @@ fn rasterize(svg: &str, width: f64, height: f64) -> Result<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 fn build_scene(project: &Project, page: &RenderPage<'_>) -> Scene {
-    let background = match page.page.appearance {
-        crate::Appearance::Light => Rgba {
-            r: 255,
-            g: 255,
-            b: 255,
-            a: 1.0,
-        },
-        crate::Appearance::Dark => Rgba {
-            r: 18,
-            g: 18,
-            b: 18,
-            a: 1.0,
-        },
-    };
+    let background = Rgba::parse(&page.page.background).expect("validated boundary background");
     let mut scene = Scene {
         width: page.width,
         height: page.height,
@@ -1865,6 +1852,23 @@ fn write_items(svg: &mut String, scene: &Scene, items: &[Item], ids: &mut SvgIds
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boundary_background_is_painted_in_svg_png_and_pdf() {
+        let mut project = Project::new("Background".into(), crate::Viewport { width: 16, height: 16 }, crate::Appearance::Dark).unwrap();
+        assert_eq!(project.pages[0].background, "#ffffff");
+        project.pages[0].background = "#123456".into();
+        let page = &project.pages[0];
+        let svg = boundary_svg(&project, page, page.base_size_id()).unwrap();
+        assert!(svg.contains("<rect width=\"100%\" height=\"100%\" fill=\"#123456\"/>"));
+        let png = boundary_png(&project, page, page.base_size_id()).unwrap();
+        let pixels = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(pixels.get_pixel(0, 0).0, [18, 52, 86, 255]);
+        let rendered = RenderPage::new(&project, page, page.base_size_id()).unwrap();
+        let pdf = slide_pdf(&project, &[rendered]).unwrap();
+        let pdf = String::from_utf8_lossy(&pdf);
+        assert!(pdf.contains("0.071 0.204 0.337 rg 0 0 12.000 12.000 re f"));
+    }
 
     const INK: Rgba = Rgba {
         r: 0,

@@ -41,6 +41,39 @@ try {
   await rewrite(modules.out);
   const { default: App } = await modules.load('App.js');
 
+  const { ExportPanel } = await modules.load('projectCanvas/exportPanel.js');
+  const { BoundaryProperties } = await modules.load('EditorDock.js');
+  const noop = () => {};
+  await test('Export lists included and excluded boundaries with accessible controls above the folder', () => {
+    const { project } = templates.find(item => item.template === 'website');
+    const pages = [
+      { ...project.pages[0], name: 'Home', included: true },
+      { ...project.pages[0], id: 'excluded', name: 'Draft', included: false, output: 'image' },
+    ];
+    const html = renderToStaticMarkup(React.createElement(ExportPanel, {
+      project: { ...project, pages }, destination: null, busy: false, job: null, sending: false, error: '',
+      selectBoundary: noop, setIncluded: noop, setOutput: noop, previewExport: noop, close: noop,
+    }));
+    assert.match(html, /aria-label="Include Home in export" checked=""/);
+    assert.match(html, /aria-label="Include Draft in export"/);
+    assert.match(html, /aria-label="Export Draft as"/);
+    assert.equal((html.match(/>Preview<\/button>/g) ?? []).length, 1);
+    assert.ok(html.indexOf('Export Draft as') < html.indexOf('Folder'));
+    assert.match(html, /<button[^>]+class="dock-action export-panel-name"[^>]*>Draft<\/button>/);
+  });
+  await test('Boundary properties has the shared colour field and six background presets', () => {
+    const { project } = templates.find(item => item.template === 'website');
+    const html = renderToStaticMarkup(React.createElement(BoundaryProperties, {
+      page: { ...project.pages[0], background: '#121212' }, busy: false,
+      commit: noop, updateSize: noop, addSize: noop, removeSize: noop, remove: noop,
+    }));
+    assert.match(html, /class="props-colour"/);
+    assert.match(html, /aria-label="Background"[^>]+value="#121212"/);
+    assert.match(html, /aria-label="Near-black background" aria-pressed="true"/);
+    assert.equal((html.match(/<button[^>]+class="props-swatch"/g) ?? []).length, 6);
+    assert.doesNotMatch(html, /boundary-export|boundary-appearance|Include in export/);
+  });
+
   const view = project => ({
     project, path: null, dirty: false, untitled: true, canUndo: false, canRedo: false,
     history: null, recovery: null, recoveries: [], recoveryError: null,

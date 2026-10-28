@@ -374,9 +374,6 @@ pub async fn prepare_export(
             .iter()
             .find(|page| page.id == page_ids[0])
             .ok_or("This boundary no longer exists.")?;
-        if !page.included {
-            return Err("Include this boundary before previewing it.".into());
-        }
         if !page.output.needs_ai() {
             return Err("Preview shows webpages and app screens.".into());
         }

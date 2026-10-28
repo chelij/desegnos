@@ -98,7 +98,7 @@
 .request-list-item { width: 100%; text-align: left; justify-content: flex-start; margin-block: var(--space-1); white-space: pre-wrap !important; overflow-wrap: anywhere; font-weight: var(--weight-regular); }
 .request-full-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .request-popover details { padding-block: var(--space-3); }
-.page-appearance-toggle { white-space: nowrap; }@media (max-width: 820px) { .ai-status { max-width: 160px; } }
+@media (max-width: 820px) { .ai-status { max-width: 160px; } }
 .layers-close { color: var(--muted); }
 .layer-actions { display: flex; align-items: center; gap: 1px; padding: var(--space-3) 0; border-bottom: 1px solid var(--border-soft); }
 .layer-actions button { display: grid; place-items: center; width: var(--control-md); min-height: var(--control-md); height: var(--control-md); padding: 0; }
@@ -461,8 +461,6 @@
 .boundary-props .check-label { gap: var(--space-2); font-size: var(--text-xs); font-weight: var(--weight-regular); white-space: nowrap; }
 .boundary-props .dock-action.danger { border-color: transparent; background: transparent; color: var(--danger); }
 .boundary-props .dock-action.danger:hover:not(:disabled) { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
-.boundary-export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
-.boundary-export-actions .dock-action { margin-left: auto; }
 .boundary-footer { display: flex; justify-content: flex-end; padding-top: var(--space-3); border-top: 1px solid var(--border-soft); }
 .dock-choice { display: flex; flex-direction: column; gap: var(--space-3); }
 .dock-choice-label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
@@ -531,13 +529,12 @@
 .dock-code .code-editor-host { flex: none; height: 160px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
 .dock-code .code-editor-host .cm-editor { height: 100%; }
 
-/* Export panel: destination, included boundaries and the paid-send decision, inline in the dock. */
+/* Export panel: boundaries, destination and the paid-send decision, inline in the dock. */
 .export-panel { display: flex; flex-direction: column; gap: var(--space-2); }
 .export-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .export-panel-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
-.export-panel-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-2); padding-block: 2px; }
+.export-panel-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-2); padding-block: 2px; }
 .export-panel-name { overflow: hidden; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
-.export-panel-output { color: var(--muted); font-size: var(--text-xs); white-space: nowrap; }
 .export-panel-job { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
 .export-panel-job p { margin: 0; font-size: var(--text-sm); }
 .export-panel-note { margin: 0; font-size: var(--text-xs); }
@@ -586,3 +583,8 @@
 .dock-panels::-webkit-scrollbar-thumb:hover, .dock-panel-body::-webkit-scrollbar-thumb:hover, .log-messages::-webkit-scrollbar-thumb:hover {
   background: var(--faint); background-clip: content-box;
 }
+
+.boundary-background-presets { display: flex; gap: var(--space-2); }
+.boundary-background-presets .props-swatch[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.export-panel-row > input[type="checkbox"] { width: 14px; min-height: 14px; margin: 0; }
+.export-panel-row > select { width: auto; min-width: 0; }

@@ -540,7 +540,7 @@ impl Project {
             let frozen = (*element).clone();
             dependencies.insert(
                 format!("element:{}:{}", page.id, element.id),
-                digest(&json(&(page.id, &page.sizes, page.appearance, &frozen))?.into_bytes()),
+                digest(&json(&(page.id, &page.sizes, &page.background, &frozen))?.into_bytes()),
             );
         }
         // Every pending request is frozen too, so editing its text, targets or area makes the
@@ -807,7 +807,7 @@ impl RequirementsSnapshot {
             ensure(
                 *expected
                     == digest(
-                        &json(&(page.id, &page.sizes, page.appearance, &frozen))?.into_bytes(),
+                        &json(&(page.id, &page.sizes, &page.background, &frozen))?.into_bytes(),
                     ),
                 "A requested layer changed. Generate new requirements.",
             )?;

@@ -1,4 +1,4 @@
-use crate::{Appearance, Error, Project, Result, digest, ensure, model::validate_text};
+use crate::{Error, Project, Result, digest, ensure, model::validate_text};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use quick_xml::{Reader, events::Event};
 use serde::{Deserialize, Serialize};
@@ -460,9 +460,8 @@ impl Project {
                 && self.pages[0].elements.is_empty()
                 && self.latest_generation.is_none()
                 && self.applied_job_ids.is_empty()
-                && self.appearance == Appearance::Light
-                && self.pages[0].appearance == Appearance::Light,
-            "Import identity into a new blank light project before editing begins.",
+                && self.pages[0].background == "#ffffff",
+            "Import identity into a new blank project with a white background before editing begins.",
         )?;
         let mut next = self.clone();
         next.imported_identity = Some(identity);

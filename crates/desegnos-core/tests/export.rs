@@ -107,6 +107,31 @@ fn reply(plan: &desegnos_core::ExportPlan, implemented_pointer: Uuid) -> ExportR
 }
 
 #[test]
+fn excluded_boundaries_can_be_previewed_without_joining_the_full_export() {
+    let mut project = project();
+    let excluded = project.pages[0].id;
+    project.pages[0].included = false;
+    assert!(plan_export(&project, &[], Uuid::new_v4()).is_err());
+    let preview = plan_export(&project, &[excluded], Uuid::new_v4()).unwrap();
+    assert_eq!(preview.pages[0].page_id, excluded);
+    assert!(!project.pages[0].included);
+}
+
+#[test]
+fn boundary_background_updates_validate_hex_and_leave_editor_theme_alone() {
+    let project = project();
+    let command = |background: &str| Command::UpdatePage {
+        page_id: project.pages[0].id, name: "Home".into(), path: "/".into(),
+        background: background.into(), included: true,
+    };
+    let changed = apply(&project, command("#123"));
+    assert_eq!(changed.pages[0].background, "#112233");
+    assert_eq!(changed.appearance, project.appearance);
+    assert!(project.apply(project.revision, command("red")).is_err());
+    assert!(project.apply(project.revision, command("#ffffff;display:none")).is_err());
+}
+
+#[test]
 fn export_reply_is_checked_against_the_frozen_plan() {
     let (project, pointer_id) = webpage_project();
     let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
@@ -127,10 +152,7 @@ fn export_reply_is_checked_against_the_frozen_plan() {
     let mut extra_page = valid.clone();
     extra_page.pages.push(desegnos_core::ExportReplyPage {
         page_id: Uuid::new_v4(),
-        path: "/extra".into(),
-        html: "<!doctype html><html><body></body></html>".into(),
-        css: String::new(),
-        js: String::new(),
+        color_scheme: "dark".into(),
     });
     assert!(parse_export_reply(&plan, &serde_json::to_string(&extra_page).unwrap()).is_err());
 

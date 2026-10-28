@@ -632,8 +632,8 @@ async function runIsolated() {
       });
       assert.ok(screenRow, 'Layers lists no boundary rows');
       await driver.click(`//button[@data-boundary-row=${xpathString(screenRow)}]`, 'xpath');
-      await driver.click('//*[@aria-label="Appearance"]//button[normalize-space(.)="Dark"]', 'xpath');
-      await waitFor(() => driver.execute(id => !!document.querySelector(`.page-boundary.dark[data-size="${id}"]`), screenRow), 'The Dark appearance did not darken the boundary');
+      await driver.click('[aria-label="Near-black background"]');
+      await waitFor(() => driver.execute(id => getComputedStyle(document.querySelector(`.page-boundary[data-size="${id}"]`)).backgroundColor === 'rgb(18, 18, 18)', screenRow), 'Picking the near-black background swatch did not darken the first boundary');
       await driver.click(`//button[@data-boundary-row=${xpathString(screenRow)}]`, 'xpath');
       await pointer.combo('Delete');
       await waitFor(async () => (await boundaries()).length === before - 1, 'Delete did not remove the selected boundary');

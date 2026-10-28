@@ -7,7 +7,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | Term | Meaning | In code |
 |---|---|---|
 | **Canvas** | The one infinite surface per project where everything lives. Everything on it is visual. | `ProjectCanvas`, `src/projectCanvas/` |
-| **Boundary** | A rectangle you draw that is one output: a page, slide, image or app screen. What is inside ships at export. Any boundary can be deleted; the first included one is the entry. | `Page` with `Page.canvas` |
+| **Boundary** | A rectangle you draw that is one output: a page, slide, image or app screen. Its hex background and contents ship when included in the Export panel. Any boundary can be deleted; the first included one is the entry. | `Page` with `Page.sizes` and `Page.background` |
 | **Page boundary** | Fixed width, grows taller as elements are added. | `BoundaryKind::Page` |
 | **Screen boundary** | Fixed size; content beyond it scrolls inside. | `BoundaryKind::Screen` |
 | **Reference** | Everything outside every boundary. Material the AI can read; never shipped. | `Project.reference` |

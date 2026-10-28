@@ -11,7 +11,7 @@ import {
   isClipboardMarker, newClipboardMarker, pastedImageFiles, pastedImageRect, pastedNoteRect, readPastedImage,
 } from './clipboardPaste';
 import { type PlayState } from './play';
-import { createTextElement, forAppearance, withPickedColours, elementChildrenOf, elementPath, findPageElement } from './elementGeometry';
+import { createTextElement, forBackground, withPickedColours, elementChildrenOf, elementPath, findPageElement } from './elementGeometry';
 import {
   ElementEntry, ClipboardEntry, PasteTarget, PasteChoice, LinkDecision, NIL_UUID, DuplicateRepeat,
   isElementTarget, elementAt, targetKey, entryTargetKey,
@@ -225,7 +225,7 @@ export function createPasteDrop(context: () => Context) {
     }
     const page = project.pages.find(item => item.id === boundary.pageId);
     const local = elementRectAt(boundary.sizeId, null, { x: 0, y: 0 }, boundary.rect, { ...point, width: 0, height: 0 });
-    const element = withPickedColours(forAppearance(createTextElement({ ...local, width: 0, height: 0 }, text), page?.appearance ?? 'light'));
+    const element = withPickedColours(forBackground(createTextElement({ ...local, width: 0, height: 0 }, text), page?.background ?? '#ffffff'));
     const singleSize = !!page && hasManySizes(page) && !editingAllSizes(boundary.pageId);
     busy.current = true;
     try {

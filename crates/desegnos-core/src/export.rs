@@ -201,15 +201,12 @@ pub struct ExportPlan {
     pub warnings: Vec<String>,
 }
 
-/// Reserved legacy page reply shape. Behaviour-only replies leave pages empty.
+/// The AI colour-scheme judgment for one boundary.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportReplyPage {
     pub page_id: Uuid,
-    pub path: String,
-    pub html: String,
-    pub css: String,
-    pub js: String,
+    pub color_scheme: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -389,10 +386,6 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
                 .iter()
                 .find(|page| page.id == *id)
                 .ok_or_else(|| Error("A boundary in this export no longer exists.".into()))?;
-            ensure(
-                page.included,
-                "Only included boundaries can be exported. Include this boundary first.",
-            )?;
             chosen.push(page);
         }
         chosen
@@ -472,7 +465,7 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
             "path": page.path,
             "file": page_file(page),
             "output": page.output,
-            "appearance": page.appearance,
+            "background": page.background,
             "sizes": sizes,
             "pointers": pointer_json,
         }));
@@ -659,7 +652,7 @@ fn export_markdown(mode: GenerationMode, design: &serde_json::Value) -> String {
     let instructions = "The HTML and CSS are generated deterministically from the element tree. \
 Do not generate or rewrite markup or styles. Implement ONLY the requested pointer comments \
 in plain JavaScript, using document.querySelector('[data-desegnos-id=\"<element-or-page-id>\"]') hooks. \
-Return an empty pages array and empty shared.css. Put all behaviour in shared.js. \
+For each web/app boundary, judge from its background and content colours whether light or dark mode suits it better. Return pages entries with pageId and colorScheme (light or dark). Return empty shared.css. Put all behaviour in shared.js. \
 Every pointer must have a self-contained block wrapped in /* desegnos-pointer:<pointerId> */ \
 and /* /desegnos-pointer:<pointerId> */; put dependencies inside its block. \
 Only pointers listed in pages[].pointers are requested; other behaviours are already cached. \
@@ -693,17 +686,13 @@ pub fn export_schema(job_id: Uuid, sha256: &str) -> serde_json::Value {
             },
             "pages": {
                 "type": "array",
-                "maxItems": 0,
                 "items": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["pageId", "path", "html", "css", "js"],
+                    "required": ["pageId", "colorScheme"],
                     "properties": {
                         "pageId": {"type": "string"},
-                        "path": {"type": "string", "description": "The exact path the request lists for this page."},
-                        "html": text(1_000_000),
-                        "css": text(1_000_000),
-                        "js": text(1_000_000),
+                        "colorScheme": {"type": "string", "enum": ["light", "dark"]},
                     },
                 },
             },
@@ -837,9 +826,16 @@ pub fn validate_export_reply(plan: &ExportPlan, reply: &ExportReply) -> Result<(
         "The AI export shared files are too large.",
     )?;
     ensure(
-        reply.pages.is_empty() && reply.shared.css.is_empty(),
+        reply.shared.css.is_empty(),
         "AI export replies may contain behaviour JavaScript only; markup and CSS come from the design.",
     )?;
+    let mut page_ids = BTreeSet::new();
+    for page in &reply.pages {
+        ensure(
+            plan.pages.iter().any(|planned| planned.page_id == page.page_id && planned.output.needs_ai()) && page_ids.insert(page.page_id),
+            "The AI export reply contains an unknown or duplicate boundary.",
+        )?;
+    }
     ensure(
         !reply.shared.js.contains('\0'),
         "The behaviour code contains an invalid character.",
@@ -1034,7 +1030,7 @@ pub fn ai_export_bundle(
             },
         );
     }
-    deterministic_bundle(project, plan, behaviours)
+    deterministic_bundle(project, plan, behaviours, &reply.pages)
 }
 
 /// Compile every requested output without AI. Missing behaviours are reported, never invented.
@@ -1045,13 +1041,14 @@ pub fn direct_export_bundle(project: &Project, page_ids: &[Uuid]) -> Result<Expo
         .iter()
         .filter_map(|p| cached_behaviour(project, p).map(|code| (p.id, code.clone())))
         .collect();
-    deterministic_bundle(project, &plan, behaviours)
+    deterministic_bundle(project, &plan, behaviours, &[])
 }
 
 fn deterministic_bundle(
     project: &Project,
     plan: &ExportPlan,
     mut behaviours: BTreeMap<Uuid, ExportBehaviour>,
+    schemes: &[ExportReplyPage],
 ) -> Result<ExportBundle> {
     let mut files = BTreeMap::new();
     let mut warnings = plan.warnings.clone();
@@ -1072,7 +1069,7 @@ fn deterministic_bundle(
             warnings.push(format!("The picture {} could not be added.", asset.name));
         }
     }
-    web_codegen::render(project, plan, &behaviours, &mut files);
+    web_codegen::render(project, plan, &behaviours, schemes, &mut files);
     if plan.pages.iter().any(|page| page.output.needs_ai()) {
         let mut js = String::new();
         for (id, code) in &behaviours {

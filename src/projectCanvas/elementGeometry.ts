@@ -1,5 +1,5 @@
 import { canvasFont } from './fonts';
-import type { Appearance, Element, ElementKind, ElementLayout, ElementStyle, InputType, Page, Project, Rect } from '../types';
+import type { Element, ElementKind, ElementLayout, ElementStyle, InputType, Page, Project, Rect } from '../types';
 import type { Point } from '../projectCanvasGeometry';
 import { resolveElements } from './links';
 import { resolveForSize } from './sizes';
@@ -41,9 +41,19 @@ export function withPickedColours(element: Element): Element {
   } };
 }
 
+export function darkBackground(background: string): boolean {
+  const hex = background.slice(1);
+  const rgb = hex.length === 3 ? hex.split('').map(value => value + value).join('') : hex;
+  const channels = [0, 2, 4].map(index => {
+    const value = parseInt(rgb.slice(index, index + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722 < 0.179;
+}
+
 /** New layers on a dark boundary start with light text and lines so they stay readable. */
-export function forAppearance(element: Element, appearance: Appearance): Element {
-  if (appearance !== 'dark') return element;
+export function forBackground(element: Element, background: string): Element {
+  if (!darkBackground(background)) return element;
   const swap = (colour: string | null) => colour === TEXT_COLOUR ? DARK_TEXT_COLOUR : colour;
   const style = element.style;
   return { ...element, style: { ...style, stroke: { ...style.stroke, color: swap(style.stroke.color) }, textStyle: { ...style.textStyle, color: swap(style.textStyle.color)! } } };
