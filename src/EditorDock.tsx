@@ -6,6 +6,7 @@ import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
 import type { BoundaryKind, ElementPatch, NamedView, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
 import { ColourField } from './projectCanvas/ColourField';
+import { nestedLayerIds } from './projectCanvas/links';
 import { ElementLayers, matchingLayerIds } from './projectCanvas/elementLayers';
 import { SIZE_PRESETS, resolveForSize, sizeLabel } from './projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from './projectCanvas/requests';
@@ -592,7 +593,20 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   const [query, setQuery] = useState('');
   const needle = query.trim().toLowerCase();
   const matches = (text: string) => !needle || text.toLowerCase().includes(needle);
-  const ordered = boundariesByPosition(boundaries);
+  const ordered = useMemo(() => boundariesByPosition(boundaries), [boundaries]);
+  const fixedLayerIds = useMemo(() => nestedLayerIds(project), [project]);
+  const layerBoundaries = useMemo(() => {
+    const pages = new Map(project.pages.map(page => [page.id, page]));
+    return ordered.flatMap(boundary => {
+      const page = pages.get(boundary.pageId);
+      const size = page?.sizes.find(size => size.id === boundary.sizeId);
+      if (!page || !size) return [];
+      const elements = resolveForSize(project, page, size.id);
+      const name = page.sizes.length > 1 ? `${page.name} · ${boundary.label}` : page.name;
+      const keep = needle && !name.toLowerCase().includes(needle) ? matchingLayerIds(elements, needle) : null;
+      return needle && keep && !keep.size ? [] : [{ ...boundary, page, elements, name, keep }];
+    });
+  }, [project, ordered, needle]);
   const selected = new Set(selection.map(canvasTargetKey));
   const selectedElements = selection.flatMap(target => target.kind === 'element' ? [target.elementId] : []);
   const referenceLabel = (item: ReferenceItem) => {
@@ -623,17 +637,9 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
     <LayerGroup section="views" title="Views" add={addView} addLabel="Save the current view">
       {views.length > 0 && views.map(view => <ViewRow key={view.id} view={view} jump={() => jumpToView(view)} rename={name => renameView(view, name)} remove={() => removeView(view)} />)}
     </LayerGroup>
-    {ordered.map(({ pageId, sizeId, label }) => {
-      const page = project.pages.find(item => item.id === pageId);
-      const size = page?.sizes.find(item => item.id === sizeId);
-      if (!page || !size) return null;
+    {layerBoundaries.map(({ pageId, sizeId, page, elements, name, keep }) => {
       const sectionKey = `boundary:${sizeId}`;
       const open = needle ? true : !collapsed.has(sectionKey);
-      const elements = resolveForSize(project, page, sizeId);
-      const name = page.sizes.length > 1 ? `${page.name} · ${label}` : page.name;
-      // A search keeps matching layers and their parents; a matching boundary shows all of its layers.
-      const keep = needle && !matches(name) ? matchingLayerIds(elements, query) : null;
-      if (needle && keep && !keep.size) return null;
       const boundarySelected = focused === pageId && !selection.some(target => target.kind === 'element' && target.pageId === pageId);
       return <li key={sizeId} className="dock-tree-group">
         <div className="dock-tree-row layer-head-row" data-selected={boundarySelected || undefined}>
@@ -648,7 +654,7 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
           </button>
           <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${name}`} title="Delete boundary" onClick={() => deleteBoundary(pageId, sizeId)}><Icon name="trash" size={13} /></button>
         </div>
-        {open && elements.length > 0 && <ElementLayers project={project} pageId={pageId} sizeId={sizeId} elements={elements} selection={selectedElements} keep={needle ? keep : null}
+        {open && elements.length > 0 && <ElementLayers project={project} pageId={pageId} sizeId={sizeId} elements={elements} selection={selectedElements} fixed={fixedLayerIds} keep={needle ? keep : null}
           select={selectElement} update={updateElements} remove={(page, size, id) => removeElements([id])} move={moveElement} />}
       </li>;
     })}

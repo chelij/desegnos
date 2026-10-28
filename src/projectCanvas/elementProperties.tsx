@@ -1,3 +1,4 @@
+import { sharedElementValues } from './sharedElementValues';
 import { ColourField } from './ColourField';
 import { FontField } from './FontField';
 import { useCanvasFont } from './fonts';
@@ -10,7 +11,7 @@ import { ChoiceRow, PropsSection } from '../EditorDock';
 import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
 import type { Element, ElementPadding, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, Rect, RequestAttachment } from '../types';
-import { commonValue, elementKindLabel, elementPadding, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri, rememberColour, uniformPadding } from './elementGeometry';
+import { elementKindLabel, elementPadding, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri, rememberColour, uniformPadding } from './elementGeometry';
 import { EditScopeChoice, requestEditScope } from './selectionBar';
 
 const validNumber = (value: string) => Number.isFinite(Number(value));
@@ -211,34 +212,18 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   const linked = single?.link ? project.linked?.[single.link] ?? null : null;
   // Every selected layer in one linked group already shares its content; offer the group, not
   // another link command that would only fail as "already linked".
-  const sharedLinkId = multi && elements.every(element => element.link && element.link === elements[0].link) ? elements[0].link! : null;
+  const shared = useMemo(() => sharedElementValues(elements), [elements]);
+  const sharedLinkId = multi ? shared.link || null : null;
   const sharedLinked = sharedLinkId ? project.linked?.[sharedLinkId] ?? null : null;
   // Edits in one size become that size's overrides; All sizes changes base values and clears
   // the same fields from every size.
   const sized = <T,>(patch: T): T & { size_id?: string | null; all_sizes?: boolean } =>
     sizeId === null ? { ...patch, all_sizes: true } : { ...patch, size_id: sizeId };
-  const sameKind = elements.every(element => element.kind === elements[0]?.kind);
-  const kind = sameKind ? elements[0].kind : null;
-  const fill = commonValue(elements.map(element => element.style.fill));
-  const strokeColour = commonValue(elements.map(element => element.style.stroke.color));
-  const strokeWidth = commonValue(elements.map(element => element.style.stroke.width));
-  const radius = commonValue(elements.map(element => element.style.radius));
-  const opacity = commonValue(elements.map(element => element.style.opacity));
-  const shadow = commonValue(elements.map(element => element.style.shadow));
-  const shadowColour = commonValue(elements.map(element => element.style.shadow.color));
-  const textStyle = commonValue(elements.map(element => element.style.textStyle));
-  const textColour = commonValue(elements.map(element => element.style.textStyle.color));
+  const sameKind = shared.kind !== undefined;
+  const kind = shared.kind ?? null;
+  const { fill, strokeColour, strokeWidth, radius, opacity, shadow, shadowColour, textStyle, textColour, text, url, layout, x, y, width, height, rotation } = shared;
   const font = useCanvasFont(textStyle);
-  const text = commonValue(elements.map(element => element.text));
-  const url = commonValue(elements.map(element => element.url));
-  const layout = commonValue(elements.map(element => element.layout));
-  // Multi-selection geometry: a field shows the shared value, or Mixed when the layers differ.
-  const x = commonValue(elements.map(element => element.rect.x));
-  const y = commonValue(elements.map(element => element.rect.y));
-  const width = commonValue(elements.map(element => element.rect.width));
-  const height = commonValue(elements.map(element => element.rect.height));
-  const rotation = commonValue(elements.map(element => normalizeAngle(element.rotation)));
-  const paddingSides = { top: commonValue(elements.map(element => elementPadding(element).top)), right: commonValue(elements.map(element => elementPadding(element).right)), bottom: commonValue(elements.map(element => elementPadding(element).bottom)), left: commonValue(elements.map(element => elementPadding(element).left)) };
+  const paddingSides = { top: shared.top, right: shared.right, bottom: shared.bottom, left: shared.left };
   const paddingUniform = paddingSides.top !== undefined && paddingSides.top === paddingSides.right && paddingSides.right === paddingSides.bottom && paddingSides.bottom === paddingSides.left ? paddingSides.top : undefined;
   const mixed = (value: unknown) => multi && value === undefined;
   const picture = useRef<HTMLInputElement>(null);
@@ -259,7 +244,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
     if (JSON.stringify(beforeText) !== JSON.stringify(afterText)) style.references = { ...style.references, text: null };
   }).map(patch => sized(patch))); }
   function picker(reference: 'fill' | 'stroke' | 'textColour' | 'text') {
-    const current = commonValue(elements.map(element => element.style.references?.[reference]));
+    const current = shared[`${reference}Reference`];
     const category = reference === 'text' ? 'text' : 'colour';
     const choose = (id: string | null) => commitStyle(style => { style.references = { ...style.references, [reference]: id }; });
     async function create() {

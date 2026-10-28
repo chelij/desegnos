@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { Icon, type IconName } from '../icons';
 import type { Element, ElementKind, ElementPatch, Project } from '../types';
 import { elementLabel, holdsChildren } from './elementGeometry';
@@ -19,22 +19,14 @@ export function matchingLayerIds(elements: Element[], query: string): Set<string
   const keep = new Set<string>();
   const needle = query.trim().toLowerCase();
   if (!needle) return keep;
-  const keepSubtree = (element: Element) => {
-    keep.add(element.id);
-    element.children.forEach(keepSubtree);
-  };
-  const walk = (element: Element, ancestors: string[]): boolean => {
-    const matched = `${elementLabel(element)} ${element.name ?? ''}`.toLowerCase().includes(needle);
-    if (matched) {
-      ancestors.forEach(id => keep.add(id));
-      keepSubtree(element);
-    }
+  const walk = (element: Element, inherited: boolean): boolean => {
+    const matched = inherited || `${elementLabel(element)} ${element.name ?? ''}`.toLowerCase().includes(needle);
     let below = false;
-    for (const child of element.children) if (walk(child, [...ancestors, element.id])) below = true;
+    for (const child of element.children) if (walk(child, matched)) below = true;
     if (matched || below) keep.add(element.id);
     return matched || below;
   };
-  elements.forEach(element => walk(element, []));
+  elements.forEach(element => walk(element, false));
   return keep;
 }
 
@@ -56,22 +48,19 @@ function dropTarget(element: Element, position: 'before' | 'after' | 'into', pag
 }
 
 /** One 28px layer row: kind icon, name (double-click renames), then hover lock and eye toggles. */
-function LayerRow({ project, pageId, sizeId, element, parentId, index, selection, collapsed, searching, toggle, select, update, remove, movable, hint, setHint, onDragStart, onDragEnd, onDrop, children }: {
-  project: Project; pageId: string; sizeId: string; element: Element; parentId: string | null; index: number;
-  selection: string[]; collapsed: ReadonlySet<string>; searching: boolean; toggle: (id: string) => void;
+const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, parentId, index, selected, open, toggle, select, update, remove, movable, setHint, onDragStart, onDragEnd, onDrop, depth, dropLine }: {
+  linkedName: string | null; pageId: string; sizeId: string; element: Element; parentId: string | null; index: number;
+  selected: boolean; open: boolean; toggle: (id: string) => void;
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
   update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
   remove: (pageId: string, sizeId: string, id: string) => void;
-  movable: boolean; hint: DropHint; setHint: (hint: DropHint) => void;
+  movable: boolean; setHint: (hint: DropHint) => void;
   onDragStart: (state: DragState) => void; onDragEnd: () => void;
   onDrop: (event: DragEvent, target: ElementDropTarget) => void;
-  children: ReactNode;
+  depth: number; dropLine: 'before' | 'after' | 'into' | null;
 }) {
   const canContain = holdsChildren(element.kind);
   const hasChildren = canContain && element.children.length > 0;
-  const open = searching || !collapsed.has(`${sizeId}:${element.id}`);
-  const definition = element.link ? project.linked?.[element.link] ?? null : null;
-  const linkedName = definition?.name ?? null;
   const label = elementLabel(element);
   // A linked copy keeps its own name; the group name appears in the row title and Properties.
   const renameable = movable;
@@ -92,10 +81,10 @@ function LayerRow({ project, pageId, sizeId, element, parentId, index, selection
     const bounds = event.currentTarget.getBoundingClientRect();
     return (event.clientY - bounds.top) / Math.max(1, bounds.height);
   }
-  return <li className={`dock-tree-group element-row${element.visible ? '' : ' hidden-in-size'}`}>
+  return <li style={{ paddingInlineStart: depth * 12, height: LAYER_ROW_HEIGHT }} className={`dock-tree-group element-row virtual-layer-row${element.visible ? '' : ' hidden-in-size'}`} data-drop={dropLine ?? undefined}>
     <div className="dock-tree-row element-row-line" draggable={movable && draft === null}
       data-element-row={element.id}
-      data-selected={selection.includes(element.id) || undefined}
+      data-selected={selected || undefined}
       title={renameable ? `${label}${linkedName ? ` · linked as ${linkedName}` : ''} · double-click to rename`
         : linkedName ? `${label} · linked as ${linkedName}` : label}
       onDragStart={event => {
@@ -129,10 +118,10 @@ function LayerRow({ project, pageId, sizeId, element, parentId, index, selection
             if (event.key === 'Enter') { event.preventDefault(); commitName(); }
             else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); editing.current = false; setDraft(null); }
           }} />
-        : <button type="button" className="dock-tree-select element" aria-pressed={selection.includes(element.id)}
+        : <button type="button" className="dock-tree-select element" aria-pressed={selected}
           onClick={event => select(pageId, element.id, sizeId, event.shiftKey || event.ctrlKey || event.metaKey)}
           onDoubleClick={renameable ? () => { editing.current = true; setDraft(element.name ?? ''); } : undefined}>
-          <Icon name={definition ? 'linked-copies' : KIND_ICONS[element.kind]} size={12} /><span className={element.name?.trim() ? undefined : 'muted'}>{label}</span>
+          <Icon name={linkedName !== null ? 'linked-copies' : KIND_ICONS[element.kind]} size={12} /><span className={element.name?.trim() ? undefined : 'muted'}>{label}</span>
         </button>}
       <button type="button" className="icon-button sm dock-row-toggle" aria-label={`${element.locked ? 'Unlock' : 'Lock'} ${elementLabel(element)}`} title={element.locked ? 'Unlock' : 'Lock'}
         aria-pressed={element.locked} onClick={() => update(pageId, sizeId, [{ id: element.id, locked: !element.locked }])}><Icon name={element.locked ? 'lock' : 'unlock'} size={13} /></button>
@@ -140,85 +129,176 @@ function LayerRow({ project, pageId, sizeId, element, parentId, index, selection
         aria-pressed={!element.visible} onClick={() => update(pageId, sizeId, [{ id: element.id, visible: !element.visible }])}><Icon name={element.visible ? 'eye' : 'eye-off'} size={13} /></button>
       <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${elementLabel(element)}`} title="Delete layer" onClick={() => remove(pageId, sizeId, element.id)}><Icon name="trash" size={13} /></button>
     </div>
-    {children}
   </li>;
+}, (before, after) => {
+  // Resolved trees are cloned after edits. Rows only depend on these presentation fields.
+  const { element: a, ...aProps } = before, { element: b, ...bProps } = after;
+  return a.id === b.id && a.kind === b.kind && a.name === b.name && a.text === b.text && a.language === b.language
+    && a.visible === b.visible && a.locked === b.locked && a.children.length === b.children.length
+    && Object.keys(aProps).every(key => Object.is(aProps[key as keyof typeof aProps], bProps[key as keyof typeof bProps]));
+});
+
+export const LAYER_ROW_HEIGHT = 28;
+const OVERSCAN = 4;
+export type FlatLayer = { element: Element; parentId: string | null; index: number; depth: number; open: boolean };
+
+/** Display order is reversed within each sibling list, while drop indices retain model order. */
+export function flattenLayers(elements: Element[], sizeId: string, collapsed: ReadonlySet<string>, keep: ReadonlySet<string> | null): FlatLayer[] {
+  const rows: FlatLayer[] = [];
+  const visit = (children: Element[], parentId: string | null, depth: number) => {
+    for (let index = children.length - 1; index >= 0; index--) {
+      const element = children[index];
+      if (keep && !keep.has(element.id)) continue;
+      const open = keep !== null || !collapsed.has(`${sizeId}:${element.id}`);
+      rows.push({ element, parentId, index, depth, open });
+      if (open && holdsChildren(element.kind)) visit(element.children, element.id, depth + 1);
+    }
+  };
+  visit(elements, null, 0);
+  return rows;
 }
 
-/** One row tree per size boundary: layers hidden in this size stay listed, dimmed. */
-export function ElementLayerRows({ project, pageId, sizeId, elements, parentId, selection, collapsed, keep, searching, toggle, select, update, remove, fixed, hint, setHint, onDragStart, onDragEnd, onDrop }: {
-  project: Project; pageId: string; sizeId: string; elements: Element[]; parentId: string | null;
-  selection: string[]; collapsed: ReadonlySet<string>; keep: ReadonlySet<string> | null; searching: boolean; toggle: (id: string) => void;
-  select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
-  update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
-  remove: (pageId: string, sizeId: string, id: string) => void;
-  fixed: ReadonlySet<string>; hint: DropHint; setHint: (hint: DropHint) => void;
-  onDragStart: (state: DragState) => void; onDragEnd: () => void;
-  onDrop: (event: DragEvent, target: ElementDropTarget) => void;
-}) {
-  // A row's insertion line sits at the array index the drop would use: array order runs bottom-up,
-  // so the line above row k is insertion index k + 1 and the line below the last row is index 0.
-  const line = (at: number) => hint && hint.pageId === pageId && hint.sizeId === sizeId && hint.parentId === parentId && hint.index === at
-    ? <li className="dock-drop-line" aria-hidden="true" />
-    : null;
-  const childHint = hint !== null && hint.pageId === pageId && hint.sizeId === sizeId;
-  return <>{[...elements].reverse().map((element, reversedIndex) => {
-    if (keep && !keep.has(element.id)) return null;
-    const index = elements.length - 1 - reversedIndex;
-    const movable = !fixed.has(element.id);
-    const hasChildren = holdsChildren(element.kind) && element.children.length > 0;
-    const open = searching || !collapsed.has(`${sizeId}:${element.id}`);
-    const dropInto = childHint && hint.parentId === element.id;
-    return <Fragment key={element.id}>
-      {line(index + 1)}
-      <LayerRow project={project} pageId={pageId} sizeId={sizeId} element={element} parentId={parentId} index={index}
-        selection={selection} collapsed={collapsed} searching={searching} toggle={toggle} select={select} update={update} remove={remove}
-        movable={movable} hint={hint} setHint={setHint} onDragStart={onDragStart} onDragEnd={onDragEnd} onDrop={onDrop}>
-        {holdsChildren(element.kind) && open && (hasChildren || dropInto) && <ul className="dock-tree-element-children">
-          <ElementLayerRows project={project} pageId={pageId} sizeId={sizeId} elements={element.children} parentId={element.id}
-            selection={selection} collapsed={collapsed} keep={keep} searching={searching} toggle={toggle} select={select} update={update} remove={remove} fixed={fixed}
-            hint={hint} setHint={setHint} onDragStart={onDragStart} onDragEnd={onDragEnd} onDrop={onDrop} />
-        </ul>}
-      </LayerRow>
-    </Fragment>;
-  })}{keep ? null : line(0)}</>;
-}
-
-export function ElementLayers({ project, pageId, sizeId, elements, selection, select, update, remove, move, keep = null }: {
+export function ElementLayers({ project, pageId, sizeId, elements, selection, select, update, remove, move, keep = null, fixed: fixedIds }: {
   project: Project; pageId: string; sizeId: string; elements: Element[]; selection: string[];
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
   update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
   remove: (pageId: string, sizeId: string, id: string) => void;
   move: (pageId: string, sizeId: string, id: string, parentId: string | null, index: number) => void;
+  fixed?: ReadonlySet<string>;
   /** Rows a Layers search keeps; null lists every layer. */
   keep?: ReadonlySet<string> | null;
 }) {
-  const fixed = useMemo(() => nestedLayerIds(project), [project]);
+  const fixed = useMemo(() => fixedIds ?? nestedLayerIds(project), [fixedIds, project]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const [dragging, setDragging] = useState<DragState>(null);
+  const dragging = useRef<DragState>(null);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [hint, setHint] = useState<DropHint>(null);
   const updateHint = useCallback((next: DropHint) => setHint(current => sameTarget(current, next) ? current : next), []);
-  const endDrag = useCallback(() => { setDragging(null); setHint(null); }, []);
-  const toggle = (id: string) => setCollapsed(current => {
+  const endDrag = useCallback(() => { dragging.current = null; setDraggedId(null); setHint(null); }, []);
+  const toggle = useCallback((id: string) => setCollapsed(current => {
     const next = new Set(current);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
-  });
-  if (!elements.length) return null;
-  if (keep && !keep.size) return null;
-  const searching = keep !== null;
+  }), []);
   function drop(event: DragEvent, target: ElementDropTarget) {
     event.preventDefault();
     setHint(null);
-    if (!dragging || dragging.pageId !== target.pageId || dragging.sizeId !== target.sizeId || dragging.id === target.parentId) { setDragging(null); return; }
+    setDraggedId(null);
+    if (!dragging.current || dragging.current.pageId !== target.pageId || dragging.current.sizeId !== target.sizeId || dragging.current.id === target.parentId) { dragging.current = null; return; }
     let index = target.index;
-    if (dragging.parentId === target.parentId && dragging.index < index) index -= 1;
-    setDragging(null);
-    move(target.pageId, target.sizeId, dragging.id, target.parentId, index);
+    if (dragging.current.parentId === target.parentId && dragging.current.index < index) index -= 1;
+    const id = dragging.current.id;
+    dragging.current = null;
+    move(target.pageId, target.sizeId, id, target.parentId, index);
   }
-  return <ul className="dock-tree-elements" onDragOver={event => { if (dragging) event.preventDefault(); }}
-    onDrop={event => { event.preventDefault(); if (dragging) move(pageId, sizeId, dragging.id, null, elements.length); setDragging(null); setHint(null); }}>
-    <ElementLayerRows project={project} pageId={pageId} sizeId={sizeId} elements={elements} parentId={null}
-      selection={selection} collapsed={collapsed} keep={keep} searching={searching} toggle={toggle} select={select} update={update} remove={remove} fixed={fixed}
-      hint={hint} setHint={updateHint} onDragStart={setDragging} onDragEnd={endDrag} onDrop={drop} />
+  // Stable event delegates keep callback churn in the editor out of memoised rows.
+  const actions = useRef({ select, update, remove, drop });
+  useLayoutEffect(() => { actions.current = { select, update, remove, drop }; });
+  const selectRow = useCallback((...args: Parameters<typeof select>) => actions.current.select(...args), []);
+  const updateRow = useCallback((...args: Parameters<typeof update>) => actions.current.update(...args), []);
+  const removeRow = useCallback((...args: Parameters<typeof remove>) => actions.current.remove(...args), []);
+  const dropRow = useCallback((...args: Parameters<typeof drop>) => actions.current.drop(...args), []);
+  const startDrag = useCallback((state: DragState) => { dragging.current = state; setDraggedId(state?.id ?? null); }, []);
+  const rows = useMemo(() => flattenLayers(elements, sizeId, collapsed, keep), [elements, sizeId, collapsed, keep]);
+  const selected = useMemo(() => new Set(selection), [selection]);
+  const list = useRef<HTMLUListElement>(null);
+  const [viewport, setViewport] = useState({ top: 0, height: 280 });
+  useLayoutEffect(() => {
+    const node = list.current, scroll = node?.closest<HTMLElement>('.dock-panel-body');
+    if (!node || !scroll) return;
+    const measure = () => {
+      const top = scroll.getBoundingClientRect().top - node.getBoundingClientRect().top;
+      const height = scroll.clientHeight;
+      setViewport(current => current.top === top && current.height === height ? current : { top, height });
+    };
+    measure();
+    scroll.addEventListener('scroll', measure, { passive: true });
+    const observer = new ResizeObserver(measure);
+    observer.observe(scroll); observer.observe(scroll.firstElementChild ?? scroll);
+    return () => { scroll.removeEventListener('scroll', measure); observer.disconnect(); };
+  }, [rows.length]);
+  const reveal = useCallback((index: number) => {
+    const node = list.current, scroll = node?.closest<HTMLElement>('.dock-panel-body');
+    if (!node || !scroll) return;
+    const top = node.getBoundingClientRect().top - scroll.getBoundingClientRect().top + index * LAYER_ROW_HEIGHT;
+    if (top < 0) scroll.scrollTop += top;
+    else if (top + LAYER_ROW_HEIGHT > scroll.clientHeight) scroll.scrollTop += top + LAYER_ROW_HEIGHT - scroll.clientHeight;
+    setViewport({ top: scroll.getBoundingClientRect().top - node.getBoundingClientRect().top, height: scroll.clientHeight });
+  }, []);
+  const selectedId = selection.at(-1);
+  useLayoutEffect(() => {
+    const index = rows.findIndex(row => row.element.id === selectedId);
+    if (index >= 0) reveal(index);
+  }, [selectedId, reveal]);
+  const start = Math.min(rows.length, Math.max(0, Math.floor(viewport.top / LAYER_ROW_HEIGHT) - OVERSCAN));
+  const end = Math.max(start, Math.min(rows.length, Math.ceil((viewport.top + viewport.height) / LAYER_ROW_HEIGHT) + OVERSCAN));
+  // Keep the focused editor and native drag source mounted when scrolling past them.
+  const visible = new Set(Array.from({ length: end - start }, (_, index) => start + index));
+  rows.forEach((row, index) => { if (row.element.id === focusedId || row.element.id === draggedId) visible.add(index); });
+  const indices = [...visible].sort((a, b) => a - b);
+  let previous = -1;
+  return <ul ref={list} className="dock-tree-elements" onFocusCapture={event => {
+    setFocusedId((event.target as HTMLElement).closest<HTMLElement>('[data-element-row]')?.dataset.elementRow ?? null);
+  }} onBlurCapture={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusedId(null); }} onKeyDown={event => {
+    if (event.target instanceof HTMLInputElement || event.altKey || event.ctrlKey || event.metaKey) return;
+    const rowNode = (event.target as HTMLElement).closest<HTMLElement>('[data-element-row]');
+    const index = rows.findIndex(row => row.element.id === rowNode?.dataset.elementRow);
+    if (index < 0) return;
+    const row = rows[index];
+    if (event.key === 'Tab') {
+      const buttons = rowNode?.querySelectorAll<HTMLElement>('button, input');
+      const atEdge = buttons && event.target === buttons[event.shiftKey ? 0 : buttons.length - 1];
+      const next = index + (event.shiftKey ? -1 : 1);
+      if (!atEdge || next < 0 || next >= rows.length || (next >= start && next < end)) return;
+      event.preventDefault(); event.stopPropagation();
+      reveal(next);
+      const id = rows[next].element.id;
+      requestAnimationFrame(() => {
+        const node = Array.from(list.current?.querySelectorAll<HTMLElement>('[data-element-row]') ?? []).find(node => node.dataset.elementRow === id);
+        const targets = node?.querySelectorAll<HTMLElement>('button, input');
+        targets?.[event.shiftKey ? targets.length - 1 : 0]?.focus({ preventScroll: true });
+      });
+      return;
+    }
+    let next = index;
+
+    if (event.key === 'ArrowDown') next++;
+    else if (event.key === 'ArrowUp') next--;
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = rows.length - 1;
+    else if (event.key === 'ArrowRight' && row.element.children.length && !row.open) toggle(`${sizeId}:${row.element.id}`);
+    else if (event.key === 'ArrowLeft' && row.element.children.length && row.open) toggle(`${sizeId}:${row.element.id}`);
+    else return;
+    event.preventDefault(); event.stopPropagation();
+    next = Math.max(0, Math.min(rows.length - 1, next));
+    reveal(next);
+    const id = rows[next].element.id;
+    selectRow(pageId, id, sizeId, event.shiftKey);
+    requestAnimationFrame(() => {
+      const nodes = list.current?.querySelectorAll<HTMLElement>('[data-element-row]');
+      const node = Array.from(nodes ?? []).find(node => node.dataset.elementRow === id);
+      node?.querySelector<HTMLElement>('.dock-tree-select')?.focus({ preventScroll: true });
+    });
+  }} onDragOver={event => { if (dragging.current) event.preventDefault(); }}
+    onDrop={event => { event.preventDefault(); if (dragging.current) move(pageId, sizeId, dragging.current.id, null, elements.length); endDrag(); }}>
+    {indices.map(rowIndex => {
+      const { element, parentId, index, depth, open } = rows[rowIndex];
+      const gap = rowIndex - previous - 1;
+      previous = rowIndex;
+      const target = hint?.pageId === pageId && hint.sizeId === sizeId ? hint : null;
+      const dropLine = target?.parentId === element.id ? 'into'
+        : target && target.parentId === parentId && target.index === index + 1 ? 'before'
+        : target && target.parentId === parentId && target.index === 0 && index === 0 ? 'after' : null;
+      return <Fragment key={element.id}>
+        {gap > 0 && <li aria-hidden="true" style={{ height: gap * LAYER_ROW_HEIGHT }} />}
+        <LayerRow linkedName={element.link ? project.linked?.[element.link]?.name ?? null : null}
+        pageId={pageId} sizeId={sizeId} element={element} parentId={parentId} index={index} depth={depth} open={open}
+        selected={selected.has(element.id)} toggle={toggle} select={selectRow} update={updateRow} remove={removeRow}
+        movable={!fixed.has(element.id)} setHint={updateHint} dropLine={dropLine}
+        onDragStart={startDrag} onDragEnd={endDrag} onDrop={dropRow} />
+      </Fragment>;
+    })}
+    <li aria-hidden="true" style={{ height: (rows.length - previous - 1) * LAYER_ROW_HEIGHT }} />
   </ul>;
 }
