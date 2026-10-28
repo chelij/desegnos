@@ -33,6 +33,8 @@ type Binding = {
   display: string;
   /** Actions that still make sense while the caret is in a text field. */
   inText?: boolean;
+  /** Actions that only apply while editing a canvas text layer. */
+  textOnly?: boolean;
 };
 
 const plain = (key: string): KeyCombo => ({ key, shift: false });
@@ -67,8 +69,8 @@ export const KEYMAP: Binding[] = [
   { action: 'delete', label: 'Delete selection', group: 'Edit', keys: [{ key: 'Delete', shift: false }, { key: 'Backspace', shift: false }], display: 'Delete or Backspace' },
   { action: 'renameLayer', label: 'Rename selected layer', group: 'Edit', keys: [{ key: 'F2', shift: false }], display: 'F2' },
 
-  { action: 'bold', label: 'Toggle bold', group: 'Edit', keys: [mod('b')], display: 'Ctrl/Cmd+B', inText: true },
-  { action: 'italic', label: 'Toggle italic', group: 'Edit', keys: [mod('i')], display: 'Ctrl/Cmd+I', inText: true },
+  { action: 'bold', label: 'Toggle bold', group: 'Edit', keys: [mod('b')], display: 'Ctrl/Cmd+B', inText: true, textOnly: true },
+  { action: 'italic', label: 'Toggle italic', group: 'Edit', keys: [mod('i')], display: 'Ctrl/Cmd+I', inText: true, textOnly: true },
   { action: 'fontSizeUp', label: 'Increase font size', group: 'Edit', keys: [{ code: 'Period', mod: true, shift: true }, modShift('>')], display: 'Ctrl/Cmd+Shift+>' },
   { action: 'fontSizeDown', label: 'Decrease font size', group: 'Edit', keys: [{ code: 'Comma', mod: true, shift: true }, modShift('<')], display: 'Ctrl/Cmd+Shift+<' },
   { action: 'opacity100', label: 'Opacity 100%', group: 'Edit', keys: [plain('0')], display: '0' },
@@ -202,7 +204,7 @@ export function shortcutFor(event: ShortcutInput, editingText: boolean): Shortcu
   editingText = editingText || !!event.target && isTextField(event.target);
   for (const binding of KEYMAP) {
     if (editingText && !binding.inText) continue;
-    if ((binding.action === 'bold' || binding.action === 'italic') && !(typeof HTMLElement !== 'undefined' && event.target instanceof HTMLElement && event.target.closest('.element-text-editor'))) continue;
+    if (binding.textOnly && !(typeof HTMLElement !== 'undefined' && event.target instanceof HTMLElement && event.target.closest('.element-text-editor'))) continue;
     if (binding.keys.some(combo => comboMatches(combo, event))) return binding.action;
   }
   return null;

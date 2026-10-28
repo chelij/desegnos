@@ -483,9 +483,12 @@ try {
           const key = JSON.stringify(event);
           if (seen.has(key)) continue;
           seen.add(key);
-          const fired = shortcuts.KEYMAP.filter(other => other.keys.some(candidate => matches(candidate, event)));
-          if (new Set(fired.map(other => other.action)).size > 1) {
-            conflicts.push(`${key} → ${fired.map(other => other.action).join(', ')}`);
+          // Text-layer editing and everything else are separate contexts, as in shortcutFor.
+          for (const active of [other => other.inText, other => !other.textOnly]) {
+            const fired = shortcuts.KEYMAP.filter(other => active(other) && other.keys.some(candidate => matches(candidate, event)));
+            if (new Set(fired.map(other => other.action)).size > 1) {
+              conflicts.push(`${key} → ${fired.map(other => other.action).join(', ')}`);
+            }
           }
         }
       }

@@ -829,6 +829,8 @@ fn reference_round_trip_preserves_shapes_text_children_pictures_and_history() {
             original.image = Some(picture);
         }
         let mut project = insert(&project, vec![original.clone()]).unwrap();
+        // Inserting names unnamed layers, so compare against the layer as it was placed.
+        let original = project.page(page).unwrap().elements[0].clone();
         project = apply(
             &project,
             Command::ElementToReference {
