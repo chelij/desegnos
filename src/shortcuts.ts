@@ -4,10 +4,12 @@ export type ShortcutAction =
   | 'selectTool' | 'requestTool' | 'requestFromShape' | 'boundaryTool' | 'pointerTool' | 'textTool' | 'panTool'
   | 'rectTool' | 'ellipseTool' | 'lineTool' | 'imageTool' | 'noteTool' | 'insert'
   | 'copy' | 'cut' | 'paste' | 'pasteChoice' | 'duplicate'
+  | 'copyStyle' | 'pasteStyle' | 'paintFormat'
   | 'undo' | 'redo' | 'link' | 'unlink' | 'group' | 'ungroup' | 'delete' | 'renameLayer'
   | 'forward' | 'backward' | 'front' | 'back'
   | 'selectAll' | 'selectChild' | 'selectParent' | 'nudge' | 'nudgeFar'
   | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'fitAll' | 'fitSelection' | 'hidePanels'
+  | 'minimap' | 'saveView' | 'goToView'
   | 'play' | 'preview' | 'askAI' | 'export'
   | 'new' | 'open' | 'save' | 'saveAs' | 'closeProject'
   | 'help';
@@ -28,9 +30,11 @@ type Binding = {
 };
 
 const plain = (key: string): KeyCombo => ({ key, shift: false });
+const shift = (key: string): KeyCombo => ({ key, shift: true });
 const mod = (key: string): KeyCombo => ({ key, mod: true, shift: false });
 const modShift = (key: string): KeyCombo => ({ key, mod: true, shift: true });
 const altMod = (key: string): KeyCombo => ({ key, mod: true, shift: false, alt: true });
+const altModShift = (key: string): KeyCombo => ({ key, mod: true, shift: true, alt: true });
 const shiftCode = (code: string): KeyCombo => ({ code, shift: true });
 
 export const KEYMAP: Binding[] = [
@@ -49,6 +53,9 @@ export const KEYMAP: Binding[] = [
   { action: 'paste', label: 'Paste', group: 'Edit', keys: [mod('v')], display: 'Ctrl/Cmd+V' },
   { action: 'pasteChoice', label: 'Paste with linked or unlinked choice', group: 'Edit', keys: [modShift('v')], display: 'Shift+Ctrl/Cmd+V' },
   { action: 'duplicate', label: 'Duplicate', group: 'Edit', keys: [mod('d')], display: 'Ctrl/Cmd+D' },
+  { action: 'copyStyle', label: 'Copy style', group: 'Edit', keys: [altMod('c')], display: 'Ctrl/Cmd+Alt+C' },
+  { action: 'pasteStyle', label: 'Paste style', group: 'Edit', keys: [altMod('v')], display: 'Ctrl/Cmd+Alt+V' },
+  { action: 'paintFormat', label: 'Paint format', group: 'Edit', keys: [altModShift('c')], display: 'Shift+Ctrl/Cmd+Alt+C' },
   { action: 'link', label: 'Link layers', group: 'Edit', keys: [altMod('k')], display: 'Ctrl/Cmd+Alt+K' },
   { action: 'unlink', label: 'Unlink layers', group: 'Edit', keys: [altMod('b')], display: 'Ctrl/Cmd+Alt+B' },
   { action: 'delete', label: 'Delete selection', group: 'Edit', keys: [{ key: 'Delete', shift: false }, { key: 'Backspace', shift: false }], display: 'Delete or Backspace' },
@@ -94,6 +101,9 @@ export const KEYMAP: Binding[] = [
   { action: 'zoomReset', label: 'Zoom to 100%', group: 'View', keys: [{ code: 'Digit0', mod: true }, { key: '0', mod: true }], display: 'Ctrl/Cmd+0' },
   { action: 'fitAll', label: 'Fit all boundaries', group: 'View', keys: [shiftCode('Digit1')], display: 'Shift+1' },
   { action: 'fitSelection', label: 'Fit the selection', group: 'View', keys: [shiftCode('Digit2')], display: 'Shift+2' },
+  { action: 'minimap', label: 'Show or hide the minimap', group: 'View', keys: [shift('m')], display: 'Shift+M' },
+  { action: 'saveView', label: 'Save the current view', group: 'View', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(altMod), display: 'Ctrl/Cmd+Alt+1…9' },
+  { action: 'goToView', label: 'Go to a saved view', group: 'View', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(key => ({ key, alt: true, shift: false })), display: 'Alt+1…9' },
   { action: 'hidePanels', label: 'Hide or show panels', group: 'View', keys: [plain('Tab')], display: 'Tab' },
 
   // Run
@@ -121,6 +131,7 @@ export function withShortcut(label: string, action: ShortcutAction) {
 export const TOOL_SHORTCUTS: Record<string, string> = {
   newProject: shortcutLabel('new'), openProject: shortcutLabel('open'), save: shortcutLabel('save'), saveAs: shortcutLabel('saveAs'),
   copy: shortcutLabel('copy'), cut: shortcutLabel('cut'), paste: shortcutLabel('paste'), pasteChoice: shortcutLabel('pasteChoice'), duplicate: shortcutLabel('duplicate'),
+  copyStyle: shortcutLabel('copyStyle'), pasteStyle: shortcutLabel('pasteStyle'), paintFormat: shortcutLabel('paintFormat'),
   forward: shortcutLabel('forward'), backward: shortcutLabel('backward'), front: shortcutLabel('front'), back: shortcutLabel('back'),
   undo: shortcutLabel('undo'), redo: shortcutLabel('redo'), link: shortcutLabel('link'), unlink: shortcutLabel('unlink'),
   group: shortcutLabel('group'), ungroup: shortcutLabel('ungroup'),
@@ -161,6 +172,14 @@ export function shortcutFor(event: ShortcutInput, editingText: boolean): Shortcu
 }
 
 export type ShortcutHelpGroup = { group: ShortcutGroup; items: { label: string; keys: string }[] };
+
+/** The numbered slot (1–9) a save-view or go-to-view chord refers to. */
+export function viewSlot(event: { key: string; code?: string }): number | null {
+  const key = /^[1-9]$/.exec(event.key);
+  if (key) return Number(key[0]);
+  const code = /^(?:Digit|Numpad)([1-9])$/.exec(event.code ?? '');
+  return code ? Number(code[1]) : null;
+}
 
 /** The keyboard help is generated from the keymap, grouped in reading order. */
 export const SHORTCUT_GROUPS: ShortcutHelpGroup[] = (() => {

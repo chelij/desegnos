@@ -2,8 +2,9 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, 
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTextField } from './WorkspaceSurface';
-import { automaticLinks, boundaryAt, boundaryKey, boundaryMoves, canvasRectFromPage, canvasTargetKey, dotGrid, drawnBoundaryRect, fitCamera, insideAnyBoundary, layoutBoundaries, pointerAt, POINTER_HIT_PX, referenceFrameRect, referenceItemAt, referenceMoves, referenceNoteRect, movedReferenceRect, nearestEdgeAnchors, pageRectFromCanvas, panCamera, pointerRoute, pushApartBoundaries, pushApartReference, resizedReferenceRect, sameBoundaries, samePointerEndpoint, selectedPointers, viewportWorldRect, type Boundary, type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point, type ReferenceBox, type ReferenceMove, type RequestBox } from './projectCanvasGeometry';
-import type { BoundaryKind, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, Page, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from './types';
+import { automaticLinks, boundaryAt, boundaryKey, boundaryMoves, canvasRectFromPage, canvasTargetKey, dotGrid, drawnBoundaryRect, fitCamera, insideAnyBoundary, layoutBoundaries, MAX_ZOOM, MIN_BOUNDARY_DRAW_HEIGHT, MIN_BOUNDARY_WIDTH, pointerAt, POINTER_HIT_PX, referenceFrameRect, referenceItemAt, referenceMoves, referenceNoteRect, movedReferenceRect, nearestEdgeAnchors, pageRectFromCanvas, panCamera, pointerRoute, pushApartBoundaries, pushApartReference, resizedReferenceRect, sameBoundaries, samePointerEndpoint, selectedPointers, snapToBoundaryGrid, viewportWorldRect, zoomCameraAt, type Boundary, type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point, type ReferenceBox, type ReferenceMove, type RequestBox } from './projectCanvasGeometry';
+import { steppedZoom } from './canvasGeometry';
+import type { BoundaryKind, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, NamedView, Page, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from './types';
 import type { ProjectTool, RequestToolShape } from './EditorTools';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { BoundaryLayer } from './projectCanvas/boundaries';
@@ -11,6 +12,8 @@ import { coveredTargets, dedupeTargets, elementBoxes, elementBoxesNow, pendingRe
 import { ReferenceLayer, ReferenceNoteEditor, shownReference } from './projectCanvas/reference';
 import { pointerEntries, pointerWorld, PointerComments, PointerHandles, PointerLines } from './projectCanvas/pointers';
 import { centre, screenRect, useCanvasCamera, type NativeDrag, type ScreenRect } from './projectCanvas/surface';
+import { Minimap } from './projectCanvas/Minimap';
+import { contentFitsViewport, overviewRects } from './projectCanvas/minimap';
 import { ElementSelectionOverlay, ElementTextEditor, textEditorScreen } from './projectCanvas/elements';
 import { LinkChoiceRow, PasteChoiceRow, PlaceholderChoiceRow, type LinkCopy } from './projectCanvas/linkedChoices';
 import { copySummary, linkNeedsChoice, nestedLayerIds, resolveElements, sameStructure } from './projectCanvas/links';
@@ -23,7 +26,7 @@ import { Notice } from './ProblemBanner';
 import { shortcutFor } from './shortcuts';
 import { playIsActive, type PlayState } from './projectCanvas/play';
 import {
-  cloneElement, createElement, createTextElement, forAppearance, withPickedColours, elementBoundsHeight, elementChildrenOf, elementPath, elementParents, findElementIn, findPageElement, ratioResizedRect, rectFromPoints, resizedElementRect, snapPoint, snapValue,
+  cloneElement, createElement, createTextElement, forAppearance, withPickedColours, elementBoundsHeight, elementChildrenOf, elementPath, elementParents, findElementIn, findPageElement, axisLockedDelta, drawRectWithKeys, rectFromPoints, resizedRectWithKeys, snappedLineEnd, snapPoint, snapValue,
   type ElementCorner,
 } from './projectCanvas/elementGeometry';
 
@@ -35,18 +38,19 @@ type DrawNoteDrag = { kind: 'draw-note'; pointerId: number; start: Point; rect: 
 type DrawPointerDrag = { kind: 'draw-pointer'; pointerId: number; start: Point; source: PointerSource; sourceRect: Rect; current: Point; moved: boolean };
 type ReattachPointerDrag = { kind: 'reattach-pointer'; pointerId: number; start: Point; pointer: string; end: 'from' | 'to'; original: PointerSource | PointerTarget; fixed: Point; current: Point; moved: boolean };
 type MoveTarget = { kind: 'reference'; itemId: string; origin: Rect };
-type MoveSelectionDrag = { kind: 'move-selection'; pointerId: number; start: Point; targets: MoveTarget[]; rects: Record<string, Rect>; moved: boolean };
+type MoveSelectionDrag = { kind: 'move-selection'; pointerId: number; start: Point; targets: MoveTarget[]; rects: Record<string, Rect>; moved: boolean; axisLocked: boolean };
 type ResizeReferenceDrag = { kind: 'resize-reference'; pointerId: number; start: Point; corner: FrameCorner; itemId: string; origin: Rect; rect: Rect; moved: boolean };
 type ElementEntry = { id: string; pageId: string; sizeId: string; allSizes: boolean; parentId: string | null; index: number; element: Element; rect: Rect; parentOrigin: Point; boundaryOrigin: Point; world: Rect };
 type ClipboardEntry = { id: string; pageId: string; parentId: string | null; index: number; element: Element; world: Rect; rect: Rect };
 type PasteTarget = { pageId: string; sizeId: string; allSizes: boolean; parentId: string | null; parentOrigin: Point; boundary: Rect };
 type PasteChoice = { target: PasteTarget; offset: number; value: PasteMode; useDefault: boolean; screen: ScreenRect };
 type LinkDecision = { copies: LinkCopy[]; error: string | null; screen: ScreenRect };
-type MoveElementsDrag = { kind: 'move-elements'; pointerId: number; start: Point; entries: ElementEntry[]; rects: Record<string, Rect>; moved: boolean; duplicate: boolean };
+type MoveElementsDrag = { kind: 'move-elements'; pointerId: number; start: Point; entries: ElementEntry[]; rects: Record<string, Rect>; moved: boolean; duplicate: boolean; axisLocked: boolean };
 type ResizeElementDrag = { kind: 'resize-element'; pointerId: number; start: Point; corner: ElementCorner; entry: ElementEntry; rect: Rect; moved: boolean };
 type DrawElementDrag = { kind: 'draw-element'; pointerId: number; start: Point; pageId: string; sizeId: string; parentId: string | null; parentOrigin: Point; boundary: Rect; rect: Rect; elementKind: ElementKind; line: boolean; rotation: number; moved: boolean };
 type MarqueeDrag = { kind: 'marquee'; pointerId: number; start: Point; current: Point; pageId: string | null; additive: boolean; moved: boolean };
-type Drag = PanDrag | MoveBoundaryDrag | DrawBoundaryDrag | DrawRequestAreaDrag | DrawNoteDrag | DrawPointerDrag | ReattachPointerDrag | MoveSelectionDrag | ResizeReferenceDrag | MoveElementsDrag | ResizeElementDrag | DrawElementDrag | MarqueeDrag;
+type ZoomDrag = { kind: 'zoom-rect'; pointerId: number; start: Point; current: Point; zoomOut: boolean; moved: boolean };
+type Drag = PanDrag | MoveBoundaryDrag | DrawBoundaryDrag | DrawRequestAreaDrag | DrawNoteDrag | DrawPointerDrag | ReattachPointerDrag | MoveSelectionDrag | ResizeReferenceDrag | MoveElementsDrag | ResizeElementDrag | DrawElementDrag | MarqueeDrag | ZoomDrag;
 
 const CORNERS: FrameCorner[] = ['nw', 'ne', 'sw', 'se'];
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
@@ -59,7 +63,12 @@ const REQUEST_EDITOR_HEIGHT = 84;
 type DragInput = Pick<PointerEvent, 'pointerId' | 'clientX' | 'clientY' | 'button' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey'>;
 
 export type PreviewState = { pageId: string; url: string; stale: boolean };
-export type ProjectCanvasHandle = { focusCanvas: () => void; fit: () => void; fitSelection: () => void; zoomStep: (direction: number) => void; zoomTo: (zoom: number) => void; focusBoundary: (pageId: string) => void; armPointer: (pointerId: string) => void; linkSelection: () => void; unlinkSelection: () => void };
+export type ProjectCanvasHandle = { focusCanvas: () => void; fit: () => void; fitSelection: () => void; zoomStep: (direction: number) => void; zoomTo: (zoom: number) => void; focusBoundary: (pageId: string) => void; armPointer: (pointerId: string) => void; linkSelection: () => void; unlinkSelection: () => void;
+  copyStyle: () => void; pasteStyle: () => void; paintFormat: () => void;
+  currentCamera: () => CanvasCamera; goToView: (view: NamedView) => void; };
+
+/** A repeated duplicate: the selection that was just made, and how far it sat from its source. */
+type DuplicateRepeat = { key: string; offset: Point };
 
 export type ProjectCanvasProps = {
   project: Project; openPage: (pageId: string) => void;
@@ -181,11 +190,18 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   const clipboardMark = useRef<string | null>(null);
   const pasteCount = useRef(0);
   const pasteMode = usePasteDefault();
+  // Format painter: the last copied style, and whether the next click applies it.
+  const copiedStyle = useRef<Element['style'] | null>(null);
+  const [painterArmed, setPainterArmed] = useState(false);
+  // Smart duplicate: what the last duplicate was, so Ctrl/Cmd+D can repeat its offset.
+  const duplicateRepeat = useRef<DuplicateRepeat | null>(null);
   const [pasteChoice, setPasteChoice] = useState<PasteChoice | null>(null);
   const [placeholderChoice, setPlaceholderChoice] = useState<{ pageId: string; sizeId: string; elementId: string; screen: ScreenRect } | null>(null);
   const [linkChoice, setLinkChoice] = useState<LinkDecision | null>(null);
   const [boundaries, setBoundaries] = useState<Boundary[]>([]);
-  const { camera, setCamera, panning, setPanning, spaceHeld, space, touched, fit, zoomStep, zoomTo, worldPoint } = useCanvasCamera(surface, boundaries, project.id);
+  const { camera, setCamera, panning, setPanning, spaceHeld, space, zoomHeld, zoom, touched, fit, zoomStep, zoomTo, worldPoint, currentCamera, animateTo, stopTransition } = useCanvasCamera(surface, boundaries, project.id);
+  // The minimap hides itself while the whole canvas fits; the shortcut can force it on or off.
+  const [minimapPreference, setMinimapPreference] = useState<'auto' | 'on' | 'off'>('auto');
   const [moving, setMoving] = useState<{ pageId: string; sizeId: string; rect: Rect } | null>(null);
   const [draft, setDraft] = useState<Rect | null>(null);
   const [draftArea, setDraftArea] = useState<RequestShape | null>(null);
@@ -194,6 +210,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   const [draftNote, setDraftNote] = useState<Rect | null>(null);
   const [draftElement, setDraftElement] = useState<{ rect: Rect; line: boolean; rotation: number } | null>(null);
   const [marquee, setMarquee] = useState<Rect | null>(null);
+  const [zoomRect, setZoomRect] = useState<Rect | null>(null);
   const [pointerDraft, setPointerDraft] = useState<{ from: Point; to: Point } | null>(null);
   const [armedPointer, setArmedPointer] = useState<{ pointerId: string; end: 'from' | 'to' } | null>(null);
   const [movingItems, setMovingItems] = useState<Record<string, Rect>>({});
@@ -206,6 +223,10 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   const [editing, setEditing] = useState<{ pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean } | null>(null);
   const [pendingImage, setPendingImage] = useState<{ uri: string; width: number; height: number; name: string } | null>(null);
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
+  // The minimap draws boundaries and reference; it stays hidden while all of it fits on screen.
+  const minimapRects = overviewRects(boundaries, project.reference);
+  const minimapFits = viewSize.width >= 1 && contentFitsViewport(minimapRects, viewportWorldRect(camera, viewSize));
+  const minimapVisible = viewSize.width >= 1 && (minimapPreference === 'on' || (minimapPreference === 'auto' && !minimapFits));
   // The boundary (or the canvas bed) under a native file drag, and the last drop message.
   const [dropHover, setDropHover] = useState<{ key: string; rect: Rect | null } | null>(null);
   const [dropNotice, setDropNotice] = useState<{ id: number; message: string; variant: 'info' | 'warning' } | null>(null);
@@ -226,7 +247,13 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   useEffect(() => { onLayout(boundaries); }, [boundaries, onLayout]);
   useEffect(() => { onZoom(camera.zoom); }, [camera.zoom, onZoom]);
   useEffect(() => { setPasteChoice(null); setLinkChoice(null); setPlaceholderChoice(null); }, [project.id]);
+  // A repeat duplicate ends as soon as the selection changes any other way.
+  const selectedElementKey = targetKey(selection.filter(isElementTarget));
+  useEffect(() => {
+    if (duplicateRepeat.current && duplicateRepeat.current.key !== selectedElementKey) duplicateRepeat.current = null;
+  }, [selectedElementKey]);
   useEffect(() => { if (tool !== 'request') { setRequestDraft(null); setPolygonDraft(null); setDraftArea(null); } }, [tool]);
+  useEffect(() => { if (tool !== 'select') setPainterArmed(false); }, [tool]);
   useEffect(() => { if (requestShape === 'pick') setPolygonDraft(null); }, [requestShape]);
 
   // Keep the visible world in step with the surface, so far-away pointers can be culled.
@@ -241,6 +268,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   }, []);
 
   function escapeCanvas() {
+    if (painterArmed) { setPainterArmed(false); return; }
     if (playIsActive(latest.current.play)) { onPlayExit(); return; }
     if (requestDraft || polygonDraft || draftArea) { cancelRequestDraft(); return; }
     if (editing) { cancelEditingText(); return; }
@@ -259,7 +287,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       // A choice row owns the keyboard until it closes.
       if (pasteChoice || linkChoice) return;
       if (event.key === 'Escape') {
-        if (!selection.length && !focused && !editing) return;
+        if (!selection.length && !focused && !editing && !painterArmed) return;
         event.preventDefault();
         escapeCanvas();
         return;
@@ -277,7 +305,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
-  }, [selection, focused, focusedSize, editing, selectBoundary, removeSelection, removeElements, deleteBoundary, pasteChoice, linkChoice]);
+  }, [selection, focused, focusedSize, editing, selectBoundary, removeSelection, removeElements, deleteBoundary, pasteChoice, linkChoice, painterArmed]);
 
   // Files dropped on the project canvas: pictures and text land inside the boundary under
   // the pointer or become reference outside every boundary, and other accepted files attach
@@ -480,6 +508,12 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     surface.current?.focus({ preventScroll: true });
   }
 
+  /** Alt+1–9: glide back to a saved named view. */
+  function goToView(view: NamedView) {
+    animateTo({ x: view.x, y: view.y, zoom: view.zoom });
+    surface.current?.focus({ preventScroll: true });
+  }
+
   /** Shift+2: frame the selected layers, reference items or the focused boundary. */
   function fitSelection() {
     const node = surface.current;
@@ -506,7 +540,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     setCamera(fitCamera({ x: left, y: top, width: right - left, height: bottom - top }, { width: box.width, height: box.height }));
   }
 
-  useImperativeHandle(ref, () => ({ focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection }));
+  useImperativeHandle(ref, () => ({ focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView }));
 
   /** Double-click editing is the all-sizes mode: a layer drawn then belongs to every size. */
   const editingAllSizes = (pageId: string): boolean =>
@@ -696,7 +730,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       return item ? [{ kind: 'reference' as const, itemId: item.id, origin: item.rect }] : [];
     });
     if (!movable.length) return null;
-    return { kind: 'move-selection', pointerId: event.pointerId, start: point, targets: movable, rects: {}, moved: false };
+    return { kind: 'move-selection', pointerId: event.pointerId, start: point, targets: movable, rects: {}, moved: false, axisLocked: false };
   }
 
   function nextSelectionFor(target: CanvasTarget, additive: boolean): CanvasTarget[] {
@@ -770,6 +804,41 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (moves.length) void Promise.resolve(moveElements(moves)).catch(() => {});
   }
 
+  // Format painter: the style is the only thing that travels, never position, size or text.
+  function copyStyle() {
+    const entry = elementEntries(selection)[0];
+    if (entry) copiedStyle.current = structuredClone(entry.element.style);
+  }
+
+  /** One command per page, so pasting a style over a selection is a single undo step. */
+  function pasteStyle() {
+    const style = copiedStyle.current;
+    const entries = elementEntries(selection);
+    if (!style || !entries.length) return;
+    const byPage = new Map<string, ElementPatch[]>();
+    for (const entry of entries) {
+      const patch: ElementPatch = { id: entry.id, style: structuredClone(style), ...(entry.allSizes ? { all_sizes: true } : { size_id: entry.sizeId }) };
+      byPage.set(entry.pageId, [...(byPage.get(entry.pageId) ?? []), patch]);
+    }
+    for (const [pageId, patches] of byPage) void Promise.resolve(updateElements(pageId, patches)).catch(() => {});
+  }
+
+  /** Shift+Ctrl/Cmd+Alt+C copies the selected style and arms the painter for one click. */
+  function paintFormat() {
+    if (elementEntries(selection).length) copyStyle();
+    if (!copiedStyle.current) return;
+    setPainterArmed(true);
+    surface.current?.focus({ preventScroll: true });
+  }
+
+  function applyPainterStyle(target: ElementTarget) {
+    const style = copiedStyle.current;
+    if (!style) return;
+    const patch: ElementPatch = { id: target.elementId, style: structuredClone(style), ...(target.sizeId === null ? { all_sizes: true } : { size_id: target.sizeId }) };
+    void Promise.resolve(updateElements(target.pageId, [patch])).catch(() => {});
+    setPainterArmed(false);
+  }
+
   function copyElements() {
     const entries = elementEntries(selection);
     if (!entries.length) return;
@@ -810,23 +879,25 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     return { left: point.x * camera.zoom + camera.x, top: point.y * camera.zoom + camera.y, width: 0, height: 0 };
   }
 
-  function pasteEntries(entries: ClipboardEntry[], mode: PasteMode, target: PasteTarget, offset: number) {
+  function pasteEntries(entries: ClipboardEntry[], mode: PasteMode, target: PasteTarget, offset: Point,
+    onInserted?: (targets: { pageId: string; elementId: string; sizeId: string | null }[]) => void, selectAfter = true) {
     if (!entries.length) return;
     const index = elementChildrenOf(project, target.pageId, target.parentId).length;
     if (mode === 'linked') {
       const items: LinkedPasteInstance[] = entries.map((entry, position) => {
-        const world = { x: entry.world.x + offset, y: entry.world.y + offset };
+        const world = { x: entry.world.x + offset.x, y: entry.world.y + offset.y };
         return {
           id: crypto.randomUUID(), sourceId: entry.id, pageId: target.pageId, parentId: target.parentId, index: index + position,
           rect: { x: world.x - target.boundary.x - target.parentOrigin.x, y: world.y - target.boundary.y - target.parentOrigin.y, width: entry.rect.width, height: entry.rect.height },
         };
       });
-      void pasteLinked(items).then(() => selectTargets(items.map(item => ({ pageId: item.pageId, elementId: item.id, sizeId: target.allSizes ? null : target.sizeId })))).catch(() => {});
+      const targets = items.map(item => ({ pageId: item.pageId, elementId: item.id, sizeId: target.allSizes ? null : target.sizeId }));
+      void pasteLinked(items).then(() => { onInserted?.(targets); if (selectAfter) selectTargets(targets); }).catch(() => {});
       return;
     }
     const inserted: { pageId: string; elementId: string; sizeId: string | null }[] = [];
     const elements = entries.map(entry => {
-      const world = { x: entry.world.x + offset, y: entry.world.y + offset };
+      const world = { x: entry.world.x + offset.x, y: entry.world.y + offset.y };
       const element: Element = { ...structuredClone(entry.element), id: crypto.randomUUID(), link: null, overrides: {},
         rect: { x: world.x - target.boundary.x - target.parentOrigin.x, y: world.y - target.boundary.y - target.parentOrigin.y, width: entry.rect.width, height: entry.rect.height },
         children: cloneChildren(entry.element.children) };
@@ -834,7 +905,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       return element;
     });
     // A layer pasted in one size is hidden in the others, exactly like a newly drawn layer.
-    void insertElements(target.pageId, target.parentId, index, elements, undefined, target.allSizes ? null : target.sizeId).then(() => selectTargets(inserted)).catch(() => {});
+    void insertElements(target.pageId, target.parentId, index, elements, undefined, target.allSizes ? null : target.sizeId)
+      .then(() => { onInserted?.(inserted); if (selectAfter) selectTargets(inserted); }).catch(() => {});
   }
 
   /** Ctrl/Cmd+V: the default paste when one is set, otherwise the inline choice. */
@@ -846,7 +918,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     const mode = alwaysAsk ? null : pasteMode ?? pasteDefault();
     if (mode) {
       pasteCount.current += 1;
-      pasteEntries(clipboard.current, mode, target, 16 * pasteCount.current);
+      pasteEntries(clipboard.current, mode, target, { x: 16 * pasteCount.current, y: 16 * pasteCount.current });
       return;
     }
     setPasteChoice({ target, offset: 16 * (pasteCount.current + 1), value: 'linked', useDefault: false, screen: pasteScreen() });
@@ -858,17 +930,21 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     setPasteChoice(null);
     pasteCount.current += 1;
     if (choice.useDefault) setPasteDefault(choice.value);
-    pasteEntries(clipboard.current, choice.value, choice.target, choice.offset);
+    pasteEntries(clipboard.current, choice.value, choice.target, { x: choice.offset, y: choice.offset });
   }
 
   function cloneChildren(children: Element[]): Element[] {
     return children.map(child => ({ ...structuredClone(child), id: crypto.randomUUID(), children: cloneChildren(child.children) }));
   }
 
-  /** Ctrl/Cmd+D follows the paste default; each copy stays beside its original. */
+  /** Ctrl/Cmd+D follows the paste default; each copy stays beside its original.
+   *  A repeat duplicate keeps the offset of the copy that was just moved, Figma-style. */
   function duplicateElements() {
     const entries = elementEntries(selection);
     if (!entries.length) return;
+    const repeat = duplicateRepeat.current;
+    const key = entryTargetKey(entries);
+    const offset = repeat?.key === key ? repeat.offset : { x: 16, y: 16 };
     const mode = pasteMode ?? pasteDefault() ?? 'unlinked';
     const shared = nestedLayerIds(project);
     const groups = new Map<string, { target: PasteTarget; entries: ClipboardEntry[] }>();
@@ -878,12 +954,23 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       // A layer inside a linked element is copied beside its copy, not into the shared box.
       const parentId = entry.parentId && !shared.has(entry.parentId) ? entry.parentId : null;
       const parentOrigin = parentId ? entry.parentOrigin : { x: 0, y: 0 };
-      const key = `${entry.pageId}\u0000${entry.sizeId}\u0000${parentId ?? ''}`;
-      const group = groups.get(key) ?? { target: { pageId: entry.pageId, sizeId: entry.sizeId, allSizes: entry.allSizes, parentId, parentOrigin, boundary }, entries: [] };
+      const groupKey = `${entry.pageId}\u0000${entry.sizeId}\u0000${parentId ?? ''}`;
+      const group = groups.get(groupKey) ?? { target: { pageId: entry.pageId, sizeId: entry.sizeId, allSizes: entry.allSizes, parentId, parentOrigin, boundary }, entries: [] };
       group.entries.push({ id: entry.id, pageId: entry.pageId, parentId: entry.parentId, index: entry.index, element: entry.element, world: entry.world, rect: entry.rect });
-      groups.set(key, group);
+      groups.set(groupKey, group);
     }
-    for (const group of groups.values()) pasteEntries(group.entries, mode, group.target, 16);
+    // Copies can land in several boxes; select them all and arm the repeat once they exist.
+    const inserted: { pageId: string; elementId: string; sizeId: string | null }[] = [];
+    let pending = groups.size;
+    for (const group of groups.values()) {
+      pasteEntries(group.entries, mode, group.target, offset, targets => {
+        inserted.push(...targets);
+        pending -= 1;
+        if (pending > 0) return;
+        duplicateRepeat.current = { key: targetKey(inserted), offset };
+        selectTargets(inserted);
+      }, false);
+    }
   }
 
   function linkSelection() {
@@ -939,6 +1026,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   function nudgeElements(dx: number, dy: number) {
     const entries = elementEntries(selection);
     if (!entries.length) return;
+    rememberRepeatMove(entries, { x: dx, y: dy });
     void Promise.resolve(moveElements(entries.map(entry => ({
       id: entry.id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index: entry.index,
       rect: { ...entry.rect, x: entry.rect.x + dx, y: entry.rect.y + dy },
@@ -983,6 +1071,9 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         case 'paste': return;
         case 'pasteChoice': if (clipboard.current.length) { event.preventDefault(); pasteElements(true); } return;
         case 'duplicate': if (elementTargets.length) { event.preventDefault(); duplicateElements(); } return;
+        case 'copyStyle': if (elementTargets.length) { event.preventDefault(); copyStyle(); } return;
+        case 'pasteStyle': if (elementTargets.length && copiedStyle.current) { event.preventDefault(); pasteStyle(); } return;
+        case 'paintFormat': if (elementTargets.length || copiedStyle.current) { event.preventDefault(); paintFormat(); } return;
         case 'group': if (elementTargets.length) { event.preventDefault(); groupSelection(); } return;
         case 'ungroup': if (elementTargets.length) { event.preventDefault(); ungroupSelection(); } return;
         case 'forward': case 'front': if (elementTargets.length) { event.preventDefault(); arrangeElements(true); } return;
@@ -997,11 +1088,15 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
           nudgeElements(key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0, key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0);
           return;
         }
+        case 'minimap':
+          event.preventDefault();
+          setMinimapPreference(minimapVisible ? 'off' : 'on');
+          return;
       }
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
-  }, [project, selection, focused]);
+  }, [project, selection, focused, minimapVisible]);
 
   // The Image tool opens the platform file picker through the same picture store as reference.
   useEffect(() => {
@@ -1059,6 +1154,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (busy.current) return;
+    // Middle-button drag pans from any tool and never touches the selection.
+    if (event.button === 1) { startPan(event, null); return; }
     if (pasteChoice || linkChoice) { setPasteChoice(null); setLinkChoice(null); }
     const target = event.target as HTMLElement;
     const boundaryNode = target.closest<HTMLElement>('[data-boundary]');
@@ -1069,6 +1166,25 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     const requestNode = target.closest<HTMLElement>('[data-request]');
     const point = worldPoint(event);
     lastPointer.current = point;
+    // Z arms zooming: drag a rectangle to fit it, or click a zoom step at the pointer.
+    if (event.button === 0 && zoom.current && !space.current) {
+      event.preventDefault();
+      beginPointerSession(event);
+      drag.current = { kind: 'zoom-rect', pointerId: event.pointerId, start: point, current: point, zoomOut: event.altKey, moved: false };
+      setZoomRect({ ...point, width: 0, height: 0 });
+      return;
+    }
+    // The painter applies its style to the next clicked layer and then disarms.
+    if (event.button === 0 && painterArmed && !space.current) {
+      const hit = elementTargetAt(project, selection, target);
+      if (hit) {
+        event.preventDefault();
+        applyPainterStyle(hit);
+        surface.current?.focus({ preventScroll: true });
+        return;
+      }
+      setPainterArmed(false);
+    }
     if (requestNode && !space.current) {
       event.preventDefault();
       selectRequest(requestNode.dataset.request!);
@@ -1094,7 +1210,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       return;
     }
     const additive = event.shiftKey || event.ctrlKey || event.metaKey;
-    if (event.button === 1 || (event.button === 0 && space.current) || (event.button === 0 && tool === 'pan')) { startPan(event, boundaryNode?.dataset.boundary ?? null); return; }
+    if (event.button === 0 && space.current) { startPan(event, boundaryNode?.dataset.boundary ?? null); return; }
+    if (event.button === 0 && tool === 'pan') { startPan(event, boundaryNode?.dataset.boundary ?? null); return; }
     if (event.button !== 0) return;
 
     if (tool === 'request') {
@@ -1144,7 +1261,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       // keeps boundaries from overlapping and keeps the tool from silently refusing a press.
       event.preventDefault();
       beginPointerSession(event);
-      drag.current = { kind: 'draw-boundary', pointerId: event.pointerId, start: point, rect: drawnBoundaryRect(point, point), moved: false };
+      drag.current = { kind: 'draw-boundary', pointerId: event.pointerId, start: point, rect: boundaryDrawRect(point, point), moved: false };
       setDraft(drag.current.rect);
       return;
     }
@@ -1205,7 +1322,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         if (!entries.length) return;
         event.preventDefault();
         beginPointerSession(event);
-        drag.current = { kind: 'move-elements', pointerId: event.pointerId, start: point, entries, rects: {}, moved: false, duplicate: event.altKey };
+        drag.current = { kind: 'move-elements', pointerId: event.pointerId, start: point, entries, rects: {}, moved: false, duplicate: event.altKey, axisLocked: false };
         surface.current?.focus({ preventScroll: true });
         return;
       }
@@ -1289,7 +1406,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (!drag.current) return;
     drag.current = null;
     endPointerSession();
-    setDraft(null); setDraftArea(null); setPolygonDraft(null); setDraftNote(null); setDraftElement(null); setMarquee(null);
+    setDraft(null); setDraftArea(null); setPolygonDraft(null); setDraftNote(null); setDraftElement(null); setMarquee(null); setZoomRect(null);
     setPointerDraft(null); setMoving(null); setMovingElements({}); setMovingItems({}); setPanning(false);
   }
 
@@ -1313,37 +1430,41 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (active.kind === 'move-boundary') {
       active.rect = { ...active.origin, x: Math.round(active.origin.x + point.x - active.start.x), y: Math.round(active.origin.y + point.y - active.start.y) };
       setMoving({ pageId: active.pageId, sizeId: active.sizeId, rect: active.rect });
-    } else if (active.kind === 'draw-boundary') setDraft(active.rect = drawnBoundaryRect(active.start, point));
+    } else if (active.kind === 'draw-boundary') setDraft(active.rect = boundaryDrawRect(active.start, point, { square: event.shiftKey, fromCentre: event.altKey }));
     else if (active.kind === 'draw-request-area') {
       active.current = point;
       if (active.shape === 'freehand') {
         const last = active.points[active.points.length - 1];
         if (Math.hypot(point.x - last.x, point.y - last.y) * camera.zoom >= 2) active.points.push(point);
         setDraftArea({ kind: 'freehand', points: [...active.points, point] });
-      } else if (active.shape === 'ellipse') {
-        setDraftArea({ kind: 'ellipse', rect: rectFromPoints(active.start, point) });
       } else {
-        setDraftArea({ kind: 'rect', rect: rectFromPoints(active.start, point) });
+        const rect = drawRectWithKeys(active.start, point, { square: event.shiftKey, fromCentre: event.altKey });
+        setDraftArea({ kind: active.shape === 'ellipse' ? 'ellipse' : 'rect', rect });
       }
     }
     else if (active.kind === 'draw-note') setDraftNote(active.rect = referenceNoteRect(active.start, point));
     else if (active.kind === 'draw-element') {
       if (active.line) {
-        const end = event.shiftKey ? snapLine(active.start, point) : point;
+        // A drawn line's rotation snaps to 15 degree steps while Shift is held.
+        const end = event.shiftKey ? snappedLineEnd(active.start, point, 15) : point;
         const length = Math.max(1, Math.hypot(end.x - active.start.x, end.y - active.start.y));
         active.rotation = Math.atan2(end.y - active.start.y, end.x - active.start.x) * 180 / Math.PI;
         active.rect = { x: (active.start.x + end.x) / 2 - length / 2, y: (active.start.y + end.y) / 2, width: length, height: 0 };
+      } else if (active.elementKind === 'box' || active.elementKind === 'ellipse') {
+        active.rect = drawRectWithKeys(active.start, point, { snap: true, square: event.shiftKey, fromCentre: event.altKey });
       } else {
-        const end = event.altKey ? point : snapPoint(point);
-        active.rect = rectFromPoints(active.start, end);
+        active.rect = rectFromPoints(active.start, event.altKey ? point : snapPoint(point));
       }
       setDraftElement({ rect: active.rect, line: active.line, rotation: active.rotation });
     } else if (active.kind === 'marquee') {
       active.current = point;
-      const end = event.altKey ? point : point;
-      setMarquee(rectFromPoints(active.start, end));
+      setMarquee(rectFromPoints(active.start, point));
+    } else if (active.kind === 'zoom-rect') {
+      active.current = point;
+      setZoomRect(rectFromPoints(active.start, point));
     } else if (active.kind === 'move-elements') {
-      const delta = elementMoveDelta(active.entries, active.start, point, !event.altKey);
+      active.axisLocked = event.shiftKey;
+      const delta = elementMoveDelta(active.entries, active.start, point, !event.altKey, active.axisLocked);
       const rects: Record<string, Rect> = {};
       for (const entry of active.entries) {
         const world = { ...entry.world, x: entry.world.x + delta.x, y: entry.world.y + delta.y };
@@ -1353,7 +1474,9 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       setMovingElements(rects);
     } else if (active.kind === 'resize-element') {
       const localPoint = elementLocalRect({ x: point.x, y: point.y, width: 0, height: 0 }, active.entry.boundaryOrigin, active.entry.parentOrigin);
-      active.rect = event.shiftKey ? ratioResizedRect(active.entry.rect, active.corner, localPoint, !event.altKey) : resizedElementRect(active.entry.rect, active.corner, localPoint, !event.altKey);
+      // Images keep their ratio by default and Shift frees it; Alt resizes from the centre.
+      const keepRatio = active.entry.element.kind === 'image' ? !event.shiftKey : event.shiftKey;
+      active.rect = resizedRectWithKeys(active.entry.rect, active.corner, localPoint, { snap: true, ratio: keepRatio, fromCentre: event.altKey });
       setMovingElements({ [active.entry.id]: active.rect });
     } else if (active.kind === 'draw-pointer') {
       active.current = point;
@@ -1369,10 +1492,16 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         : nearestEdgeAnchors({ ...active.fixed, width: 0, height: 0 }, targetRect);
       setPointerDraft({ from: route.from, to: route.to });
     } else if (active.kind === 'move-selection') {
-      const delta = { x: point.x - active.start.x, y: point.y - active.start.y };
+      active.axisLocked = event.shiftKey;
+      const travel = { x: point.x - active.start.x, y: point.y - active.start.y };
+      const delta = active.axisLocked ? axisLockedDelta(travel) : travel;
       const items: Record<string, Rect> = {};
       for (const target of active.targets) {
-        const rect = movedReferenceRect(target.origin, delta);
+        const moved = movedReferenceRect(target.origin, delta);
+        // Keep the locked axis on its exact starting value, grid snapping included.
+        const rect = active.axisLocked
+          ? { ...moved, x: delta.x === 0 ? target.origin.x : moved.x, y: delta.y === 0 ? target.origin.y : moved.y }
+          : moved;
         active.rects[target.itemId] = rect;
         items[target.itemId] = rect;
       }
@@ -1430,9 +1559,17 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     return [...unique.values()];
   }
 
+  /** A move of the layer just duplicated shifts the offset the next duplicate repeats. */
+  function rememberRepeatMove(entries: ElementEntry[], delta: Point) {
+    const repeat = duplicateRepeat.current;
+    if (repeat && repeat.key === entryTargetKey(entries)) {
+      duplicateRepeat.current = { key: repeat.key, offset: { x: repeat.offset.x + delta.x, y: repeat.offset.y + delta.y } };
+    }
+  }
+
   /** Alt+drag leaves the originals in place and drops a copy at the dragged position. */
   async function duplicateElementMove(active: MoveElementsDrag, point: Point, snap: boolean) {
-    const delta = elementMoveDelta(active.entries, active.start, point, snap);
+    const delta = elementMoveDelta(active.entries, active.start, point, snap, active.axisLocked);
     const groups = new Map<string, { pageId: string; parentId: string | null; index: number; sizeId: string | null; allSizes: boolean; elements: Element[]; targets: { pageId: string; elementId: string; sizeId: string | null }[] }>();
     for (const entry of active.entries) {
       const key = `${entry.pageId}\u0000${entry.parentId ?? ''}\u0000${entry.sizeId}\u0000${entry.allSizes}`;
@@ -1448,7 +1585,11 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       await Promise.resolve(insertElements(group.pageId, group.parentId, group.index, group.elements, undefined, group.sizeId)).catch(() => {});
       targets.push(...group.targets);
     }
-    if (targets.length) selectTargets(targets);
+    if (targets.length) {
+      // An Alt-drag duplicate arms Ctrl/Cmd+D to repeat the same offset.
+      duplicateRepeat.current = { key: targetKey(targets), offset: delta };
+      selectTargets(targets);
+    }
   }
 
   async function commitElementMove(active: MoveElementsDrag, point: Point, snap: boolean): Promise<boolean> {
@@ -1456,7 +1597,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     const skip = new Set(active.entries.map(entry => entry.id));
     for (const entry of active.entries) for (const id of elementTreeIds(entry.element.children)) skip.add(id);
     const moves: ElementMove[] = [];
-    const delta = elementMoveDelta(active.entries, active.start, point, snap);
+    const delta = elementMoveDelta(active.entries, active.start, point, snap, active.axisLocked);
+    rememberRepeatMove(active.entries, delta);
     let converted = false;
     for (const entry of active.entries) {
       const world = { ...entry.world, x: entry.world.x + delta.x, y: entry.world.y + delta.y };
@@ -1505,6 +1647,22 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       if (!active.moved && !active.pageId && event.button === 0) selectBoundary(null);
       return;
     }
+    if (active.kind === 'zoom-rect') {
+      setZoomRect(null);
+      const node = surface.current;
+      if (!node) return;
+      const box = node.getBoundingClientRect();
+      touched.current = true;
+      if (active.moved && Math.abs(active.current.x - active.start.x) * camera.zoom >= 4 && Math.abs(active.current.y - active.start.y) * camera.zoom >= 4) {
+        setCamera(fitCamera(rectFromPoints(active.start, active.current), { width: box.width, height: box.height }, 0, MAX_ZOOM));
+        return;
+      }
+      if (!active.moved) {
+        const at = worldToScreen(active.start);
+        setCamera(current => zoomCameraAt(current, at, steppedZoom(current.zoom, active.zoomOut ? -1 : 1)));
+      }
+      return;
+    }
     if (active.kind === 'move-boundary') { setMoving(null); if (active.moved) void persistMove(active.sizeId, active.rect); return; }
     if (active.kind === 'draw-boundary') {
       setDraft(null);
@@ -1517,7 +1675,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       setDraftArea(null);
       const points = [...active.points, active.current];
       if (active.shape === 'freehand') { if (points.length >= 3) closeRequestArea(points, 'freehand'); return; }
-      const rect = rectFromPoints(active.start, active.current);
+      const rect = drawRectWithKeys(active.start, active.current, { square: event.shiftKey, fromCentre: event.altKey });
       if (rect.width < 4 || rect.height < 4) return;
       closeRequestArea(rect, active.shape);
       return;
@@ -1624,13 +1782,6 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 
   function worldToScreen(point: Point): Point {
     return { x: point.x * camera.zoom + camera.x, y: point.y * camera.zoom + camera.y };
-  }
-
-  function snapLine(start: Point, end: Point): Point {
-    const dx = end.x - start.x, dy = end.y - start.y;
-    const length = Math.hypot(dx, dy);
-    const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
-    return { x: start.x + Math.cos(angle) * length, y: start.y + Math.sin(angle) * length };
   }
 
   function startElementResize(event: ReactPointerEvent<HTMLButtonElement>, elementId: string, corner: ElementCorner, sizeId: string | null) {
@@ -1928,7 +2079,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 
   const previewBoundary = preview ? boundaries.find(item => item.pageId === preview.pageId) ?? null : null;
   const previewScreen = previewBoundary ? screenRect(previewBoundary.rect, camera) : null;
-  return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${playIsActive(play) ? ' playing' : ''}${dropHover && !dropHover.rect ? ' drop-bed' : ''}`} style={dotStyle} tabIndex={0}
+  return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${zoomHeld ? ' zoom-ready' : ''}${painterArmed ? ' paint-format' : ''}${playIsActive(play) ? ' playing' : ''}${dropHover && !dropHover.rect ? ' drop-bed' : ''}`} style={dotStyle} tabIndex={0}
     onPointerDown={pointerDown} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { chooseImage(event.target.files?.[0]); event.target.value = ''; }} />
@@ -1943,6 +2094,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       {draft && <div className={`boundary-draft${boundaryKind === 'screen' ? ' screen' : ''}`} style={{ left: draft.x, top: draft.y, width: draft.width, height: draft.height, borderWidth: 2 * inverse }} />}
       {draftElement && <div className={`element-draft${draftElement.line ? ' line' : ''}`} style={{ left: draftElement.rect.x, top: draftElement.rect.y, width: draftElement.rect.width, height: draftElement.rect.height, borderWidth: inverse, transform: draftElement.rotation ? `rotate(${draftElement.rotation}deg)` : undefined }} />}
       {marquee && <div className="element-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.width, height: marquee.height, borderWidth: inverse }} />}
+      {zoomRect && <div className="zoom-marquee" style={{ left: zoomRect.x, top: zoomRect.y, width: zoomRect.width, height: zoomRect.height, borderWidth: inverse }} />}
       <PointerLines entries={entries} autoLinks={autoLinks} draft={pointerDraft} camera={camera} viewport={viewport}
         selected={selectedPointerIds} pointerStates={pointerStates} enabled={tool === 'select'} onSelect={choosePointer} />
     </div>
@@ -1950,6 +2102,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       change={(pointerId, comment) => updatePointer(pointerId, { comment })}
       autoFocusId={createdPointer.current} close={() => { createdPointer.current = null; surface.current?.focus({ preventScroll: true }); }} />
     <BoundaryLabels project={project} boundaries={boundaries} moving={moving} focused={focused} selection={selection} camera={camera} openPage={openPage} />
+    {minimapVisible && <Minimap boundaries={boundaries} reference={project.reference} camera={camera} viewSize={viewSize}
+      move={next => { stopTransition(); touched.current = true; setCamera(next); }} />}
     <PointerHandles entries={entries} camera={camera} selectedId={selectedPointerId} armed={armedPointer} onStart={startReattach} />
     {!editing && <ElementSelectionOverlay surface={surface} project={project} selection={selectedElementTargets} camera={camera}
       version={Object.entries(movingElements).map(([id, rect]) => `${id}:${rect.x},${rect.y},${rect.width},${rect.height}`).join('|')} onResizeStart={startElementResize} />}
@@ -1986,12 +2140,39 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   </div>;
 });
 
-function elementMoveDelta(entries: ElementEntry[], start: Point, point: Point, snap: boolean): Point {
-  const delta = { x: point.x - start.x, y: point.y - start.y };
-  if (!snap || !entries.length) return delta;
+function elementMoveDelta(entries: ElementEntry[], start: Point, point: Point, snap: boolean, axisLock: boolean): Point {
+  const travel = { x: point.x - start.x, y: point.y - start.y };
+  if (!snap || !entries.length) return axisLock ? axisLockedDelta(travel) : travel;
   const first = entries[0].world;
-  return { x: snapValue(first.x + delta.x) - first.x, y: snapValue(first.y + delta.y) - first.y };
+  const delta = { x: snapValue(first.x + travel.x) - first.x, y: snapValue(first.y + travel.y) - first.y };
+  if (!axisLock) return delta;
+  // The locked axis stays exactly where it was; snapping only adjusts the axis being dragged.
+  const axis = axisLockedDelta(travel);
+  return { x: axis.x === 0 ? 0 : delta.x, y: axis.y === 0 ? 0 : delta.y };
 }
+
+/** Boundary drawing with Shift (square) and Alt (from the centre), on the boundary grid. */
+function boundaryDrawRect(start: Point, point: Point, keys: { square?: boolean; fromCentre?: boolean } = {}): Rect {
+  if (!keys.square && !keys.fromCentre) return drawnBoundaryRect(start, point);
+  const from = { x: snapToBoundaryGrid(start.x), y: snapToBoundaryGrid(start.y) };
+  let dx = snapToBoundaryGrid(point.x) - from.x;
+  let dy = snapToBoundaryGrid(point.y) - from.y;
+  if (keys.square) {
+    const size = Math.max(Math.abs(dx), Math.abs(dy));
+    dx = dx < 0 ? -size : size;
+    dy = dy < 0 ? -size : size;
+  }
+  if (keys.fromCentre) {
+    return { x: from.x - Math.abs(dx), y: from.y - Math.abs(dy),
+      width: Math.max(MIN_BOUNDARY_WIDTH, Math.abs(dx) * 2), height: Math.max(MIN_BOUNDARY_DRAW_HEIGHT, Math.abs(dy) * 2) };
+  }
+  return { x: Math.min(from.x, from.x + dx), y: Math.min(from.y, from.y + dy),
+    width: Math.max(MIN_BOUNDARY_WIDTH, Math.abs(dx)), height: Math.max(MIN_BOUNDARY_DRAW_HEIGHT, Math.abs(dy)) };
+}
+
+const targetKey = (targets: { pageId: string; elementId: string }[]): string =>
+  targets.map(target => `${target.pageId}:${target.elementId}`).sort().join('|');
+const entryTargetKey = (entries: { pageId: string; id: string }[]): string => targetKey(entries.map(entry => ({ pageId: entry.pageId, elementId: entry.id })));
 
 function elementTree(elements: Element[]): Element[] {
   return elements.flatMap(element => [element, ...elementTree(element.children)]);

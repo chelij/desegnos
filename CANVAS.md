@@ -93,6 +93,8 @@ For websites and apps, export sends the visual design (element tree with positio
 - **Play** (Shift+Space on a boundary): the boundary becomes clickable and simple pointers run visually. Escape stops.
 - **Preview export**: exports the focused boundary in the background with the AI and runs the real result in place over the boundary, in a sandbox. It shows the last preview until the design changes; Escape returns to the design.
 - **Open in browser** serves the last export for a final check in a real browser.
+- **Minimap**: a small overview in the bottom-right corner draws every boundary and reference item with the visible viewport on top; click or drag it to move the view. It hides while the whole canvas fits on screen; Shift+M shows or hides it.
+- **Named views**: Layers lists saved cameras. Click one to glide back to it, double-click to rename it, and use '+' to save the current camera. Ctrl/Cmd+Alt+1–9 saves the current camera to that slot; Alt+1–9 returns to it.
 
 ## Import
 
@@ -118,6 +120,7 @@ Every tool and action has a shortcut, using the keys other design tools use.
 | Request on selection / request from a shape's outline | F / Shift+F |
 | Insert any element | Ctrl/Cmd+I |
 | Copy / Paste / Paste with choice / Duplicate | Ctrl/Cmd+C / V / Shift+V / D |
+| Copy style / Paste style / Paint format | Ctrl/Cmd+Alt+C / Ctrl/Cmd+Alt+V / Shift+Ctrl/Cmd+Alt+C |
 | Link / Unlink | Ctrl/Cmd+Alt+K / Ctrl/Cmd+Alt+B |
 | Group / Ungroup | Ctrl/Cmd+G / Shift+Ctrl/Cmd+G |
 | Bring forward / backward | Ctrl/Cmd+] / [ |
@@ -125,11 +128,23 @@ Every tool and action has a shortcut, using the keys other design tools use.
 | Nudge / far nudge | Arrows / Shift+Arrows |
 | Delete | Delete or Backspace |
 | Zoom in / out / 100% / fit all / fit selection | Ctrl/Cmd+= / - / 0, Shift+1, Shift+2 |
+| Save view / go to view (slots 1–9) | Ctrl/Cmd+Alt+1–9 / Alt+1–9 |
+| Minimap | Shift+M |
 | Play / Preview export | Shift+Space / Ctrl/Cmd+Enter |
 | Hide panels | Tab |
 | Ask AI on selection | Ctrl/Cmd+K |
 | Export | Ctrl/Cmd+E |
 | Undo / Redo | Ctrl/Cmd+Z / Shift+Ctrl/Cmd+Z |
+
+Transform keys follow the conventions of Figma, Photoshop and Excel:
+
+- Shift keeps a layer's ratio while resizing (images keep it by default and Shift frees it); Alt resizes from the centre; both combine. Shift snaps a drawn line's angle to 15° steps.
+- Shift draws a square or circle while drawing a rectangle, ellipse, boundary or request area; Alt draws it from the centre.
+- Shift locks a layer drag (and a reference drag) to the dominant axis.
+
+Holding Z turns the pointer into a zoom tool: drag a rectangle to zoom to fit it, or click to zoom one step at the pointer (Alt+Z+click zooms out). Middle-mouse drag pans from any tool without changing the selection. Escape cancels the armed format painter.
+
+Ctrl/Cmd+D duplicates and remembers the offset: move the copy, press Ctrl/Cmd+D again, and each new copy repeats the same offset until the selection changes. An Alt-drag duplicate followed by Ctrl/Cmd+D repeats that drag's offset too. Ctrl/Cmd+Alt+C copies the selected layer's style and Ctrl/Cmd+Alt+V pastes it over the selection (one undo step); Shift+Ctrl/Cmd+Alt+C arms the painter so the next clicked layer receives the style.
 
 ## Tools
 
@@ -145,7 +160,7 @@ The active tool decides what a click does, as in Photoshop. Each tool has its ow
 | Boundary | Draw a Page or Screen boundary | — |
 | Pointer | Drag from an element or boundary to its target | — |
 | Note | Place a reference note | — |
-| Pan | Drag the canvas | — |
+| Pan | Drag the canvas (or middle-mouse drag from any tool) | — |
 
 ## Example: chelib
 

@@ -327,12 +327,57 @@ export function ratioResizedRect(rect: Rect, corner: ElementCorner, point: Point
   };
 }
 
-export function lineEnd(start: Point, end: Point, constrain: boolean): Point {
-  if (!constrain) return end;
+export type ResizeKeys = { snap?: boolean; ratio?: boolean; fromCentre?: boolean };
+
+/**
+ * A handle drag with the transform keys applied: Shift keeps the ratio, Alt resizes from the
+ * centre, and both combine. The caller decides what Shift means for the layer kind.
+ */
+export function resizedRectWithKeys(rect: Rect, corner: ElementCorner, point: Point, keys: ResizeKeys = {}): Rect {
+  const next = keys.ratio
+    ? ratioResizedRect(rect, corner, point, keys.snap === true)
+    : resizedElementRect(rect, corner, point, keys.snap === true);
+  if (!keys.fromCentre) return next;
+  const width = Math.max(MIN_ELEMENT_SIZE, next.width);
+  const height = Math.max(MIN_ELEMENT_SIZE, next.height);
+  return { x: rect.x + rect.width / 2 - width / 2, y: rect.y + rect.height / 2 - height / 2, width, height };
+}
+
+export type DrawKeys = { snap?: boolean; square?: boolean; fromCentre?: boolean };
+
+/**
+ * A shape drag with the transform keys applied: Shift constrains to a square (a circle inside
+ * the square), Alt draws from the press point as the centre, and both combine.
+ */
+export function drawRectWithKeys(start: Point, point: Point, keys: DrawKeys = {}): Rect {
+  const end = keys.snap === true ? snapPoint(point) : point;
+  let dx = end.x - start.x, dy = end.y - start.y;
+  if (keys.square) {
+    const size = Math.max(Math.abs(dx), Math.abs(dy));
+    dx = dx < 0 ? -size : size;
+    dy = dy < 0 ? -size : size;
+  }
+  if (!keys.fromCentre) return rectFromPoints(start, { x: start.x + dx, y: start.y + dy });
+  return { x: start.x - Math.abs(dx), y: start.y - Math.abs(dy), width: Math.abs(dx) * 2, height: Math.abs(dy) * 2 };
+}
+
+/** Shift-move locks to whichever axis the pointer has travelled furthest along. */
+export function axisLockedDelta(delta: Point): Point {
+  return Math.abs(delta.x) >= Math.abs(delta.y) ? { x: delta.x, y: 0 } : { x: 0, y: delta.y };
+}
+
+/** A line's other end with its angle snapped to `step` degrees, keeping its length. */
+export function snappedLineEnd(start: Point, end: Point, step = 15): Point {
   const dx = end.x - start.x, dy = end.y - start.y;
   const length = Math.hypot(dx, dy);
-  const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4);
+  const radians = (step * Math.PI) / 180;
+  if (!radians || !length) return end;
+  const angle = Math.round(Math.atan2(dy, dx) / radians) * radians;
   return { x: start.x + Math.cos(angle) * length, y: start.y + Math.sin(angle) * length };
+}
+
+export function lineEnd(start: Point, end: Point, constrain: boolean): Point {
+  return constrain ? snappedLineEnd(start, end, 45) : end;
 }
 
 export function rectFromPoints(start: Point, end: Point): Rect {

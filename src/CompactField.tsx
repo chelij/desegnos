@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { resolveNumberField } from './numberExpression';
 
 /** Display numbers rounded to at most two decimals; the full value survives untouched until edited. */
 function shownNumber(value: number): string {
   return String(Math.round(value * 100) / 100);
 }
 
-/** A field commits on Enter or blur and Escape puts the old value back. */
-export function useFieldDraft(value: string | number, commit: (value: string) => void, valid?: (draft: string) => boolean) {
+/** A field commits on Enter or blur and Escape puts the old value back. `resolve` turns the raw
+ * draft (an expression, typed units) into the value to commit; returning null reverts. */
+export function useFieldDraft(value: string | number, commit: (value: string) => void, valid?: (draft: string) => boolean, resolve?: (draft: string) => string | null) {
   const [draft, setDraft] = useState(String(value));
   const cancelled = useRef(false);
   useEffect(() => { setDraft(String(value)); }, [value]);
   function settle() {
     if (cancelled.current) { cancelled.current = false; setDraft(String(value)); return; }
-    if (draft === String(value)) return;
-    if (!valid || valid(draft)) commit(draft); else setDraft(String(value));
+    const resolved = resolve ? resolve(draft) : draft;
+    if (resolved === null) { setDraft(String(value)); return; }
+    if (resolved === String(value)) { if (resolved !== draft) setDraft(resolved); return; }
+    if (!valid || valid(resolved)) commit(resolved); else setDraft(String(value));
   }
   return {
     draft, setDraft, settle,
@@ -54,13 +58,18 @@ type Drag = { start: number; origin: number; value: number; moved: boolean };
  * Dragging the prefix scrubs the value like a paint program: one unit per 2px,
  * ten per 2px while Shift is held, clamped to the field's range and committed
  * once on release so the whole drag is a single undo step.
+ *
+ * Typing also accepts arithmetic (`120*2`, `(10+5)*2`, `100/3`) and relative entries
+ * (`+16`, `*2`, `/2`; subtraction is `+-8` because a leading `-` is an absolute number).
+ * Units typed by habit (`24px`, `50%`) are ignored, results are clamped and rounded to two
+ * decimals, and invalid input reverts without committing.
  */
 export function CompactNumberField({ prefix, label, value, commit, valid, min, max, disabled, unit, field }: {
   prefix: ReactNode; label: string; value: string | number; commit: (value: string) => void;
   valid?: (draft: string) => boolean; min?: number; max?: number; disabled?: boolean; unit?: string; field?: string;
 }) {
   const formatted = typeof value === 'number' ? shownNumber(value) : value;
-  const state = useFieldDraft(formatted, commit, valid);
+  const state = useFieldDraft(formatted, commit, valid, draft => resolveNumberField(draft, formatted, min, max));
   const input = useRef<HTMLInputElement>(null);
   const drag = useRef<Drag | null>(null);
   const [scrubbed, setScrubbed] = useState<string | null>(null);
@@ -104,8 +113,9 @@ export function CompactNumberField({ prefix, label, value, commit, valid, min, m
   return <label className="props-num" title={label}>
     <span className="props-num-prefix is-scrubby" aria-hidden="true" data-scrub={label}
       onPointerDown={beginScrub} onPointerMove={scrub} onPointerUp={endScrub} onPointerCancel={cancelScrub}>{prefix}</span>
-    <input ref={input} type="number" inputMode="decimal" step="any" aria-label={label} value={scrubbed ?? state.draft}
-      min={min} max={max} disabled={disabled} data-field={field}
+    <input ref={input} type="text" inputMode="decimal" aria-label={label} value={scrubbed ?? state.draft}
+      spellCheck={false} autoComplete="off" disabled={disabled} data-field={field}
+      style={{ fontVariantNumeric: 'tabular-nums' }}
       onChange={event => state.setDraft(event.target.value)}
       onBlur={state.settle} onKeyDown={fieldKeys(state.settle, state.cancel)} />
     {unit && <span className="props-num-unit" aria-hidden="true">{unit}</span>}

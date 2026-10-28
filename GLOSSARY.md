@@ -16,6 +16,9 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | **Link card** | A pasted web address in reference. | `ReferenceKind::Link` |
 | **Swatch** | A pasted colour in reference. | `ReferenceKind::Swatch` |
 | **Dot grid** | The spreadsheet-like dots on the canvas bed; snapping follows them. | `dotGrid` |
+| **Zoom rectangle** | Hold Z and drag a box to zoom the canvas to fit it; a Z click zooms one step at the pointer, Alt+Z+click zooms out. | `ZoomDrag`, `useCanvasCamera` |
+| **Minimap** | Bottom-right overview of every boundary and reference item with the visible viewport on top. Click or drag to move the view; hides while everything fits; Shift+M toggles it. | `Minimap`, `src/projectCanvas/minimap.ts` |
+| **Named view** | A saved camera position in the project file, listed in Layers. Ctrl/Cmd+Alt+1–9 saves to a slot; Alt+1–9 returns with a short glide. | `NamedView`, `Project.views`, `Command::AddNamedView`, `Command::UpdateNamedView`, `Command::RemoveNamedView` |
 
 ## Elements and layers
 
@@ -30,6 +33,9 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | **Linked element** | A named element whose copies are one element: edit one, all change. Each copy keeps its own position. | `Element.link`, `Project.linked`, `LinkedDefinition`, `resolve_element` |
 | **Link / Unlink** | Join elements under one name / detach a copy (Ctrl/Cmd+Alt+K / B). | `Command::LinkElements` / `UnlinkElements`, `link_elements`, `unlink_elements` |
 | **Paste choice** | Inline Linked / Unlinked choice on paste, with "Use as default". | `Command::PasteLinkedInstances`, `src/projectCanvas/linkedChoices.tsx`, `src/pastePreference.ts` |
+| **Smart duplicate** | Ctrl/Cmd+D remembers the last copy's offset, so moving the copy and duplicating again repeats that offset until the selection changes. | `duplicateRepeat` in `ProjectCanvas` |
+| **Style** | The visual properties a layer carries: fill, stroke, radius, opacity, shadow and text style. Clipboard and painter copy only these, never position, size or text. | `ElementStyle` |
+| **Format painter** | Copies one layer's style to another: Ctrl/Cmd+Alt+C then Ctrl/Cmd+Alt+V over a selection, or Shift+Ctrl/Cmd+Alt+C to paint the next clicked layer. | `copyStyle`, `pasteStyle`, `paintFormat` |
 
 ## AI
 

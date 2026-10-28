@@ -16,6 +16,8 @@ pub const MAX_REFERENCE_ITEMS: usize = 1000;
 pub const MAX_POINTERS: usize = 1000;
 pub const MAX_REQUESTS: usize = 256;
 pub const MAX_REQUEST_TARGETS: usize = 64;
+pub const MAX_NAMED_VIEWS: usize = 50;
+pub const MAX_NAMED_VIEW_NAME_CHARS: usize = 80;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -590,6 +592,38 @@ impl CanvasPlacement {
     }
 }
 
+/// A saved camera position, so the user can return to a part of the canvas. Views belong to
+/// the project file and never affect what ships.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NamedView {
+    pub id: Uuid,
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+    pub zoom: f64,
+}
+
+impl NamedView {
+    pub fn validate(&self) -> Result<()> {
+        ensure(!self.id.is_nil(), "View identifiers must be nonempty.")?;
+        validate_text(
+            &self.name,
+            "View name",
+            MAX_NAMED_VIEW_NAME_CHARS,
+            true,
+        )?;
+        ensure(
+            self.x.is_finite() && self.y.is_finite() && self.zoom.is_finite(),
+            "A view's camera must be finite.",
+        )?;
+        ensure(
+            self.zoom > 0.0 && self.zoom <= 1000.0,
+            "A view's zoom must be greater than 0 and at most 1000.",
+        )
+    }
+}
+
 /// One reference item's spot on the project canvas, moved when a boundary pushes it aside.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -1156,6 +1190,9 @@ pub struct Project {
     /// request can target several layers, boundaries, reference items and pointers at once.
     #[serde(default)]
     pub requests: Vec<PendingRequest>,
+    /// Saved camera positions for returning to a part of the canvas.
+    #[serde(default)]
+    pub views: Vec<NamedView>,
     pub decisions: Vec<Decision>,
     pub exceptions: Vec<DesignException>,
     pub extensions: BTreeMap<String, ExtensionRecord>,
@@ -1245,6 +1282,28 @@ pub enum Command {
         /// Reference items the moved or drawn boundaries push aside, in the same undo step.
         #[serde(default)]
         reference: Vec<ReferencePlacement>,
+    },
+    /// Save the current camera as a named view.
+    AddNamedView {
+        name: String,
+        x: f64,
+        y: f64,
+        zoom: f64,
+    },
+    /// Rename a view and/or move its camera in one undo step.
+    UpdateNamedView {
+        view_id: Uuid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        y: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        zoom: Option<f64>,
+    },
+    RemoveNamedView {
+        view_id: Uuid,
     },
     AddReferenceItem {
         item: ReferenceItem,
@@ -1460,6 +1519,9 @@ impl Command {
             Self::AddPageSize { .. } => "Added a size",
             Self::RemovePageSize { .. } => "Removed a size",
             Self::SetCanvasLayout { .. } => "Moved boundaries",
+            Self::AddNamedView { .. } => "Saved a view",
+            Self::UpdateNamedView { .. } => "Changed a view",
+            Self::RemoveNamedView { .. } => "Removed a view",
             Self::AddReferenceItem { item, .. } => match item.kind {
                 ReferenceKind::Note { .. } => "Added a note",
                 ReferenceKind::Link { .. } => "Added a link",
@@ -1543,6 +1605,7 @@ impl Project {
             pointers: vec![],
             linked: BTreeMap::new(),
             requests: vec![],
+            views: vec![],
             decisions: vec![],
             exceptions: vec![],
             extensions: BTreeMap::new(),
@@ -1600,6 +1663,7 @@ impl Project {
             pointers: vec![],
             linked: BTreeMap::new(),
             requests: vec![],
+            views: vec![],
             decisions: vec![],
             exceptions: vec![],
             extensions: BTreeMap::new(),
@@ -2222,6 +2286,18 @@ impl Project {
             }
         }
         ensure(
+            self.views.len() <= MAX_NAMED_VIEWS,
+            "A project holds at most 50 named views.",
+        )?;
+        let mut view_ids = BTreeSet::new();
+        for view in &self.views {
+            ensure(
+                view_ids.insert(view.id),
+                "View identifiers must be unique.",
+            )?;
+            view.validate()?;
+        }
+        ensure(
             self.pages.len() <= MAX_PAGES,
             "A project contains at most 100 pages.",
         )?;
@@ -2577,6 +2653,59 @@ impl Project {
                     placement.place(&mut next.pages)?;
                 }
                 next.place_reference(reference)?;
+            }
+            Command::AddNamedView {
+                name,
+                x,
+                y,
+                zoom,
+            } => {
+                ensure(
+                    next.views.len() < MAX_NAMED_VIEWS,
+                    "A project holds at most 50 named views.",
+                )?;
+                let view = NamedView {
+                    id: Uuid::new_v4(),
+                    name: name.trim().into(),
+                    x,
+                    y,
+                    zoom,
+                };
+                view.validate()?;
+                next.views.push(view);
+            }
+            Command::UpdateNamedView {
+                view_id,
+                name,
+                x,
+                y,
+                zoom,
+            } => {
+                let view = next
+                    .views
+                    .iter_mut()
+                    .find(|view| view.id == view_id)
+                    .ok_or_else(|| Error("This view no longer exists.".into()))?;
+                if let Some(name) = name {
+                    view.name = name.trim().into();
+                }
+                if let Some(x) = x {
+                    view.x = x;
+                }
+                if let Some(y) = y {
+                    view.y = y;
+                }
+                if let Some(zoom) = zoom {
+                    view.zoom = zoom;
+                }
+                view.validate()?;
+            }
+            Command::RemoveNamedView { view_id } => {
+                ensure(
+                    next.views.iter().any(|view| view.id == view_id),
+                    "This view no longer exists.",
+                )?;
+                next.views.retain(|view| view.id != view_id);
             }
             Command::AddReferenceItem {
                 item,

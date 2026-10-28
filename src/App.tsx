@@ -20,7 +20,7 @@ import type { ProjectLocationView } from './types';
 import { Notes, type DossierSection } from './Notes';
 import { MenuButton, type MenuItem } from './Menus';
 import './shell.css';
-import { shortcutFor, shortcutLabel, SHORTCUT_GROUPS, withShortcut } from './shortcuts';
+import { shortcutFor, shortcutLabel, viewSlot, SHORTCUT_GROUPS, withShortcut } from './shortcuts';
 import { Icon } from './icons';
 import { StatusChip } from './StatusChip';
 import { steppedZoom } from './canvasGeometry';
@@ -43,7 +43,7 @@ import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './delet
 import { useHistory } from './useHistory';
 import { HistoryPanel } from './HistoryPanel';
 import { activeGeneration, useGeneration } from './useGeneration';
-import type { AiSettingsView, AppSettingsView, Appearance, BoundaryKind, Brief, CanvasTemplate, Command, CompactReport, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, Page, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, RecoveryInfo, ReferenceItem, RequestAttachment, RequestRecord, SizePreset, WorkspaceView, RecentProjectsView, RecentProject, ExportCheck, ExportJobView, OutputType } from './types';
+import type { AiSettingsView, AppSettingsView, Appearance, BoundaryKind, Brief, CanvasTemplate, Command, CompactReport, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, NamedView, Page, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, RecoveryInfo, ReferenceItem, RequestAttachment, RequestRecord, SizePreset, WorkspaceView, RecentProjectsView, RecentProject, ExportCheck, ExportJobView, OutputType } from './types';
 import { baseSizeId, resolveForSize } from './projectCanvas/sizes';
 import { elementBoundsHeight } from './projectCanvas/elementGeometry';
 import { ExportPanel } from './projectCanvas/exportPanel';
@@ -922,7 +922,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       // The start page has no canvas: project commands wait until a canvas is open again.
       if ((showStartPage || !current.current?.project) && !['new', 'open', 'help'].includes(action)) return;
       const project = current.current?.project;
-      if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels'].includes(action)) return;
+      if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels', 'saveView'].includes(action)) return;
       switch (action) {
         // The canvas owns these; its listener runs first and prevents the default.
         case 'copy': case 'cut': case 'paste': case 'pasteChoice': case 'duplicate':
@@ -960,6 +960,16 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         case 'zoomReset': event.preventDefault(); canvasRef.current?.zoomTo(1); return;
         case 'fitAll': event.preventDefault(); canvasRef.current?.fit(); return;
         case 'fitSelection': event.preventDefault(); canvasRef.current?.fitSelection(); return;
+        case 'saveView': {
+          const slot = viewSlot(event);
+          if (!project || !slot) return;
+          event.preventDefault(); saveCurrentView(slot); return;
+        }
+        case 'goToView': {
+          const slot = viewSlot(event);
+          if (!project || !slot) return;
+          event.preventDefault(); goToViewSlot(slot); return;
+        }
         case 'play': if (!project) return; event.preventDefault(); togglePlay(); return;
         case 'preview': if (!project) return; event.preventDefault(); previewSelectedBoundary(); return;
         case 'export':
@@ -1164,6 +1174,42 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   }
   const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
   const canEditProject = !!project && !onStartPage;
+  const views = project?.views ?? [];
+
+  // Named views live in the project file. Ctrl/Cmd+Alt+N saves into the view named "View N",
+  // matching the names the '+' button creates, so numbered slots survive deletions and reordering.
+  function viewForSlot(slot: number) {
+    return views.find(view => view.name === `View ${slot}`) ?? null;
+  }
+  function nextViewName() {
+    const names = new Set(views.map(view => view.name));
+    let index = 1;
+    while (names.has(`View ${index}`)) index += 1;
+    return `View ${index}`;
+  }
+  function saveCurrentView(slot: number) {
+    const camera = canvasRef.current?.currentCamera();
+    if (!camera || !project) return;
+    const existing = viewForSlot(slot);
+    run(() => mutate(existing
+      ? { type: 'update_named_view', view_id: existing.id, x: camera.x, y: camera.y, zoom: camera.zoom }
+      : { type: 'add_named_view', name: `View ${slot}`, x: camera.x, y: camera.y, zoom: camera.zoom }));
+  }
+  function goToViewSlot(slot: number) {
+    const view = viewForSlot(slot);
+    if (view) canvasRef.current?.goToView(view);
+  }
+  function addNamedView() {
+    const camera = canvasRef.current?.currentCamera();
+    if (!camera) return;
+    run(() => mutate({ type: 'add_named_view', name: nextViewName(), x: camera.x, y: camera.y, zoom: camera.zoom }));
+  }
+  function renameNamedView(view: NamedView, name: string) {
+    run(() => mutate({ type: 'update_named_view', view_id: view.id, name }));
+  }
+  function removeNamedView(view: NamedView) {
+    run(() => mutate({ type: 'remove_named_view', view_id: view.id }));
+  }
 
   const menuItems: MenuItem[] = [
     { id: 'home', label: 'Home', disabled: showStartPage || !project, action: () => setShowStartPage(true) },
@@ -1403,7 +1449,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
             removeCanvasSelection([], [], [], elementIds);
           }}
           deleteBoundary={deleteBoundary} removeRequest={id => removeCanvasSelection([], [], [id])}
-          removeReference={id => removeCanvasSelection([id])} removePointer={id => removeCanvasSelection([], [id])} />} />
+          removeReference={id => removeCanvasSelection([id])} removePointer={id => removeCanvasSelection([], [id])}
+          views={views} addView={addNamedView} jumpToView={view => canvasRef.current?.goToView(view)} renameView={renameNamedView} removeView={removeNamedView} />} />
       </div>
       <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 ? `${canvasSelection.length} selected` : ''}</span><div className="canvas-status-actions">{playIsActive(play) && <StatusChip tone="info" role="status" className="play-chip" onClick={() => setPlay(idlePlay)} ariaLabel="Stop Play">Playing · Esc to stop</StatusChip>}{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
     </>}

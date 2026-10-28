@@ -14,6 +14,7 @@ export type GenerationMode = 'fuzzy' | 'strict';
 export type Viewport = { width: number; height: number };
 export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: boolean; rulers: boolean };
 export type Rect = { x: number; y: number; width: number; height: number };
+export type NamedView = { id: string; name: string; x: number; y: number; zoom: number };
 export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; preview?: string; text?: string; url?: string };
 export type BoundaryKind = 'page' | 'screen';
 export type OutputType = 'webpage' | 'appScreen' | 'slide' | 'image';
@@ -81,7 +82,7 @@ export type Decision = { id: string; topic: string; value: string; scope: Scope;
 export type DesignException = { id: string; rule: string; reason: string; scope: Scope; acceptedAtRevision: number };
 export type Project = { pictures?: Record<string, string>; schemaVersion: number; id: string; name: string; revision: number; viewport: Viewport;
   importedIdentity?: ImportedIdentity;
-  appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; reference: ReferenceItem[]; pointers?: Pointer[]; linked?: Record<string, LinkedDefinition>; requests?: PendingRequest[]; brief: Brief;
+  appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; reference: ReferenceItem[]; pointers?: Pointer[]; linked?: Record<string, LinkedDefinition>; requests?: PendingRequest[]; views: NamedView[]; brief: Brief;
   lastExport?: ExportRecord | null;
   decisions: Decision[]; exceptions: DesignException[]; appliedJobIds: string[]; extensions: Record<string, { schemaVersion: number; data: unknown }> };
 export type RecoveryInfo = { projectId: string; name: string; revision: number; savedPath: string | null; editedAtMs: number };
@@ -177,6 +178,9 @@ export type Command =
   | { type: 'add_page_size'; page_id: string; size: PageSize; moves: Placements; reference: ReferencePlacement[] }
   | { type: 'remove_page_size'; page_id: string; size_id: string }
   | { type: 'set_canvas_layout'; placements: Placements; reference: ReferencePlacement[] }
+  | { type: 'add_named_view'; name: string; x: number; y: number; zoom: number }
+  | { type: 'update_named_view'; view_id: string; name?: string; x?: number; y?: number; zoom?: number }
+  | { type: 'remove_named_view'; view_id: string }
   | { type: 'add_reference_item'; item: ReferenceItem; picture_data_uri?: string }
   | { type: 'update_reference_item'; item_id: string; rect?: Rect; text?: string; url?: string; title?: string; color?: string }
   | { type: 'remove_reference_items'; ids: string[] }

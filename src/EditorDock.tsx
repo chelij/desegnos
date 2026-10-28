@@ -3,7 +3,7 @@ import { Icon, type IconName } from './icons';
 import { CompactNumberField, CompactTextField, useFieldDraft } from './CompactField';
 import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
-import type { Appearance, BoundaryKind, ElementPatch, OutputType, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
+import type { Appearance, BoundaryKind, ElementPatch, NamedView, OutputType, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
 import { ElementLayers } from './projectCanvas/elementLayers';
 import { SIZE_PRESETS, resolveForSize, sizeLabel } from './projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from './projectCanvas/requests';
@@ -444,8 +444,35 @@ export function PointerProperties({ pointer, project, state, change, reattach, r
   </div>;
 }
 
+// A saved camera: click to glide there, double-click to rename in place, or delete it.
+function ViewRow({ view, jump, rename, remove }: { view: NamedView; jump: () => void; rename: (name: string) => void; remove: () => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  // Enter commits and removes the input; the blur that follows must not rename twice.
+  const editing = useRef(false);
+  function commit() {
+    if (!editing.current) return;
+    editing.current = false;
+    const name = (draft ?? '').trim();
+    if (name && name !== view.name) rename(name);
+    setDraft(null);
+  }
+  return <li className="dock-linked-row">
+    {draft === null
+      ? <button type="button" className="dock-tree-select dock-tree-item" title={`Go to ${view.name} · double-click to rename`} onClick={jump} onDoubleClick={() => { editing.current = true; setDraft(view.name); }}>
+        <Icon name="canvas" size={12} /><span>{view.name}</span>
+      </button>
+      : <input className="dock-inline-name" aria-label={`Rename ${view.name}`} maxLength={80} autoFocus value={draft}
+        onChange={event => setDraft(event.target.value)} onBlur={commit}
+        onKeyDown={event => {
+          if (event.key === 'Enter') { event.preventDefault(); commit(); }
+          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); editing.current = false; setDraft(null); }
+        }} />}
+    <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${view.name}`} title="Delete view" onClick={remove}><Icon name="trash" size={13} /></button>
+  </li>;
+}
+
 // Boundaries read top-left first, each opening onto its layers; reference items and pointers follow.
-export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectRequest, selectElement, updateElements, moveElement, removeLinked, removeElements, deleteBoundary, removeRequest, removeReference, removePointer }: {
+export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectRequest, selectElement, updateElements, moveElement, removeLinked, removeElements, deleteBoundary, removeRequest, removeReference, removePointer, views, addView, jumpToView, renameView, removeView }: {
   project: Project; boundaries: Boundary[]; selection: CanvasTarget[]; focused: string | null;
   selectBoundary: (pageId: string, sizeId?: string) => void;
   selectReference: (itemId: string) => void; selectPointer: (pointerId: string) => void; selectRequest: (requestId: string) => void;
@@ -458,6 +485,8 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   removeRequest: (id: string) => void;
   removeReference: (id: string) => void;
   removePointer: (id: string) => void;
+  views: NamedView[]; addView: () => void; jumpToView: (view: NamedView) => void;
+  renameView: (view: NamedView, name: string) => void; removeView: (view: NamedView) => void;
 }) {
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const ordered = boundariesByPosition(boundaries);
@@ -475,8 +504,17 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   const pointers = project.pointers ?? [];
   const linked = Object.values(project.linked ?? {}).sort((first, second) => first.name.localeCompare(second.name));
   const requests = project.requests ?? [];
-  if (!ordered.length && !project.reference.length && !pointers.length && !linked.length && !requests.length) return null;
+  if (!ordered.length && !project.reference.length && !pointers.length && !linked.length && !requests.length && !views.length) return null;
   return <ul className="dock-tree">
+    <li className="dock-tree-group views-group">
+      <div className="dock-tree-row">
+        <span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Views</span>
+        <button type="button" className="icon-button sm dock-row-toggle" aria-label="Save the current view" title="Save the current view" onClick={addView}><Icon name="plus" size={13} /></button>
+      </div>
+      {views.length > 0 && <ul className="dock-tree-items">
+        {views.map(view => <ViewRow key={view.id} view={view} jump={() => jumpToView(view)} rename={name => renameView(view, name)} remove={() => removeView(view)} />)}
+      </ul>}
+    </li>
     {ordered.map(({ pageId, sizeId, label, kind }) => {
       const page = project.pages.find(item => item.id === pageId);
       const size = page?.sizes.find(item => item.id === sizeId);

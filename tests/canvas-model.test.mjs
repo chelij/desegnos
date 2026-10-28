@@ -8,12 +8,14 @@ const modules = await compileModules([
   'src/projectCanvas/sizes.ts',
   'src/projectCanvas/links.ts',
   'src/projectCanvas/elementGeometry.ts',
+  'src/projectCanvas/minimap.ts',
   'src/shortcuts.ts',
 ]);
 try {
   const sizes = await modules.load('projectCanvas/sizes.js');
   const links = await modules.load('projectCanvas/links.js');
   const elementGeometry = await modules.load('projectCanvas/elementGeometry.js');
+  const minimap = await modules.load('projectCanvas/minimap.js');
   const shortcuts = await modules.load('shortcuts.js');
 
   const baseStyle = () => ({
@@ -300,6 +302,26 @@ try {
     assert.deepEqual(elementGeometry.elementLocalRect(world, boundaryOrigin, { x: 0, y: 0 }), { x: 60, y: 80, width: 100, height: 80 });
   });
 
+  await test('transform keys resize from the centre, keep ratios and lock axes', () => {
+    const rect = { x: 10, y: 20, width: 100, height: 80 };
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 210, y: 180 }, { snap: false }), { x: 10, y: 20, width: 200, height: 160 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 210, y: 180 }, { snap: false, fromCentre: true }), { x: -40, y: -20, width: 200, height: 160 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'nw', { x: 0, y: 0 }, { snap: false, fromCentre: true }), { x: 5, y: 10, width: 110, height: 100 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 400, y: 300 }, { snap: false, ratio: true }), { x: 10, y: 20, width: 390, height: 312 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 400, y: 300 }, { snap: false, ratio: true, fromCentre: true }), { x: -135, y: -96, width: 390, height: 312 });
+    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 143, y: 121 }, { snap: true }), { x: 100, y: 100, width: 44, height: 20 });
+    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { square: true }), { x: 100, y: 100, width: 40, height: 40 });
+    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { fromCentre: true }), { x: 60, y: 80, width: 80, height: 40 });
+    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { square: true, fromCentre: true }), { x: 60, y: 60, width: 80, height: 80 });
+    assert.deepEqual(elementGeometry.axisLockedDelta({ x: 10, y: 3 }), { x: 10, y: 0 });
+    assert.deepEqual(elementGeometry.axisLockedDelta({ x: 2, y: -9 }), { x: 0, y: -9 });
+    const snapped = elementGeometry.snappedLineEnd({ x: 0, y: 0 }, { x: 10, y: 3 }, 15);
+    const length = Math.hypot(10, 3);
+    assert.ok(Math.abs(snapped.x - Math.cos(Math.PI / 12) * length) < 1e-9);
+    assert.ok(Math.abs(snapped.y - Math.sin(Math.PI / 12) * length) < 1e-9);
+    assert.deepEqual(elementGeometry.snappedLineEnd({ x: 0, y: 0 }, { x: 10, y: 0 }), { x: 10, y: 0 });
+  });
+
   await test('element labels and pictures read the project store', () => {
     const stored = makeElement('image', { kind: 'image', image: 'pic', text: 'Alt text' });
     assert.equal(elementGeometry.pictureUri({ pictures: { pic: 'data:image/png;base64,abc' } }, 'pic'), 'data:image/png;base64,abc');
@@ -318,6 +340,39 @@ try {
     assert.equal(elementGeometry.commonValue([1, 1]), 1);
     assert.equal(elementGeometry.commonValue([1, 2]), undefined);
     assert.equal(elementGeometry.commonValue([{ a: 1 }, { a: 1 }]).a, 1);
+  });
+
+  // -------------------------------------------------------------------------
+  // minimap.ts
+  // -------------------------------------------------------------------------
+
+  await test('the minimap fits content, maps the viewport and hides when everything fits', () => {
+    const boundary = { pageId: 'p', sizeId: 's', label: 'Desktop', kind: 'page', rect: { x: 100, y: 50, width: 400, height: 300 } };
+    const reference = [{ id: 'r', rect: { x: -80, y: 20, width: 100, height: 80 }, kind: { kind: 'note', text: 'Note' } }];
+    const content = minimap.overviewRects([boundary], reference);
+    assert.deepEqual(content, [boundary.rect, reference[0].rect]);
+
+    const camera = { x: 0, y: 0, zoom: 1 };
+    assert.deepEqual(minimap.minimapWorld(content, camera, { width: 800, height: 600 }), { x: -80, y: 20, width: 580, height: 330 });
+    const empty = minimap.minimapWorld([], camera, { width: 800, height: 600 });
+    assert.equal(Math.abs(empty.x), 0);
+    assert.equal(Math.abs(empty.y), 0);
+    assert.equal(empty.width, 800);
+    assert.equal(empty.height, 600);
+
+    assert.equal(minimap.contentFitsViewport(content, { x: -100, y: 0, width: 700, height: 500 }), true);
+    assert.equal(minimap.contentFitsViewport(content, { x: 0, y: 0, width: 200, height: 100 }), false);
+    assert.equal(minimap.contentFitsViewport([], { x: 0, y: 0, width: 1, height: 1 }), true);
+
+    const world = { x: -80, y: 20, width: 580, height: 330 };
+    const transform = minimap.minimapTransform(world);
+    assert.ok(transform.scale > 0);
+    const inside = minimap.minimapPoint(transform, { x: 0, y: 0 });
+    assert.deepEqual(minimap.minimapWorldPoint(transform, inside), { x: 0, y: 0 });
+    assert.ok(inside.x >= 0 && inside.x <= minimap.MINIMAP_WIDTH);
+    assert.ok(inside.y >= 0 && inside.y <= minimap.MINIMAP_HEIGHT);
+
+    assert.deepEqual(minimap.cameraCentredOn({ x: 50, y: 25 }, { x: 10, y: 20, zoom: 2 }, { width: 800, height: 600 }), { x: 300, y: 250, zoom: 2 });
   });
 
   // -------------------------------------------------------------------------
@@ -380,6 +435,7 @@ try {
       'Note (reference)': [['noteTool', 'N']],
       'Insert any element': [['insert', 'Ctrl/Cmd+I']],
       'Copy / Paste / Paste with choice / Duplicate': [['copy', 'Ctrl/Cmd+C'], ['paste', 'Ctrl/Cmd+V'], ['pasteChoice', 'Shift+Ctrl/Cmd+V'], ['duplicate', 'Ctrl/Cmd+D']],
+      'Copy style / Paste style / Paint format': [['copyStyle', 'Ctrl/Cmd+Alt+C'], ['pasteStyle', 'Ctrl/Cmd+Alt+V'], ['paintFormat', 'Shift+Ctrl/Cmd+Alt+C']],
       'Link / Unlink': [['link', 'Ctrl/Cmd+Alt+K'], ['unlink', 'Ctrl/Cmd+Alt+B']],
       'Group / Ungroup': [['group', 'Ctrl/Cmd+G'], ['ungroup', 'Shift+Ctrl/Cmd+G']],
       'Bring forward / backward': [['forward', 'Ctrl/Cmd+]'], ['backward', 'Ctrl/Cmd+[']],
@@ -387,6 +443,8 @@ try {
       'Nudge / far nudge': [['nudge', 'Arrow keys'], ['nudgeFar', 'Shift+Arrow keys']],
       'Delete': [['delete', 'Delete or Backspace']],
       'Zoom in / out / 100% / fit all / fit selection': [['zoomIn', 'Ctrl/Cmd+='], ['zoomOut', 'Ctrl/Cmd+-'], ['zoomReset', 'Ctrl/Cmd+0'], ['fitAll', 'Shift+1'], ['fitSelection', 'Shift+2']],
+      'Save view / go to view (slots 1–9)': [['saveView', 'Ctrl/Cmd+Alt+1…9'], ['goToView', 'Alt+1…9']],
+      'Minimap': [['minimap', 'Shift+M']],
       'Play / Preview export': [['play', 'Shift+Space'], ['preview', 'Ctrl/Cmd+Enter']],
       'Hide panels': [['hidePanels', 'Tab']],
       'Ask AI on selection': [['askAI', 'Ctrl/Cmd+K']],
@@ -420,6 +478,19 @@ try {
     assert.equal(shortcuts.shortcutFor(event({ key: 'Enter', code: 'Enter', shiftKey: true }), false), 'selectParent');
     assert.equal(shortcuts.shortcutFor(event({ key: 'Unidentified', code: 'Tab', shiftKey: true }), false), null);
     assert.equal(shortcuts.shortcutFor(event({ key: 'Tab', code: 'Tab' }), false), 'hidePanels');
+    assert.equal(shortcuts.shortcutFor(event({ key: 'c', code: 'KeyC', ctrlKey: true, altKey: true }), false), 'copyStyle');
+    assert.equal(shortcuts.shortcutFor(event({ key: 'v', code: 'KeyV', ctrlKey: true, altKey: true }), false), 'pasteStyle');
+    assert.equal(shortcuts.shortcutFor(event({ key: 'c', code: 'KeyC', ctrlKey: true, altKey: true, shiftKey: true }), false), 'paintFormat');
+    assert.equal(shortcuts.shortcutFor(event({ key: '1', code: 'Digit1', ctrlKey: true, altKey: true }), false), 'saveView');
+    assert.equal(shortcuts.shortcutFor(event({ key: '9', code: 'Digit9', ctrlKey: true, altKey: true }), false), 'saveView');
+    assert.equal(shortcuts.shortcutFor(event({ key: '4', code: 'Digit4', altKey: true }), false), 'goToView');
+    assert.equal(shortcuts.shortcutFor(event({ key: 'm', code: 'KeyM', shiftKey: true }), false), 'minimap');
+    assert.equal(shortcuts.shortcutFor(event({ key: '1', code: 'Digit1', ctrlKey: true, altKey: true, shiftKey: true }), false), null, 'Save view ignores Shift');
+    assert.equal(shortcuts.viewSlot({ key: '7', code: 'Digit7' }), 7);
+    assert.equal(shortcuts.viewSlot({ key: '3', code: 'Numpad3' }), 3);
+    assert.equal(shortcuts.viewSlot({ key: '0', code: 'Digit0' }), null);
+    assert.equal(shortcuts.viewSlot({ key: 'Unidentified', code: 'Digit2' }), 2);
+    assert.equal(shortcuts.viewSlot({ key: 'a', code: 'KeyA' }), null);
     assert.equal(shortcuts.shortcutFor(event({ key: 'q', code: 'KeyQ' }), false), null);
     assert.equal(shortcuts.shortcutLabel('not-an-action'), '');
     assert.equal(shortcuts.withShortcut('Ask AI', 'askAI'), 'Ask AI · Ctrl/Cmd+K');
