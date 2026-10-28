@@ -113,13 +113,6 @@ export function RenameProject({ name, submit }: { name: string; submit: (value: 
   return <form className="dialog-body" onSubmit={event => { event.preventDefault(); setBusy(true); void submit(value.trim()).catch(() => {}).finally(() => setBusy(false)); }}><label>Project name<input autoFocus required maxLength={120} value={value} onChange={event => setValue(event.target.value)} /></label><div className="form-actions"><button className="primary" disabled={busy || !value.trim()}>Rename project</button></div></form>;
 }
 
-export function canvasPageName(pages: Page[]) {
-  const names = new Set(pages.map(page => page.name.trim().toLowerCase()));
-  let number = 1;
-  while (names.has(`page ${number}`)) number++;
-  return `Page ${number}`;
-}
-
 export function suggestedPagePath(name: string, paths: string[]) {
   let slug = name.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'page';
   if (/^(assets|src|node_modules|con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(slug)) slug += '-page';
