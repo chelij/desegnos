@@ -68,9 +68,11 @@ type Drag = { start: number; origin: number; value: number; moved: boolean };
  * Units typed by habit (`24px`, `50%`) are ignored, results are clamped and rounded to two
  * decimals, and invalid input reverts without committing.
  */
-export function CompactNumberField({ prefix, label, value, commit, valid, min, max, disabled, unit, field, optional, normalise }: {
+export function CompactNumberField({ prefix, label, value, commit, valid, min, max, disabled, unit, field, optional, normalise, placeholder }: {
   prefix: ReactNode; label: string; value: string | number; commit: (value: string) => void;
   valid?: (draft: string) => boolean; min?: number; max?: number; disabled?: boolean; unit?: string; field?: string;
+  /** Shown when the field has no single value, as "Mixed" does for a multi-selection. */
+  placeholder?: string;
   /** Optional fields may be cleared with an empty draft; every other field reverts. */
   optional?: boolean;
   /** Wrap a clamped result, for values such as an angle that has a natural range. */
@@ -125,7 +127,7 @@ export function CompactNumberField({ prefix, label, value, commit, valid, min, m
   return <label className="props-num" title={label}>
     <span className="props-num-prefix is-scrubby" aria-hidden="true" data-scrub={label}
       onPointerDown={beginScrub} onPointerMove={scrub} onPointerUp={endScrub} onPointerCancel={cancelScrub}>{prefix}</span>
-    <input ref={input} type="text" inputMode="decimal" aria-label={label} value={scrubbed ?? state.draft}
+    <input ref={input} type="text" inputMode="decimal" aria-label={label} value={scrubbed ?? state.draft} placeholder={placeholder}
       spellCheck={false} autoComplete="off" disabled={disabled} data-field={field}
       style={{ fontVariantNumeric: 'tabular-nums' }}
       onChange={event => state.setDraft(event.target.value)}

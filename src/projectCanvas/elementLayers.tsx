@@ -14,6 +14,30 @@ type DragState = { pageId: string; sizeId: string; id: string; parentId: string 
 export type ElementDropTarget = { pageId: string; sizeId: string; parentId: string | null; index: number };
 type DropHint = ElementDropTarget | null;
 
+/** The rows a layer search keeps: matches, their parents, and everything under a match. */
+export function matchingLayerIds(elements: Element[], query: string): Set<string> {
+  const keep = new Set<string>();
+  const needle = query.trim().toLowerCase();
+  if (!needle) return keep;
+  const keepSubtree = (element: Element) => {
+    keep.add(element.id);
+    element.children.forEach(keepSubtree);
+  };
+  const walk = (element: Element, ancestors: string[]): boolean => {
+    const matched = `${elementLabel(element)} ${element.name ?? ''}`.toLowerCase().includes(needle);
+    if (matched) {
+      ancestors.forEach(id => keep.add(id));
+      keepSubtree(element);
+    }
+    let below = false;
+    for (const child of element.children) if (walk(child, [...ancestors, element.id])) below = true;
+    if (matched || below) keep.add(element.id);
+    return matched || below;
+  };
+  elements.forEach(element => walk(element, []));
+  return keep;
+}
+
 function sameTarget(first: DropHint, second: DropHint): boolean {
   return first === second || (!!first && !!second && first.pageId === second.pageId && first.sizeId === second.sizeId
     && first.parentId === second.parentId && first.index === second.index);
@@ -32,9 +56,9 @@ function dropTarget(element: Element, position: 'before' | 'after' | 'into', pag
 }
 
 /** One 28px layer row: kind icon, name (double-click renames), then hover lock and eye toggles. */
-function LayerRow({ project, pageId, sizeId, element, parentId, index, selection, collapsed, toggle, select, update, remove, movable, hint, setHint, onDragStart, onDragEnd, onDrop, children }: {
+function LayerRow({ project, pageId, sizeId, element, parentId, index, selection, collapsed, searching, toggle, select, update, remove, movable, hint, setHint, onDragStart, onDragEnd, onDrop, children }: {
   project: Project; pageId: string; sizeId: string; element: Element; parentId: string | null; index: number;
-  selection: string[]; collapsed: ReadonlySet<string>; toggle: (id: string) => void;
+  selection: string[]; collapsed: ReadonlySet<string>; searching: boolean; toggle: (id: string) => void;
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
   update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
   remove: (pageId: string, sizeId: string, id: string) => void;
@@ -45,7 +69,7 @@ function LayerRow({ project, pageId, sizeId, element, parentId, index, selection
 }) {
   const canContain = holdsChildren(element.kind);
   const hasChildren = canContain && element.children.length > 0;
-  const open = !collapsed.has(`${sizeId}:${element.id}`);
+  const open = searching || !collapsed.has(`${sizeId}:${element.id}`);
   const definition = element.link ? project.linked?.[element.link] ?? null : null;
   const linkedName = definition?.name ?? null;
   const label = elementLabel(element);
@@ -121,9 +145,9 @@ function LayerRow({ project, pageId, sizeId, element, parentId, index, selection
 }
 
 /** One row tree per size boundary: layers hidden in this size stay listed, dimmed. */
-export function ElementLayerRows({ project, pageId, sizeId, elements, parentId, selection, collapsed, toggle, select, update, remove, fixed, hint, setHint, onDragStart, onDragEnd, onDrop }: {
+export function ElementLayerRows({ project, pageId, sizeId, elements, parentId, selection, collapsed, keep, searching, toggle, select, update, remove, fixed, hint, setHint, onDragStart, onDragEnd, onDrop }: {
   project: Project; pageId: string; sizeId: string; elements: Element[]; parentId: string | null;
-  selection: string[]; collapsed: ReadonlySet<string>; toggle: (id: string) => void;
+  selection: string[]; collapsed: ReadonlySet<string>; keep: ReadonlySet<string> | null; searching: boolean; toggle: (id: string) => void;
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
   update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
   remove: (pageId: string, sizeId: string, id: string) => void;
@@ -138,32 +162,35 @@ export function ElementLayerRows({ project, pageId, sizeId, elements, parentId, 
     : null;
   const childHint = hint !== null && hint.pageId === pageId && hint.sizeId === sizeId;
   return <>{[...elements].reverse().map((element, reversedIndex) => {
+    if (keep && !keep.has(element.id)) return null;
     const index = elements.length - 1 - reversedIndex;
     const movable = !fixed.has(element.id);
     const hasChildren = holdsChildren(element.kind) && element.children.length > 0;
-    const open = !collapsed.has(`${sizeId}:${element.id}`);
+    const open = searching || !collapsed.has(`${sizeId}:${element.id}`);
     const dropInto = childHint && hint.parentId === element.id;
     return <Fragment key={element.id}>
       {line(index + 1)}
       <LayerRow project={project} pageId={pageId} sizeId={sizeId} element={element} parentId={parentId} index={index}
-        selection={selection} collapsed={collapsed} toggle={toggle} select={select} update={update} remove={remove}
+        selection={selection} collapsed={collapsed} searching={searching} toggle={toggle} select={select} update={update} remove={remove}
         movable={movable} hint={hint} setHint={setHint} onDragStart={onDragStart} onDragEnd={onDragEnd} onDrop={onDrop}>
         {holdsChildren(element.kind) && open && (hasChildren || dropInto) && <ul className="dock-tree-element-children">
           <ElementLayerRows project={project} pageId={pageId} sizeId={sizeId} elements={element.children} parentId={element.id}
-            selection={selection} collapsed={collapsed} toggle={toggle} select={select} update={update} remove={remove} fixed={fixed}
+            selection={selection} collapsed={collapsed} keep={keep} searching={searching} toggle={toggle} select={select} update={update} remove={remove} fixed={fixed}
             hint={hint} setHint={setHint} onDragStart={onDragStart} onDragEnd={onDragEnd} onDrop={onDrop} />
         </ul>}
       </LayerRow>
     </Fragment>;
-  })}{line(0)}</>;
+  })}{keep ? null : line(0)}</>;
 }
 
-export function ElementLayers({ project, pageId, sizeId, elements, selection, select, update, remove, move }: {
+export function ElementLayers({ project, pageId, sizeId, elements, selection, select, update, remove, move, keep = null }: {
   project: Project; pageId: string; sizeId: string; elements: Element[]; selection: string[];
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
   update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
   remove: (pageId: string, sizeId: string, id: string) => void;
   move: (pageId: string, sizeId: string, id: string, parentId: string | null, index: number) => void;
+  /** Rows a Layers search keeps; null lists every layer. */
+  keep?: ReadonlySet<string> | null;
 }) {
   const fixed = useMemo(() => nestedLayerIds(project), [project]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
@@ -177,6 +204,8 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
     return next;
   });
   if (!elements.length) return null;
+  if (keep && !keep.size) return null;
+  const searching = keep !== null;
   function drop(event: DragEvent, target: ElementDropTarget) {
     event.preventDefault();
     setHint(null);
@@ -189,7 +218,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
   return <ul className="dock-tree-elements" onDragOver={event => { if (dragging) event.preventDefault(); }}
     onDrop={event => { event.preventDefault(); if (dragging) move(pageId, sizeId, dragging.id, null, elements.length); setDragging(null); setHint(null); }}>
     <ElementLayerRows project={project} pageId={pageId} sizeId={sizeId} elements={elements} parentId={null}
-      selection={selection} collapsed={collapsed} toggle={toggle} select={select} update={update} remove={remove} fixed={fixed}
+      selection={selection} collapsed={collapsed} keep={keep} searching={searching} toggle={toggle} select={select} update={update} remove={remove} fixed={fixed}
       hint={hint} setHint={updateHint} onDragStart={setDragging} onDragEnd={endDrag} onDrop={drop} />
   </ul>;
 }

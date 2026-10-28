@@ -1,5 +1,5 @@
 import { canvasFont } from './fonts';
-import type { Element, ElementKind, ElementLayout, ElementStyle, InputType, OutputType, Page, Project, Rect } from '../types';
+import type { Element, ElementKind, ElementLayout, ElementPadding, ElementStyle, InputType, OutputType, Page, Project, Rect } from '../types';
 import type { Point } from '../projectCanvasGeometry';
 import { resolveElements } from './links';
 import { resolveForSize } from './sizes';
@@ -30,12 +30,16 @@ export function rememberColour(kind: 'fill' | 'stroke' | 'text', value: string |
   if (kind === 'text') picked.text = value ?? TEXT_COLOUR;
   else picked[kind] = value;
 }
-export function withPickedColours(element: Element): Element {
+const sameColour = (first: string | null, second: string | null | undefined) =>
+  !!first && !!second && first.trim().toLowerCase() === second.trim().toLowerCase();
+export function withPickedColours(element: Element, surface?: string | null): Element {
   const style = element.style;
   const shape = element.kind === 'box' || element.kind === 'ellipse';
+  // A repeated fill that matches the box the layer is drawn into would make it vanish, so the
+  // default fill wins there; other layers keep the paint-program memory.
   return { ...element, style: {
     ...style,
-    fill: shape && picked.fill !== undefined ? picked.fill : style.fill,
+    fill: shape && picked.fill !== undefined && !sameColour(picked.fill, surface) ? picked.fill : style.fill,
     stroke: (shape || element.kind === 'line') && picked.stroke !== undefined ? { ...style.stroke, color: picked.stroke } : style.stroke,
     textStyle: element.kind === 'text' && picked.text !== undefined ? { ...style.textStyle, color: picked.text } : style.textStyle,
   } };
@@ -419,10 +423,38 @@ export const pictureName = (project: Project, id: string | null | undefined): st
 };
 
 export function elementLabel(element: Element): string {
-  if (element.name?.trim()) return element.name.trim();
-  if (element.kind === 'code') return `${element.language || 'Code'} code`;
+  const name = element.name?.trim() ?? '';
+  if (name && !isDefaultLayerName(element)) return name;
+  // A layer still showing its kind's placeholder text reads by its numbered name; once the
+  // text is its own, text layers and controls show that text, as they always have.
   const line = element.text.trim().split('\n')[0];
-  return line ? line.slice(0, 80) : ELEMENT_KIND_LABELS[element.kind];
+  if (line && line !== defaultText(element.kind)) return line.slice(0, 80);
+  if (element.kind === 'code') return `${element.language || 'Code'} code`;
+  return name || line.slice(0, 80) || ELEMENT_KIND_LABELS[element.kind];
+}
+
+/** The base name new layers of a kind are numbered from; a box reads as a rectangle. */
+export function defaultLayerNameBase(kind: ElementKind): string {
+  return kind === 'box' ? 'Rectangle' : ELEMENT_KIND_LABELS[kind];
+}
+
+/** True when a name is the numbered default new layers receive, not one the user chose. */
+export function isDefaultLayerName(element: Element): boolean {
+  const name = element.name?.trim() ?? '';
+  const base = defaultLayerNameBase(element.kind);
+  const number = name.startsWith(`${base} `) ? name.slice(base.length + 1) : '';
+  return /^[1-9]\d*$/.test(number);
+}
+
+/** Stack or grid padding per side: the layer's own sides, else the layout's all-sides value. */
+export function elementPadding(element: Element): ElementPadding {
+  const base = element.layout.kind === 'free' ? 0 : element.layout.padding;
+  return element.style.padding ?? { top: base, right: base, bottom: base, left: base };
+}
+
+/** The one value all four sides share, or null when they differ. */
+export function uniformPadding(padding: ElementPadding): number | null {
+  return padding.top === padding.right && padding.right === padding.bottom && padding.bottom === padding.left ? padding.top : null;
 }
 
 export function elementKindLabel(element: Element): string {
@@ -467,14 +499,16 @@ export function intrinsicElementSize(element: Element, textSize?: (element: Elem
       contentHeight = Math.max(0, ...children.map(child => child.y + child.height));
     } else if (layout.kind === 'stack') {
       const gaps = layout.gap * Math.max(0, children.length - 1);
+      const padding = elementPadding(element);
       contentWidth = layout.direction === 'row' ? children.reduce((sum, child) => sum + child.width, gaps) : Math.max(0, ...children.map(child => child.width));
       contentHeight = layout.direction === 'column' ? children.reduce((sum, child) => sum + child.height, gaps) : Math.max(0, ...children.map(child => child.height));
-      contentWidth += layout.padding * 2; contentHeight += layout.padding * 2;
+      contentWidth += padding.left + padding.right; contentHeight += padding.top + padding.bottom;
     } else {
-      contentWidth = Math.max(0, ...children.map(child => child.width)) * layout.columns + layout.gap * (layout.columns - 1) + layout.padding * 2;
+      const padding = elementPadding(element);
+      contentWidth = Math.max(0, ...children.map(child => child.width)) * layout.columns + layout.gap * (layout.columns - 1) + padding.left + padding.right;
       const rows: number[] = [];
       children.forEach((child, index) => { const row = Math.floor(index / layout.columns); rows[row] = Math.max(rows[row] ?? 0, child.height); });
-      contentHeight = rows.reduce((sum, height) => sum + height, 0) + layout.gap * Math.max(0, rows.length - 1) + layout.padding * 2;
+      contentHeight = rows.reduce((sum, height) => sum + height, 0) + layout.gap * Math.max(0, rows.length - 1) + padding.top + padding.bottom;
     }
     const border = element.style.stroke.color ? element.style.stroke.width * 2 : 0;
     if (sizing?.width === 'fit') width = contentWidth + border;

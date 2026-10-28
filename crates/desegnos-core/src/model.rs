@@ -3222,7 +3222,7 @@ impl Project {
                     .map(|page| page.path.to_ascii_lowercase())
                     .collect();
                 let first = next.pages.is_empty();
-                for (index, page) in pages.into_iter().enumerate() {
+                for (index, mut page) in pages.into_iter().enumerate() {
                     ensure(
                         !next.pages.iter().any(|existing| existing.id == page.id),
                         "This imported boundary already exists.",
@@ -3234,6 +3234,9 @@ impl Project {
                     if first && index == 0 {
                         next.home_page_id = page.id;
                     }
+                    // Imported layers are new layers too: number the ones without a name.
+                    let mut used = crate::elements::used_default_names(&next);
+                    crate::elements::assign_default_names(&mut page.elements, &mut used);
                     next.pages.push(page);
                 }
                 next.reference.extend(reference);

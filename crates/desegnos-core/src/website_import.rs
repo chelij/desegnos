@@ -366,6 +366,7 @@ fn element_style(styles: &WebStyles, text: bool) -> ElementStyle {
     let radius = styles.radius.clamp(0.0, 4096.0);
     ElementStyle {
         sizing: Default::default(),
+        padding: None,
         references: Default::default(),
         fill: if text { None } else { parse_colour(&styles.background) },
         stroke: if text {

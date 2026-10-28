@@ -41,6 +41,25 @@ fn font_family(value: &str) -> String {
 fn length(value: f64) -> String {
     format!("calc({value} * var(--desegnos-unit))")
 }
+
+/// A stack or grid content inset: the four sides when the layer names them, else the layout's
+/// all-sides value that older projects and the direct renderer carry.
+fn padding_css(element: &Element) -> String {
+    let base = match &element.layout {
+        ElementLayout::Stack { padding, .. } | ElementLayout::Grid { padding, .. } => *padding,
+        ElementLayout::Free => 0.0,
+    };
+    match &element.style.padding {
+        Some(padding) => format!(
+            "{} {} {} {}",
+            length(padding.top),
+            length(padding.right),
+            length(padding.bottom),
+            length(padding.left)
+        ),
+        None => length(base),
+    }
+}
 fn class(id: Uuid) -> String {
     format!("d-{}", id.simple())
 }
@@ -286,11 +305,11 @@ fn rules(elements: &[Element], parent: &ElementLayout, rules: &mut BTreeMap<Uuid
         }
         match &element.layout {
             ElementLayout::Free => {}
-            ElementLayout::Stack { direction, gap, padding, align, justify, wrap } => css.push_str(&format!("flex-direction:{};gap:{};padding:{};align-items:{};justify-content:{};flex-wrap:{};",
-                match direction { StackDirection::Row => "row", StackDirection::Column => "column" }, length(*gap), length(*padding),
+            ElementLayout::Stack { direction, gap, align, justify, wrap, .. } => css.push_str(&format!("flex-direction:{};gap:{};padding:{};align-items:{};justify-content:{};flex-wrap:{};",
+                match direction { StackDirection::Row => "row", StackDirection::Column => "column" }, length(*gap), padding_css(element),
                 match align { StackAlign::Start => "flex-start", StackAlign::Center => "center", StackAlign::End => "flex-end", StackAlign::Stretch => "stretch" },
                 match justify { StackJustify::Start => "flex-start", StackJustify::Center => "center", StackJustify::End => "flex-end", StackJustify::SpaceBetween => "space-between" }, if *wrap { "wrap" } else { "nowrap" })),
-            ElementLayout::Grid { columns, gap, padding } => css.push_str(&format!("grid-template-columns:repeat({columns},minmax(0,1fr));grid-auto-rows:auto;gap:{};padding:{};", length(*gap), length(*padding))),
+            ElementLayout::Grid { columns, gap, .. } => css.push_str(&format!("grid-template-columns:repeat({columns},minmax(0,1fr));grid-auto-rows:auto;gap:{};padding:{};", length(*gap), padding_css(element))),
         }
         rules.insert(element.id, css);
         self::rules(&element.children, &element.layout, rules);
@@ -493,6 +512,45 @@ mod tests {
         assert!(css.contains(&format!("background:var(--colour-{colour});")));
         output.clear(); rules(&[child.clone()], &ElementLayout::Free, &mut output);
         assert!(output[&child.id].contains("width:calc(100% -"));
+    }
+
+    #[test]
+    fn stack_and_grid_padding_uses_each_named_side() {
+        let mut child = element(ElementKind::Box);
+        child.layout = ElementLayout::Stack {
+            direction: StackDirection::Row,
+            gap: 8.0,
+            padding: 0.0,
+            align: StackAlign::Start,
+            justify: StackJustify::Start,
+            wrap: false,
+        };
+        child.style.padding = Some(crate::ElementPadding {
+            top: 4.0,
+            right: 8.0,
+            bottom: 12.0,
+            left: 16.0,
+        });
+        let mut output = BTreeMap::new();
+        rules(&[child.clone()], &ElementLayout::Free, &mut output);
+        let css = &output[&child.id];
+        assert!(css.contains(&format!(
+            "padding:{} {} {} {};",
+            length(4.0),
+            length(8.0),
+            length(12.0),
+            length(16.0)
+        )));
+        // Without named sides the layout's all-sides value still wins, so old files are unchanged.
+        child.style.padding = None;
+        child.layout = ElementLayout::Grid {
+            columns: 2,
+            gap: 4.0,
+            padding: 6.0,
+        };
+        output.clear();
+        rules(&[child.clone()], &ElementLayout::Free, &mut output);
+        assert!(output[&child.id].contains(&format!("padding:{};", length(6.0))));
     }
 
     #[test]

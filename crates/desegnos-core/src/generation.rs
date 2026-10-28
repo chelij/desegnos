@@ -1366,6 +1366,11 @@ pub fn apply_generation_output(
         dossier.applied_at_revision = Some(next.revision);
         dossier.accepted_decision_indices = accepted_decision_indices.to_vec();
     }
+    // AI layers arrive without names; give them the same numbered default names as hand edits.
+    let mut used = crate::elements::used_default_names(&next);
+    for page in &mut next.pages {
+        crate::elements::assign_default_names(&mut page.elements, &mut used);
+    }
     next.validate()?;
     Ok(next)
 }

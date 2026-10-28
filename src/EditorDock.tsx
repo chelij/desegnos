@@ -6,7 +6,7 @@ import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
 import type { BoundaryKind, ElementPatch, NamedView, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
 import { ColourField } from './projectCanvas/ColourField';
-import { ElementLayers } from './projectCanvas/elementLayers';
+import { ElementLayers, matchingLayerIds } from './projectCanvas/elementLayers';
 import { SIZE_PRESETS, resolveForSize, sizeLabel } from './projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from './projectCanvas/requests';
 import { PROJECT_NAME_MAX_LENGTH } from './editorShared';
@@ -549,10 +549,12 @@ export function StylesSection({ project, command, busy = false }: { project: Pro
   const disabled = busy || !command;
   const send = (edit: import('./types').Command) => { void command?.(edit).catch(() => {}); };
   return <PropsSection id="project-styles" title="Styles">
-    {project.styles?.colours.map(style => <div key={style.id} className="dock-inline">
+    {project.styles?.colours.map(style => <div key={style.id}>
       <CompactTextField label="Colour style name" value={style.name} disabled={disabled} valid={value => !!value.trim()} commit={name => send({ type: 'update_colour_style', style: { ...style, name: name.trim() } })} />
-      <input type="color" aria-label={`${style.name} colour`} value={style.value.length === 7 ? style.value : '#000000'} disabled={disabled} style={{ width: 28 }} onChange={event => send({ type: 'update_colour_style', style: { ...style, value: event.target.value } })} />
-      <button type="button" className="icon-button sm" aria-label={`Delete ${style.name} style`} disabled={disabled} onClick={() => send({ type: 'remove_colour_style', id: style.id })}><Icon name="close" size={12} /></button>
+      <div className="dock-inline">
+        <ColourField label={`${style.name} colour`} value={style.value} optional={false} disabled={disabled} commit={value => send({ type: 'update_colour_style', style: { ...style, value } })} />
+        <button type="button" className="icon-button sm" aria-label={`Delete ${style.name} style`} disabled={disabled} onClick={() => send({ type: 'remove_colour_style', id: style.id })}><Icon name="close" size={12} /></button>
+      </div>
     </div>)}
     {project.styles?.text.map(style => <details key={style.id}>
       <summary>{style.name}</summary>
@@ -587,6 +589,9 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   // Boundary trees share the dock's remembered section state with every other section.
   const collapsed = useCollapsedSections();
   const toggleSection = (key: string) => setSectionCollapsed(key, !collapsed.has(key));
+  const [query, setQuery] = useState('');
+  const needle = query.trim().toLowerCase();
+  const matches = (text: string) => !needle || text.toLowerCase().includes(needle);
   const ordered = boundariesByPosition(boundaries);
   const selected = new Set(selection.map(canvasTargetKey));
   const selectedElements = selection.flatMap(target => target.kind === 'element' ? [target.elementId] : []);
@@ -603,7 +608,16 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   const pointers = project.pointers ?? [];
   const linked = Object.values(project.linked ?? {}).sort((first, second) => first.name.localeCompare(second.name));
   const requests = project.requests ?? [];
+  const shownRequests = requests.filter(request => matches(request.text.trim().split('\n')[0] || 'Empty request'));
+  const shownPointers = pointers.filter(pointer => matches(pointerLabel(pointer, project)));
+  const shownLinked = linked.filter(definition => matches(definition.name));
+  const shownReference = [...project.reference].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x).filter(item => matches(referenceLabel(item)));
   return <ul className="dock-tree">
+    <li className="dock-search">
+      <input className="dock-search-input" type="search" aria-label="Search layers" placeholder="Search layers" value={query}
+        onChange={event => setQuery(event.target.value)}
+        onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setQuery(''); } }} />
+    </li>
     <li><button type="button" className="dock-action" onClick={addBoundary}><Icon name="plus" />Add {boundaryName(projectKind(project)).toLowerCase()}</button></li>
     <li><StylesSection project={project} command={styleCommand} /></li>
     <LayerGroup section="views" title="Views" add={addView} addLabel="Save the current view">
@@ -614,9 +628,12 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
       const size = page?.sizes.find(item => item.id === sizeId);
       if (!page || !size) return null;
       const sectionKey = `boundary:${sizeId}`;
-      const open = !collapsed.has(sectionKey);
+      const open = needle ? true : !collapsed.has(sectionKey);
       const elements = resolveForSize(project, page, sizeId);
       const name = page.sizes.length > 1 ? `${page.name} · ${label}` : page.name;
+      // A search keeps matching layers and their parents; a matching boundary shows all of its layers.
+      const keep = needle && !matches(name) ? matchingLayerIds(elements, query) : null;
+      if (needle && keep && !keep.size) return null;
       const boundarySelected = focused === pageId && !selection.some(target => target.kind === 'element' && target.pageId === pageId);
       return <li key={sizeId} className="dock-tree-group">
         <div className="dock-tree-row layer-head-row" data-selected={boundarySelected || undefined}>
@@ -631,35 +648,35 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
           </button>
           <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${name}`} title="Delete boundary" onClick={() => deleteBoundary(pageId, sizeId)}><Icon name="trash" size={13} /></button>
         </div>
-        {open && elements.length > 0 && <ElementLayers project={project} pageId={pageId} sizeId={sizeId} elements={elements} selection={selectedElements}
+        {open && elements.length > 0 && <ElementLayers project={project} pageId={pageId} sizeId={sizeId} elements={elements} selection={selectedElements} keep={needle ? keep : null}
           select={selectElement} update={updateElements} remove={(page, size, id) => removeElements([id])} move={moveElement} />}
       </li>;
     })}
-    {requests.length > 0 && <LayerGroup section="requests" title="Requests">
-      {requests.map(request => <li key={request.id} className="dock-linked-row">
+    {shownRequests.length > 0 && <LayerGroup section="requests" title="Requests">
+      {shownRequests.map(request => <li key={request.id} className="dock-linked-row">
         <button type="button" className="dock-tree-select" data-request-row={request.id} aria-pressed={selected.has(canvasTargetKey({ kind: 'request', requestId: request.id }))} onClick={() => selectRequest(request.id)}>
           <Icon name="text" size={12} /><span>{request.text.trim().split('\n')[0] || 'Empty request'}</span>
         </button>
         <button type="button" className="icon-button sm dock-row-toggle" aria-label="Delete request" title="Delete request" onClick={() => removeRequest(request.id)}><Icon name="trash" size={13} /></button>
       </li>)}
     </LayerGroup>}
-    {project.reference.length > 0 && <LayerGroup section="reference" title="Reference">
-      {[...project.reference].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x).map(item => <li key={item.id} className="dock-linked-row">
+    {shownReference.length > 0 && <LayerGroup section="reference" title="Reference">
+      {shownReference.map(item => <li key={item.id} className="dock-linked-row">
         <button type="button" className="dock-tree-select" aria-pressed={selected.has(canvasTargetKey({ kind: 'reference', itemId: item.id }))} onClick={() => selectReference(item.id)}>
           <Icon name={referenceIcon(item)} size={12} /><span>{referenceLabel(item)}</span>
         </button>
         <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${referenceLabel(item)}`} title="Delete reference item" onClick={() => removeReference(item.id)}><Icon name="trash" size={13} /></button>
       </li>)}
     </LayerGroup>}
-    {linked.length > 0 && <LayerGroup section="linked" title="Linked">
-      {linked.map(definition => <li key={definition.id} className="dock-linked-row">
+    {shownLinked.length > 0 && <LayerGroup section="linked" title="Linked">
+      {shownLinked.map(definition => <li key={definition.id} className="dock-linked-row">
         <span className="dock-tree-select dock-tree-item" title={`Linked element ${definition.name}`}><Icon name="linked-copies" size={12} /><span>{definition.name}</span></span>
         <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete linked element ${definition.name}`} title="Delete linked element"
           onClick={() => removeLinked(definition.id)}><Icon name="trash" size={13} /></button>
       </li>)}
     </LayerGroup>}
-    {pointers.length > 0 && <LayerGroup section="pointers" title="Pointers">
-      {pointers.map(pointer => <li key={pointer.id}>
+    {shownPointers.length > 0 && <LayerGroup section="pointers" title="Pointers">
+      {shownPointers.map(pointer => <li key={pointer.id}>
         <button type="button" className={`dock-tree-select dock-tree-item${pointerBroken(pointer, project) ? ' broken' : ''}`} aria-pressed={selected.has(canvasTargetKey({ kind: 'pointer', pointerId: pointer.id }))}
           title={pointerLabel(pointer, project)} onClick={() => selectPointer(pointer.id)}>
           <Icon name="arrow-right" size={12} /><span>{pointerLabel(pointer, project)}</span>
