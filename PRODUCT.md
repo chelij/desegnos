@@ -1,28 +1,28 @@
 # Desegnos product direction
 
-Date: 2026-10-19. Owner decisions. Where this file and [RELEASE_PLAN.md](RELEASE_PLAN.md) disagree on product direction, this file wins; the release plan still governs technical and safety contracts. Work order is in [FEATURE_PRIORITIES.md](FEATURE_PRIORITIES.md) and [UX_AUDIT.md](UX_AUDIT.md).
+Date: 2026-10-28. Owner decisions. Where this file and [RELEASE_PLAN.md](RELEASE_PLAN.md) disagree on product direction, this file wins; the release plan still governs technical and safety contracts. The next milestone is [three finished examples](CANVAS.md#next-milestone-three-finished-examples). [FEATURE_PRIORITIES.md](FEATURE_PRIORITIES.md) and [UX_AUDIT.md](UX_AUDIT.md) provide earlier research and audit context.
 
 ## What Desegnos is
 
-**A visual canvas with AI.** A desktop design tool where you place things exactly where you want them on an infinite canvas, by hand or by describing them. Everything stays visual while you work; at export the AI builds real HTML, CSS and JavaScript that you own, and slides and images export directly. See [CANVAS.md](CANVAS.md).
+**A visual canvas with AI.** A desktop design tool where you place things exactly where you want them on an infinite canvas, by hand or by describing them. Everything stays visual while you work; export compiles real HTML/CSS from the model and can use AI for missing pointer behaviour, while slides and images export directly. You own the output files. See [CANVAS.md](CANVAS.md).
 
 ## What makes it different
 
-**Placement and control.** Other AI site builders are chat-first: you describe a page and accept what comes back. In Desegnos, you decide where things go and the AI fills them in. When the choice is between AI convenience and user control, control wins.
+**Placement and control.** Many AI creation tools start with a chat prompt and a generated result. In Desegnos, you decide where things go and the AI fills them in. When the choice is between AI convenience and user control, control wins.
 
 What this means in practice:
 - **Placement fidelity is the core quality measure.** AI-made elements land in the request that asked for them, and exports keep elements where they were placed, at about that size, in that order and grouping. Precise mode honours this closely.
 - **Visual first.** Work happens on the canvas, not in code. Code exists only in exports, as ordinary files users can read and edit.
-- **Changes are scoped.** A request changes only the layer it targets, and everything else stays as it was. Pointers are the explicit way to let a request reach further.
+- **Changes are scoped.** A request changes only its selected or covered targets, and everything else stays as it was. Pointers are the explicit way to let a request reach further.
 - **The output is ordinary files** that open without Desegnos and are not locked to any host.
 
 ## Who it is for
 
-**Primary:** people who know what they want their site to look like and want to place it themselves, without hand-writing all the code. Examples: designers, hobbyists, small-business owners and freelancers, i.e. people who would have used Dreamweaver or a visual builder.
+**Primary:** designers, creators, hobbyists, small-business owners and freelancers who want to compose a social image, slide deck, website or app screen themselves, with AI helping inside their chosen areas. They need direct placement, editable layers and an output that keeps the intended appearance.
 
-**Secondary:** developers who want a fast visual starting point and clean exported code.
+**Secondary:** developers who want a visual starting point for websites and app screens, and ordinary exported web files. App screens currently export as web files; native application packaging is not the promised output.
 
-**Not the target:** people who want a site generated from a single sentence with no further input. Chat-first tools already serve them.
+**Not the target:** people who want a finished output generated from a single sentence with no further input. Chat-first tools already serve them.
 
 ## Business model
 
@@ -51,13 +51,14 @@ The ChatGPT-plan path and OpenAI-only support exist **for testing only**. The go
 
 ## Success measure
 
-**"I can get a site looking like how I imagined it."**
+**"I can make an image, deck, website or app screen look how I imagined it, edit it, and keep that appearance when I export and reopen it."**
 
 To make this testable:
-- **Placement fidelity score.** For each benchmark scenario, compare each request box with the bounds of the element generated for it: relative order, alignment, size ratio, and whether it stayed inside its area. Record the score per run in `docs/GENERATION_BENCHMARK.md`.
+- **Placement fidelity score.** For each benchmark scenario, compare each request box with the bounds of the element generated for it: relative order, alignment, size ratio, and whether it stayed inside its area. Record the score per run in [the generation benchmark](docs/GENERATION_BENCHMARK.md).
 - **Owner rating.** For each scenario: "looks like what I imagined" yes or no.
 - **Kept rate.** The share of generations kept without Undo, measured in benchmark runs.
-- **Time to a finished page.** From a new project to an exported page that the owner rates "done".
+- **Time to a finished output.** From a new project to an exported image, deck, website or app screen that the owner rates "done".
+- **Round-trip appearance.** Check the edited design, opened export and reopened project for each of the [three milestone examples](CANVAS.md#next-milestone-three-finished-examples). Current capability evidence is scoped in [CANVAS.md](CANVAS.md#capability-status).
 
 ## Feedback and diagnostics
 
@@ -66,7 +67,7 @@ To make this testable:
 
 ## Testing with people
 
-The owner tests by hand after the UX audit and Tier 1 features land. After that, run a few short sessions with people in the primary audience: they build a page without help while someone watches. File what you see against UX_AUDIT.md.
+The owner tests by hand after the UX audit and Tier 1 features land. After that, run a few short sessions with people in the primary audience: they make an image, short deck or two-page website without help while someone watches. File what you see against UX_AUDIT.md.
 
 ## Launch (later)
 
@@ -79,4 +80,4 @@ Not planned in detail until Tier 1 works. Meanwhile:
 - **Version control from now on.** Every change goes into git, one branch per feature or audit item, merged once its checks pass.
 - **Small CI:** frontend build, Rust tests, clippy, canvas tests. Native workflow tests run locally until runners exist.
 - **Evidence per change:** one native workflow test and screenshots of key states. `test-results/` is not committed. Keep only the latest run per feature locally.
-- **Document order of authority:** PRODUCT.md (direction) → FEATURE_PRIORITIES.md and UX_AUDIT.md (order of work) → RELEASE_PLAN.md (technical contracts) → DESIGN.md (visual rules).
+- **Document order of authority:** PRODUCT.md (direction) → CANVAS.md and RELEASE_PLAN.md (current milestone and gates) → DESIGN.md (visual rules). FEATURE_PRIORITIES.md and UX_AUDIT.md retain earlier research and audit context.

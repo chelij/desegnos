@@ -735,7 +735,8 @@ pub enum PointerSource {
     },
 }
 
-/// Where a pointer goes. A layer grants edit permission; reference items and URLs are read only.
+/// Where a pointer goes. A change pointer grants edit permission; a reference pointer only
+/// reads its target. Reference items and URLs are always read only.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
@@ -821,6 +822,9 @@ pub struct ExportRecord {
     pub pages: Vec<ExportedPage>,
     #[serde(default)]
     pub pointers: BTreeMap<Uuid, ExportedPointer>,
+    /// Accepted behaviour code, independent of visual/text edits.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub behaviours: BTreeMap<Uuid, crate::ExportBehaviour>,
 }
 
 impl ExportRecord {
@@ -869,8 +873,20 @@ impl ExportRecord {
                 false,
             )?;
         }
+        crate::validate_behaviours(&self.behaviours)?;
         Ok(())
     }
+}
+
+/// What a pointer lets a request do with its target.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PointerKind {
+    /// The AI may read the target as context, never change it.
+    #[default]
+    Reference,
+    /// The AI may read and change the target; behaviour comments compile at export.
+    Change,
 }
 
 /// A line from a frame or boundary to what it grants the AI permission to read or change.
@@ -882,6 +898,8 @@ pub struct Pointer {
     pub from: PointerSource,
     pub to: PointerTarget,
     pub comment: String,
+    #[serde(default)]
+    pub kind: PointerKind,
     #[serde(default)]
     pub wiring: Option<PointerWiring>,
     /// A simple action the comment asks for, and the comment it was classified from.
@@ -1158,7 +1176,120 @@ pub struct ExtensionRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ColourStyle {
+    pub id: Uuid,
+    pub name: String,
+    pub value: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TextStyle {
+    pub id: Uuid,
+    pub name: String,
+    pub font_family: String,
+    pub size: f64,
+    pub weight: u16,
+    pub line_height: f64,
+    pub letter_spacing: f64,
+    pub italic: bool,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectStyles {
+    pub colours: Vec<ColourStyle>,
+    pub text: Vec<TextStyle>,
+}
+impl ProjectStyles {
+    pub fn resolve(&self, style: &mut crate::ElementStyle) {
+        let colour = |id| {
+            self.colours
+                .iter()
+                .find(|c| Some(c.id) == id)
+                .map(|c| c.value.clone())
+        };
+        if let Some(value) = colour(style.references.fill) {
+            style.fill = Some(value);
+        }
+        if let Some(value) = colour(style.references.stroke) {
+            style.stroke.color = Some(value);
+        }
+        if let Some(value) = colour(style.references.text_colour) {
+            style.text_style.color = value;
+        }
+        if let Some(text) = self
+            .text
+            .iter()
+            .find(|t| Some(t.id) == style.references.text)
+        {
+            style.text_style.font_family = text.font_family.clone();
+            style.text_style.size = text.size;
+            style.text_style.weight = text.weight;
+            style.text_style.line_height = text.line_height;
+            style.text_style.letter_spacing = text.letter_spacing;
+            style.text_style.italic = text.italic;
+        }
+    }
+    pub fn validate_references(&self, refs: &crate::StyleReferences) -> Result<()> {
+        for id in [refs.fill, refs.stroke, refs.text_colour]
+            .into_iter()
+            .flatten()
+        {
+            ensure(
+                self.colours.iter().any(|c| c.id == id),
+                "A colour style no longer exists.",
+            )?;
+        }
+        ensure(
+            refs.text
+                .is_none_or(|id| self.text.iter().any(|t| t.id == id)),
+            "A text style no longer exists.",
+        )
+    }
+    fn validate(&self) -> Result<()> {
+        ensure(
+            self.colours.len() + self.text.len() <= 1000,
+            "A project supports at most 1,000 styles.",
+        )?;
+        let mut ids = std::collections::BTreeSet::new();
+        for (id, name) in self
+            .colours
+            .iter()
+            .map(|s| (s.id, &s.name))
+            .chain(self.text.iter().map(|s| (s.id, &s.name)))
+        {
+            ensure(
+                !id.is_nil() && ids.insert(id),
+                "Style identifiers must be nonempty and unique.",
+            )?;
+            validate_text(name, "Style name", 120, false)?;
+        }
+        for colour in &self.colours {
+            crate::elements::validate_colour(&colour.value, "Style colour")?;
+        }
+        for text in &self.text {
+            let mut style = crate::empty_element(
+                crate::ElementKind::Text,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 0.0,
+                },
+            )
+            .style;
+            style.references.text = Some(text.id);
+            self.resolve(&mut style);
+            style.validate()?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Project {
+    #[serde(default)]
+    pub styles: ProjectStyles,
     pub schema_version: u32,
     pub id: Uuid,
     pub name: String,
@@ -1207,6 +1338,12 @@ pub struct Project {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
+    AddColourStyle { style: ColourStyle },
+    UpdateColourStyle { style: ColourStyle },
+    RemoveColourStyle { id: Uuid },
+    AddTextStyle { style: TextStyle },
+    UpdateTextStyle { style: TextStyle },
+    RemoveTextStyle { id: Uuid },
     RenameProject {
         name: String,
     },
@@ -1331,7 +1468,7 @@ pub enum Command {
     AddPointer {
         pointer: Pointer,
     },
-    /// Change a comment and/or either endpoint in one undo step.
+    /// Change a comment, kind and/or either endpoint in one undo step.
     UpdatePointer {
         pointer_id: Uuid,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1340,6 +1477,8 @@ pub enum Command {
         to: Option<PointerTarget>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         comment: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<PointerKind>,
     },
     RemovePointers {
         ids: Vec<Uuid>,
@@ -1508,6 +1647,9 @@ impl Command {
     /// A short, plain label for the change. Saved versions are named from these.
     pub fn version_label(&self) -> &'static str {
         match self {
+            Self::AddColourStyle { .. } | Self::AddTextStyle { .. } => "Added a style",
+            Self::UpdateColourStyle { .. } | Self::UpdateTextStyle { .. } => "Changed a style",
+            Self::RemoveColourStyle { .. } | Self::RemoveTextStyle { .. } => "Removed a style",
             Self::RenameProject { .. } => "Renamed the project",
             Self::SetGrid { .. } => "Changed the grid",
             Self::SetGridSettings { .. } => "Changed the grid",
@@ -1567,6 +1709,50 @@ impl Command {
 }
 
 impl Project {
+    fn detach_style(&mut self, id: Uuid, text: bool) -> Result<()> {
+        ensure(
+            if text {
+                self.styles.text.iter().any(|s| s.id == id)
+            } else {
+                self.styles.colours.iter().any(|s| s.id == id)
+            },
+            "This style no longer exists.",
+        )?;
+        fn detach(styles: &ProjectStyles, elements: &mut [Element], id: Uuid) {
+            for element in elements {
+                for style in std::iter::once(&mut element.style).chain(
+                    element
+                        .overrides
+                        .values_mut()
+                        .filter_map(|o| o.style.as_mut()),
+                ) {
+                    styles.resolve(style);
+                    for reference in [
+                        &mut style.references.fill,
+                        &mut style.references.stroke,
+                        &mut style.references.text_colour,
+                        &mut style.references.text,
+                    ] {
+                        if *reference == Some(id) {
+                            *reference = None;
+                        }
+                    }
+                }
+                detach(styles, &mut element.children, id);
+            }
+        }
+        for page in &mut self.pages {
+            detach(&self.styles, &mut page.elements, id);
+        }
+        for definition in self.linked.values_mut() {
+            detach(
+                &self.styles,
+                std::slice::from_mut(&mut definition.master),
+                id,
+            );
+        }
+        Ok(())
+    }
     pub fn new(name: String, viewport: Viewport, appearance: Appearance) -> Result<Self> {
         let home_page_id = Uuid::new_v4();
         let project = Self {
@@ -1603,6 +1789,7 @@ impl Project {
             pictures: BTreeMap::new(),
             reference: vec![],
             pointers: vec![],
+            styles: ProjectStyles::default(),
             linked: BTreeMap::new(),
             requests: vec![],
             views: vec![],
@@ -1661,6 +1848,7 @@ impl Project {
             pictures: BTreeMap::new(),
             reference: vec![],
             pointers: vec![],
+            styles: ProjectStyles::default(),
             linked: BTreeMap::new(),
             requests: vec![],
             views: vec![],
@@ -1738,6 +1926,7 @@ impl Project {
         from: Option<PointerSource>,
         to: Option<PointerTarget>,
         comment: Option<String>,
+        kind: Option<PointerKind>,
     ) -> Result<()> {
         let pointer = self.pointer_mut(pointer_id)?;
         if let Some(from) = from {
@@ -1748,6 +1937,9 @@ impl Project {
         }
         if let Some(comment) = comment {
             pointer.comment = comment;
+        }
+        if let Some(kind) = kind {
+            pointer.kind = kind;
         }
         Ok(())
     }
@@ -2229,6 +2421,7 @@ impl Project {
         validate_text(&self.name, "Project name", 120, true)?;
         self.viewport.validate()?;
         self.grid_settings.validate()?;
+        self.styles.validate()?;
         ensure(
             self.requests.len() <= MAX_REQUESTS,
             "A project holds at most 256 pending requests.",
@@ -2510,6 +2703,46 @@ impl Project {
             .checked_add(1)
             .ok_or_else(|| Error("Project revision limit reached.".into()))?;
         match command {
+            Command::AddColourStyle { style } => {
+                ensure(
+                    !next.styles.colours.iter().any(|s| s.id == style.id),
+                    "This style already exists.",
+                )?;
+                next.styles.colours.push(style);
+            }
+            Command::UpdateColourStyle { style } => {
+                let id = style.id;
+                *next
+                    .styles
+                    .colours
+                    .iter_mut()
+                    .find(|s| s.id == id)
+                    .ok_or_else(|| Error("This style no longer exists.".into()))? = style;
+            }
+            Command::RemoveColourStyle { id } => {
+                next.detach_style(id, false)?;
+                next.styles.colours.retain(|s| s.id != id);
+            }
+            Command::AddTextStyle { style } => {
+                ensure(
+                    !next.styles.text.iter().any(|s| s.id == style.id),
+                    "This style already exists.",
+                )?;
+                next.styles.text.push(style);
+            }
+            Command::UpdateTextStyle { style } => {
+                let id = style.id;
+                *next
+                    .styles
+                    .text
+                    .iter_mut()
+                    .find(|s| s.id == id)
+                    .ok_or_else(|| Error("This style no longer exists.".into()))? = style;
+            }
+            Command::RemoveTextStyle { id } => {
+                next.detach_style(id, true)?;
+                next.styles.text.retain(|s| s.id != id);
+            }
             Command::RenameProject { name } => next.name = name.trim().into(),
             Command::SetGrid { enabled } => next.show_grid = enabled,
             Command::SetGridSettings { settings } => next.grid_settings = settings,
@@ -2736,7 +2969,8 @@ impl Project {
                 from,
                 to,
                 comment,
-            } => next.update_pointer(pointer_id, from, to, comment)?,
+                kind,
+            } => next.update_pointer(pointer_id, from, to, comment, kind)?,
             Command::RemovePointers { ids } => {
                 ensure(!ids.is_empty(), "Choose a pointer to remove.")?;
                 for id in &ids {

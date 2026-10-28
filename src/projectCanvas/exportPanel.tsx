@@ -10,7 +10,7 @@ export const OUTPUT_CHOICES: [string, string][] = [
 ];
 
 const STATUS_LABELS: Record<string, string> = {
-  prepared: 'Ready to send',
+  prepared: 'Ready',
   sending: 'Exporting…',
   ready: 'Exported',
   failed: 'Could not export',
@@ -51,7 +51,7 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
     {job && <div className="export-panel-job" role="status">
       <p><strong>{STATUS_LABELS[job.status] ?? job.status}</strong>{job.status === 'prepared' && job.estimateUsd > 0 ? ` · ${money(job.estimateUsd)} estimate` : ''}</p>
       <p>{job.message}</p>
-      {job.kind === 'code' && <p className="muted">Sent {job.pages.length} {job.pages.length === 1 ? 'boundary' : 'boundaries'} · {job.sizeCount} {job.sizeCount === 1 ? 'size' : 'sizes'} · {job.pointerCount} {job.pointerCount === 1 ? 'pointer' : 'pointers'}</p>}
+      {job.kind === 'code' && <p className="muted">Export {job.pages.length} {job.pages.length === 1 ? 'boundary' : 'boundaries'} · {job.sizeCount} {job.sizeCount === 1 ? 'size' : 'sizes'} · {job.pointerCount} {job.pointerCount === 1 ? 'pointer' : 'pointers'}</p>}
       {job.summary && <p className="muted">{job.summary}</p>}
       {job.usage && <p className="muted">{job.usage.inputTokens.toLocaleString()} in · {job.usage.outputTokens.toLocaleString()} out tokens{job.attempts.length > 1 ? ` · ${job.attempts.length} attempts` : ''}</p>}
       {job.pages.length > 0 && <details><summary>Files</summary><ul className="export-panel-files">{job.pages.map(page => <li key={page.pageId}>{page.name} → {page.file || page.output}</li>)}</ul></details>}
@@ -63,11 +63,10 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
     </div>}
     <div className="form-actions">
       {!running && <button type="button" className={prepared ? 'dock-action' : 'primary'} disabled={busy || !destination || boundaries.length === 0} onClick={runExport}>{prepared ? 'Start a new export' : 'Export'}</button>}
-      {prepared && <button type="button" className="primary" disabled={sending} onClick={sendExport}>{sending ? 'Sending…' : job?.kind === 'comment' ? 'Send to rewrite the comment' : 'Send to AI'}</button>}
+      {prepared && <button type="button" className="primary" disabled={sending} onClick={sendExport}>{sending ? 'Sending…' : job?.kind === 'comment' ? 'Send to rewrite the comment' : 'Generate behaviour'}</button>}
       {prepared && <button type="button" className="dock-action" disabled={sending} onClick={cancelExport}>Cancel</button>}
       {running && <button type="button" className="dock-action" onClick={cancelExport}>Cancel</button>}
       {(job?.status === 'failed' || job?.status === 'cancelled' || job?.status === 'stale') && <button type="button" className="dock-action" disabled={sending} onClick={retryExport}>Try again</button>}
     </div>
-    <p className="muted export-panel-note">Websites and app screens are built by the AI from the design, then written as ordinary files. Slides and images render directly.</p>
   </div>;
 }

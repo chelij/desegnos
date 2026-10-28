@@ -1,5 +1,6 @@
 use desegnos_core::{
-    Appearance, CanvasTemplate, Command, GenerationCandidate, Project, RequirementsSnapshot, Session,
+    Appearance, CanvasTemplate, Command, GenerationCandidate, Project, RequirementsSnapshot,
+    Session,
 };
 use desegnos_storage::{
     AutosaveProject, FileStamp, LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure,
@@ -22,21 +23,6 @@ type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 
 /// Unsaved edits reach the autosave branch at most this often while the project is dirty.
 const AUTOSAVE_INTERVAL: Duration = Duration::from_secs(3);
-
-/// A fingerprint of the canvas documents; canvases never read page code.
-fn documents_key(project: Option<&Project>) -> String {
-    let Some(project) = project else {
-        return String::new();
-    };
-    use sha2::{Digest, Sha256};
-    let mut hash = Sha256::new();
-    for page in &project.pages {
-        hash.update(page.id.as_bytes());
-        hash.update(page.path.as_bytes());
-    }
-    hash.update(project.revision.to_le_bytes());
-    format!("{:x}", hash.finalize())
-}
 
 /// Open failures keep existing text errors and expose recovery choices without parsing prose.
 #[derive(Debug, Serialize)]
@@ -143,9 +129,6 @@ pub struct WorkspaceView {
     recovery_error: Option<String>,
     open_projects: Vec<OpenProjectSummary>,
     any_dirty: bool,
-    /// A fingerprint of the code and framed documents, so editors can re-read them after a
-    /// document change without waking on every request prompt keystroke.
-    documents_key: String,
     /// Pointer clashes and pending wiring, derived from the project on every published view.
     pointer_states: Vec<desegnos_core::PointerStateView>,
 }
@@ -158,6 +141,7 @@ struct HistoryView {
     position: usize,
     end: usize,
     version: u64,
+    entries: Vec<desegnos_core::HistoryEntry>,
 }
 
 #[derive(Serialize)]
@@ -220,29 +204,22 @@ struct PendingSaveConflict {
 pub struct Workspace {
     directory: PathBuf,
     system_project_location: PathBuf,
-    session: Option<Session>,
-    file: Option<ProjectDatabase>,
-    /// What the file held when we opened it or last saved, for conflict checks.
-    stamp: Option<FileStamp>,
-    ownership: Option<File>,
-    saved_revision: Option<u64>,
-    last_autosave: Option<Instant>,
+    active: Option<OpenProject>,
     recoveries: Vec<RecoveryCandidate>,
     recovery_error: Option<String>,
-    prepared: Option<RequirementsSnapshot>,
     recent_error: Option<String>,
-    pending_save: Option<PendingSaveConflict>,
-    /// The active project has no user-chosen project file yet.
-    untitled: bool,
     /// Other open projects, each with its own undo history, file and autosave.
     parked: Vec<OpenProject>,
     /// Open projects in tab order.
     order: Vec<Uuid>,
 }
 
-/// A project kept open in the background while another one is active.
+/// All state owned by one open tab, active or parked.
 struct OpenProject {
     session: Session,
+    last_autosave: Option<Instant>,
+    prepared: Option<RequirementsSnapshot>,
+    pending_save: Option<PendingSaveConflict>,
     file: Option<ProjectDatabase>,
     stamp: Option<FileStamp>,
     ownership: Option<File>,
@@ -274,6 +251,19 @@ pub struct OpenPageSummary {
 }
 
 impl Workspace {
+    fn session(&self) -> Option<&Session> {
+        self.active.as_ref().map(|open| &open.session)
+    }
+    fn session_mut(&mut self) -> Option<&mut Session> {
+        self.active.as_mut().map(|open| &mut open.session)
+    }
+    fn file(&self) -> Option<&ProjectDatabase> {
+        self.active.as_ref().and_then(|open| open.file.as_ref())
+    }
+    fn is_untitled(&self) -> bool {
+        self.active.as_ref().is_some_and(|open| open.untitled)
+    }
+
     pub(super) fn directory(&self) -> &std::path::Path {
         &self.directory
     }
@@ -284,31 +274,29 @@ impl Workspace {
         crate::project_location::read(&self.directory, &self.system_project_location)
     }
     pub(super) fn project(&self) -> NativeResult<&Project> {
-        self.session
-            .as_ref()
+        self.session()
             .map(Session::project)
             .ok_or_else(|| "Create or open a project first.".into())
     }
 
     /// The newest saved version, recorded with an export.
     pub(super) fn head_version(&mut self) -> NativeResult<i64> {
-        self.file
-            .as_ref()
+        self.file()
             .ok_or("Save this project before exporting it.")?
             .head_version()
             .map_err(message)
     }
 
-    /// Record a completed export as one undoable change, so clashes compare against it.
-    pub(super) fn record_export(&mut self, record: desegnos_core::ExportRecord) -> NativeResult<()> {
+    /// Record a completed export so clashes compare against it. It is metadata about the
+    /// design, not an edit, so it never adds an undo step.
+    pub(super) fn record_export(
+        &mut self,
+        record: desegnos_core::ExportRecord,
+    ) -> NativeResult<()> {
         let session = self
-            .session
-            .as_mut()
+            .session_mut()
             .ok_or("Create or open a project first.")?;
-        let revision = session.project().revision;
-        session
-            .execute(revision, Command::RecordExport { record }, |_| Ok(()))
-            .map_err(message)?;
+        session.record_export(record, |_| Ok(())).map_err(message)?;
         self.autosave_if_due();
         Ok(())
     }
@@ -320,8 +308,7 @@ impl Workspace {
         pictures: BTreeMap<Uuid, String>,
     ) -> NativeResult<WorkspaceView> {
         let session = self
-            .session
-            .as_mut()
+            .session_mut()
             .ok_or("Create or open a project first.")?;
         let revision = session.project().revision;
         session
@@ -348,8 +335,7 @@ impl Workspace {
         fingerprint: &str,
     ) -> NativeResult<()> {
         let session = self
-            .session
-            .as_mut()
+            .session_mut()
             .ok_or("Create or open a project first.")?;
         let revision = session.project().revision;
         let wiring = desegnos_core::PointerWiring {
@@ -377,8 +363,7 @@ impl Workspace {
         candidate: &GenerationCandidate,
         attempt_ordinal: usize,
     ) -> NativeResult<()> {
-        self.session
-            .as_mut()
+        self.session_mut()
             .ok_or("Create or open a project first.")?
             .record_generation(snapshot, candidate, attempt_ordinal, |_| Ok(()))
             .map_err(message)?;
@@ -394,8 +379,7 @@ impl Workspace {
         accepted_decision_indices: &[usize],
         generated_pictures: &std::collections::BTreeMap<String, String>,
     ) -> NativeResult<()> {
-        self.session
-            .as_mut()
+        self.session_mut()
             .ok_or("Create or open a project first.")?
             .apply_generation(
                 snapshot,
@@ -428,18 +412,10 @@ impl Workspace {
         let mut state = Self {
             system_project_location: directory.join("Projects"),
             directory,
-            session: None,
-            file: None,
-            stamp: None,
-            ownership: None,
-            saved_revision: None,
-            last_autosave: None,
+            active: None,
             recoveries: vec![],
             recovery_error: None,
-            prepared: None,
             recent_error: None,
-            pending_save: None,
-            untitled: false,
             parked: vec![],
             order: vec![],
         };
@@ -589,11 +565,7 @@ impl Workspace {
                             name: work.project.name,
                             revision: work.project.revision,
                             saved_path: (!untitled).then(|| path.to_string_lossy().into_owned()),
-                            edited_at_ms: work
-                                .created_at
-                                .max(0)
-                                .try_into()
-                                .unwrap_or(u64::MAX),
+                            edited_at_ms: work.created_at.max(0).try_into().unwrap_or(u64::MAX),
                         },
                         modified,
                     });
@@ -628,22 +600,20 @@ impl Workspace {
 
     pub(super) fn view(&self) -> WorkspaceView {
         WorkspaceView {
-            documents_key: documents_key(self.session.as_ref().map(Session::project)),
             pointer_states: self
-                .session
-                .as_ref()
+                .session()
                 .map(|session| session.project().pointer_states())
                 .unwrap_or_default(),
-            project: self.session.as_ref().map(|s| s.project().clone()),
-            path: (!self.untitled)
-                .then_some(self.file.as_ref())
+            project: self.session().map(|s| s.project().clone()),
+            path: (!self.is_untitled())
+                .then_some(self.file())
                 .flatten()
                 .map(|f| f.path().to_string_lossy().into_owned()),
             dirty: self.active_dirty(),
-            untitled: self.untitled,
-            can_undo: self.session.as_ref().is_some_and(Session::can_undo),
-            can_redo: self.session.as_ref().is_some_and(Session::can_redo),
-            history: self.session.as_ref().map(|session| {
+            untitled: self.is_untitled(),
+            can_undo: self.session().is_some_and(Session::can_undo),
+            can_redo: self.session().is_some_and(Session::can_redo),
+            history: self.session().map(|session| {
                 let (session_id, start, position, end, version) = session.history();
                 HistoryView {
                     session_id,
@@ -651,6 +621,7 @@ impl Workspace {
                     position,
                     end,
                     version,
+                    entries: session.history_entries().to_vec(),
                 }
             }),
             recovery: self
@@ -678,52 +649,40 @@ impl Workspace {
     }
 
     fn active_dirty(&self) -> bool {
-        self.untitled
-            || self
-                .session
-                .as_ref()
-                .is_some_and(|session| Some(session.project().revision) != self.saved_revision)
+        self.active.as_ref().is_some_and(OpenProject::dirty)
     }
 
     /// "Discard and continue": the unsaved work is gone, so it is no longer offered for
     /// recovery and no longer blocks opening the saved file.
     fn set_aside_recovery(&mut self) -> NativeResult<()> {
-        let Some(id) = self.session.as_ref().map(|session| session.project().id) else {
+        let Some(id) = self.session().map(|session| session.project().id) else {
             return Ok(());
         };
-        if let Some(file) = self.file.as_ref() {
+        if let Some(file) = self.file() {
             file.discard_autosave().map_err(message)?;
         }
         self.remove_pointer(id);
-        self.last_autosave = None;
+        self.active.as_mut().expect("active project").last_autosave = None;
         Ok(())
     }
 
     /// Close the active project and activate the next open one in tab order. The caller opens
     /// a fresh untitled canvas when no project remains.
     fn close(&mut self) {
-        let position = self.session.as_ref().and_then(|session| {
+        let position = self.session().and_then(|session| {
             let id = session.project().id;
             self.order.iter().position(|other| *other == id)
         });
-        let untitled = if self.untitled {
-            self.session.as_ref().map(|session| session.project().id)
+        let untitled = if self.is_untitled() {
+            self.session().map(|session| session.project().id)
         } else {
             None
         };
-        if let Some(session) = &self.session {
+        if let Some(session) = self.session() {
             let id = session.project().id;
             self.order.retain(|other| *other != id);
         }
-        self.untitled = false;
-        self.session = None;
-        self.file = None;
-        self.stamp = None;
-        self.ownership = None;
-        self.saved_revision = None;
-        self.last_autosave = None;
-        self.prepared = None;
-        self.pending_save = None;
+        self.active = None;
         if let Some(id) = untitled {
             self.remove_untitled_database(id);
             self.remove_pointer(id);
@@ -750,13 +709,11 @@ impl Workspace {
     /// Close one open project tab. Unsaved changes need an explicit discard; discarding drops
     /// the autosave so the edits are no longer offered for recovery.
     fn close_tab(&mut self, project_id: Option<Uuid>, discard: bool) -> NativeResult<()> {
-        let Some(target) = project_id.or_else(|| self.session.as_ref().map(|s| s.project().id))
-        else {
+        let Some(target) = project_id.or_else(|| self.session().map(|s| s.project().id)) else {
             return Ok(());
         };
         if self
-            .session
-            .as_ref()
+            .session()
             .is_some_and(|session| session.project().id == target)
         {
             if self.active_dirty() {
@@ -816,7 +773,7 @@ impl Workspace {
         self.order
             .iter()
             .filter_map(|id| {
-                if let Some(session) = self.session.as_ref().filter(|s| s.project().id == *id) {
+                if let Some(session) = self.session().filter(|s| s.project().id == *id) {
                     let dirty = self.active_dirty();
                     return Some(summary(session.project(), dirty, true));
                 }
@@ -830,43 +787,23 @@ impl Workspace {
 
     /// Keep the active project open in the background so another one can become active.
     fn park_active(&mut self) {
-        if self.session.is_some() {
+        if self.active.is_some() {
             self.autosave_if_due();
         }
-        if let Some(session) = self.session.take() {
-            self.parked.push(OpenProject {
-                session,
-                file: self.file.take(),
-                stamp: self.stamp.take(),
-                ownership: self.ownership.take(),
-                saved_revision: self.saved_revision.take(),
-                untitled: self.untitled,
-            });
+        if let Some(mut project) = self.active.take() {
+            project.prepared = None;
+            project.pending_save = None;
+            project.last_autosave = None;
+            self.parked.push(project);
         }
-        self.untitled = false;
-        self.prepared = None;
-        self.pending_save = None;
-        self.last_autosave = None;
     }
 
     fn unpark(&mut self, project: OpenProject) {
-        self.session = Some(project.session);
-        self.file = project.file;
-        self.stamp = project.stamp;
-        self.ownership = project.ownership;
-        self.saved_revision = project.saved_revision;
-        self.untitled = project.untitled;
-        self.prepared = None;
-        self.pending_save = None;
-        self.last_autosave = None;
+        self.active = Some(project);
     }
 
     fn switch_to(&mut self, project_id: Uuid) -> NativeResult<()> {
-        if self
-            .session
-            .as_ref()
-            .is_some_and(|s| s.project().id == project_id)
-        {
+        if self.session().is_some_and(|s| s.project().id == project_id) {
             return Ok(());
         }
         let index = self
@@ -883,12 +820,12 @@ impl Workspace {
     /// Open or create another project in a new tab group. If that fails, the previous
     /// project becomes active again.
     fn open_tab<T, E>(&mut self, open: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
-        let previous = self.session.as_ref().map(|s| s.project().id);
+        let previous = self.session().map(|s| s.project().id);
         self.park_active();
         match open(self) {
             Ok(value) => Ok(value),
             Err(error) => {
-                if self.session.is_none()
+                if self.session().is_none()
                     && let Some(id) = previous
                     && let Some(index) = self
                         .parked
@@ -910,7 +847,13 @@ impl Workspace {
         discard_recovery: bool,
     ) -> OpenResult<()> {
         let revision = loaded.project.revision;
-        self.start_with_recovery(loaded.project, file, Some(revision), discard_recovery, false)?;
+        self.start_with_recovery(
+            loaded.project,
+            file,
+            Some(revision),
+            discard_recovery,
+            false,
+        )?;
         self.remember_recent();
         Ok(())
     }
@@ -923,7 +866,7 @@ impl Workspace {
         {
             return self.open_file_tab(&file_path, discard_recovery);
         }
-        let active = self.file.as_ref().is_some_and(|file| {
+        let active = self.file().is_some_and(|file| {
             file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
         });
         match (active, self.view().dirty) {
@@ -945,7 +888,7 @@ impl Workspace {
             self.unpark(project);
             return Ok(());
         }
-        let (file, loaded) = if let Some(current) = self.file.as_ref().filter(|file| {
+        let (file, loaded) = if let Some(current) = self.file().filter(|file| {
             file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
         }) {
             // Reload through the handle this tab already holds.
@@ -959,7 +902,7 @@ impl Workspace {
     }
 
     fn remember_recent(&mut self) {
-        if let (Some(file), Some(session)) = (&self.file, &self.session) {
+        if let (Some(file), Some(session)) = (self.file(), self.session()) {
             self.recent_error =
                 crate::recent::remember(&self.directory, file.path(), &session.project().name)
                     .err();
@@ -968,10 +911,13 @@ impl Workspace {
 
     /// Saving renames a recent entry but does not count as opening it.
     fn remember_recent_saved(&mut self) {
-        if let (Some(file), Some(session)) = (&self.file, &self.session) {
-            self.recent_error =
-                crate::recent::remember_saved(&self.directory, file.path(), &session.project().name)
-                    .err();
+        if let (Some(file), Some(session)) = (self.file(), self.session()) {
+            self.recent_error = crate::recent::remember_saved(
+                &self.directory,
+                file.path(),
+                &session.project().name,
+            )
+            .err();
         }
     }
 
@@ -994,8 +940,7 @@ impl Workspace {
             return Ok(());
         }
         let same_project = self
-            .session
-            .as_ref()
+            .session()
             .is_some_and(|session| session.project().id == project.id);
         let ownership = if same_project {
             None
@@ -1004,7 +949,9 @@ impl Workspace {
                 .acquire_ownership(project.id)?
                 .ok_or("This project is already active in another Desegnos window.")?;
             // A reload keeps the tab's own file handle, so look at that one too.
-            let checked = file.as_ref().or_else(|| self.file.as_ref().filter(|_| same_project));
+            let checked = file
+                .as_ref()
+                .or_else(|| self.file().filter(|_| same_project));
             if let Some(file) = checked {
                 match file.autosave_work() {
                     Ok(Some(work)) if work.project != project => {
@@ -1053,32 +1000,31 @@ impl Workspace {
         if let Some(file) = file.as_ref() {
             self.write_pointer(id, file.path(), untitled)?;
         }
-        self.pending_save = None;
         if !self.order.contains(&id) {
             self.order.push(id);
         }
-        self.session = Some(session);
-        if let Some(file) = file {
-            self.file = Some(file);
-            self.stamp = stamp;
-        }
-        if let Some(ownership) = ownership {
-            self.ownership = Some(ownership);
-        }
-        self.saved_revision = saved_revision;
-        self.untitled = untitled;
-        self.last_autosave = None;
-        self.prepared = None;
+        let previous = self.active.take();
+        let (previous_file, previous_stamp, previous_ownership) = previous
+            .map(|open| (open.file, open.stamp, open.ownership))
+            .unwrap_or_default();
+        let has_file = file.is_some();
+        self.active = Some(OpenProject {
+            session,
+            file: file.or(previous_file),
+            stamp: if has_file { stamp } else { previous_stamp },
+            ownership: ownership.or(previous_ownership),
+            saved_revision,
+            untitled,
+            last_autosave: None,
+            prepared: None,
+            pending_save: None,
+        });
         self.refresh_recoveries();
         Ok(())
     }
 
     fn check_snapshot(&self, project: &Project) -> NativeResult<()> {
-        let current = self
-            .session
-            .as_ref()
-            .ok_or("The project was closed.")?
-            .project();
+        let current = self.session().ok_or("The project was closed.")?.project();
         if current.id != project.id || current.revision != project.revision {
             return Err("The project changed while the file dialog was open. Save again from the current project.".into());
         }
@@ -1087,31 +1033,41 @@ impl Workspace {
 
     /// Keep unsaved in-memory edits on the hidden autosave branch every few seconds.
     fn autosave_if_due(&mut self) {
-        if !self.active_dirty() || self.last_autosave.is_some_and(|at| at.elapsed() < AUTOSAVE_INTERVAL) {
+        if !self.active_dirty()
+            || self
+                .active
+                .as_ref()
+                .and_then(|open| open.last_autosave)
+                .is_some_and(|at| at.elapsed() < AUTOSAVE_INTERVAL)
+        {
             return;
         }
-        let (Some(session), Some(file)) = (self.session.as_ref(), self.file.as_ref()) else {
+        let (Some(session), Some(file)) = (self.session(), self.file()) else {
             return;
         };
-        match file.autosave(session.project(), desegnos_storage::project_db::now_millis()) {
-            Ok(()) => self.last_autosave = Some(Instant::now()),
+        match file.autosave(
+            session.project(),
+            desegnos_storage::project_db::now_millis(),
+        ) {
+            Ok(()) => {
+                self.active.as_mut().expect("active project").last_autosave = Some(Instant::now())
+            }
             Err(error) => eprintln!("Could not keep unsaved work: {error}"),
         }
     }
 
     fn take_version_labels(&mut self) -> Vec<String> {
-        self.session
-            .as_mut()
+        self.session_mut()
             .map(Session::take_version_labels)
             .unwrap_or_default()
     }
 
     fn save_destination(&self, path: Option<PathBuf>) -> NativeResult<SaveDestination> {
         let Some(path) = path else {
-            if self.untitled {
+            if self.is_untitled() {
                 return Err("Choose a name and location for this project first.".into());
             }
-            return if self.file.is_some() {
+            return if self.file().is_some() {
                 Ok(SaveDestination::Current)
             } else {
                 let project = self.project()?;
@@ -1129,7 +1085,7 @@ impl Workspace {
         } else {
             path
         };
-        let current = self.file.as_ref().is_some_and(|file| {
+        let current = self.file().is_some_and(|file| {
             file.path() == path || path.canonicalize().ok().as_deref() == Some(file.path())
         });
         if current {
@@ -1144,8 +1100,7 @@ impl Workspace {
     fn destination_path(&self, destination: &SaveDestination) -> NativeResult<PathBuf> {
         match destination {
             SaveDestination::Current => self
-                .file
-                .as_ref()
+                .file()
                 .map(|file| file.path().to_path_buf())
                 .ok_or_else(|| "Choose a project file first.".into()),
             SaveDestination::New(path) | SaveDestination::Existing(path) => Ok(path.clone()),
@@ -1153,16 +1108,15 @@ impl Workspace {
     }
 
     fn finish_save(&mut self, project: &Project) -> NativeResult<()> {
-        self.stamp = self
-            .file
-            .as_ref()
+        self.active.as_mut().expect("active project").stamp = self
+            .file()
             .map(|file| file.stamp().map_err(message))
             .transpose()?;
-        if let Some(file) = self.file.as_ref() {
+        if let Some(file) = self.file() {
             self.write_pointer(project.id, file.path(), false)?;
         }
-        self.saved_revision = Some(project.revision);
-        self.last_autosave = None;
+        self.active.as_mut().expect("active project").saved_revision = Some(project.revision);
+        self.active.as_mut().expect("active project").last_autosave = None;
         self.remember_recent_saved();
         Ok(())
     }
@@ -1178,22 +1132,19 @@ impl Workspace {
         let now = desegnos_storage::project_db::now_millis();
         match destination {
             SaveDestination::Current => {
-                let file = self
-                    .file
-                    .as_ref()
-                    .ok_or("Choose a project file first.")?;
-                let stamp = self.stamp.clone();
+                let file = self.file().ok_or("Choose a project file first.")?;
+                let stamp = self.active.as_ref().and_then(|open| open.stamp.clone());
                 file.save_checked(project, stamp.as_ref(), labels, label)
                     .map_err(|failure| failure.message)?;
             }
             SaveDestination::New(path) => {
                 let file = ProjectDatabase::create(&path, project, now).map_err(message)?;
-                self.file = Some(file);
+                self.active.as_mut().expect("active project").file = Some(file);
             }
             SaveDestination::Existing(path) => {
                 let file = ProjectDatabase::open(&path).map_err(message)?;
                 file.save(project, labels, label).map_err(message)?;
-                self.file = Some(file);
+                self.active.as_mut().expect("active project").file = Some(file);
             }
         }
         self.finish_save(project)
@@ -1210,23 +1161,24 @@ impl Workspace {
         let now = desegnos_storage::project_db::now_millis();
         match destination {
             SaveDestination::Current => {
-                let file = self.file.as_ref().ok_or_else(|| {
+                let file = self.file().ok_or_else(|| {
                     SaveFailure::new(SaveFailureKind::Io, "Choose a project file first.")
                 })?;
-                let stamp = self.stamp.clone();
+                let stamp = self.active.as_ref().and_then(|open| open.stamp.clone());
                 file.save_checked(project, stamp.as_ref(), labels, label)?;
             }
             SaveDestination::New(path) => {
                 let file = ProjectDatabase::create(&path, project, now)
                     .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))?;
-                self.file = Some(file);
+                self.active.as_mut().expect("active project").file = Some(file);
             }
             SaveDestination::Existing(path) => {
-                let file = ProjectDatabase::open(&path)
-                    .map_err(|error| SaveFailure::new(SaveFailureKind::Unreadable, error.to_string()))?;
+                let file = ProjectDatabase::open(&path).map_err(|error| {
+                    SaveFailure::new(SaveFailureKind::Unreadable, error.to_string())
+                })?;
                 let saved = file.save_checked(project, None, labels, label);
                 if saved.is_ok() {
-                    self.file = Some(file);
+                    self.active.as_mut().expect("active project").file = Some(file);
                 }
                 saved?;
             }
@@ -1238,8 +1190,8 @@ impl Workspace {
     /// The lowest unused `Canvas N` among the open untitled projects.
     fn next_untitled_name(&self) -> String {
         let mut names = Vec::new();
-        if self.untitled
-            && let Some(session) = self.session.as_ref()
+        if self.is_untitled()
+            && let Some(session) = self.session()
         {
             names.push(session.project().name.clone());
         }
@@ -1258,18 +1210,15 @@ impl Workspace {
         appearance: Appearance,
         template: CanvasTemplate,
     ) -> NativeResult<()> {
-        let project = Project::untitled(self.next_untitled_name(), appearance, template)
-            .map_err(message)?;
+        let project =
+            Project::untitled(self.next_untitled_name(), appearance, template).map_err(message)?;
         let path = self.untitled_path(project.id);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(message)?;
         }
-        let file = ProjectDatabase::create(
-            &path,
-            &project,
-            desegnos_storage::project_db::now_millis(),
-        )
-        .map_err(message)?;
+        let file =
+            ProjectDatabase::create(&path, &project, desegnos_storage::project_db::now_millis())
+                .map_err(message)?;
         let revision = project.revision;
         self.open_tab(|state| {
             state
@@ -1280,10 +1229,10 @@ impl Workspace {
 
     /// The first save gives the untitled project its real file; the recovery copy is removed.
     fn finish_untitled_save(&mut self, project: &Project) {
-        if self.untitled {
-            self.untitled = false;
+        if self.is_untitled() {
+            self.active.as_mut().expect("active project").untitled = false;
             let recovery_path = self.untitled_path(project.id);
-            if self.file.as_ref().is_none_or(|file| file.path() != recovery_path) {
+            if self.file().is_none_or(|file| file.path() != recovery_path) {
                 self.remove_untitled_database(project.id);
             }
         }
@@ -1296,7 +1245,7 @@ impl Workspace {
         label: Option<String>,
     ) -> NativeResult<SaveProjectOutcome> {
         self.check_snapshot(project)?;
-        self.pending_save = None;
+        self.active.as_mut().expect("active project").pending_save = None;
         let labels = self.take_version_labels();
         let destination = self.save_destination(Some(path))?;
         match self.write_destination_checked(
@@ -1311,15 +1260,13 @@ impl Workspace {
                     workspace: Box::new(self.view()),
                 })
             }
-            Err(failure) => {
-                self.save_conflict(project, destination, *failure, true, labels, label)
-            }
+            Err(failure) => self.save_conflict(project, destination, *failure, true, labels, label),
         }
     }
 
     fn save_snapshot(&mut self, project: &Project, path: Option<PathBuf>) -> NativeResult<()> {
         self.check_snapshot(project)?;
-        self.pending_save = None;
+        self.active.as_mut().expect("active project").pending_save = None;
         let labels = self.take_version_labels();
         let destination = self.save_destination(path)?;
         self.write_destination(destination, project, &labels, None)?;
@@ -1392,7 +1339,7 @@ impl Workspace {
                 actual: failure.actual.clone(),
             },
         };
-        self.pending_save = Some(PendingSaveConflict {
+        self.active.as_mut().expect("active project").pending_save = Some(PendingSaveConflict {
             token,
             project_id: project.id,
             revision: project.revision,
@@ -1414,7 +1361,7 @@ impl Workspace {
         label: Option<String>,
     ) -> NativeResult<SaveProjectOutcome> {
         self.check_snapshot(project)?;
-        self.pending_save = None;
+        self.active.as_mut().expect("active project").pending_save = None;
         let labels = self.take_version_labels();
         let destination = self.save_destination(path)?;
         match self.write_destination_checked(
@@ -1437,28 +1384,33 @@ impl Workspace {
 
     fn take_save_conflict(&mut self, token: Uuid) -> NativeResult<PendingSaveConflict> {
         let pending = self
-            .pending_save
+            .active
             .as_ref()
+            .and_then(|open| open.pending_save.as_ref())
             .filter(|pending| pending.token == token)
             .ok_or("This save choice expired. Save again.")?;
         let current = self.project()?;
         if current.id != pending.project_id || current.revision != pending.revision {
             return Err("The project changed while this save choice was open. Save again.".into());
         }
-        self.pending_save
+        self.active
+            .as_mut()
+            .expect("active project")
+            .pending_save
             .take()
             .ok_or_else(|| "This save choice expired. Save again.".into())
     }
 
     fn cancel_save_conflict(&mut self, token: Uuid) -> NativeResult<()> {
         if self
-            .pending_save
+            .active
             .as_ref()
+            .and_then(|open| open.pending_save.as_ref())
             .is_none_or(|pending| pending.token != token)
         {
             return Err("This save choice expired. Save again.".into());
         }
-        self.pending_save = None;
+        self.active.as_mut().expect("active project").pending_save = None;
         Ok(())
     }
 
@@ -1476,7 +1428,7 @@ impl Workspace {
         let result: NativeResult<()> = (|| {
             match &pending.destination {
                 SaveDestination::Current => {
-                    let file = self.file.as_ref().ok_or("Choose a project file first.")?;
+                    let file = self.file().ok_or("Choose a project file first.")?;
                     file.save_replacing(
                         &project,
                         &observed,
@@ -1489,7 +1441,7 @@ impl Workspace {
                 }
                 SaveDestination::New(path) => {
                     let file = ProjectDatabase::create(path, &project, now).map_err(message)?;
-                    self.file = Some(file);
+                    self.active.as_mut().expect("active project").file = Some(file);
                 }
                 SaveDestination::Existing(path) => {
                     let file = ProjectDatabase::open(path).map_err(message)?;
@@ -1502,7 +1454,7 @@ impl Workspace {
                     )
                     .map(|_| ())
                     .map_err(|failure| failure.message)?;
-                    self.file = Some(file);
+                    self.active.as_mut().expect("active project").file = Some(file);
                 }
             }
             Ok(())
@@ -1592,7 +1544,13 @@ impl Workspace {
             .ok_or("There are no unsaved changes to recover for this project.")?;
         let file = ProjectDatabase::open(&path).map_err(message)?;
         let saved_revision = file.load().map(|loaded| loaded.project.revision).ok();
-        self.activate(work.project, Some(file), saved_revision, Some(ownership), untitled)?;
+        self.activate(
+            work.project,
+            Some(file),
+            saved_revision,
+            Some(ownership),
+            untitled,
+        )?;
         Ok(())
     }
 }
@@ -1632,7 +1590,7 @@ pub fn save_untitled_project(
     label: Option<String>,
 ) -> NativeResult<SaveProjectOutcome> {
     let mut state = state.lock().map_err(message)?;
-    if !state.untitled {
+    if !state.is_untitled() {
         return Err("This project already has a file. Use Save instead.".into());
     }
     let name = name.trim();
@@ -1643,8 +1601,7 @@ pub fn save_untitled_project(
     if current.name != name {
         let revision = current.revision;
         state
-            .session
-            .as_mut()
+            .session_mut()
             .ok_or("Create or open a project first.")?
             .execute(
                 revision,
@@ -1655,7 +1612,7 @@ pub fn save_untitled_project(
             )
             .map_err(message)?;
     }
-    if let Some(session) = state.session.as_mut() {
+    if let Some(session) = state.session_mut() {
         session.end_history_step();
     }
     let project = state.project()?.clone();
@@ -1759,12 +1716,11 @@ pub fn import_context(
     context.attach_matching_pages = attach_matching_pages.unwrap_or(true);
     let mut state = state.lock().map_err(message)?;
     state
-        .session
-        .as_mut()
+        .session_mut()
         .ok_or("Create or open a project first.")?
         .import_context(revision, context, |_| Ok(()))
         .map_err(message)?;
-    state.prepared = None;
+    state.active.as_mut().expect("active project").prepared = None;
     state.autosave_if_due();
     Ok(state.view())
 }
@@ -1776,8 +1732,7 @@ impl Workspace {
             return Ok(());
         }
         let project = self
-            .session
-            .as_ref()
+            .session()
             .ok_or("Create or open a project first.")?
             .project()
             .clone();
@@ -1786,62 +1741,65 @@ impl Workspace {
 
     fn switch_alternative(&mut self, name: &str) -> NativeResult<()> {
         self.save_before_switch()?;
-        let file = self.file.as_ref().ok_or("Save this project first.")?;
+        let file = self.file().ok_or("Save this project first.")?;
         let loaded = file.switch_branch(name).map_err(message)?;
         let saved_revision = loaded.project.revision;
         let session = Session::new(loaded.project).map_err(message)?;
-        self.session = Some(session);
-        self.saved_revision = Some(saved_revision);
-        self.stamp = Some(file.stamp().map_err(message)?);
-        self.last_autosave = None;
-        self.prepared = None;
-        self.pending_save = None;
+        let stamp = file.stamp().map_err(message)?;
+        let active = self.active.as_mut().expect("active project");
+        active.session = session;
+        active.saved_revision = Some(saved_revision);
+        active.stamp = Some(stamp);
+        self.active.as_mut().expect("active project").last_autosave = None;
+        self.active.as_mut().expect("active project").prepared = None;
+        self.active.as_mut().expect("active project").pending_save = None;
         self.refresh_recoveries();
         Ok(())
     }
 
     fn create_alternative(&mut self, name: &str) -> NativeResult<()> {
         self.save_before_switch()?;
-        let file = self.file.as_ref().ok_or("Save this project first.")?;
+        let file = self.file().ok_or("Save this project first.")?;
         file.create_branch(name).map_err(message)?;
-        self.stamp = Some(file.stamp().map_err(message)?);
-        self.saved_revision = self.session.as_ref().map(|session| session.project().revision);
+        self.active.as_mut().expect("active project").stamp = Some(file.stamp().map_err(message)?);
+        self.active.as_mut().expect("active project").saved_revision =
+            self.session().map(|session| session.project().revision);
         Ok(())
     }
 
     fn rename_alternative(&mut self, from: &str, to: &str) -> NativeResult<()> {
-        let file = self.file.as_ref().ok_or("Create or open a project first.")?;
+        let file = self.file().ok_or("Create or open a project first.")?;
         file.rename_branch(from, to).map_err(message)?;
         Ok(())
     }
 
     fn delete_alternative(&mut self, name: &str) -> NativeResult<()> {
-        let file = self.file.as_ref().ok_or("Create or open a project first.")?;
+        let file = self.file().ok_or("Create or open a project first.")?;
         let history = file.history().map_err(message)?;
         if history.branch == name {
             // Leave the alternative before deleting it; switching saves first.
             self.switch_alternative(&history.primary_branch)?;
         }
-        let file = self.file.as_ref().ok_or("Create or open a project first.")?;
+        let file = self.file().ok_or("Create or open a project first.")?;
         file.delete_branch(name).map_err(message)?;
-        self.stamp = Some(file.stamp().map_err(message)?);
+        self.active.as_mut().expect("active project").stamp = Some(file.stamp().map_err(message)?);
         Ok(())
     }
 
     /// The saved version becomes the current state as one undo step.
     fn restore_version(&mut self, version: i64) -> NativeResult<()> {
-        let file = self.file.as_ref().ok_or("Create or open a project first.")?;
+        let file = self.file().ok_or("Create or open a project first.")?;
         let restored = file.restore(version).map_err(message)?;
         let stamp = file.stamp().map_err(message)?;
         let session = self
-            .session
-            .as_mut()
+            .session_mut()
             .ok_or("Create or open a project first.")?;
         session.restore(restored, |_| Ok(())).map_err(message)?;
-        self.saved_revision = Some(session.project().revision);
-        self.stamp = Some(stamp);
-        self.last_autosave = None;
-        self.pending_save = None;
+        self.active.as_mut().expect("active project").saved_revision =
+            Some(session.project().revision);
+        self.active.as_mut().expect("active project").stamp = Some(stamp);
+        self.active.as_mut().expect("active project").last_autosave = None;
+        self.active.as_mut().expect("active project").pending_save = None;
         Ok(())
     }
 }
@@ -1854,8 +1812,7 @@ pub fn edit_project(
 ) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     state
-        .session
-        .as_mut()
+        .session_mut()
         .ok_or("Create or open a project first.")?
         .execute(revision, command, |_| Ok(()))
         .map_err(message)?;
@@ -1892,8 +1849,7 @@ fn preview_link(url: &str) -> NativeResult<desegnos_ai::WebUrl> {
 pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     state
-        .session
-        .as_mut()
+        .session_mut()
         .ok_or("Create or open a project first.")?
         .undo(|_| Ok(()))
         .map_err(message)?;
@@ -1905,8 +1861,7 @@ pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
 pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     state
-        .session
-        .as_mut()
+        .session_mut()
         .ok_or("Create or open a project first.")?
         .redo(|_| Ok(()))
         .map_err(message)?;
@@ -1918,7 +1873,7 @@ pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
 #[tauri::command(async)]
 pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
     let mut state = state.lock().map_err(message)?;
-    if let Some(session) = state.session.as_mut() {
+    if let Some(session) = state.session_mut() {
         session.end_history_step();
     }
     Ok(())
@@ -1990,8 +1945,7 @@ pub async fn save_project(
         let state = state.lock().map_err(message)?;
         (
             state
-                .session
-                .as_ref()
+                .session()
                 .ok_or("Create or open a project first.")?
                 .project()
                 .clone(),
@@ -2021,7 +1975,7 @@ pub async fn save_project(
         None
     };
     let mut state = state.lock().map_err(message)?;
-    if let Some(session) = state.session.as_mut() {
+    if let Some(session) = state.session_mut() {
         session.end_history_step();
     }
     state.check_snapshot(&project)?;
@@ -2083,9 +2037,9 @@ fn copy_destination(path: Option<PathBuf>, project: &Project) -> NativeResult<Op
 pub fn move_into_project_folder(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     let project = state.project()?.clone();
-    let former = state.file.as_ref().map(|file| file.path().to_owned());
+    let former = state.file().map(|file| file.path().to_owned());
     let folder_name = desegnos_storage::sanitize_project_name(&project.name);
-    if state.file.as_ref().is_some_and(|file| {
+    if state.file().is_some_and(|file| {
         file.path()
             .parent()
             .and_then(|parent| parent.file_name())
@@ -2102,7 +2056,7 @@ pub fn move_into_project_folder(state: WorkspaceState<'_>) -> NativeResult<Works
     // The old file stays as a fallback. The project's current state moves into the managed
     // folder as a new file; only the active save/recovery/recent destination changes.
     state.save_snapshot(&project, Some(path))?;
-    if let (Some(former), Some(file)) = (former, state.file.as_ref()) {
+    if let (Some(former), Some(file)) = (former, state.file()) {
         state.recent_error =
             crate::recent::moved(&state.directory, file.path(), &project.name, &former).err();
     }
@@ -2118,8 +2072,9 @@ pub async fn save_project_checked(
 ) -> NativeResult<SaveProjectOutcome> {
     let (project, choose_path) = {
         let mut state = state.lock().map_err(message)?;
-        state.pending_save = None;
-        (state.project()?.clone(), save_as)
+        let project = state.project()?.clone();
+        state.active.as_mut().expect("active project").pending_save = None;
+        (project, save_as)
     };
     let picked = if choose_path {
         let suggested = format!(
@@ -2134,7 +2089,7 @@ pub async fn save_project_checked(
         None
     };
     let mut state = state.lock().map_err(message)?;
-    if let Some(session) = state.session.as_mut() {
+    if let Some(session) = state.session_mut() {
         session.end_history_step();
     }
     state.check_snapshot(&project)?;
@@ -2188,8 +2143,7 @@ pub fn prepare_requirements(
 ) -> NativeResult<RequirementsSnapshot> {
     let mut state = state.lock().map_err(message)?;
     let prepared = state
-        .session
-        .as_ref()
+        .session()
         .ok_or("Create or open a project first.")?
         .project()
         .prepare_requirements()
@@ -2205,7 +2159,7 @@ pub fn prepare_requirements(
             time::OffsetDateTime::now_utc().unix_timestamp(),
         )
         .map_err(message)?;
-    state.prepared = Some(prepared.clone());
+    state.active.as_mut().expect("active project").prepared = Some(prepared.clone());
     Ok(prepared)
 }
 
@@ -2218,8 +2172,9 @@ pub async fn save_requirements(
     let prepared = state
         .lock()
         .map_err(message)?
-        .prepared
-        .clone()
+        .active
+        .as_ref()
+        .and_then(|open| open.prepared.clone())
         .filter(|p| p.job_id.to_string() == job_id)
         .ok_or("Prepare the requirements again before saving them.")?;
     let picked = tauri::async_runtime::spawn_blocking(move || {
@@ -2271,14 +2226,12 @@ pub fn get_project_notes(state: WorkspaceState<'_>) -> NativeResult<String> {
     state
         .lock()
         .map_err(message)?
-        .session
-        .as_ref()
+        .session()
         .ok_or("Create or open a project first.")?
         .project()
         .project_markdown()
         .map_err(message)
 }
-
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2390,11 +2343,9 @@ pub fn autosave_project(state: WorkspaceState<'_>) -> NativeResult<()> {
 }
 
 #[tauri::command(async)]
-pub fn get_project_history(
-    state: WorkspaceState<'_>,
-) -> NativeResult<Option<ProjectHistoryView>> {
+pub fn get_project_history(state: WorkspaceState<'_>) -> NativeResult<Option<ProjectHistoryView>> {
     let state = state.lock().map_err(message)?;
-    match state.file.as_ref() {
+    match state.file() {
         Some(file) => file.history().map(Some).map_err(message),
         None => Ok(None),
     }
@@ -2423,10 +2374,7 @@ pub fn switch_alternative(
 
 /// Start an alternative at the current version and make it the one being edited.
 #[tauri::command(async)]
-pub fn create_alternative(
-    state: WorkspaceState<'_>,
-    name: String,
-) -> NativeResult<WorkspaceView> {
+pub fn create_alternative(state: WorkspaceState<'_>, name: String) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     state.create_alternative(&name)?;
     Ok(state.view())
@@ -2444,10 +2392,7 @@ pub fn rename_alternative(
 }
 
 #[tauri::command(async)]
-pub fn delete_alternative(
-    state: WorkspaceState<'_>,
-    name: String,
-) -> NativeResult<WorkspaceView> {
+pub fn delete_alternative(state: WorkspaceState<'_>, name: String) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     state.delete_alternative(&name)?;
     Ok(state.view())
@@ -2482,14 +2427,9 @@ pub async fn save_project_copy(
 
 /// Keep recent versions in full, thin out older ones, drop unreferenced blobs and shrink.
 #[tauri::command(async)]
-pub fn compact_history(
-    state: WorkspaceState<'_>,
-) -> NativeResult<desegnos_storage::CompactReport> {
+pub fn compact_history(state: WorkspaceState<'_>) -> NativeResult<desegnos_storage::CompactReport> {
     let state = state.lock().map_err(message)?;
-    let file = state
-        .file
-        .as_ref()
-        .ok_or("Create or open a project first.")?;
+    let file = state.file().ok_or("Create or open a project first.")?;
     file.compact(desegnos_storage::project_db::now_millis())
         .map_err(message)
 }

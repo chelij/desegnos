@@ -365,6 +365,8 @@ fn text_style(styles: &WebStyles) -> ElementTextStyle {
 fn element_style(styles: &WebStyles, text: bool) -> ElementStyle {
     let radius = styles.radius.clamp(0.0, 4096.0);
     ElementStyle {
+        sizing: Default::default(),
+        references: Default::default(),
         fill: if text { None } else { parse_colour(&styles.background) },
         stroke: if text {
             ElementStroke {
@@ -1256,6 +1258,7 @@ fn walk_behaviours(nodes: &[WebNode], path: &mut Vec<usize>, plan: &PagePlan<'_>
                 from: PointerSource::Element { page_id: plan.page_id, element_id, size_id: Some(plan.size_id) },
                 to: PointerTarget::Boundary { page_id: plan.page_id, size_id: Some(plan.size_id) },
                 comment: comment.into(),
+                kind: crate::PointerKind::Reference,
                 wiring: None,
                 play: None,
                 play_comment: String::new(),

@@ -84,7 +84,7 @@ try {
     assert.equal(pageImport, 1);
   });
   await test('the menu keeps brand and website imports as separate routes', async () => {
-    const app = await readFile(join(root, 'src/App.tsx'), 'utf8');
+    const app = await readFile(join(root, 'src/session/useEditor.tsx'), 'utf8');
     assert.equal((app.match(/label: 'Import context…'/g) ?? []).length, 1);
     assert.equal((app.match(/label: 'Import website…'/g) ?? []).length, 1);
     assert.match(app, /label: 'Import context…'.*setShowImport\(true\)/);

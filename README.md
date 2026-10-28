@@ -1,6 +1,6 @@
 # Desegnos
 
-A visual canvas with AI. Place elements exactly where you want them on an infinite canvas, by hand or by describing them in a frame. Everything stays visual while you work; at export the AI builds real HTML, CSS and JavaScript from the design, and slides and images render directly.
+A visual canvas with AI. Place elements exactly where you want them on an infinite canvas, by hand or by describing them in a request. Everything stays visual while you work; export compiles website and app-screen HTML/CSS from the design, AI can supply missing pointer behaviour, and slides and images render directly.
 
 Desegnos is a Tauri desktop app: React 19 and TypeScript for the editor, Rust for the project model, storage, AI providers and export.
 
@@ -14,9 +14,9 @@ Desegnos is a Tauri desktop app: React 19 and TypeScript for the editor, Rust fo
 
 **One canvas per project.** Boundaries are the outputs: a page, app screen, slide or image. Everything inside a boundary ships at export. Everything outside every boundary is reference for the AI and never ships. Boundaries sit side by side, never overlap, and linked sizes (phone, tablet, desktop) share their elements with per-size overrides.
 
-**Elements, layers and frames.** Boxes, text, shapes, lines, images, buttons, links, form controls, video, embeds and code blocks are visual elements. A box can lay its children out freely, in a stack or in a grid. A layer is one element or a group, with its own AI request history and context. A frame is a box whose request the AI fills.
+**Elements, layers and requests.** Boxes, text, shapes, lines, images, buttons, links, form controls, video, embeds and code blocks are visual elements. A box can lay its children out freely, in a stack or in a grid. A layer is one element or a group, with its own AI request history and context. A request picks targets or covers an area; the AI returns editable elements.
 
-**Pointers.** A pointer is a line from a layer or boundary to its target. Its comment is the instruction. The line grants the AI permission to read and change the target within the project. Simple pointers run visually in Play; the rest compile at export.
+**Pointers.** A pointer is a line from a layer or boundary to its target. Its comment is the instruction. A reference pointer grants read-only context; a change pointer permits changes to its target within the project. Simple pointers run visually in Play; the rest compile at export.
 
 **Play and Preview.** Play makes a boundary clickable and runs simple pointers on the canvas. Preview export builds the real page in the background and runs it over the boundary in a sandbox. Escape returns to the design.
 
@@ -25,6 +25,8 @@ Desegnos is a Tauri desktop app: React 19 and TypeScript for the editor, Rust fo
 **Projects and history.** Several projects can be open as project tabs. A project is one `.desegnos` SQLite file holding the design and its version history. Saves create labelled versions; History restores one as a single undo step; Alternatives are named branches. Exports stay ordinary folders outside the project.
 
 **Keyboard.** Every tool and action has a shortcut from one keymap in [src/shortcuts.ts](src/shortcuts.ts). The tool strip tooltips, the menu and **Menu → Keyboard shortcuts** read the same table. Shortcuts stay out of text fields except where saving and preview still make sense.
+
+The next milestone is [three finished examples](CANVAS.md#next-milestone-three-finished-examples): a social image, a short slide deck and a responsive two-page website that preserve their intended appearance through editing, export and reopening. Current [capability status](CANVAS.md#capability-status) records implementation and limited test evidence separately; finished-output quality remains unverified. App screens export as web files, not native packages.
 
 ## Run it
 
@@ -54,7 +56,7 @@ crates/desegnos-storage/  .desegnos SQLite project, versions, safe writing, impo
 crates/desegnos-ai/       Providers, credentials, ChatGPT, image APIs, safe website fetching.
 src-tauri/                Desktop commands, workspace, generation, export, local static server.
 src/                      React editor: canvas, dock, menus, dialogs, import, keyboard map.
-src/projectCanvas/        Boundaries, elements, frames, reference, pointers and canvas helpers.
+src/projectCanvas/        Boundaries, elements, requests, reference, pointers and canvas helpers.
 docs/                     Contracts, guides and the project map.
 ```
 

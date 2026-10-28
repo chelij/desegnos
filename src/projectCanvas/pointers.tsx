@@ -42,10 +42,13 @@ function breakPath(from: { x: number; y: number }, to: { x: number; y: number },
   return `M ${point(0.2, 0.8)} L ${point(1.1, -0.3)} M ${point(0.2, -0.8)} L ${point(1.1, 0.3)}`;
 }
 
-function pointerVisual(pointer: Pointer, state: PointerStateView | undefined): { state: string; clash: boolean; dashed: boolean } {
+function pointerVisual(pointer: Pointer, state: PointerStateView | undefined): { state: string; clash: boolean; dashed: boolean; reference: boolean } {
   const value = state?.state ?? (pointer.wiring ? 'wired' : 'unwired');
   const clash = value === 'contradicts' || value === 'codeChanged';
-  return { state: value, clash, dashed: value === 'unwired' || value === 'needsGenerating' || value === 'needsExporting' || value === 'broken' };
+  // A reference reads its target, so it stays thin and dashed; a change points at what it edits.
+  const reference = pointer.kind !== 'change';
+  return { state: value, clash, reference,
+    dashed: reference || value === 'unwired' || value === 'needsGenerating' || value === 'needsExporting' || value === 'broken' };
 }
 
 export function PointerLines({ entries, autoLinks, draft, camera, viewport, selected, pointerStates, enabled, onSelect }: {
@@ -60,12 +63,12 @@ export function PointerLines({ entries, autoLinks, draft, camera, viewport, sele
       const chosen = selected.has(pointer.id);
       const visual = pointerVisual(pointer, pointerStates[pointer.id]);
       const state = route.broken ? 'broken' : visual.state;
-      const classes = `pointer-line ${state}${chosen ? ' selected' : ''}${visual.clash ? ' clash' : ''}`;
-      const arrow = route.target && route.brokenEnd !== 'to';
+      const classes = `pointer-line ${state} ${visual.reference ? 'reference' : 'change'}${chosen ? ' selected' : ''}${visual.clash ? ' clash' : ''}`;
+      const arrow = route.target && !visual.reference && route.brokenEnd !== 'to';
       const breakEnd = route.brokenEnd === 'to' ? route.to : route.brokenEnd === 'from' ? route.from : null;
       return <g key={pointer.id} className={classes}>
         <path className="pointer-stroke" d={`M ${route.from.x} ${route.from.y} L ${route.to.x} ${route.to.y}`} fill="none"
-          strokeWidth={1.2 * inverse} strokeDasharray={visual.dashed || route.broken ? `${5 * inverse} ${4 * inverse}` : undefined} />
+          strokeWidth={(visual.reference ? 1 : 1.4) * inverse} strokeDasharray={visual.dashed || route.broken ? `${5 * inverse} ${4 * inverse}` : undefined} />
         {arrow && <polygon className="pointer-arrow" points={arrowPoints(route.from, route.to, POINTER_ARROW_PX * inverse)} />}
         {breakEnd && <path className="pointer-break" d={breakPath(route.from, route.to, POINTER_BREAK_PX * inverse)} fill="none" strokeWidth={1.4 * inverse} />}
         <path className="pointer-hit" d={`M ${route.from.x} ${route.from.y} L ${route.to.x} ${route.to.y}`} fill="none" stroke="transparent"
@@ -77,16 +80,17 @@ export function PointerLines({ entries, autoLinks, draft, camera, viewport, sele
   </svg>;
 }
 
-export function PointerComments({ entries, camera, selected, pointerStates, interactive, onSelect, change, autoFocusId, close }: {
+export function PointerComments({ entries, camera, selected, pointerStates, interactive, onSelect, change, changeKind, autoFocusId, close }: {
   entries: PointerEntry[]; camera: CanvasCamera; selected: Set<string>; pointerStates: Record<string, PointerStateView>; interactive: boolean; onSelect: (pointerId: string) => void;
-  change: (pointerId: string, comment: string) => Promise<unknown>; autoFocusId: string | null; close: () => void;
+  change: (pointerId: string, comment: string) => Promise<unknown>;
+  changeKind: (pointerId: string, kind: Pointer['kind']) => Promise<unknown>; autoFocusId: string | null; close: () => void;
 }) {
   const collapsed = camera.zoom < POINTER_COMMENT_ZOOM;
   return <>
     {entries.map(({ pointer, route }) => {
       const point = screenPoint(midpoint(route), camera);
       if (selected.has(pointer.id)) return <PointerCommentEditor key={pointer.id} pointer={pointer} screen={point} autoFocus={autoFocusId === pointer.id}
-        change={comment => change(pointer.id, comment)} close={close} />;
+        change={comment => change(pointer.id, comment)} changeKind={kind => changeKind(pointer.id, kind)} close={close} />;
       const text = pointer.comment.trim();
       const visual = pointerVisual(pointer, pointerStates[pointer.id]);
       return <button key={pointer.id} type="button" className={`pointer-comment-chip${collapsed ? ' collapsed' : ''}${route.broken ? ' broken' : ''}${visual.clash ? ' clash' : ''}${(visual.state === 'needsGenerating' || visual.state === 'needsExporting') ? ' generating' : ''}${interactive ? '' : ' inert'}`}
@@ -100,15 +104,20 @@ export function PointerComments({ entries, camera, selected, pointerStates, inte
 }
 
 // Native screen pixels: the comment never lives inside the transformed layer.
-function PointerCommentEditor({ pointer, screen, autoFocus, change, close }: {
+function PointerCommentEditor({ pointer, screen, autoFocus, change, changeKind, close }: {
   pointer: Pointer; screen: { x: number; y: number }; autoFocus: boolean;
-  change: (comment: string) => Promise<unknown>; close: () => void;
+  change: (comment: string) => Promise<unknown>; changeKind: (kind: Pointer['kind']) => Promise<unknown>; close: () => void;
 }) {
   const text = useRef<HTMLTextAreaElement>(null);
   const [draft, changeDraft, flushDraft] = useDraftText(pointer.comment, (_value, latest) => change(latest()).then(() => latest()), 400);
+  const kind = pointer.kind ?? 'reference';
   useEffect(() => { if (autoFocus) text.current?.focus({ preventScroll: true }); }, [autoFocus, pointer.id]);
-  return <div className="pointer-comment-editor" style={{ left: screen.x, top: screen.y }} onPointerDown={event => event.stopPropagation()}>
-    <textarea ref={text} aria-label="Pointer comment" maxLength={16384} value={draft} placeholder="What should this pointer do?" spellCheck
+  return <div className="pointer-comment-editor" style={{ left: screen.x, top: screen.y, height: 'auto', flexDirection: 'column' }} onPointerDown={event => event.stopPropagation()}>
+    <div className="segmented" role="group" aria-label="Pointer kind" style={{ flex: 'none', alignSelf: 'flex-start', margin: 1 }}>
+      <button type="button" aria-pressed={kind === 'reference'} onClick={() => void changeKind('reference')}>Reference</button>
+      <button type="button" aria-pressed={kind === 'change'} onClick={() => void changeKind('change')}>Change</button>
+    </div>
+    <textarea ref={text} aria-label="Pointer comment" maxLength={16384} value={draft} placeholder="What should this pointer do?" spellCheck style={{ flex: 'none', width: '100%', height: 56 }}
       onChange={event => changeDraft(event.target.value)} onBlur={flushDraft}
       onKeyDown={event => {
         if (event.key !== 'Escape') return;

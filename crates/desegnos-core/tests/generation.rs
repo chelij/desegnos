@@ -98,6 +98,7 @@ fn setup() -> (Project, Uuid, Uuid, Uuid) {
                 },
                 to: PointerTarget::Reference { item_id: reference },
                 comment: "Reads the note".into(),
+                kind: desegnos_core::PointerKind::Reference,
                 wiring: None,
                 play: None,
                 play_comment: String::new(),

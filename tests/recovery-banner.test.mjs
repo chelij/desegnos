@@ -53,13 +53,13 @@ try {
   });
 
   // Exercise App's actual handlers with a native/queue boundary stub, without a GUI.
-  const app = await readFile(join(temporary, 'App.js'), 'utf8');
+  const app = await readFile(join(temporary, 'session/projectCommands.js'), 'utf8');
   function handler(name, environment) {
     const start = app.indexOf(`    async function ${name}(`);
     assert.ok(start >= 0, `App handler ${name} exists`);
     const end = app.indexOf('\n    }', start) + '\n    }'.length;
     const source = app.slice(start, end);
-    return new Function(...Object.keys(environment), `${source}; return ${name};`)(...Object.values(environment));
+    return new Function('context', ...Object.keys(environment), `${source}; return ${name};`)(() => environment, ...Object.values(environment));
   }
   function setup() {
     const state = { pending: null, error: '', calls: [], accepted: [], showRecovery: false };

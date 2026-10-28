@@ -6,6 +6,7 @@ use crate::{
 pub struct Session {
     project: Project,
     undo: Vec<Project>,
+    history_entries: Vec<HistoryEntry>,
     redo: Vec<Project>,
     user_revision_floor: u64,
     history_id: uuid::Uuid,
@@ -20,6 +21,26 @@ pub struct Session {
     pending_label: Option<&'static str>,
 }
 
+/// Authoritative session step labels, retained across undo and redo.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct HistoryEntry {
+    pub label: String,
+    pub at: u64,
+    pub position: usize,
+}
+impl HistoryEntry {
+    fn new(label: &str, position: usize) -> Self {
+        Self {
+            label: label.into(),
+            position,
+            at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        }
+    }
+}
+
 /// Edits to the same thing that pause longer than this start a new history step.
 const NEW_LAYER: &str = "new-layer:";
 const STEP_PAUSE: std::time::Duration = std::time::Duration::from_secs(5);
@@ -32,6 +53,7 @@ impl Session {
         Ok(Self {
             project,
             undo: vec![],
+            history_entries: vec![HistoryEntry::new("Opened project", 0)],
             redo: vec![],
             user_revision_floor,
             history_id: uuid::Uuid::new_v4(),
@@ -62,6 +84,10 @@ impl Session {
             position + self.redo.len(),
             self.history_version,
         )
+    }
+
+    pub fn history_entries(&self) -> &[HistoryEntry] {
+        &self.history_entries
     }
 
     pub fn execute(
@@ -261,6 +287,13 @@ impl Session {
 
     fn commit(&mut self, candidate: Project) {
         self.burst = None;
+        let position = self.history_start + self.undo.len() + 1;
+        self.history_entries
+            .retain(|entry| entry.position < position);
+        self.history_entries.push(HistoryEntry::new(
+            self.pending_label.unwrap_or("Changed the project"),
+            position,
+        ));
         if let Some(label) = self.pending_label.take() {
             self.version_labels.push(label.to_owned());
         }
@@ -271,6 +304,8 @@ impl Session {
         if self.undo.len() > 200 {
             self.undo.remove(0);
             self.history_start += 1;
+            self.history_entries
+                .retain(|entry| entry.position >= self.history_start);
         }
         self.redo.clear();
     }
@@ -439,6 +474,54 @@ mod tests {
 
     fn key() -> Option<String> {
         Some("project-name".into())
+    }
+
+    #[test]
+    fn history_labels_follow_native_steps_and_survive_save_undo_and_redo() {
+        let mut session = session();
+        session
+            .execute(
+                session.project().revision,
+                Command::RenameProject { name: "One".into() },
+                |_| Ok(()),
+            )
+            .unwrap();
+        session
+            .execute(
+                session.project().revision,
+                Command::RenameProject { name: "Two".into() },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(
+            session.history_entries().len(),
+            2,
+            "a burst has one authoritative label"
+        );
+        let first_label = session.history_entries()[1].label.clone();
+        assert!(!first_label.is_empty());
+        session.take_version_labels();
+        session.undo(|_| Ok(())).unwrap();
+        assert_eq!(session.history().2, 0);
+        assert_eq!(session.history_entries()[1].label, first_label);
+        session.redo(|_| Ok(())).unwrap();
+        assert_eq!(session.history().2, 1);
+        assert_eq!(session.history_entries()[1].label, first_label);
+        session.undo(|_| Ok(())).unwrap();
+        session
+            .execute(
+                session.project().revision,
+                Command::SetGrid { enabled: false },
+                |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(
+            session.history_entries().len(),
+            2,
+            "a new edit replaces the abandoned redo label"
+        );
+        assert_ne!(session.history_entries()[1].label, first_label);
+        assert!(!session.can_redo());
     }
 
     #[test]

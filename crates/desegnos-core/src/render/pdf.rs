@@ -1,25 +1,47 @@
-//! A minimal PDF writer for slide decks: vector paths, strokes and raster pictures.
+//! A minimal PDF writer for slide decks: vector paths, strokes, clipped pictures and shadows.
 //!
 //! Every scene is one page, drawn in canvas order. Glyphs are already outlines, so the PDF
 //! embeds no font program and needs no font installed. Pictures are decoded to raw RGB and
 //! deflated, so reading the PDF needs no image codec.
-use super::{Item, Rgba, Scene, Segment};
+//!
+//! Two things PDF cannot draw natively are approximated. Opacity is a graphics state constant,
+//! so the writer multiplies opacity down the tree itself and switches state only where the
+//! product changes; the same mechanism carries a fill's own alpha, which PDF colours do not
+//! have. A Gaussian-blurred shadow becomes [`SHADOW_LAYERS`] silhouettes growing outwards with
+//! one fixed alpha each, chosen so the overlap in the middle adds up to the shadow's own alpha:
+//! a soft ramp in place of the blur that PNG and SVG get.
+use super::{
+    Clip, Group, Item, Path, Picture, Point, Rgba, Rotate, Scene, Segment, Shadow, ShadowShape,
+    Shape,
+};
 use flate2::{Compression, write::ZlibEncoder};
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
-use std::io::Write as _;
+use std::io::{Cursor, Write as _};
 
 /// PDF points per canvas pixel (96 dpi pixels to 72 dpi points).
 const SCALE: f64 = 0.75;
+/// Silhouettes that stand in for one Gaussian-blurred shadow.
+const SHADOW_LAYERS: usize = 6;
 
 pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
+    // Content comes first: it is what discovers the pictures and the opacity states the
+    // resources dictionary has to hold.
+    let mut alphas = Alphas::default();
     let mut pictures: Vec<(String, Vec<u8>)> = Vec::new();
-    let mut picture_ids: BTreeMap<(usize, usize), usize> = BTreeMap::new();
-    for (scene_index, scene) in scenes.iter().enumerate() {
-        let mut ordinal = 0_usize;
-        collect_pictures(&scene.items, scene_index, &mut ordinal, &mut pictures, &mut picture_ids);
+    let mut streams: Vec<String> = Vec::new();
+    for scene in scenes {
+        let mut page = Page {
+            scene,
+            stream: String::new(),
+            opacity: 1.0,
+            current: 1.0,
+            alphas: &mut alphas,
+            pictures: &mut pictures,
+        };
+        page.items(&scene.items);
+        streams.push(page.stream);
     }
-    let alphas = collect_alphas(scenes);
+
     // 1 catalog, 2 pages, 3 resources, then one page and one content object per scene.
     let first_page = 4;
     let first_picture = first_page + scenes.len() * 2;
@@ -41,7 +63,7 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
     let xobjects: Vec<String> = (0..pictures.len())
         .map(|index| format!("/Im{index} {} 0 R", first_picture + index))
         .collect();
-    let states: Vec<String> = (0..alphas.len())
+    let states: Vec<String> = (0..alphas.values.len())
         .map(|index| format!("/GS{index} {} 0 R", first_state + index))
         .collect();
     writer.dict(
@@ -52,25 +74,24 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
             states.join(" ")
         ),
     );
-    for (index, scene) in scenes.iter().enumerate() {
+    for (index, stream) in streams.into_iter().enumerate() {
         let page_id = first_page + index * 2;
         writer.dict(
             page_id,
             format!(
                 "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {:.3} {:.3}] /Resources 3 0 R /Contents {} 0 R >>",
-                scene.width * SCALE,
-                scene.height * SCALE,
+                scenes[index].width * SCALE,
+                scenes[index].height * SCALE,
                 page_id + 1
             ),
         );
-        let stream = content(scene, index, &alphas, &picture_ids);
         writer.stream(page_id + 1, stream.into_bytes(), false);
     }
     for (index, (mime, bytes)) in pictures.iter().enumerate() {
         let image = image_stream(mime, bytes);
         writer.stream(first_picture + index, image, true);
     }
-    for (index, alpha) in alphas.iter().enumerate() {
+    for (index, alpha) in alphas.values.iter().enumerate() {
         writer.dict(
             first_state + index,
             format!("<< /Type /ExtGState /ca {alpha:.3} /CA {alpha:.3} >>"),
@@ -79,143 +100,176 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
     writer.finish()
 }
 
-fn collect_pictures(
-    items: &[Item],
-    scene: usize,
-    ordinal: &mut usize,
-    pictures: &mut Vec<(String, Vec<u8>)>,
-    ids: &mut BTreeMap<(usize, usize), usize>,
-) {
-    for item in items {
-        match item {
-            Item::Picture(picture) => {
-                ids.insert((scene, *ordinal), pictures.len());
-                *ordinal += 1;
-                pictures.push((picture.mime.clone(), picture.bytes.clone()));
-            }
-            Item::Group { items, .. } => collect_pictures(items, scene, ordinal, pictures, ids),
-            Item::Shape(_) => {}
+/// The opacity states one deck needs, rounded so the same product reuses one state.
+#[derive(Default)]
+struct Alphas {
+    values: Vec<f64>,
+}
+
+impl Alphas {
+    fn round(value: f64) -> f64 {
+        (value.clamp(0.0, 1.0) * 100.0).round() / 100.0
+    }
+
+    fn index(&mut self, value: f64) -> usize {
+        let value = Self::round(value);
+        if let Some(index) = self
+            .values
+            .iter()
+            .position(|stored| (stored - value).abs() < 0.000_1)
+        {
+            return index;
         }
+        self.values.push(value);
+        self.values.len() - 1
     }
 }
 
-fn collect_alphas(scenes: &[Scene]) -> Vec<f64> {
-    let mut alphas: Vec<f64> = Vec::new();
-    fn walk(items: &[Item], alphas: &mut Vec<f64>) {
+/// One page's content stream, with everything it needs to keep its own state.
+struct Page<'a> {
+    scene: &'a Scene,
+    stream: String,
+    /// The opacity the tree has multiplied down to here.
+    opacity: f64,
+    /// The alpha the graphics state currently paints with, which `q`/`Q` save and restore.
+    current: f64,
+    alphas: &'a mut Alphas,
+    pictures: &'a mut Vec<(String, Vec<u8>)>,
+}
+
+impl Page<'_> {
+    fn items(&mut self, items: &[Item]) {
         for item in items {
-            if let Item::Group { alpha, items, .. } = item {
-                let rounded = (alpha * 100.0).round() / 100.0;
-                if rounded < 0.995 && !alphas.iter().any(|value| (*value - rounded).abs() < 0.001)
-                {
-                    alphas.push(rounded);
-                }
-                walk(items, alphas);
+            match item {
+                Item::Shape(shape) => self.shape(shape),
+                Item::Picture(picture) => self.picture(picture),
+                Item::Shadow(shadow) => self.shadow(shadow),
+                Item::Group(group) => self.group(group),
             }
         }
     }
-    for scene in scenes {
-        walk(&scene.items, &mut alphas);
+
+    fn shape(&mut self, shape: &Shape) {
+        let scene = self.scene;
+        let Some(path) = scene.paths.get(shape.path_ref) else {
+            return;
+        };
+        if let Some(fill) = shape.fill {
+            self.paint_alpha(fill.a);
+            set_fill(&mut self.stream, fill);
+            write_path(&mut self.stream, scene, path);
+            self.stream.push_str("f\n");
+        }
+        if let Some((stroke, width)) = shape.stroke {
+            self.paint_alpha(stroke.a);
+            set_stroke(&mut self.stream, stroke);
+            let _ = write!(self.stream, "{:.3} w ", width * SCALE);
+            write_path(&mut self.stream, scene, path);
+            self.stream.push_str("S\n");
+        }
     }
-    alphas
-}
 
-fn content(
-    scene: &Scene,
-    scene_index: usize,
-    alphas: &[f64],
-    picture_ids: &BTreeMap<(usize, usize), usize>,
-) -> String {
-    let mut stream = String::new();
-    let mut picture = 0_usize;
-    write_items(
-        &mut stream,
-        scene,
-        &scene.items,
-        alphas,
-        picture_ids,
-        scene_index,
-        &mut picture,
-    );
-    stream
-}
+    fn picture(&mut self, picture: &Picture) {
+        let index = self.pictures.len();
+        self.pictures
+            .push((picture.mime.clone(), picture.bytes.clone()));
+        // `object-fit: cover`: scale to fill the box, centre it and let the clip crop it.
+        let (intrinsic_width, intrinsic_height) =
+            picture_dimensions(&picture.bytes).unwrap_or((picture.width, picture.height));
+        let scale = (picture.width / intrinsic_width).max(picture.height / intrinsic_height);
+        let width = intrinsic_width * scale;
+        let height = intrinsic_height * scale;
+        let x = picture.x - (width - picture.width) / 2.0;
+        let y = picture.y - (height - picture.height) / 2.0;
+        let _ = write!(
+            self.stream,
+            "q\n{:.3} {:.3} {:.3} {:.3} re W n\n{:.3} 0 0 {:.3} {:.3} {:.3} cm\n/Im{index} Do\nQ\n",
+            picture.x * SCALE,
+            pdf_y(self.scene, picture.y + picture.height),
+            picture.width * SCALE,
+            picture.height * SCALE,
+            width * SCALE,
+            height * SCALE,
+            x * SCALE,
+            pdf_y(self.scene, y + height)
+        );
+    }
 
-#[allow(clippy::too_many_arguments)]
-fn write_items(
-    stream: &mut String,
-    scene: &Scene,
-    items: &[Item],
-    alphas: &[f64],
-    picture_ids: &BTreeMap<(usize, usize), usize>,
-    scene_index: usize,
-    picture: &mut usize,
-) {
-    for item in items {
-        match item {
-            Item::Shape(shape) => {
-                let Some(path) = scene.paths.get(shape.path_ref) else {
-                    continue;
-                };
-                if let Some(fill) = shape.fill {
-                    set_fill(stream, fill);
-                    if let Some((stroke, width)) = shape.stroke {
-                        set_stroke(stream, stroke);
-                        let _ = write!(stream, "{:.3} w ", width * SCALE);
-                        write_path(stream, scene, path);
-                        stream.push_str("B\n");
-                    } else {
-                        write_path(stream, scene, path);
-                        stream.push_str("f\n");
-                    }
-                } else if let Some((stroke, width)) = shape.stroke {
-                    set_stroke(stream, stroke);
-                    let _ = write!(stream, "{:.3} w ", width * SCALE);
-                    write_path(stream, scene, path);
-                    stream.push_str("S\n");
-                }
-            }
-            Item::Picture(picture_item) => {
-                let ordinal = *picture;
-                *picture += 1;
-                let Some(index) = picture_ids.get(&(scene_index, ordinal)) else {
-                    continue;
-                };
-                let _ = writeln!(
-                    stream,
-                    "q {:.3} 0 0 {:.3} {:.3} {:.3} cm /Im{index} Do Q",
-                    picture_item.width * SCALE,
-                    picture_item.height * SCALE,
-                    picture_item.x * SCALE,
-                    (scene.height - picture_item.y - picture_item.height) * SCALE
-                );
-            }
-            Item::Group {
-                clip,
-                alpha,
-                items,
-            } => {
-                stream.push_str("q\n");
-                if let Some(rect) = clip {
-                    let _ = writeln!(
-                        stream,
-                        "{:.3} {:.3} {:.3} {:.3} re W n",
-                        rect.x * SCALE,
-                        (scene.height - rect.y - rect.height) * SCALE,
-                        rect.width * SCALE,
-                        rect.height * SCALE
-                    );
-                }
-                if *alpha < 0.995 {
-                    let rounded = (alpha * 100.0).round() / 100.0;
-                    let index = alphas
-                        .iter()
-                        .position(|value| (*value - rounded).abs() < 0.001)
-                        .unwrap_or(0);
-                    let _ = writeln!(stream, "/GS{index} gs");
-                }
-                write_items(stream, scene, items, alphas, picture_ids, scene_index, picture);
-                stream.push_str("Q\n");
+    fn shadow(&mut self, shadow: &Shadow) {
+        let scene = self.scene;
+        let (parent_opacity, parent_current) = (self.opacity, self.current);
+        // The silhouette is its own state scope: its layers each want a different opacity, and
+        // `Q` puts the page's opacity back for whatever is painted over it.
+        self.stream.push_str("q\n");
+        set_fill(&mut self.stream, shadow.fill);
+        let sigma = shadow.blur / 2.0;
+        if sigma <= 0.01 {
+            self.paint_alpha(shadow.fill.a);
+            let path = shadow_path(shadow.shape, 0.0);
+            write_path(&mut self.stream, scene, &path);
+            self.stream.push_str("f\n");
+        } else {
+            // A Gaussian fades out about two standard deviations from the silhouette, so the
+            // outermost stand-in grows by that much and the innermost is the silhouette itself.
+            let layers = SHADOW_LAYERS;
+            let spread = sigma * 2.0;
+            let step = spread / (layers - 1) as f64;
+            // Overlapping the layers evenly gets the middle back to the shadow's own alpha.
+            let layer_alpha = 1.0 - (1.0 - shadow.fill.a.clamp(0.0, 1.0)).powf(1.0 / layers as f64);
+            for layer in (0..layers).rev() {
+                self.paint_alpha(layer_alpha);
+                let path = shadow_path(shadow.shape, layer as f64 * step);
+                write_path(&mut self.stream, scene, &path);
+                self.stream.push_str("f\n");
             }
         }
+        self.stream.push_str("Q\n");
+        self.opacity = parent_opacity;
+        self.current = parent_current;
+    }
+
+    fn group(&mut self, group: &Group) {
+        let scene = self.scene;
+        let (parent_opacity, parent_current) = (self.opacity, self.current);
+        self.stream.push_str("q\n");
+        if let Some(rotate) = group.rotate {
+            write_rotation(&mut self.stream, scene, &rotate);
+        }
+        if let Some(clip) = group.clip {
+            let path = clip_path(clip);
+            write_path(&mut self.stream, scene, &path);
+            self.stream.push_str("W n\n");
+        }
+        self.opacity = parent_opacity * group.alpha;
+        self.items(&group.items);
+        self.stream.push_str("Q\n");
+        self.opacity = parent_opacity;
+        self.current = parent_current;
+    }
+
+    /// Selects the opacity one paint operation needs, writing it only when the graphics state
+    /// does not already paint with it.
+    fn paint_alpha(&mut self, colour_alpha: f64) {
+        let value = Alphas::round(self.opacity * colour_alpha);
+        if (value - self.current).abs() < 0.005 {
+            return;
+        }
+        let index = self.alphas.index(value);
+        let _ = writeln!(self.stream, "/GS{index} gs");
+        self.current = value;
+    }
+}
+
+fn clip_path(clip: Clip) -> Path {
+    Path::rect(clip.rect, clip.radius)
+}
+
+/// The silhouette a shadow layer draws, grown by `spread` on every side.
+fn shadow_path(shape: ShadowShape, spread: f64) -> Path {
+    let rect = super::inflate(shape.bounds(), spread);
+    match shape {
+        ShadowShape::Rect { radius, .. } => Path::rect(rect, radius + spread),
+        ShadowShape::Ellipse(_) => Path::ellipse(rect),
     }
 }
 
@@ -229,7 +283,21 @@ fn set_stroke(stream: &mut String, colour: Rgba) {
     let _ = write!(stream, "{r:.3} {g:.3} {b:.3} RG ");
 }
 
-fn write_path(stream: &mut String, scene: &Scene, path: &super::Path) {
+/// A clockwise canvas rotation about its centre, as PDF's counter-clockwise `cm` matrix.
+fn write_rotation(stream: &mut String, scene: &Scene, rotate: &Rotate) {
+    let (sin, cos) = rotate.degrees.to_radians().sin_cos();
+    let cx = rotate.cx * SCALE;
+    let cy = pdf_y(scene, rotate.cy);
+    let e = cx - cos * cx - sin * cy;
+    let f = cy + sin * cx - cos * cy;
+    let _ = writeln!(
+        stream,
+        "{cos:.6} {:.6} {sin:.6} {cos:.6} {e:.6} {f:.6} cm",
+        -sin
+    );
+}
+
+fn write_path(stream: &mut String, scene: &Scene, path: &Path) {
     for segment in &path.segments {
         match segment {
             Segment::Move(point) => {
@@ -289,7 +357,7 @@ fn write_path(stream: &mut String, scene: &Scene, path: &super::Path) {
 }
 
 /// The point a segment starts from, used to raise a quadratic curve to a cubic.
-fn previous_point(path: &super::Path, segment: &Segment) -> Option<super::Point> {
+fn previous_point(path: &Path, segment: &Segment) -> Option<Point> {
     let index = path
         .segments
         .iter()
@@ -306,6 +374,15 @@ fn previous_point(path: &super::Path, segment: &Segment) -> Option<super::Point>
 
 fn pdf_y(scene: &Scene, y: f64) -> f64 {
     (scene.height - y) * SCALE
+}
+
+/// A picture's pixel size, read from its header; `None` when the bytes cannot be decoded.
+fn picture_dimensions(bytes: &[u8]) -> Option<(f64, f64)> {
+    let reader = image::ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let (width, height) = reader.into_dimensions().ok()?;
+    (width > 0 && height > 0).then_some((f64::from(width), f64::from(height)))
 }
 
 /// A picture as a PDF image XObject: raw RGB, deflated.
@@ -337,7 +414,7 @@ fn image_stream(mime: &str, bytes: &[u8]) -> Vec<u8> {
 
 #[derive(Default)]
 struct Writer {
-    objects: BTreeMap<usize, Vec<u8>>,
+    objects: std::collections::BTreeMap<usize, Vec<u8>>,
 }
 
 impl Writer {
@@ -354,11 +431,7 @@ impl Writer {
         if complete {
             bytes.extend_from_slice(&body);
         } else {
-            let _ = write!(
-                bytes,
-                "<< /Length {} >>\nstream\n",
-                body.len()
-            );
+            let _ = write!(bytes, "<< /Length {} >>\nstream\n", body.len());
             let mut body = body;
             bytes.append(&mut body);
             bytes.extend_from_slice(b"\nendstream");
@@ -369,7 +442,7 @@ impl Writer {
 
     fn finish(mut self) -> Vec<u8> {
         let mut out = b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n".to_vec();
-        let mut offsets = BTreeMap::new();
+        let mut offsets = std::collections::BTreeMap::new();
         let max_id = self.objects.keys().max().copied().unwrap_or(0);
         for id in 0..=max_id {
             let Some(bytes) = self.objects.remove(&id) else {
@@ -384,7 +457,9 @@ impl Writer {
         out.extend_from_slice(b"0000000000 65535 f \n");
         for id in 1..count {
             match offsets.get(&id) {
-                Some(offset) => out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes()),
+                Some(offset) => {
+                    out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes())
+                }
                 None => out.extend_from_slice(b"0000000000 65535 f \n"),
             }
         }

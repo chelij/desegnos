@@ -1,0 +1,97 @@
+import { type EditorTool } from './EditorTools';
+import { type ProjectCanvasHandle } from './ProjectCanvas';
+import { type ShortcutAction } from './shortcuts';
+import type { CanvasTemplate, ElementKind, WorkspaceView } from './types';
+import { ActionEvent, NO_ACTION_EVENT } from './editorShared';
+
+type Context = {
+  showStartPage: boolean;
+  current: import("react").RefObject<WorkspaceView | null>;
+  setShowShortcuts: import("react").Dispatch<import("react").SetStateAction<boolean>>;
+  setShowPalette: import("react").Dispatch<import("react").SetStateAction<boolean>>;
+  newUntitled: (template?: CanvasTemplate) => Promise<void>;
+  open: (folder?: boolean, path?: string, discardRecovery?: boolean) => Promise<void>;
+  setInsertKind: import("react").Dispatch<import("react").SetStateAction<ElementKind | null>>;
+  setInsertSignal: import("react").Dispatch<import("react").SetStateAction<number>>;
+  setCanvasTool: import("react").Dispatch<import("react").SetStateAction<EditorTool>>;
+  panelActions: import("./EditorDock").PanelActions;
+  canvasRef: import("react").RefObject<ProjectCanvasHandle | null>;
+  togglePlay: (pageId?: string | null) => void;
+  previewSelectedBoundary: () => void;
+  openExportPanel: (restore?: boolean) => void;
+  exportDestination: string | null;
+  runExport: (previewPageId?: string | null) => Promise<void>;
+  chooseExportDestination: () => Promise<void>;
+  travel: (command: 'undo_project' | 'redo_project') => Promise<void>;
+  save: (saveAs?: boolean) => Promise<WorkspaceView | null>;
+  closeProject: () => Promise<void>;
+};
+
+export function createEditorShortcuts(context: () => Context) {
+  function performAction(action: ShortcutAction, event: ActionEvent = NO_ACTION_EVENT) {
+    const { showStartPage, current, setShowShortcuts, setShowPalette, newUntitled, open, setInsertKind, setInsertSignal, setCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary, openExportPanel, exportDestination, runExport, chooseExportDestination, travel, save, closeProject } = context();
+    // The start page has no canvas: project commands wait until a canvas is open again.
+    if ((showStartPage || !current.current?.project) && !['new', 'open', 'help', 'commandPalette'].includes(action)) return;
+    const project = current.current?.project;
+    if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels'].includes(action)) return;
+    switch (action) {
+      // The canvas owns these; its listener runs first and prevents the default.
+      case 'copy': case 'cut': case 'paste': case 'pasteChoice': case 'duplicate':
+      case 'link': case 'unlink': case 'group': case 'ungroup': case 'forward': case 'backward': case 'front': case 'back':
+      case 'selectAll': case 'selectChild': case 'selectParent': case 'nudge': case 'nudgeFar': case 'delete':
+      case 'copyStyle': case 'pasteStyle': case 'paintFormat': case 'minimap': case 'saveView': case 'goToView':
+        return;
+      case 'help': event.preventDefault(); setShowShortcuts(true); return;
+      case 'commandPalette': event.preventDefault(); setShowPalette(true); return;
+      case 'new': event.preventDefault(); void newUntitled().catch(() => {}); return;
+      case 'open': event.preventDefault(); void open().catch(() => {}); return;
+      case 'renameLayer': {
+        const field = document.querySelector<HTMLInputElement>('[data-field="layer-name"]');
+        if (!field) return;
+        event.preventDefault(); field.focus({ preventScroll: true }); field.select(); return;
+      }
+      case 'insert': event.preventDefault(); setInsertKind(null); setInsertSignal(value => value + 1); return;
+      case 'imageTool': event.preventDefault(); setInsertKind(null); setCanvasTool('image'); return;
+      case 'selectTool': case 'boundaryTool': case 'pointerTool': case 'textTool': case 'panTool':
+      case 'rectTool': case 'ellipseTool': case 'lineTool': case 'noteTool': {
+        event.preventDefault(); setInsertKind(null);
+        setCanvasTool(action === 'selectTool' ? 'select' : action === 'boundaryTool' ? 'boundary'
+          : action === 'pointerTool' ? 'pointer' : action === 'textTool' ? 'text' : action === 'panTool' ? 'pan'
+            : action === 'rectTool' ? 'rect' : action === 'ellipseTool' ? 'ellipse' : action === 'lineTool' ? 'line' : 'note');
+        return;
+      }
+      case 'requestTool': case 'requestFromShape':
+        // The canvas starts a request on the selection; with nothing selected F picks the tool.
+        return;
+      case 'askAI': event.preventDefault(); document.querySelector<HTMLElement>('[data-element-request]')?.focus(); return;
+      case 'hidePanels':
+        if (!project) return;
+        if (event.target instanceof Element && event.target.closest('.workspace-surface, .editor-menu, .layers-popover')) return;
+        event.preventDefault(); panelActions.toggleHidden(); return;
+      case 'zoomIn': event.preventDefault(); canvasRef.current?.zoomStep(1); return;
+      case 'zoomOut': event.preventDefault(); canvasRef.current?.zoomStep(-1); return;
+      case 'zoomReset': event.preventDefault(); canvasRef.current?.zoomTo(1); return;
+      case 'fitAll': event.preventDefault(); canvasRef.current?.fit(); return;
+      case 'fitSelection': event.preventDefault(); canvasRef.current?.fitSelection(); return;
+      case 'play': if (!project) return; event.preventDefault(); togglePlay(); return;
+      case 'preview': if (!project) return; event.preventDefault(); previewSelectedBoundary(); return;
+      case 'export':
+        if (!project) return;
+        event.preventDefault(); openExportPanel();
+        if (exportDestination) void runExport(); else void chooseExportDestination();
+        return;
+      case 'undo': case 'redo':
+        if (!project) return;
+        event.preventDefault();
+        if (action === 'undo' ? current.current?.canUndo : current.current?.canRedo) {
+          void travel(action === 'undo' ? 'undo_project' : 'redo_project').catch(() => {});
+        }
+        return;
+      case 'save': if (!project) return; event.preventDefault(); void save().catch(() => {}); return;
+      case 'saveAs': if (!project) return; event.preventDefault(); void save(true).catch(() => {}); return;
+      case 'closeProject': if (!project) return; event.preventDefault(); void closeProject().catch(() => {}); return;
+    }
+  }
+
+  return { performAction };
+}

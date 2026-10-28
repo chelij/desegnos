@@ -1,7 +1,8 @@
 //! Pointers: intent and permission made durable.
 //!
-//! The comment is the specification. A pointer may grant its source request permission to edit
-//! its target layer, and simple comments are classified into a Play action by generation.
+//! The comment is the specification. A change pointer grants its source request permission to
+//! edit its target layer; a reference pointer only lets the request read it as context. Simple
+//! comments are classified into a Play action by generation.
 //! Clashes are derived from the project alone, so the canvas and the AI conversation agree.
 use crate::{Pointer, PointerSource, PointerTarget, Project};
 use serde::Serialize;
@@ -52,20 +53,35 @@ pub fn pointer_needs_generating(pointer: &Pointer) -> bool {
             .is_none_or(|wiring| wiring.generated_comment != pointer.comment)
 }
 
-/// The comment and endpoints may change without the id, so generation treats them as context.
+/// The comment, endpoints and kind may change without the id, so generation treats them as
+/// context.
 pub fn pointer_context_value(project: &Project, pointer: &Pointer) -> serde_json::Value {
     serde_json::json!({
         "id": pointer.id,
         "from": pointer.from,
         "to": pointer.to,
         "comment": pointer.comment,
-        "target": pointer_target_value(project, &pointer.to),
+        "kind": pointer.kind,
+        "target": pointer_target_value(project, &pointer.to, pointer.kind),
         "action": pointer.play,
     })
 }
 
+/// Whether this pointer lets a request change its target.
+pub fn pointer_grants_change(pointer: &Pointer) -> bool {
+    pointer.kind == crate::PointerKind::Change
+}
+
 /// A precise, human-readable description of what a pointer may read or change.
-pub fn pointer_target_description(project: &Project, target: &PointerTarget) -> String {
+pub fn pointer_target_description(
+    project: &Project,
+    target: &PointerTarget,
+    kind: crate::PointerKind,
+) -> String {
+    let permission = match kind {
+        crate::PointerKind::Change => "may be changed within this project",
+        crate::PointerKind::Reference => "may be read as context, not changed",
+    };
     match target {
         PointerTarget::Element {
             page_id, element_id, ..
@@ -80,7 +96,7 @@ pub fn pointer_target_description(project: &Project, target: &PointerTarget) -> 
                 );
             };
             format!(
-                "layer \"{}\" on page {} ({}). The layer may be changed within this project.",
+                "layer \"{}\" on page {} ({}). The layer {permission}.",
                 short(&element.label(), 400),
                 page.name,
                 page.path
@@ -92,7 +108,7 @@ pub fn pointer_target_description(project: &Project, target: &PointerTarget) -> 
             .find(|page| page.id == *page_id)
             .map(|page| {
                 format!(
-                    "page {} ({}). Any of its layers may be changed within this project.",
+                    "page {} ({}). Any of its layers {permission}.",
                     page.name, page.path
                 )
             })
@@ -109,7 +125,12 @@ pub fn pointer_target_description(project: &Project, target: &PointerTarget) -> 
     }
 }
 
-pub fn pointer_target_value(project: &Project, target: &PointerTarget) -> serde_json::Value {
+pub fn pointer_target_value(
+    project: &Project,
+    target: &PointerTarget,
+    kind: crate::PointerKind,
+) -> serde_json::Value {
+    let editable = kind == crate::PointerKind::Change;
     match target {
         PointerTarget::Element {
             page_id,
@@ -126,7 +147,7 @@ pub fn pointer_target_value(project: &Project, target: &PointerTarget) -> serde_
                 "path": page.map(|page| page.path.clone()),
                 "elementId": element_id,
                 "label": element.map(|element| element.label()),
-                "editable": true,
+                "editable": editable,
             })
         }
         PointerTarget::Boundary { page_id, size_id } => {
@@ -137,7 +158,7 @@ pub fn pointer_target_value(project: &Project, target: &PointerTarget) -> serde_
                 "sizeId": size_id,
                 "pageName": page.map(|page| page.name.clone()),
                 "path": page.map(|page| page.path.clone()),
-                "editable": true,
+                "editable": editable,
             })
         }
         PointerTarget::Reference { item_id } => {
@@ -204,7 +225,8 @@ fn collect_ids(elements: &[crate::Element], ids: &mut BTreeSet<Uuid>) {
 
 impl Project {
     /// Element ids a request on this layer may change: its own subtree plus the targets of
-    /// pointers whose source is this layer or one of its descendants.
+    /// change pointers whose source is this layer or one of its descendants. Reference pointers
+    /// only travel as context and grant nothing here.
     pub fn editable_element_ids(
         &self,
         page_id: Uuid,
@@ -224,7 +246,7 @@ impl Project {
                     ..
                 } => *source_page_id == page_id,
             };
-            if !source_matches {
+            if !source_matches || !pointer_grants_change(pointer) {
                 continue;
             }
             match &pointer.to {

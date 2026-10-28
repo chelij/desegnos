@@ -1,9 +1,10 @@
+import { canvasBoxes } from './canvasView';
 import { useEffect, useRef, useState } from 'react';
 import type { Boundary, Point, RequestBox } from '../projectCanvasGeometry';
 import { pointerRoute } from '../projectCanvasGeometry';
 import { pointerWorld } from './pointers';
-import type { Element, PendingRequest, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
-import { resolveForSize } from './sizes';
+import type { PendingRequest, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
+
 import { elementParents, findElementIn } from './elementGeometry';
 import { requestAreaContains, requestShapeBounds, requestShapePath } from './requestGeometry';
 
@@ -12,23 +13,14 @@ export { requestAreaContains, requestShapeBounds, requestShapePath } from './req
 export type RequestDraft = { targets: RequestTarget[]; area: RequestArea | null } | null;
 export type BoundaryShift = { pageId: string; sizeId: string; rect: Rect } | null;
 
-function walk(elements: Element[], origin: { x: number; y: number }, rows: RequestBox[], pageId: string, sizeId: string) {
-  for (const element of elements) {
-    rows.push({ pageId, elementId: element.id, sizeId, rect: { x: origin.x + element.rect.x, y: origin.y + element.rect.y, width: element.rect.width, height: element.rect.height } });
-    walk(element.children, { x: origin.x + element.rect.x, y: origin.y + element.rect.y }, rows, pageId, sizeId);
-  }
-}
-
-/** Every layer of every size, drawn at that size's canvas origin. */
+/** A moving boundary offsets its cached geometry; all other boxes retain their identity. */
 export function elementBoxes(project: Project, boundaries: Boundary[], moving: BoundaryShift): RequestBox[] {
-  const boxes: RequestBox[] = [];
-  for (const boundary of boundaries) {
-    const page = project.pages.find(item => item.id === boundary.pageId);
-    if (!page) continue;
-    const origin = moving && moving.sizeId === boundary.sizeId ? moving.rect : boundary.rect;
-    walk(resolveForSize(project, page, boundary.sizeId), origin, boxes, boundary.pageId, boundary.sizeId);
-  }
-  return boxes;
+  const boxes = canvasBoxes(project, boundaries);
+  if (!moving) return boxes;
+  const boundary = boundaries.find(boundary => boundary.sizeId === moving.sizeId);
+  if (!boundary) return boxes;
+  return boxes.map(box => box.sizeId === moving.sizeId ? { ...box, rect: { ...box.rect,
+    x: box.rect.x + moving.rect.x - boundary.rect.x, y: box.rect.y + moving.rect.y - boundary.rect.y } } : box);
 }
 
 export const elementBoxesNow = (project: Project, boundaries: Boundary[]): RequestBox[] => elementBoxes(project, boundaries, null);

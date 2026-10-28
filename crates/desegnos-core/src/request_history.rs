@@ -141,7 +141,7 @@ pub fn record_validation_rejection(request: &mut EarlierRequest, reason: &str) {
 
 fn prevention_rule(reason: &str) -> &'static str {
     if reason.contains("outside its request") {
-        "Change only this layer's subtree and the targets its pointers grant."
+        "Change only this layer's subtree and the targets its change pointers grant."
     } else if reason.contains("inside") || reason.contains("frame") {
         "Keep every new or changed element inside its parent's box, in the parent's coordinates."
     } else if reason.contains("pointer") {

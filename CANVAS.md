@@ -4,7 +4,7 @@ Date: 2026-10-27. The canvas format starts from scratch: old project files are n
 
 ## Idea
 
-One infinite canvas per project. Everything on it is visual: you place elements by hand or ask the AI to fill a request, and what you see is the design. Code exists only at export, when the AI does the heavy lifting of turning the design into a real website or app. Slides and images export directly. The bounds you draw decide what ships. Placement and control still win over AI convenience.
+One infinite canvas per project. Everything on it is visual: you place elements by hand or ask the AI to fill a request, and what you see is the design. Code exists only at export: the model compiles into website or app-screen HTML/CSS, and AI can supply missing pointer behaviour. Slides and images export directly. The bounds you draw decide what ships. Placement and control still win over AI convenience.
 
 ## Primitives
 
@@ -39,15 +39,17 @@ One infinite canvas per project. Everything on it is visual: you place elements 
 
 ## Linked elements
 
-- Any element can be given a name, which makes it a linked element: every copy with that name is one element, so editing one edits all of them, across boundaries and sizes. Each copy keeps its own position.
+- A name is a label, not a link: naming a layer, or clearing its name, never links or detaches it. On a linked copy the name is the linked name every copy shares.
+- **Make linked** (Ctrl/Cmd+Alt+K) is its own action, on the selection bar and in Properties. On one layer it makes that layer a linked element; on several it joins them under one linked name. It uses the layer's name when it has one, otherwise the next free name; when copies differ in content it asks which copy wins. Every copy is then one element, so editing one edits all of them, across boundaries and sizes. Each copy keeps its own position.
 - Ctrl/Cmd+V shows a small inline choice at the paste point: Linked or Unlinked, with "Use as default". Once a default is set, Ctrl/Cmd+V uses it; Ctrl/Cmd+Shift+V always shows the choice.
-- Link (Ctrl/Cmd+Alt+K) joins selected unlinked elements under one name; Unlink (Ctrl/Cmd+Alt+B) detaches a copy. Elements with different structure (different element kinds or different children) cannot be linked and say so inline; when only text, images or styles differ, the user picks which copy wins.
+- Unlink (Ctrl/Cmd+Alt+B) detaches a copy. Elements with different structure (different element kinds or different children) cannot be linked and say so inline.
 - The same linked element can sit in many places on the canvas and be used in different ways around it.
 
 ## Pointers
 
 - The comment is the spec. "Clicking a project opens it here" on a shelf → viewer pointer becomes behaviour.
-- **A pointer is intent and permission.** It can target anything: an element, a boundary, a reference item or an external URL. The comment says what is intended; the line grants the AI full permission to read and change the target, within the project. External URLs can only be read. Without a pointer, a request never reaches outside its own layer and boundary. A pointer is not a live copy; linked elements are for that.
+- **A pointer is intent and permission.** It can target anything: an element, a boundary, a reference item or an external URL. The comment says what is intended. A pointer's kind decides what it may do: **reference** (the default) lets the AI read the target as context only, and **change** (solid line with an arrowhead) lets it read and change the target within the project. Reference pointers draw dashed and thin. External URLs and reference items can only be read. Without a pointer, a request never reaches outside its own layer and boundary. A pointer is not a live copy; linked elements are for that.
+- The kind is a compact toggle in the comment editor; the line shows it, and generation and export read it wherever pointer permission is decided.
 - Simple pointers work visually on the canvas in Play: go to a boundary, show, hide, toggle, swap content. The AI recognises these from the comment. Everything else compiles at export.
 - The comment is written on the line. Zoomed out, it collapses to an icon.
 - Pointers can connect linked sizes of the same page, e.g. phone menu → desktop nav: "collapse this into a hamburger here".
@@ -69,19 +71,19 @@ Each export records a fingerprint of the code it made for every pointer. A point
 
 | Boundary type | Exports as | Who builds it | Pointer between boundaries means |
 |---|---|---|---|
-| Webpage | HTML, CSS, JS | AI | Link, embed or behaviour |
-| App screen | HTML, CSS, JS | AI | Navigation |
+| Webpage | HTML, CSS, JS | Desegnos; AI for missing behaviour | Link, embed or behaviour |
+| App screen | HTML, CSS, JS | Desegnos; AI for missing behaviour | Navigation |
 | Slide | PDF (deck) | Desegnos, directly | Order and transition |
 | Image | PNG or SVG | Desegnos, directly | Variant |
 
-For websites and apps, export sends the visual design (element tree with positions, sizes and styles), pointers, references and the project brief to the AI, which writes real, responsive, ordinary files. Flexible/Precise decides how closely layout follows positions.
+For websites and app screens, export compiles the resolved element tree and linked-size overrides into ordinary HTML/CSS. Missing change-pointer behaviours can be sent as frozen AI requests for marked JavaScript. Existing accepted behaviour can be reused. This path is implemented; responsive appearance and interaction quality still need the finished-example gate below. App-screen output is web files, not a native application package.
 
 ## Layout and sizes
 
 - One canvas per project, saved in the project file.
-- Element positions and sizes are exact on the canvas. At export they are placement intent: the AI turns them into responsive layout.
+- Element positions and sizes are exact on the canvas. At export the resolved tree and linked sizes supply the HTML/CSS layout.
 - Each screen size is its own boundary (phone, tablet, desktop), linked to the others and laid out side by side. Linked sizes share their elements; each size can override position, size and style.
-- Two editing modes on linked sizes. **Single click** edits this size only. **Double click** edits all linked sizes together. The selection highlights in every size it affects.
+- Two editing modes on linked sizes, chosen with the **This size / All sizes** control on the selection bar and in the Properties header while the boundary has more than one linked size. **This size** edits that size only; **All sizes** edits every linked size together. The selection highlights in every size it affects. Double-click still enters a group or edits text.
 - When an element is added to one size only, the other linked sizes show a faint dashed placeholder where it would go. Click it to include the element in that size, or dismiss it to hide it there.
 - Two kinds of boundary. **Screen** has a fixed size, like an app screen or one-screen page; content beyond it scrolls inside. **Page** has a fixed width and grows taller as elements are added.
 - Boundaries never overlap. Moving or growing one pushes its neighbours aside, so every element belongs to exactly one boundary.
@@ -91,7 +93,7 @@ For websites and apps, export sends the visual design (element tree with positio
 
 - The canvas draws elements directly. There are no snapshots of code and no per-page editor; everything is edited on the canvas.
 - **Play** (Shift+Space on a boundary): the boundary becomes clickable and simple pointers run visually. Escape stops.
-- **Preview export**: exports the focused boundary in the background with the AI and runs the real result in place over the boundary, in a sandbox. It shows the last preview until the design changes; Escape returns to the design.
+- **Preview export**: exports the focused webpage/app-screen boundary in the background, requesting AI behaviour only when needed and runs the real result in place over the boundary, in a sandbox. It shows the last preview until the design changes; Escape returns to the design.
 - **Open in browser** serves the last export for a final check in a real browser.
 - **Minimap**: a small overview in the bottom-right corner draws every boundary and reference item with the visible viewport on top; click or drag it to move the view. It hides while the whole canvas fits on screen; Shift+M shows or hides it.
 - **Named views**: Layers lists saved cameras. Click one to glide back to it, double-click to rename it, and use '+' to save the current camera. Ctrl/Cmd+Alt+1–9 saves the current camera to that slot; Alt+1–9 returns to it.
@@ -121,7 +123,7 @@ Every tool and action has a shortcut, using the keys other design tools use.
 | Insert any element | Ctrl/Cmd+I |
 | Copy / Paste / Paste with choice / Duplicate | Ctrl/Cmd+C / V / Shift+V / D |
 | Copy style / Paste style / Paint format | Ctrl/Cmd+Alt+C / Ctrl/Cmd+Alt+V / Shift+Ctrl/Cmd+Alt+C |
-| Link / Unlink | Ctrl/Cmd+Alt+K / Ctrl/Cmd+Alt+B |
+| Make linked / Unlink | Ctrl/Cmd+Alt+K / Ctrl/Cmd+Alt+B |
 | Group / Ungroup | Ctrl/Cmd+G / Shift+Ctrl/Cmd+G |
 | Bring forward / backward | Ctrl/Cmd+] / [ |
 | Select all / child / parent | Ctrl/Cmd+A / Enter / Shift+Enter |
@@ -152,7 +154,7 @@ The active tool decides what a click does, as in Photoshop. Each tool has its ow
 
 | Tool | Click or drag | Double click |
 |---|---|---|
-| Select | Select in this size | Select in all linked sizes |
+| Select | Select in this size | Enter group or edit text |
 | Text | Place or edit text | — |
 | Rectangle / Ellipse / Line | Draw the shape | — |
 | Image | Place a picture | — |
@@ -169,24 +171,41 @@ The active tool decides what a click does, as in Photoshop. Each tool has its ow
 - Pointer shelf → viewer: "clicking a project opens it here". It works in Play by swapping the viewer's content, and becomes real code at export.
 - Reference beside it: sites and images the AI can draw from.
 
-## Build plan
+## Capability status
 
-Progress checklist for the `infinite-canvas` branch, kept current as work lands.
+Reviewed 2026-10-28 against the current working tree. **Implemented** means a code path exists, with quality still unverified. **Verified** applies only to the checks stated in the cell, not to a finished output. **Not yet** means the capability is absent. Tests cited here were inspected, not rerun for this documentation update. No current execution record for the output-specific appearance gate was established, so no whole capability is marked Verified.
 
-- [x] Canvas surface: pan, zoom, dot grid
-- [x] Boundaries: draw, move, push apart, Page/Screen, saved
-- [x] Tool strip and Properties/Layers dock
-- [x] Frames, reference items, pointers with comments, link lines, clash UI
-- [x] Specs updated for visual-first (CANVAS, DESIGN, GLOSSARY, PRODUCT)
-- [x] Element model and renderer: element tree per boundary, drawn on the canvas; Text, shapes, Image, Note, Insert; select, move, resize, group, copy/paste; Layers tree; Properties with request box, history and context
-- [x] Remove the per-page editor, snapshot pipeline and HTML-editing core
-- [x] Saving and versions: `.desegnos` SQLite file, content-addressed versions, History, alternatives
-- [x] AI fills frames and changes layers with elements; Reference rename in code
-- [x] Linked elements and the paste choice
-- [x] Linked sizes with overrides, single and double click modes, placeholders
-- [x] Export: AI builds websites and apps; slides and images render directly; pointer fingerprints and export clashes
-- [x] Preview export and Play
-- [x] Import converts websites into elements
-- [x] Full keyboard pass
-- [x] Test and fix everything once
-- [x] Release build and startup check (hands-on canvas check pending)
+| Output type | Design | Interact (Play/pointers) | Export | Reopen |
+| --- | --- | --- | --- | --- |
+| Social image / Image | Implemented | Implemented (shared Play) | Implemented (PNG; eligible SVG) | Implemented |
+| Slide deck | Implemented | Implemented (shared Play; presentation transitions: Not yet) | Implemented (PDF) | Implemented |
+| Website | Implemented | Implemented | Implemented | Implemented |
+| App screen | Implemented | Implemented | Implemented (web files; native app packaging: Not yet) | Implemented |
+
+Design uses the shared element tree, properties, linked sizes and editing tools. [canvas_templates.rs](crates/desegnos-core/tests/canvas_templates.rs) checks starter geometry in `app_screen_and_social_image_are_single_fixed_screens`, `slide_deck_starts_with_three_slides_side_by_side` and `website_starts_with_linked_desktop_tablet_and_phone_sizes`; these are template checks, not design-quality proof. [elements_and_session.rs](crates/desegnos-core/tests/elements_and_session.rs) checks editing and undo with `insert_update_move_reparent_and_remove_are_one_undo_step_each`.
+
+`slides_render_a_valid_pdf_and_images_render_png_and_svg` in [export.rs](crates/desegnos-core/tests/export.rs) asserts PNG signature/chunks, SVG dimensions, and a PDF header, page marker and EOF. These structural assertions do not prove appearance or a usable deck. No passing execution record for the current export changes was identified during this review.
+
+Play implements go-to, show, hide, toggle and swap in [play.ts](src/projectCanvas/play.ts). That shared path does not prove slide presentation, exported interaction fidelity or usable app behaviour. Static PNG/SVG/PDF outputs do not carry Play interactions.
+
+Reopen uses the shared `.desegnos` database. `split_and_join_round_trip_and_unchanged_parts_keep_their_hash` in [storage.rs](crates/desegnos-storage/tests/storage.rs) checks model round-trip equality; [canvas-smoke.mjs](tests/native/canvas-smoke.mjs) includes “Reopen the saved project from Home”. Neither establishes intended appearance for each output type. No complete edit → export → reopen appearance evidence for the three finished examples was identified in the reviewed sources.
+
+## Next milestone: three finished examples
+
+Deliver three editable `.desegnos` sample projects with their ordinary exported files. All three remain pending. The gate is intended appearance after a meaningful edit, export, closing and reopening the saved project, and a second export. Record the app revision, platform, provider/model if used, exact edit, output files, owner verdict and screenshots of canvas, reopened canvas and opened export. This is a recorded review of real examples; it does not require new test infrastructure.
+
+| Example | Needs before it is finished |
+| --- | --- |
+| Social image | One 1080 × 1080 image boundary with final headline, supporting copy, supplied picture/logo and intentional typography, crop, spacing and colour. Edit text and move/resize an element; save and reopen with assets intact. Open PNG and eligible SVG independently; check dimensions, clipping, opacity, text and image appearance against the design. |
+| Short slide deck | Three 1920 × 1080 slides: title, content and closing slide, with consistent type, colours and imagery. Edit copy and layout on one slide without changing the others. Save and reopen all three; open the PDF independently and check slide order, page dimensions, text, images and clipping. Record any unsupported transition rather than presenting it as shipped. |
+| Responsive two-page website | Finished Home and About boundaries with linked desktop/tablet/390 px phone sizes, shared navigation, real copy and packaged assets. Exercise This size / All sizes edits and one pointer interaction; save and reopen with overrides and links intact. Export, open both pages in a browser, check local navigation, keyboard focus, pointer behaviour, content order and overflow at named and intermediate widths, then re-export after reopening. |
+
+The [release plan](RELEASE_PLAN.md) uses these examples as the next preview gate. The [generation benchmark](docs/GENERATION_BENCHMARK.md) separately measures provider quality; file validity and build success do not satisfy either appearance gate.
+
+### Sizing and shared styles
+
+Every element has independent width and height modes: Fixed keeps its dimensions, Hug fits text or children, and Fill takes the available space. In a stack, Fill shares the remaining main-axis space and fills the cross axis; in a grid it fills its cell. In free layout it reaches the parent's edge from its offset. Optional minimum and maximum dimensions constrain every mode. These visual settings live in `ElementStyle.sizing`, so linked-size style overrides carry them too. Properties places the mode beside each dimension; Min / max reveals the optional limits.
+
+A linked boundary's top-edge width scrubber previews any width between its narrowest and widest named sizes. The nearest named size at or below that width supplies the overrides, matching CSS min-width breakpoints. This preview changes no project data or history and returns to the named width on release or cancellation.
+
+`Project.styles` contains named colour and text styles. A layer can reference colours for its fill, stroke and text, plus one text style for typography. References resolve after size overrides for canvas, image/slide rendering and website CSS. Style edits update every reference; deleting a style preserves each reference's current resolved appearance as local properties. Add, update and remove commands each form one undo step. Properties offers style selection and creation; the dock's Styles section edits names and values and deletes styles.

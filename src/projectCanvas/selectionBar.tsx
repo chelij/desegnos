@@ -5,6 +5,30 @@ import type { ScreenRect } from './surface';
 
 export type SelectionAlign = 'left' | 'centre' | 'right' | 'top' | 'middle' | 'bottom';
 
+/** Whether an edit lands in this linked size only, or all sizes together. */
+export type EditScope = 'this' | 'all';
+
+const EDIT_SCOPE_EVENT = 'desegnos:edit-scope';
+
+/** Components that cannot reach the canvas selection ask for the scope it should use. */
+export function requestEditScope(scope: EditScope) {
+  window.dispatchEvent(new CustomEvent<EditScope>(EDIT_SCOPE_EVENT, { detail: scope }));
+}
+
+export function onEditScope(handle: (scope: EditScope) => void): () => void {
+  const listener = (event: Event) => handle((event as CustomEvent<EditScope>).detail);
+  window.addEventListener(EDIT_SCOPE_EVENT, listener);
+  return () => window.removeEventListener(EDIT_SCOPE_EVENT, listener);
+}
+
+/** The two editing scopes of a boundary with more than one linked size. */
+export function EditScopeChoice({ scope, choose }: { scope: EditScope; choose: (scope: EditScope) => void }) {
+  return <div className="segmented" role="group" aria-label="Edit scope">
+    <button type="button" aria-pressed={scope === 'this'} onClick={() => choose('this')}>This size</button>
+    <button type="button" aria-pressed={scope === 'all'} onClick={() => choose('all')}>All sizes</button>
+  </div>;
+}
+
 const ALIGN: { edge: SelectionAlign; label: string; icon: string }[] = [
   { edge: 'left', label: 'left', icon: 'M3 2.5v11M5 5h7M5 10h4' },
   { edge: 'centre', label: 'centre', icon: 'M8 2.5v11M4.5 5h7M6 10h4' },
@@ -25,11 +49,13 @@ const hex = (value: string) => {
  * The contextual bar for the current layer selection. It lives in screen pixels above the
  * selection, so it never scales with the canvas and never lands inside a boundary.
  */
-export function SelectionBar({ screen, viewWidth, fill, count, linked, onFill, onAlign, onRequest, onLink, onUnlink, onDuplicate, onDelete }: {
+export function SelectionBar({ screen, viewWidth, fill, linked, linkable, scope, onFill, onAlign, onScope, onRequest, onLink, onUnlink, onDuplicate, onDelete }: {
   screen: ScreenRect; viewWidth: number;
-  fill: string; count: number; linked: boolean;
+  fill: string; linked: boolean; linkable: boolean;
+  scope: EditScope | null;
   onFill: (value: string) => void;
   onAlign: (edge: SelectionAlign) => void;
+  onScope: (scope: EditScope) => void;
   onRequest: () => void;
   onLink: () => void;
   onUnlink: () => void;
@@ -58,10 +84,12 @@ export function SelectionBar({ screen, viewWidth, fill, count, linked, onFill, o
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d={icon} /></svg>
       </button>)}
     </div>
+    {scope && <><span className="floating-bar-divider" aria-hidden="true" />
+      <EditScopeChoice scope={scope} choose={onScope} /></>}
     <span className="floating-bar-divider" aria-hidden="true" />
     <button type="button" className="selection-action" aria-label="Request" title={withShortcut('Request', 'requestTool')} onClick={onRequest}><Icon name="note" /></button>
-    <button type="button" className="selection-action" aria-label={linked ? 'Unlink layers' : 'Link layers'} title={withShortcut(linked ? 'Unlink' : 'Link', linked ? 'unlink' : 'link')}
-      disabled={!linked && count < 2} onClick={linked ? onUnlink : onLink}><Icon name="link" /></button>
+    <button type="button" className="selection-action" aria-label={linked ? 'Unlink layer' : 'Make linked'} title={withShortcut(linked ? 'Unlink' : 'Make linked', linked ? 'unlink' : 'link')}
+      disabled={!linked && !linkable} onClick={linked ? onUnlink : onLink}><Icon name="link" /></button>
     <button type="button" className="selection-action" aria-label="Duplicate" title={withShortcut('Duplicate', 'duplicate')} onClick={onDuplicate}><Icon name="copy" /></button>
     <button type="button" className="selection-action" aria-label="Delete" title={withShortcut('Delete', 'delete')} onClick={onDelete}><Icon name="trash" /></button>
   </div>;

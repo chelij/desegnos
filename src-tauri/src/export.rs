@@ -1,7 +1,7 @@
 //! Native export authority: frozen jobs, safe writing, previews and Open in browser.
 //!
-//! Websites and app screens are one frozen AI request per export, sent only after an explicit
-//! paid-send decision. Slides and images render directly from the element tree. Every write goes
+//! Visuals render directly from the element tree. Missing pointer behaviours use a frozen AI
+//! request, sent only after an explicit paid-send decision. Every write goes
 //! through the storage crate's staged, no-replace writer, and the project records the version,
 //! folder and pointer fingerprints the export produced.
 use crate::generation::{AiState, ExportChatgptState};
@@ -15,9 +15,7 @@ use desegnos_core::{
     ExportBundle, ExportPlan, ExportPlanKind, ExportRecord, GenerationMode, Project, WebsiteExport,
     export_manifest, pointer_fingerprints,
 };
-use desegnos_storage::{
-    export_folder_name, read_export_file, write_export_at, write_export_into,
-};
+use desegnos_storage::{export_folder_name, read_export_file, write_export_at, write_export_into};
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -158,6 +156,7 @@ struct ExportJob {
 pub struct ExportService {
     directory: PathBuf,
     jobs: BTreeMap<Uuid, ExportJob>,
+    accepted: BTreeMap<Uuid, ExportRecord>,
 }
 
 impl ExportService {
@@ -165,7 +164,85 @@ impl ExportService {
         Self {
             directory: data.join("exports"),
             jobs: BTreeMap::new(),
+            accepted: fs::read(data.join("exports/behaviours.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default(),
         }
+    }
+
+    fn with_accepted(&self, mut project: Project) -> Project {
+        if let Some(accepted) = self.accepted.get(&project.id) {
+            let fingerprints: BTreeMap<_, _> = project
+                .pointers
+                .iter()
+                .map(|pointer| {
+                    (
+                        pointer.id,
+                        desegnos_core::behaviour_fingerprint(&project, pointer),
+                    )
+                })
+                .collect();
+            let record = project.last_export.get_or_insert_with(|| accepted.clone());
+            for (id, code) in &accepted.behaviours {
+                let forgotten = !record.pointers.contains_key(id)
+                    && record
+                        .behaviours
+                        .get(id)
+                        .is_some_and(|old| old.accepted_revision >= code.accepted_revision);
+                let matches = fingerprints.get(id) == Some(&code.fingerprint);
+                if forgotten || !matches {
+                    continue;
+                }
+                record.behaviours.insert(*id, code.clone());
+                if let Some(pointer) = accepted.pointers.get(id) {
+                    record.pointers.insert(*id, pointer.clone());
+                }
+            }
+        }
+        project
+    }
+
+    fn remember(&mut self, project: &Project, bundle: &ExportBundle) -> NativeResult<()> {
+        let mut record = self
+            .accepted
+            .get(&project.id)
+            .cloned()
+            .or_else(|| project.last_export.clone())
+            .unwrap_or_else(|| ExportRecord {
+                id: Uuid::new_v4(),
+                project_id: project.id,
+                version: 0,
+                destination: self.directory.to_string_lossy().into_owned(),
+                exported_at: now(),
+                pages: Vec::new(),
+                pointers: BTreeMap::new(),
+                behaviours: BTreeMap::new(),
+            });
+        let current: BTreeMap<_, _> = project
+            .pointers
+            .iter()
+            .map(|pointer| {
+                (
+                    pointer.id,
+                    desegnos_core::behaviour_fingerprint(project, pointer),
+                )
+            })
+            .collect();
+        record
+            .behaviours
+            .retain(|id, code| current.get(id) == Some(&code.fingerprint));
+        record
+            .pointers
+            .retain(|id, _| record.behaviours.contains_key(id));
+        record.behaviours.extend(bundle.behaviours.clone());
+        record.pointers.extend(bundle.pointers.clone());
+        self.accepted.insert(project.id, record);
+        fs::create_dir_all(&self.directory).map_err(message)?;
+        let bytes = serde_json::to_vec(&self.accepted).map_err(message)?;
+        let pending = self.directory.join("behaviours.pending");
+        fs::write(&pending, bytes).map_err(message)?;
+        fs::rename(pending, self.directory.join("behaviours.json")).map_err(message)
     }
 
     fn previews(&self) -> PathBuf {
@@ -301,9 +378,7 @@ pub async fn prepare_export(
             return Err("Include this boundary before previewing it.".into());
         }
         if !page.output.needs_ai() {
-            return Err(
-                "Slides and images export directly; preview shows AI-built pages.".into(),
-            );
+            return Err("Preview shows webpages and app screens.".into());
         }
     } else if !page_ids.is_empty() {
         return Err("Export writes every included boundary.".into());
@@ -313,6 +388,7 @@ pub async fn prepare_export(
         workspace.lock().map_err(message)?.head_version()?;
     }
     let job_id = Uuid::new_v4();
+    let project = service.lock().map_err(message)?.with_accepted(project);
     let plan = desegnos_core::plan_export(&project, &page_ids, job_id).map_err(message)?;
     let (destination_path, preview_folder) = if preview {
         let folder = {
@@ -326,7 +402,7 @@ pub async fn prepare_export(
         let parent = destination.ok_or("Choose a destination folder before exporting.")?;
         (Some(trusted_destination(parent)?), None)
     };
-    let has_ai = plan.pages.iter().any(|page| page.output.needs_ai());
+    let has_ai = plan.request_count > 0;
     let mut view = ExportJobView {
         job_id,
         project_id,
@@ -334,7 +410,7 @@ pub async fn prepare_export(
         kind: "code",
         status: JobStatus::Prepared.label(),
         message: if has_ai {
-            "Ready to send to the AI. Sending uses your provider plan or credits.".into()
+            "Ready to generate behaviour. Sending uses your provider plan or credits.".into()
         } else {
             "Ready to write.".into()
         },
@@ -356,10 +432,16 @@ pub async fn prepare_export(
             &site,
             &project,
             &bundle,
-            destination_path.as_deref().ok_or("Choose a destination folder.")?,
+            destination_path
+                .as_deref()
+                .ok_or("Choose a destination folder.")?,
             preview_folder.as_deref(),
             preview,
         )?;
+        service
+            .lock()
+            .map_err(message)?
+            .remember(&project, &bundle)?;
         view.status = JobStatus::Ready.label();
         view.message = written.label.clone();
         view.summary = "Rendered directly from the design.".into();
@@ -468,6 +550,7 @@ fn commit(
             exported_at: now(),
             pages: bundle.pages.clone(),
             pointers: bundle.pointers.clone(),
+            behaviours: bundle.behaviours.clone(),
         };
         let mut export = export_website(bundle);
         export.files.insert(
@@ -567,7 +650,9 @@ pub async fn start_export(
             .find(|account| account.id == account_id)
             .ok_or("This ChatGPT account is no longer connected.")?;
         if !account.connected || !account.plan_enabled {
-            return Err("Sign in to this ChatGPT account and grant plan usage before exporting.".into());
+            return Err(
+                "Sign in to this ChatGPT account and grant plan usage before exporting.".into(),
+            );
         }
         chatgpt
             .manager()?
@@ -638,6 +723,7 @@ fn finish(
         let workspace = workspace.lock().map_err(message)?;
         workspace.project()?.clone()
     };
+    let project = service.lock().map_err(message)?.with_accepted(project);
     let _outcome: Result<(), String> = match result {
         Ok(response) => {
             let stale = project.id != plan.project_id || project.revision != plan.base_revision;
@@ -678,9 +764,15 @@ fn finish(
                                     preview,
                                 ) {
                                     Ok(written) => {
+                                        service
+                                            .lock()
+                                            .map_err(message)?
+                                            .remember(&project, &bundle)?;
                                         let mut guard = service.lock().map_err(message)?;
                                         let Some(job) = guard.jobs.get_mut(&job_id) else {
-                                            return Err("This export is no longer available.".into());
+                                            return Err(
+                                                "This export is no longer available.".into()
+                                            );
                                         };
                                         job.view.usage = response.usage;
                                         job.view.attempts.push(ExportAttempt {
@@ -737,7 +829,11 @@ fn finish(
             let cancelled = job.cancellation.is_cancelled();
             job.view.attempts.push(ExportAttempt {
                 ordinal: job.view.attempts.len() + 1,
-                status: if cancelled { "cancelled".into() } else { "failed".into() },
+                status: if cancelled {
+                    "cancelled".into()
+                } else {
+                    "failed".into()
+                },
                 usage: None,
             });
             if cancelled {
@@ -843,9 +939,7 @@ pub fn get_export_job(
 ) -> NativeResult<Option<ExportJobView>> {
     trusted(&window)?;
     let service = service.lock().map_err(message)?;
-    Ok(service
-        .latest_for(project_id)
-        .map(|job| job.view.clone()))
+    Ok(service.latest_for(project_id).map(|job| job.view.clone()))
 }
 
 /// Recompute pointer fingerprints from the last export's folder, so code changed outside a
@@ -983,10 +1077,14 @@ pub async fn keep_pointer_code(
     let files = read_export_files(&PathBuf::from(&record.destination)).map_err(message)?;
     let marked = marked_code_for(&files, pointer_id);
     if marked.trim().is_empty() {
-        return Err("That pointer's code is no longer in the export folder. Keep the comment instead.".into());
+        return Err(
+            "That pointer's code is no longer in the export folder. Keep the comment instead."
+                .into(),
+        );
     }
     let job_id = Uuid::new_v4();
-    let plan = desegnos_core::plan_comment(&project, pointer_id, &marked, job_id).map_err(message)?;
+    let plan =
+        desegnos_core::plan_comment(&project, pointer_id, &marked, job_id).map_err(message)?;
     let (authentication, provider, settings) = {
         let ai = ai.lock().map_err(message)?;
         ai.export_connection()
@@ -1003,8 +1101,7 @@ pub async fn keep_pointer_code(
         base_revision: project.revision,
         kind: "comment",
         status: JobStatus::Prepared.label(),
-        message: "Ready to rewrite the comment. Sending uses your provider plan or credits."
-            .into(),
+        message: "Ready to rewrite the comment. Sending uses your provider plan or credits.".into(),
         summary: String::new(),
         estimate_usd,
         usage: None,
@@ -1106,8 +1203,9 @@ pub fn open_export_folder(
     if !folder.is_dir() {
         return Err("The last export folder is no longer there. Export again.".into());
     }
-    crate::system_open::open(&folder)
-        .map_err(|_| "Your export is safe, but its folder could not open. Open it in your file manager.".into())
+    crate::system_open::open(&folder).map_err(|_| {
+        "Your export is safe, but its folder could not open. Open it in your file manager.".into()
+    })
 }
 
 /// Serve the last export in the system browser.
@@ -1169,4 +1267,119 @@ fn entry_url(folder: &Path, base: &str) -> String {
         }
     }
     base.to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use desegnos_core::{
+        Appearance, ExportBehaviour, ExportedPointer, Pointer, PointerKind, PointerSource,
+        PointerTarget, Viewport, behaviour_fingerprint, plan_export,
+    };
+
+    #[test]
+    fn preview_acceptance_reuses_code_but_respects_keep_comment() {
+        let mut project = Project::new(
+            "Cache".into(),
+            Viewport {
+                width: 800,
+                height: 600,
+            },
+            Appearance::Light,
+        )
+        .unwrap();
+        let page_id = project.home_page_id;
+        let pointer = Pointer {
+            id: Uuid::new_v4(),
+            kind: PointerKind::Change,
+            from: PointerSource::Boundary {
+                page_id,
+                size_id: None,
+            },
+            to: PointerTarget::Boundary {
+                page_id,
+                size_id: None,
+            },
+            comment: "Toggle this page".into(),
+            wiring: None,
+            play: None,
+            play_comment: String::new(),
+        };
+        let pointer_id = pointer.id;
+        project.pointers.push(pointer.clone());
+        let record = ExportRecord {
+            id: Uuid::new_v4(),
+            project_id: project.id,
+            version: 1,
+            destination: "/tmp/export".into(),
+            exported_at: "now".into(),
+            pages: vec![],
+            pointers: BTreeMap::from([(
+                pointer_id,
+                ExportedPointer {
+                    fingerprint: "a".repeat(64),
+                    comment: pointer.comment.clone(),
+                },
+            )]),
+            behaviours: BTreeMap::from([(
+                pointer_id,
+                ExportBehaviour {
+                    accepted_revision: project.revision,
+                    fingerprint: behaviour_fingerprint(&project, &pointer),
+                    js: "console.log('accepted');".into(),
+                },
+            )]),
+        };
+        let mut service = ExportService {
+            directory: PathBuf::new(),
+            jobs: BTreeMap::new(),
+            accepted: BTreeMap::from([(project.id, record.clone())]),
+        };
+        let prepared = service.with_accepted(project.clone());
+        assert_eq!(
+            plan_export(&prepared, &[], Uuid::new_v4())
+                .unwrap()
+                .request_count,
+            0
+        );
+        project.last_export = Some(record);
+        project
+            .last_export
+            .as_mut()
+            .unwrap()
+            .pointers
+            .remove(&pointer_id);
+        project.revision += 1;
+        let forgotten = service.with_accepted(project.clone());
+        assert_eq!(
+            plan_export(&forgotten, &[], Uuid::new_v4())
+                .unwrap()
+                .request_count,
+            1
+        );
+        // Accepting the replacement at the new revision supersedes the forgotten code.
+        service
+            .accepted
+            .get_mut(&project.id)
+            .unwrap()
+            .behaviours
+            .get_mut(&pointer_id)
+            .unwrap()
+            .accepted_revision = project.revision;
+        let accepted = service.with_accepted(project.clone());
+        assert_eq!(
+            plan_export(&accepted, &[], Uuid::new_v4())
+                .unwrap()
+                .request_count,
+            0
+        );
+        project.revision += 1;
+        let later_edit = service.with_accepted(project);
+        assert_eq!(
+            plan_export(&later_edit, &[], Uuid::new_v4())
+                .unwrap()
+                .request_count,
+            0
+        );
+    }
 }

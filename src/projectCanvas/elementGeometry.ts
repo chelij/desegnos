@@ -211,18 +211,14 @@ export function anyElementLocation(project: Project, id: string): ElementLocatio
 export function elementPath(project: Project, pageId: string, id: string, sizeId?: string | null): ElementPathEntry[] | null {
   if (!project.pages.some(entry => entry.id === pageId)) return null;
   const elements = pageElements(project, pageId, sizeId);
+  const index = elementIndex(elements);
   const out: ElementPathEntry[] = [];
-  const walk = (elements: Element[], parentId: string | null, base: Point, depth: number): boolean => {
-    for (const [index, element] of elements.entries()) {
-      const origin = { x: base.x + element.rect.x, y: base.y + element.rect.y };
-      out.push({ element, parentId, index, origin, parentOrigin: base, depth });
-      if (element.id === id) return true;
-      if (element.children.length && walk(element.children, element.id, origin, depth + 1)) return true;
-      out.pop();
-    }
-    return false;
-  };
-  return walk(elements, null, { x: 0, y: 0 }, 0) ? out : null;
+  let entry = index.get(id);
+  while (entry) {
+    out.unshift(entry);
+    entry = entry.parentId ? index.get(entry.parentId) : undefined;
+  }
+  return out.length ? out : null;
 }
 
 export function elementParents(project: Project, pageId: string, id: string): string[] {
@@ -433,4 +429,67 @@ export function measureText(text: string, style: Element['style']['textStyle']):
   context!.font = `${style.italic ? 'italic ' : ''}${style.weight} ${style.size}px ${style.fontFamily}`;
   const width = Math.max(...lines.map(line => context!.measureText(line).width + style.letterSpacing * Math.max(0, line.length - 1)), style.size);
   return { width: Math.ceil(width) + 1, height: Math.ceil(Math.max(1, lines.length) * style.size * style.lineHeight) + 1 };
+}
+
+/** Intrinsic container bounds. A Fill child contributes its stored size when its parent hugs,
+ * avoiding a circular dependency between parent and child. Text metrics come from the caller. */
+export function intrinsicElementSize(element: Element, textSize?: (element: Element) => { width: number; height: number }): { width: number; height: number } {
+  const sizing = element.style.sizing;
+  let { width, height } = element.rect;
+  const measured = isTextKind(element.kind) ? textSize?.(element) : undefined;
+  if (measured) {
+    if (sizing?.width === 'fit' || width <= 0) width = measured.width;
+    if (sizing?.height === 'fit' || height <= 0) height = measured.height;
+  } else if (sizing?.width === 'fit' || sizing?.height === 'fit') {
+    const children = element.children.filter(child => child.visible).map(child => ({ ...intrinsicElementSize(child, textSize), x: child.rect.x, y: child.rect.y }));
+    const layout = element.layout;
+    let contentWidth = 0, contentHeight = 0;
+    if (layout.kind === 'free') {
+      contentWidth = Math.max(0, ...children.map(child => child.x + child.width));
+      contentHeight = Math.max(0, ...children.map(child => child.y + child.height));
+    } else if (layout.kind === 'stack') {
+      const gaps = layout.gap * Math.max(0, children.length - 1);
+      contentWidth = layout.direction === 'row' ? children.reduce((sum, child) => sum + child.width, gaps) : Math.max(0, ...children.map(child => child.width));
+      contentHeight = layout.direction === 'column' ? children.reduce((sum, child) => sum + child.height, gaps) : Math.max(0, ...children.map(child => child.height));
+      contentWidth += layout.padding * 2; contentHeight += layout.padding * 2;
+    } else {
+      contentWidth = Math.max(0, ...children.map(child => child.width)) * layout.columns + layout.gap * (layout.columns - 1) + layout.padding * 2;
+      const rows: number[] = [];
+      children.forEach((child, index) => { const row = Math.floor(index / layout.columns); rows[row] = Math.max(rows[row] ?? 0, child.height); });
+      contentHeight = rows.reduce((sum, height) => sum + height, 0) + layout.gap * Math.max(0, rows.length - 1) + layout.padding * 2;
+    }
+    const border = element.style.stroke.color ? element.style.stroke.width * 2 : 0;
+    if (sizing?.width === 'fit') width = contentWidth + border;
+    if (sizing?.height === 'fit') height = contentHeight + border;
+  }
+  return {
+    width: Math.min(sizing?.maxWidth ?? Infinity, Math.max(sizing?.minWidth ?? 0, width)),
+    height: Math.min(sizing?.maxHeight ?? Infinity, Math.max(sizing?.minHeight ?? 0, height)),
+  };
+}
+
+/** Depth-first traversal shared by commands and selection. */
+export function elementTree(elements: Element[]): Element[] {
+  return elements.flatMap(element => [element, ...elementTree(element.children)]);
+}
+export function elementTreeIds(elements: Element[]): string[] {
+  return elementTree(elements).map(element => element.id);
+}
+
+const indices = new WeakMap<Element[], Map<string, ElementPathEntry>>();
+/** Parent and origin lookup built once for a resolved tree. */
+export function elementIndex(elements: Element[]): Map<string, ElementPathEntry> {
+  const cached = indices.get(elements);
+  if (cached) return cached;
+  const index = new Map<string, ElementPathEntry>();
+  const walk = (children: Element[], parentId: string | null, base: Point, depth: number) => {
+    children.forEach((element, position) => {
+      const origin = { x: base.x + element.rect.x, y: base.y + element.rect.y };
+      index.set(element.id, { element, parentId, index: position, origin, parentOrigin: base, depth });
+      walk(element.children, element.id, origin, depth + 1);
+    });
+  };
+  walk(elements, null, { x: 0, y: 0 }, 0);
+  indices.set(elements, index);
+  return index;
 }

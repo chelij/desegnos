@@ -54,6 +54,7 @@ fn pointer(
         },
         to: target,
         comment: comment.into(),
+        kind: desegnos_core::PointerKind::Reference,
         wiring: None,
         play: None,
         play_comment: String::new(),
@@ -273,6 +274,7 @@ fn states_distinguish_changed_code_changed_comments_and_wired_pointers() {
         project_id: project.id,
         version: 1,
         destination: "/tmp/export".into(),
+        behaviours: BTreeMap::new(),
         exported_at: "2026-10-27T00:00:00Z".into(),
         pages: vec![ExportedPage {
             page_id: page,
@@ -313,6 +315,7 @@ fn states_distinguish_changed_code_changed_comments_and_wired_pointers() {
             from: None,
             to: None,
             comment: Some("Close the menu".into()),
+            kind: None,
         },
     );
     assert_eq!(
@@ -373,4 +376,71 @@ fn fingerprints_cover_marked_fragments_and_ignore_whitespace_edit_distance() {
     )]);
     let edited = pointer_fingerprints(&edited);
     assert_ne!(edited[&first], fingerprints[&first]);
+}
+
+#[test]
+fn only_change_pointers_grant_their_target_to_a_request() {
+    let (project, page, source) = with_element();
+    let target = Uuid::new_v4();
+    let project = apply(
+        &project,
+        Command::InsertElements {
+            page_id: page,
+            parent_id: None,
+            index: 1,
+            elements: vec![element(target, "Target")],
+            picture_data_uri: None,
+            size_id: None,
+        },
+    );
+    let pointer_id = Uuid::new_v4();
+    let project = apply(
+        &project,
+        Command::AddPointer {
+            pointer: pointer(
+                pointer_id,
+                page,
+                source,
+                PointerTarget::Element {
+                    page_id: page,
+                    element_id: target,
+                    size_id: None,
+                },
+                "Reads this layer",
+            ),
+        },
+    );
+    let (editable, _) = project.editable_element_ids(page, source);
+    assert!(
+        !editable.contains(&target),
+        "a reference pointer reads its target without granting changes"
+    );
+    let project = apply(
+        &project,
+        Command::UpdatePointer {
+            pointer_id,
+            from: None,
+            to: None,
+            comment: None,
+            kind: Some(desegnos_core::PointerKind::Change),
+        },
+    );
+    let (editable, _) = project.editable_element_ids(page, source);
+    assert!(
+        editable.contains(&target),
+        "a change pointer grants its target"
+    );
+}
+
+#[test]
+fn a_pointer_without_a_kind_deserialises_as_reference() {
+    let parsed: Pointer = serde_json::from_value(serde_json::json!({
+        "id": Uuid::new_v4(),
+        "from": { "kind": "boundary", "pageId": Uuid::new_v4() },
+        "to": { "kind": "url", "url": "https://example.com" },
+        "comment": "Read this",
+        "wiring": null,
+    }))
+    .unwrap();
+    assert_eq!(parsed.kind, desegnos_core::PointerKind::Reference);
 }

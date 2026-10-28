@@ -849,8 +849,8 @@ fn fits(parent: &crate::Rect, child: &crate::Rect) -> bool {
 }
 
 /// What one reply outcome may change. Element targets grant their subtree plus what their
-/// pointers grant; a boundary target grants every layer inside it; a pointer target grants what
-/// that pointer points at.
+/// change pointers grant; a boundary target grants every layer inside it; a change pointer target
+/// grants what that pointer points at. Reference pointers grant reads only.
 struct RequestScope {
     allowed: BTreeSet<Uuid>,
     boundary_pages: BTreeSet<Uuid>,
@@ -883,7 +883,11 @@ fn scope_for(
                     }
                 }
                 crate::RequestTarget::Pointer { id } => {
-                    if let Some(pointer) = project.pointers.iter().find(|pointer| pointer.id == *id)
+                    if let Some(pointer) = project
+                        .pointers
+                        .iter()
+                        .find(|pointer| pointer.id == *id)
+                        .filter(|pointer| crate::pointer_grants_change(pointer))
                     {
                         match &pointer.to {
                             crate::PointerTarget::Element {

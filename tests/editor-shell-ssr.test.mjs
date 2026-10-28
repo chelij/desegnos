@@ -44,7 +44,7 @@ try {
   const view = project => ({
     project, path: null, dirty: false, untitled: true, canUndo: false, canRedo: false,
     history: null, recovery: null, recoveries: [], recoveryError: null,
-    openProjects: [], anyDirty: false, documentsKey: '', pointerStates: [],
+    openProjects: [], anyDirty: false, pointerStates: [],
   });
 
   for (const { template, project } of templates) {

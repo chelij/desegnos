@@ -65,6 +65,7 @@ fn webpage_project() -> (Project, Uuid) {
         Command::AddPointer {
             pointer: Pointer {
                 id: pointer_id,
+                kind: desegnos_core::PointerKind::Change,
                 from: PointerSource::Element {
                     page_id: page,
                     element_id,
@@ -89,23 +90,10 @@ fn reply(plan: &desegnos_core::ExportPlan, implemented_pointer: Uuid) -> ExportR
         job_id: plan.job_id,
         requirements_sha256: plan.sha256.clone(),
         summary: "Built the page".into(),
-        pages: plan
-            .pages
-            .iter()
-            .filter(|page| page.output.needs_ai())
-            .map(|page| desegnos_core::ExportReplyPage {
-                page_id: page.page_id,
-                path: page.path.clone(),
-                html:
-                    "<!doctype html><html><head><title>Page</title></head><body><p>Hello</p></body></html>"
-                        .into(),
-                css: "body { margin: 0; }".into(),
-                js: "console.log('ready');".into(),
-            })
-            .collect(),
+        pages: Vec::new(),
         shared: desegnos_core::ExportReplyShared {
-            css: "p { color: #123; }".into(),
-            js: String::new(),
+            css: String::new(),
+            js: format!("/* desegnos-pointer:{implemented_pointer} */\nconsole.log('ready');\n/* /desegnos-pointer:{implemented_pointer} */"),
         },
         pointers: plan
             .pointers
@@ -146,23 +134,17 @@ fn export_reply_is_checked_against_the_frozen_plan() {
     });
     assert!(parse_export_reply(&plan, &serde_json::to_string(&extra_page).unwrap()).is_err());
 
-    let mut changed_path = valid.clone();
-    changed_path.pages[0].path = "/elsewhere".into();
-    assert!(parse_export_reply(&plan, &serde_json::to_string(&changed_path).unwrap()).is_err());
+    let mut css_reply = valid.clone();
+    css_reply.shared.css = "body { color: red; }".into();
+    assert!(validate_export_reply(&plan, &css_reply).is_err());
 
-    let mut empty_html = valid.clone();
-    empty_html.pages[0].html = "   ".into();
-    assert!(parse_export_reply(&plan, &serde_json::to_string(&empty_html).unwrap()).is_err());
+    let mut unmarked = valid.clone();
+    unmarked.shared.js = "console.log('unowned');".into();
+    assert!(validate_export_reply(&plan, &unmarked).is_err());
 
-    let mut external_script = valid.clone();
-    external_script.pages[0].html =
-        "<!doctype html><html><head><script src=\"https://evil.example/x.js\"></script></head><body></body></html>"
-            .into();
-    assert!(parse_export_reply(&plan, &serde_json::to_string(&external_script).unwrap()).is_err());
-
-    let mut bad_css = valid.clone();
-    bad_css.pages[0].css = "body { color red; }".into();
-    assert!(parse_export_reply(&plan, &serde_json::to_string(&bad_css).unwrap()).is_err());
+    let mut bad_js = valid.clone();
+    bad_js.shared.js = format!("/* desegnos-pointer:{pointer_id} */const = ;/* /desegnos-pointer:{pointer_id} */");
+    assert!(validate_export_reply(&plan, &bad_js).is_err());
 
     let mut missing_pointer = valid.clone();
     missing_pointer.pointers.clear();
@@ -190,6 +172,7 @@ fn recording_an_export_does_not_add_an_undo_step_and_survives_undo() {
         project_id: session.project().id,
         version: 4,
         destination: "/tmp/desegnos-export".into(),
+        behaviours: BTreeMap::new(),
         exported_at: "2026-10-27T00:00:00Z".into(),
         pages: vec![ExportedPage {
             page_id: page,

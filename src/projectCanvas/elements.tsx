@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import type { Element, ElementKind, Project, Rect } from '../types';
 import type { Boundary, CanvasCamera, ElementTarget } from '../projectCanvasGeometry';
 import type { ElementCorner } from './elementGeometry';
-import { elementPath, isTextKind, measureText, pictureUri } from './elementGeometry';
+import { elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
 import { elementOrigin, resolveForSize } from './sizes';
 import type { ScreenRect } from './surface';
 
@@ -22,25 +22,58 @@ function textStyle(element: Element): CSSProperties {
   };
 }
 
-function wrapperStyle(element: Element, flow: boolean, rect: Rect): CSSProperties {
+/**
+ * The rendering contract, canvas half: a layer clips its own content to its box unless it is a
+ * box or group, which let children overflow. The renderer in desegnos-core does the same.
+ */
+const clipsContent = (kind: ElementKind) => kind !== 'box' && kind !== 'group';
+
+/**
+ * Blur is a CSS blur radius, so the shadow's Gaussian standard deviation is half of it, which is
+ * what the exported SVG filter uses. Spread stays at zero.
+ */
+function shadowCss(shadow: Element['style']['shadow']): string | undefined {
+  return shadow.color ? `${shadow.x}px ${shadow.y}px ${shadow.blur}px 0 ${shadow.color}` : undefined;
+}
+
+function wrapperStyle(element: Element, flow: boolean, rect: Rect, parentLayout?: Element['layout']): CSSProperties {
   const style = element.style;
   const line = element.kind === 'line';
   const plain = element.kind === 'group';
   const autoText = (element.kind === 'text' || element.kind === 'button' || element.kind === 'link') && rect.width === 0;
+  const sizing = style.sizing;
+  const row = parentLayout?.kind === 'stack' && parentLayout.direction === 'row';
+  const mainFill = parentLayout?.kind === 'stack' && (row ? sizing?.width : sizing?.height) === 'fill';
+  const axis = (mode: string | undefined, fixed: number, offset: number, horizontal: boolean): CSSProperties['width'] => {
+    if (mode === 'fit') {
+      if (element.layout.kind === 'free' && element.children.length) {
+        const content = intrinsicElementSize(element, child => typeof document === 'undefined' ? child.rect : measureText(child.text, child.style.textStyle));
+        return horizontal ? content.width : content.height;
+      }
+      return horizontal ? 'max-content' : 'auto';
+    }
+    if (mode === 'fill') return !flow ? `calc(100% - ${offset}px)` : mainFill && horizontal === row ? 0 : '100%';
+    return fixed > 0 ? fixed : horizontal && autoText ? 'max-content' : undefined;
+  };
   const size = {
-    width: line ? Math.max(1, rect.width) : rect.width > 0 ? rect.width : autoText ? 'max-content' : undefined,
-    height: line ? Math.max(1, rect.height) : rect.height > 0 ? rect.height : undefined,
+    width: line && (sizing?.width ?? 'fixed') === 'fixed' ? Math.max(1, rect.width) : axis(sizing?.width, rect.width, rect.x, true),
+    height: line && (sizing?.height ?? 'fixed') === 'fixed' ? Math.max(1, rect.height) : axis(sizing?.height, rect.height, rect.y, false),
+    minWidth: sizing?.minWidth ?? (sizing?.width === 'fill' ? 0 : undefined), maxWidth: sizing?.maxWidth ?? undefined,
+    minHeight: sizing?.minHeight ?? (sizing?.height === 'fill' ? 0 : undefined), maxHeight: sizing?.maxHeight ?? undefined,
     background: line || plain ? undefined : style.fill ?? undefined,
     borderColor: line || plain ? undefined : style.stroke.color ?? undefined,
     borderStyle: line || plain ? undefined : style.stroke.color && style.stroke.width > 0 ? 'solid' : undefined,
     borderWidth: line || plain ? undefined : style.stroke.color ? style.stroke.width : undefined,
     borderRadius: element.kind === 'ellipse' ? '50%' : style.radius,
-    boxShadow: line || plain ? undefined : style.shadow.color ? `${style.shadow.x}px ${style.shadow.y}px ${style.shadow.blur}px ${style.shadow.color}` : undefined,
+    boxShadow: line || plain ? undefined : shadowCss(style.shadow),
     opacity: style.opacity,
+    // Turning about the layer's centre is part of the contract; the renderer rotates about the
+    // centre of the same rect, so children turn with it.
     transform: element.rotation ? `rotate(${element.rotation}deg)` : undefined,
+    transformOrigin: 'center center',
   };
   if (flow) {
-    return { ...size, position: 'relative', boxSizing: 'border-box', flex: '0 0 auto', overflow: element.kind === 'group' || element.kind === 'box' ? undefined : 'hidden' };
+    return { ...size, position: 'relative', boxSizing: 'border-box', flex: mainFill ? '1 1 0' : '0 0 auto', overflow: clipsContent(element.kind) ? 'hidden' : undefined };
   }
   return {
     ...size,
@@ -48,11 +81,11 @@ function wrapperStyle(element: Element, flow: boolean, rect: Rect): CSSPropertie
     left: rect.x,
     top: rect.y,
     boxSizing: 'border-box',
-    overflow: element.kind === 'group' || element.kind === 'box' ? undefined : 'hidden',
+    overflow: clipsContent(element.kind) ? 'hidden' : undefined,
   };
 }
 
-function childrenStyle(layout: Element['layout']): CSSProperties | null {
+function childrenStyle(layout: Element['layout'], sizing?: Element['style']['sizing']): CSSProperties | null {
   if (layout.kind === 'free') return null;
   if (layout.kind === 'stack') {
     return {
@@ -63,8 +96,8 @@ function childrenStyle(layout: Element['layout']): CSSProperties | null {
       alignItems: layout.align === 'start' ? 'flex-start' : layout.align === 'end' ? 'flex-end' : layout.align,
       justifyContent: layout.justify === 'start' ? 'flex-start' : layout.justify === 'end' ? 'flex-end' : layout.justify === 'spaceBetween' ? 'space-between' : 'center',
       flexWrap: layout.wrap ? 'wrap' : 'nowrap',
-      width: '100%',
-      height: '100%',
+      width: sizing?.width === 'fit' ? 'max-content' : '100%',
+      height: sizing?.height === 'fit' ? 'auto' : '100%',
       boxSizing: 'border-box',
     };
   }
@@ -183,17 +216,17 @@ function ElementBody({ project, pageId, element, flow, editingId, movingRects }:
 }
 
 function ElementChildren({ project, pageId, element, editingId, movingRects }: { project: Project; pageId: string; element: Element; editingId: string | null; movingRects?: Record<string, Rect> }) {
-  const style = childrenStyle(element.layout);
+  const style = childrenStyle(element.layout, element.style.sizing);
   if (!style) return <>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow={false} editingId={editingId} movingRects={movingRects} />)}</>;
-  return <div className="canvas-element-layout" style={style}>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow editingId={editingId} movingRects={movingRects} />)}</div>;
+  return <div className="canvas-element-layout" style={style}>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow parentLayout={element.layout} editingId={editingId} movingRects={movingRects} />)}</div>;
 }
 
-export function ElementView({ project, pageId, element, flow, editingId, root, movingRects }: {
-  project: Project; pageId: string; element: Element; flow: boolean; editingId: string | null; root?: boolean; movingRects?: Record<string, Rect>;
+export function ElementView({ project, pageId, element, flow, editingId, root, movingRects, parentLayout }: {
+  project: Project; pageId: string; element: Element; flow: boolean; editingId: string | null; root?: boolean; movingRects?: Record<string, Rect>; parentLayout?: Element['layout'];
 }) {
   if (!element.visible) return null;
   const data = { 'data-element': element.id, 'data-element-kind': element.kind, 'data-element-group': element.kind === 'group' ? 'true' : undefined, 'data-element-root': root ? 'true' : undefined };
-  return <div {...data} style={wrapperStyle(element, flow, movingRects?.[element.id] ?? element.rect)} className={`canvas-element canvas-element-${element.kind}${element.locked ? ' locked' : ''}`}>
+  return <div {...data} style={wrapperStyle(element, flow, movingRects?.[element.id] ?? element.rect, parentLayout)} className={`canvas-element canvas-element-${element.kind}${element.locked ? ' locked' : ''}`}>
     <ElementBody project={project} pageId={pageId} element={element} flow={flow} editingId={editingId} movingRects={movingRects} />
   </div>;
 }

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { compileModules, root } from './typescript.mjs';
 
 const modules = await compileModules([
+  'src/projectCanvas/canvasView.ts',
+  'src/projectCanvas/arrange.ts',
   'src/projectCanvas/sizes.ts',
   'src/projectCanvas/links.ts',
   'src/projectCanvas/elementGeometry.ts',
@@ -12,6 +14,21 @@ const modules = await compileModules([
   'src/shortcuts.ts',
 ]);
 try {
+  const { arrangeSiblingOrder } = await modules.load('projectCanvas/arrange.js');
+  await test('arranging siblings distinguishes steps from edges and preserves selected blocks', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    assert.deepEqual(arrangeSiblingOrder(ids, ['b', 'c'], 'forward'), ['a', 'd', 'b', 'c', 'e']);
+    assert.deepEqual(arrangeSiblingOrder(ids, ['b', 'c'], 'front'), ['a', 'd', 'e', 'b', 'c']);
+    assert.deepEqual(arrangeSiblingOrder(ids, ['c', 'd'], 'backward'), ['a', 'c', 'd', 'b', 'e']);
+    assert.deepEqual(arrangeSiblingOrder(ids, ['c', 'd'], 'back'), ['c', 'd', 'a', 'b', 'e']);
+    assert.deepEqual(arrangeSiblingOrder(ids, ['d', 'e'], 'forward'), ids);
+    assert.deepEqual(arrangeSiblingOrder(ids, ['a', 'b'], 'backward'), ids);
+    assert.deepEqual(arrangeSiblingOrder(ids, ['a', 'c'], 'forward'), ['b', 'a', 'd', 'c', 'e']);
+    assert.deepEqual(arrangeSiblingOrder(ids, [], 'front'), ids);
+    assert.deepEqual(arrangeSiblingOrder(ids, ids, 'back'), ids);
+    assert.deepEqual(ids, ['a', 'b', 'c', 'd', 'e']);
+  });
+  const canvas = await modules.load('projectCanvas/canvasView.js');
   const sizes = await modules.load('projectCanvas/sizes.js');
   const links = await modules.load('projectCanvas/links.js');
   const elementGeometry = await modules.load('projectCanvas/elementGeometry.js');
@@ -33,13 +50,52 @@ try {
   });
   const makeSize = (id, label, width, height, kind = 'page') => ({ id, label, width, height, kind, x: 0, y: 0 });
   const makePage = (id, name, path, sizes, elements) => ({ id, name, path, included: true, output: 'webpage', sizes, appearance: 'light', elements });
+  let projectSequence = 0;
   const makeProject = (pages = [], patch = {}) => ({
-    schemaVersion: 14, id: 'project', name: 'Test', revision: 1,
+    schemaVersion: 14, id: `project-${++projectSequence}`, name: 'Test', revision: 1,
     viewport: { width: 800, height: 600 }, appearance: 'light', showGrid: true,
     gridSettings: { spacing: 8, unit: 'pixels', snap: true, rulers: true }, generationMode: 'fuzzy',
     homePageId: pages[0]?.id ?? 'home', pages, reference: [], pointers: [], linked: {},
     brief: { purpose: '', audience: '', brandName: '', tone: '' }, latestGeneration: null,
     decisions: [], exceptions: [], appliedJobIds: [], extensions: {}, ...patch,
+  });
+
+  await test('canvas views reuse resolution and indices until the project revision changes', () => {
+    const layer = makeElement('layer', { children: [makeElement('child')] });
+    const page = makePage('p', 'Page', '/', [makeSize('base', 'Desktop', 800, 600), makeSize('phone', 'Phone', 390, 844)], [layer]);
+    const project = makeProject([page]);
+    const first = canvas.canvasView(project);
+    const tree = sizes.resolveForSize(project, page, 'base');
+    assert.equal(canvas.canvasView(project), first);
+    assert.equal(sizes.resolveForSize(project, page, 'base'), tree);
+    assert.notEqual(sizes.resolveForSize(project, page, 'phone'), tree);
+    assert.equal(elementGeometry.elementIndex(tree), elementGeometry.elementIndex(tree));
+    assert.equal(canvas.canvasBoxes(project, first.boundaries), first.boxes);
+    assert.equal(first.boxes.length, 4);
+    const refreshed = structuredClone(project);
+    assert.equal(canvas.canvasView(refreshed), first, 'unchanged native snapshots reuse the revision view');
+    assert.equal(sizes.resolveForSize(refreshed, refreshed.pages[0], 'base'), tree);
+    assert.equal(canvas.canvasBoxes(refreshed, first.boundaries), first.boxes);
+    project.revision++;
+    layer.rect.x = 24;
+    const next = canvas.canvasView(project);
+    assert.notEqual(next, first);
+    assert.notEqual(sizes.resolveForSize(project, page, 'base'), tree);
+    assert.equal(tree[0].rect.x, 0, 'cached trees never alias editable project data');
+    assert.equal(next.boxes[0].rect.x, next.boundaries[0].rect.x + 24);
+  });
+
+  await test('boundary culling includes a margin and still retains all model hit boxes', () => {
+    const viewport = { x: 0, y: 0, width: 800, height: 600 };
+    assert.equal(canvas.boundaryVisible({ x: 900, y: 0, width: 100, height: 100 }, viewport, 200), true);
+    assert.equal(canvas.boundaryVisible({ x: 1001, y: 0, width: 100, height: 100 }, viewport, 200), false);
+    assert.equal(canvas.boundaryVisible({ x: -400, y: -400, width: 100, height: 100 }, viewport, 200), false);
+    assert.equal(canvas.boundaryVisible({ x: -400, y: -400, width: 2000, height: 2000 }, viewport, 200), true);
+    const page = makePage('p', 'Distant', '/', [{ ...makeSize('base', 'Desktop', 800, 600), x: 10000, y: 10000 }], [makeElement('layer')]);
+    const view = canvas.canvasView(makeProject([page]));
+    assert.equal(canvas.boundaryVisible(view.boundaries[0].rect, viewport, 200), false);
+    assert.equal(view.boxes[0].elementId, 'layer');
+    assert.equal(view.boxes[0].rect.x, view.boundaries[0].rect.x);
   });
 
   // -------------------------------------------------------------------------
@@ -436,7 +492,7 @@ try {
       'Insert any element': [['insert', 'Ctrl/Cmd+I']],
       'Copy / Paste / Paste with choice / Duplicate': [['copy', 'Ctrl/Cmd+C'], ['paste', 'Ctrl/Cmd+V'], ['pasteChoice', 'Shift+Ctrl/Cmd+V'], ['duplicate', 'Ctrl/Cmd+D']],
       'Copy style / Paste style / Paint format': [['copyStyle', 'Ctrl/Cmd+Alt+C'], ['pasteStyle', 'Ctrl/Cmd+Alt+V'], ['paintFormat', 'Shift+Ctrl/Cmd+Alt+C']],
-      'Link / Unlink': [['link', 'Ctrl/Cmd+Alt+K'], ['unlink', 'Ctrl/Cmd+Alt+B']],
+      'Make linked / Unlink': [['link', 'Ctrl/Cmd+Alt+K'], ['unlink', 'Ctrl/Cmd+Alt+B']],
       'Group / Ungroup': [['group', 'Ctrl/Cmd+G'], ['ungroup', 'Shift+Ctrl/Cmd+G']],
       'Bring forward / backward': [['forward', 'Ctrl/Cmd+]'], ['backward', 'Ctrl/Cmd+[']],
       'Select all / child / parent': [['selectAll', 'Ctrl/Cmd+A'], ['selectChild', 'Enter'], ['selectParent', 'Shift+Enter']],

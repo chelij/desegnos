@@ -261,7 +261,7 @@ fn check_project(project: &Project) {
         .enumerate()
     {
         let path = format!("project.pointers[{index}]");
-        require(pointer, &path, &["id", "from", "to", "comment", "wiring"]);
+        require(pointer, &path, &["id", "from", "to", "comment", "kind", "wiring"]);
         assert!(
             pointer["wiring"].is_null(),
             "{path}.wiring must be serialized as null"
@@ -399,6 +399,8 @@ fn populated(mut project: Project) -> Project {
                 ElementOverride {
                     rect: Some(rect(12.0, 22.0, 100.0, 30.0)),
                     style: Some(ElementStyle {
+                        sizing: Default::default(),
+                        references: Default::default(),
                         fill: Some("#ffffff".into()),
                         stroke: ElementStroke {
                             color: None,
@@ -474,6 +476,7 @@ fn populated(mut project: Project) -> Project {
             item_id: reference_id,
         },
         comment: "Read this note".into(),
+        kind: desegnos_core::PointerKind::Reference,
         wiring: None,
         play: None,
         play_comment: String::new(),
@@ -483,6 +486,7 @@ fn populated(mut project: Project) -> Project {
         project_id: project.id,
         version: 1,
         destination: "/tmp/desegnos-export".into(),
+        behaviours: BTreeMap::new(),
         exported_at: "2026-10-27T00:00:00Z".into(),
         pages: vec![ExportedPage {
             page_id: project.home_page_id,

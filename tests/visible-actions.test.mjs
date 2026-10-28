@@ -8,7 +8,9 @@ import test from 'node:test';
 // A control is left out of a surface when, in the current state, it cannot change what the
 // user sees. These checks cover the rule itself and each surface that applies it.
 const root = fileURLToPath(new URL('../', import.meta.url));
-const read = name => readFile(join(root, 'src', name), 'utf8');
+const read = async name => name === 'App.tsx'
+  ? (await Promise.all(['App.tsx', 'session/useEditor.tsx', 'session/projectCommands.ts', 'editorShortcuts.ts'].map(file => readFile(join(root, 'src', file), 'utf8')))).join('\n')
+  : readFile(join(root, 'src', name), 'utf8');
 const temporary = await mkdtemp(join(root, '.visible-actions-'));
 try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));

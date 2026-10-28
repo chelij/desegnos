@@ -30,7 +30,13 @@ export type ElementStroke = { color: string | null; width: number };
 export type ElementShadow = { x: number; y: number; blur: number; color: string | null };
 export type ElementTextStyle = { fontFamily: string; size: number; weight: number; italic: boolean; lineHeight: number; letterSpacing: number; color: string; align: TextAlign };
 export type ElementOverride = { rect?: Rect | null; style?: ElementStyle | null; layout?: ElementLayout | null; hidden: boolean; dismissed: boolean };
-export type ElementStyle = { fill: string | null; stroke: ElementStroke; radius: number; opacity: number; shadow: ElementShadow; textStyle: ElementTextStyle };
+export type SizingMode = 'fixed' | 'fit' | 'fill';
+export type ElementSizing = { width: SizingMode; height: SizingMode; minWidth?: number | null; maxWidth?: number | null; minHeight?: number | null; maxHeight?: number | null };
+export type StyleReferences = { fill?: string | null; stroke?: string | null; textColour?: string | null; text?: string | null };
+export type ColourStyle = { id: string; name: string; value: string };
+export type TextStyle = { id: string; name: string; fontFamily: string; size: number; weight: number; lineHeight: number; letterSpacing: number; italic: boolean };
+export type ProjectStyles = { colours: ColourStyle[]; text: TextStyle[] };
+export type ElementStyle = { sizing?: ElementSizing; references?: StyleReferences; fill: string | null; stroke: ElementStroke; radius: number; opacity: number; shadow: ElementShadow; textStyle: ElementTextStyle };
 export type ElementLayout =
   | { kind: 'free' }
   | { kind: 'stack'; direction: StackDirection; gap: number; padding: number; align: StackAlign; justify: StackJustify; wrap: boolean }
@@ -69,7 +75,8 @@ export type PointerSource = { kind: 'element'; pageId: string; elementId: string
 export type PointerTarget = PointerSource | { kind: 'reference'; itemId: string } | { kind: 'url'; url: string };
 export type PointerWiring = { fingerprint: string; generatedComment: string };
 export type PlayAction = { kind: 'goTo'; boundary: string } | { kind: 'show'; element: string } | { kind: 'hide'; element: string } | { kind: 'toggle'; element: string } | { kind: 'swap'; element: string; withElement: string };
-export type Pointer = { id: string; from: PointerSource; to: PointerTarget; comment: string; wiring: PointerWiring | null; play?: PlayAction | null; playComment?: string };
+export type PointerKind = 'reference' | 'change';
+export type Pointer = { id: string; from: PointerSource; to: PointerTarget; comment: string; kind: PointerKind; wiring: PointerWiring | null; play?: PlayAction | null; playComment?: string };
 export type PointerStateKind = 'unwired' | 'needsGenerating' | 'needsExporting' | 'codeChanged' | 'wired' | 'contradicts' | 'broken';
 export type PointerStateView = { id: string; state: PointerStateKind; clashWith: string[] };
 export type ExportedPage = { pageId: string; path: string; output: OutputType };
@@ -80,7 +87,7 @@ export type Brief = { purpose: string; audience: string; brandName: string; tone
 export type Scope = { kind: 'project' } | { kind: 'page' | 'element'; id: string };
 export type Decision = { id: string; topic: string; value: string; scope: Scope; protected: boolean; acceptedAtRevision: number };
 export type DesignException = { id: string; rule: string; reason: string; scope: Scope; acceptedAtRevision: number };
-export type Project = { pictures?: Record<string, string>; schemaVersion: number; id: string; name: string; revision: number; viewport: Viewport;
+export type Project = { styles?: ProjectStyles; pictures?: Record<string, string>; schemaVersion: number; id: string; name: string; revision: number; viewport: Viewport;
   importedIdentity?: ImportedIdentity;
   appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; reference: ReferenceItem[]; pointers?: Pointer[]; linked?: Record<string, LinkedDefinition>; requests?: PendingRequest[]; views: NamedView[]; brief: Brief;
   lastExport?: ExportRecord | null;
@@ -99,13 +106,14 @@ export type ExportJobView = { jobId: string; projectId: string; baseRevision: nu
   message: string; summary: string; estimateUsd: number; usage: TokenUsage | null; attempts: ExportAttemptView[];
   pages: ExportPageView[]; sizeCount: number; pointerCount: number; warnings: string[]; result: ExportResultView | null; error: string | null };
 export type ExportCheck = { states: PointerStateView[]; lastExport: ExportRecord | null; readable: boolean };
-export type HistoryView = { sessionId: string; start: number; position: number; end: number; version: number };
+export type HistoryEntry = { label: string; at: number; position: number };
+export type HistoryView = { entries: HistoryEntry[]; sessionId: string; start: number; position: number; end: number; version: number };
 export type VersionSummary = { id: number; parent: number | null; label: string; createdAt: number; head: boolean };
 export type BranchSummary = { name: string; head: number; current: boolean; primary: boolean };
 export type ProjectHistoryView = { branch: string; primaryBranch: string; branches: BranchSummary[]; versions: VersionSummary[] };
 export type CompactReport = { removedVersions: number; removedBlobs: number };
 export type OpenProjectSummary = { id: string; name: string; dirty: boolean; active: boolean; pages: { id: string; name: string }[] };
-export type WorkspaceView = { untitled?: boolean; documentsKey?: string; openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
+export type WorkspaceView = { untitled?: boolean; openProjects?: OpenProjectSummary[]; anyDirty?: boolean; history: HistoryView | null; project: Project | null; path: string | null; dirty: boolean; canUndo: boolean; canRedo: boolean;
   pointerStates?: PointerStateView[];
   recovery: RecoveryInfo | null; recoveries: RecoveryInfo[]; recoveryError: string | null };
 export type RequirementsSnapshot = { jobId: string; projectId: string; baseRevision: number; markdown: string; sha256: string;
@@ -166,6 +174,9 @@ export type ProviderError = { kind: string; outcome: 'notSubmitted' | 'rejected'
   httpStatus: number | null; code: string | null; param: string | null; requestId: string | null;
   responseFormat?: { contentType: string | null; bodyKind: 'unavailable' | 'eventStream' | 'empty' | 'jsonError' | 'jsonDetail' | 'jsonResponse' | 'jsonOther' | 'html' | 'text' | 'binary'; bodyBytes: number; providerMessage?: string | null; bodyTruncated?: boolean; limitBytes?: number | null; rejection?: ResponseRejection | null; correlation?: ResponseCorrelation | null } | null };
 export type Command =
+  | { type: 'add_colour_style' | 'update_colour_style'; style: ColourStyle }
+  | { type: 'add_text_style' | 'update_text_style'; style: TextStyle }
+  | { type: 'remove_colour_style' | 'remove_text_style'; id: string }
   | { type: 'rename_project'; name: string }
   | { type: 'set_grid'; enabled: boolean }
   | { type: 'set_grid_settings'; settings: GridSettings }
@@ -185,7 +196,7 @@ export type Command =
   | { type: 'update_reference_item'; item_id: string; rect?: Rect; text?: string; url?: string; title?: string; color?: string }
   | { type: 'remove_reference_items'; ids: string[] }
   | { type: 'add_pointer'; pointer: Pointer }
-  | { type: 'update_pointer'; pointer_id: string; from?: PointerSource; to?: PointerTarget; comment?: string }
+  | { type: 'update_pointer'; pointer_id: string; from?: PointerSource; to?: PointerTarget; comment?: string; kind?: PointerKind }
   | { type: 'remove_pointers'; ids: string[] }
   | { type: 'set_pointer_wiring'; pointer_id: string; wiring: PointerWiring | null; comment?: string }
   | { type: 'resolve_pointer_clash'; keep: string; drop: string[]; merged_comment?: string }

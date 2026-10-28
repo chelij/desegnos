@@ -389,7 +389,7 @@ impl Project {
             }
         }
 
-        md.push_str("\n## Boundaries and requests\n\nEach request names what it may change. Positions in operations are in the parent box's coordinate space; a new or changed element must stay inside its parent's box. The boundary outline is context at lower detail. Only operations on the request's targets and pointer-granted targets are accepted. A request with an area over empty space inside a boundary may insert new layers within the area; an area outside every boundary may add reference items.\n\nA page boundary may have several linked sizes (phone, tablet, desktop) that share one element tree. The first size is the base size: its values are what every other size inherits. A request names the size it was written in (`sizeId`), and every size with its dimensions is listed so you can answer for each.\n\n");
+        md.push_str("\n## Boundaries and requests\n\nEach request names what it may change. Positions in operations are in the parent box's coordinate space; a new or changed element must stay inside its parent's box. The boundary outline is context at lower detail. Only operations on the request's targets and change-pointer-granted targets are accepted; a reference pointer's target is context only. A request with an area over empty space inside a boundary may insert new layers within the area; an area outside every boundary may add reference items.\n\nA page boundary may have several linked sizes (phone, tablet, desktop) that share one element tree. The first size is the base size: its values are what every other size inherits. A request names the size it was written in (`sizeId`), and every size with its dimensions is listed so you can answer for each.\n\n");
         let requests = self.requests_in_scope(&targets);
         let mut page_ids: Vec<Uuid> = targets.iter().map(|(page, _)| page.id).collect();
         for request in &requests {
@@ -439,8 +439,9 @@ impl Project {
                                         "to": pointer.to,
                                         "comment": pointer.comment,
                                         "sourceDescription": crate::source_description(self, &pointer.from),
-                                        "targetDescription": crate::pointer_target_description(self, &pointer.to),
-                                        "target": crate::pointer_target_value(self, &pointer.to),
+                                        "targetDescription": crate::pointer_target_description(self, &pointer.to, pointer.kind),
+                                        "target": crate::pointer_target_value(self, &pointer.to, pointer.kind),
+                                        "kind": pointer.kind,
                                         "action": pointer.play,
                                     }));
                                 }
@@ -468,8 +469,9 @@ impl Project {
                                     "to": pointer.to,
                                     "comment": pointer.comment,
                                     "sourceDescription": crate::source_description(self, &pointer.from),
-                                    "targetDescription": crate::pointer_target_description(self, &pointer.to),
-                                    "target": crate::pointer_target_value(self, &pointer.to),
+                                    "targetDescription": crate::pointer_target_description(self, &pointer.to, pointer.kind),
+                                    "target": crate::pointer_target_value(self, &pointer.to, pointer.kind),
+                                    "kind": pointer.kind,
                                     "action": pointer.play,
                                 }));
                             }
@@ -512,7 +514,7 @@ impl Project {
             .filter(|pointer| crate::pointer_needs_classifying(pointer))
             .collect();
         if !classifying.is_empty() {
-            md.push_str("\n## Pointer comments to classify\n\nA pointer is intent and permission. Its comment is the specification. Classify each pointer below in `pointerClassifications`: use one simple Play action when the comment clearly means go to a boundary, show, hide, toggle or swap a layer; otherwise return `exportOnly`. A pointer from a request target also grants that request permission to edit its target layer within this project. External URLs and reference items can only be read.\n\n");
+            md.push_str("\n## Pointer comments to classify\n\nA pointer is intent and permission. Its comment is the specification. Classify each pointer below in `pointerClassifications`: use one simple Play action when the comment clearly means go to a boundary, show, hide, toggle or swap a layer; otherwise return `exportOnly`. A `change` pointer from a request target also grants that request permission to edit its target layer within this project; a `reference` pointer is context only, and its target must stay unchanged. External URLs and reference items can only be read.\n\n");
             for pointer in classifying {
                 md.push_str(&fenced_json(&serde_json::json!({
                     "pointerId": pointer.id,
@@ -520,8 +522,9 @@ impl Project {
                     "from": pointer.from,
                     "to": pointer.to,
                     "sourceDescription": crate::source_description(self, &pointer.from),
-                    "targetDescription": crate::pointer_target_description(self, &pointer.to),
-                    "target": crate::pointer_target_value(self, &pointer.to),
+                    "targetDescription": crate::pointer_target_description(self, &pointer.to, pointer.kind),
+                    "target": crate::pointer_target_value(self, &pointer.to, pointer.kind),
+                    "kind": pointer.kind,
                 }))?);
             }
         }
@@ -554,7 +557,7 @@ impl Project {
         dependencies.insert("context".into(), context);
 
         let mut markdown = md;
-        markdown.push_str("\n## Response format\n\nReturn only the reply JSON. Every request listed above must appear exactly once in `requests`, keyed by its `requestId`; for a request that targets one layer, `elementId` may name that layer instead. Operations change only the request's targets, their subtrees, and what pointers from those targets grant. A request whose area sits inside a boundary uses `insertInBoundary` to add layers within the area; a request whose area sits outside every boundary uses `addReference` to add a note, link or colour within the area. New elements must not carry ids; Desegnos assigns them. New and changed rectangles use the parent's coordinate space and must fit inside the parent's box. A patch may carry `sizeId` to change only that linked size, when the change belongs to one size rather than all of them. Use `images` for pictures you want made, and reference each by the same key from a new Image element. Classify every pointer listed above exactly once and copy its current comment. The job id and requirements digest below identify this frozen request.\n");
+        markdown.push_str("\n## Response format\n\nReturn only the reply JSON. Every request listed above must appear exactly once in `requests`, keyed by its `requestId`; for a request that targets one layer, `elementId` may name that layer instead. Operations change only the request's targets, their subtrees, and what change pointers from those targets grant; reference pointers grant reads only. A request whose area sits inside a boundary uses `insertInBoundary` to add layers within the area; a request whose area sits outside every boundary uses `addReference` to add a note, link or colour within the area. New elements must not carry ids; Desegnos assigns them. New and changed rectangles use the parent's coordinate space and must fit inside the parent's box. A patch may carry `sizeId` to change only that linked size, when the change belongs to one size rather than all of them. Use `images` for pictures you want made, and reference each by the same key from a new Image element. Classify every pointer listed above exactly once and copy its current comment. The job id and requirements digest below identify this frozen request.\n");
         ensure(
             markdown.len() <= MAX_REQUIREMENTS_BYTES,
             "The requirements file exceeds its limit.",

@@ -50,11 +50,38 @@ function applyOverrides(elements: Element[], sizeId: string) {
   }
 }
 
+// Cached results are immutable views. The project object scopes lifetime; revision invalidates
+// views even when a caller deliberately reuses an object while loading a new revision.
+const resolvedTrees = new WeakMap<Project, { revision: number; pages: Map<Page, Map<string, Element[]>> }>();
+
+/** A freshly serialized native snapshot with the same id/revision has the same design.
+ * Share its immutable size views without retaining the previous full project snapshot. */
+export function reuseResolvedTrees(source: Project, target: Project): void {
+  const cache = resolvedTrees.get(source);
+  if (!cache || cache.revision !== target.revision) return;
+  const byId = new Map([...cache.pages].map(([page, sizes]) => [page.id, sizes]));
+  resolvedTrees.set(target, { revision: target.revision, pages: new Map(target.pages.flatMap(page => {
+    const sizes = byId.get(page.id);
+    return sizes ? [[page, sizes] as const] : [];
+  })) });
+}
+
 /** The design one linked size shows: linked-element resolution first, then size overrides. */
 export function resolveForSize(project: Project, page: Page, sizeId: string): Element[] {
+  let cache = resolvedTrees.get(project);
+  if (!cache || cache.revision !== project.revision) {
+    cache = { revision: project.revision, pages: new Map() };
+    resolvedTrees.set(project, cache);
+  }
+  let sizes = cache.pages.get(page);
+  if (!sizes) { sizes = new Map(); cache.pages.set(page, sizes); }
+  const cached = sizes.get(sizeId);
+  if (cached) return cached;
   // A copy, so drawing one size never writes an override back into the project state.
   const elements = structuredClone(resolveElements(project, page.elements));
   applyOverrides(elements, sizeId);
+  resolveSharedStyles(project, elements);
+  sizes.set(sizeId, elements);
   return elements;
 }
 
@@ -82,3 +109,23 @@ export const placeholderInSize = (element: Element, sizeId: string): boolean => 
 
 export const sameSizeRect = (first: PageSize, second: PageSize): boolean =>
   first.id === second.id && first.label === second.label && first.width === second.width && first.height === second.height && first.kind === second.kind;
+
+/** CSS min-width inheritance: the nearest smaller named size supplies overrides. */
+export function sizeAtWidth(page: Page, width: number): PageSize {
+  const sizes = [...page.sizes].sort((a, b) => a.width - b.width || a.id.localeCompare(b.id));
+  return sizes.filter(size => size.width <= width).at(-1) ?? sizes[0];
+}
+export function resolveSharedStyles(project: Project, elements: Element[]): void {
+  if (!project.styles) return;
+  for (const element of elements) {
+    const style = element.style, refs = style.references;
+    const colour = (id: string | null | undefined) => project.styles?.colours.find(item => item.id === id)?.value;
+    const fill = colour(refs?.fill), stroke = colour(refs?.stroke), textColour = colour(refs?.textColour);
+    if (fill) style.fill = fill;
+    if (stroke) style.stroke.color = stroke;
+    if (textColour) style.textStyle.color = textColour;
+    const text = project.styles?.text.find(item => item.id === refs?.text);
+    if (text) { const { id: _id, name: _name, ...properties } = text; Object.assign(style.textStyle, properties); }
+    resolveSharedStyles(project, element.children);
+  }
+}

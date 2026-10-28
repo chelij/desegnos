@@ -1,3 +1,4 @@
+import { ATTACHMENT_ACCEPT, readRequestAttachments } from '../requestAttachments';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
 import { CompactNumberField, CompactTextField } from '../CompactField';
@@ -6,6 +7,7 @@ import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
 import type { Element, ElementLayout, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, RequestAttachment } from '../types';
 import { commonValue, elementKindLabel, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri, rememberColour } from './elementGeometry';
+import { EditScopeChoice, requestEditScope } from './selectionBar';
 
 const validColour = (value: string) => !value.trim() || /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim()) || value.trim().toLowerCase() === 'transparent';
 const validNumber = (value: string) => Number.isFinite(Number(value));
@@ -124,39 +126,17 @@ function RequestArea({ element, project, request, setRequest, generate, error }:
     try { save({ text }); } catch (reason) { error(String(reason)); return; }
     generate();
   }
-  function add(attachments: RequestAttachment[]) {
-    const next = [...(request?.attachments ?? [])];
-    for (const attachment of attachments) {
-      if (next.length >= 32) { error('A request supports at most 32 attachments.'); break; }
-      next.push(attachment);
-    }
-    save({ attachments: next });
-  }
-  async function attach(files: File[]) {
-    const attachments: RequestAttachment[] = [];
-    for (const file of files) {
-      const id = crypto.randomUUID().replace(/-/g, '').slice(0, 16);
-      if (file.type.startsWith('image/')) {
-        const dataUri = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result));
-          reader.onerror = () => reject(new Error(`${file.name} could not be read.`));
-          reader.readAsDataURL(file);
-        });
-        attachments.push({ id, name: file.name.slice(0, 120), kind: 'image', dataUri });
-      } else if (file.type.startsWith('text/') || /\.(txt|md|csv|json|html?)$/i.test(file.name)) {
-        const text = await file.text();
-        if (text.trim()) attachments.push({ id, name: file.name.slice(0, 120), kind: 'text', text: text.slice(0, 65536) });
-      } else error(`${file.name} is not a picture or a text file.`);
-    }
-    add(attachments);
+  async function attach(files: File[], links: string[] = []) {
+    const result = await readRequestAttachments(request?.attachments ?? [], files, links);
+    save({ attachments: result.attachments });
+    if (result.errors.length) error(result.errors.join(' '));
   }
   function drop(event: React.DragEvent<HTMLDivElement>) {
     if (event.dataTransfer.files.length) { event.preventDefault(); void attach(Array.from(event.dataTransfer.files)); return; }
     const text = (event.dataTransfer.getData('text/uri-list') || event.dataTransfer.getData('text/plain') || '').trim();
     if (!text || !validUrl(text)) return;
     event.preventDefault();
-    add([{ id: crypto.randomUUID().replace(/-/g, '').slice(0, 16), name: new URL(text).hostname.slice(0, 120), kind: 'link', url: text }]);
+    void attach([], [text]);
   }
   return <div className="dock-form dock-layer-meta">
     <label className="dock-field">Ask AI on this layer
@@ -179,7 +159,7 @@ function RequestArea({ element, project, request, setRequest, generate, error }:
       <div className="dock-attachment-head"><span>Attachments</span>
         <button type="button" className="icon-button sm" aria-label="Attach files" title="Attach pictures or text files" onClick={() => files.current?.click()}><Icon name="paperclip" /></button>
       </div>
-      <input ref={files} type="file" hidden multiple accept="image/png,image/jpeg,image/webp,image/gif,.txt,.md,.csv,.json,.html" onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; if (chosen.length) void attach(chosen); }} />
+      <input ref={files} type="file" hidden multiple accept={ATTACHMENT_ACCEPT} onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; if (chosen.length) void attach(chosen); }} />
       {(request?.attachments.length ?? 0) > 0 ? <ul className="request-attachments">{request!.attachments.map(attachment => <li key={attachment.id} title={attachment.kind === 'link' ? attachment.url : attachment.name}>
         {attachment.kind === 'image' && attachment.dataUri ? <img src={attachment.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true"><Icon name={attachment.kind === 'link' ? 'link' : 'text'} size={12} /></span>}
         <span className="attachment-name">{attachment.name}</span>
@@ -190,7 +170,19 @@ function RequestArea({ element, project, request, setRequest, generate, error }:
   </div>;
 }
 
-export function ElementProperties({ project, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error }: {
+function StylePicker({ project, category, label, value, choose, create, disabled }: {
+  project: Project; category: 'colour' | 'text'; label: string; value?: string | null; choose: (id: string | null) => void; create: () => void; disabled: boolean;
+}) {
+  const styles = category === 'colour' ? project.styles?.colours : project.styles?.text;
+  return <select aria-label={`${label} style`} title="Style" value={value ?? ''} disabled={disabled} style={{ width: 80, minWidth: 0 }}
+    onChange={event => event.target.value === '__create' ? create() : choose(event.target.value || null)}>
+    <option value="">Custom</option>{styles?.map(style => <option key={style.id} value={style.id}>{style.name}</option>)}
+    <option value="__create">Create style from this</option>
+  </select>;
+}
+
+export function ElementProperties({ project, page, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error, styleCommand }: {
+  styleCommand?: (command: import('../types').Command) => Promise<unknown>;
   project: Project; page: Page; pageId: string; sizeId: string | null; elements: Element[]; busy: boolean;
   update: (patches: ElementPatch[]) => void;
   rename: (name: string | null) => Promise<void>;
@@ -202,8 +194,8 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
   error: (message: string) => void;
 }) {
   const single = elements.length === 1 ? elements[0] : null;
-  // Edits in one size become that size's overrides; double-click editing changes base values
-  // and clears the same fields from every size.
+  // Edits in one size become that size's overrides; All sizes changes base values and clears
+  // the same fields from every size.
   const sized = <T,>(patch: T): T & { size_id?: string | null; all_sizes?: boolean } =>
     sizeId === null ? { ...patch, all_sizes: true } : { ...patch, size_id: sizeId };
   const sameKind = elements.every(element => element.kind === elements[0]?.kind);
@@ -220,6 +212,7 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
   const layout = commonValue(elements.map(element => element.layout));
   const picture = useRef<HTMLInputElement>(null);
   const [pictureUri, setPictureUri] = useState<string | null>(null);
+  const [limitsOpen, setLimitsOpen] = useState(false);
   const [nameError, setNameError] = useState('');
   async function commitName(name: string) {
     setNameError('');
@@ -228,7 +221,37 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
     catch (reason) { setNameError(reason instanceof Error ? reason.message : String(reason)); }
   }
 
-  function commitStyle(change: (style: ElementStyle) => void) { update(stylePatches(elements, change).map(patch => sized(patch))); }
+  function commitStyle(change: (style: ElementStyle) => void) { update(stylePatches(elements, style => {
+    const before = JSON.stringify(style.textStyle); change(style);
+    const { color: _beforeColor, align: _beforeAlign, ...beforeText } = JSON.parse(before) as ElementStyle['textStyle'];
+    const { color: _color, align: _align, ...afterText } = style.textStyle;
+    if (JSON.stringify(beforeText) !== JSON.stringify(afterText)) style.references = { ...style.references, text: null };
+  }).map(patch => sized(patch))); }
+  function picker(reference: 'fill' | 'stroke' | 'textColour' | 'text') {
+    const current = commonValue(elements.map(element => element.style.references?.[reference]));
+    const category = reference === 'text' ? 'text' : 'colour';
+    const choose = (id: string | null) => commitStyle(style => { style.references = { ...style.references, [reference]: id }; });
+    async function create() {
+      if (!styleCommand) return;
+      const id = crypto.randomUUID();
+      try {
+        if (reference === 'text') {
+          const { color: _color, align: _align, ...properties } = elements[0].style.textStyle;
+          await styleCommand({ type: 'add_text_style', style: { id, name: `Text ${(project.styles?.text.length ?? 0) + 1}`, ...properties } });
+        } else {
+          const style = elements[0].style;
+          const value = reference === 'fill' ? style.fill : reference === 'stroke' ? style.stroke.color : style.textStyle.color;
+          if (!value) return;
+          await styleCommand({ type: 'add_colour_style', style: { id, name: `Colour ${(project.styles?.colours.length ?? 0) + 1}`, value } });
+        }
+        choose(id);
+      } catch (reason) { error(reason instanceof Error ? reason.message : String(reason)); }
+    }
+    return <StylePicker project={project} category={category} label={reference === 'textColour' ? 'Text colour' : reference === 'text' ? 'Text' : reference === 'fill' ? 'Fill' : 'Stroke'} value={current} choose={choose} create={() => void create()} disabled={busy || !styleCommand} />;
+  }
+  function commitSizing(change: Partial<NonNullable<ElementStyle['sizing']>>) {
+    commitStyle(style => { style.sizing = { width: 'fixed', height: 'fixed', ...style.sizing, ...change }; });
+  }
   function commitRect(rect: { x?: number; y?: number; width?: number; height?: number }) {
     if (!single) return;
     update([sized({ id: single.id, rect: { ...single.rect, ...rect } })]);
@@ -253,24 +276,37 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
   const showsStrokeWidth = kind === 'line' || (strokeColour ?? '').trim().length > 0 || (kind !== 'text' && (strokeWidth ?? 0) > 0);
   const showsRadius = kind !== null && kind !== 'text' && kind !== 'line' ? true : (radius ?? 0) > 0;
 
+  // A layer inside a linked copy is already shared; only a plain layer can be made linked.
+  const makeLinkable = !!single && !single.link && !canUnlink;
   return <div className="dock-form props">
-    <div className="dock-layer-title"><strong>{single ? elementKindLabel(single) : `${elements.length} layers`}</strong></div>
+    <div className="dock-layer-title" style={{ alignItems: 'center' }}><strong>{single ? elementKindLabel(single) : `${elements.length} layers`}</strong>
+      {page.sizes.length > 1 && <EditScopeChoice scope={sizeId === null ? 'all' : 'this'} choose={requestEditScope} />}
+    </div>
     {single && <>
       <CompactTextField label="Name" placeholder="Name" field="layer-name" value={single.name ?? ''} disabled={busy} commit={name => void commitName(name)} />
       {nameError && <p className="dock-field-error" role="alert">{nameError}</p>}
     </>}
-    {(canLink || canUnlink) && <div className="form-actions">
-      {canLink && <button type="button" className="dock-action" disabled={busy} title="Link the selected layers (Ctrl/Cmd+Alt+K)" onClick={link}>Link {elements.length} layers</button>}
+    {(canLink || canUnlink || makeLinkable) && <div className="form-actions">
+      {(canLink || makeLinkable) && <button type="button" className="dock-action" disabled={busy} title="Make the selected layers linked (Ctrl/Cmd+Alt+K)" onClick={link}>{single ? 'Make linked' : `Make linked (${elements.length})`}</button>}
       {canUnlink && <button type="button" className="dock-action" disabled={busy} title="Detach this copy (Ctrl/Cmd+Alt+B)" onClick={unlink}>Unlink</button>}
     </div>}
     {(single || (sameKind && kind === 'box')) && <PropsSection id="props-layout" title="Layout">
       {single && <div className="props-grid">
         <CompactNumberField prefix="X" label="X" value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
         <CompactNumberField prefix="Y" label="Y" value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
-        <CompactNumberField prefix="W" label="Width" min={0} value={single.rect.width} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ width: Number(value) })} />
-        <CompactNumberField prefix="H" label="Height" min={0} value={single.rect.height} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ height: Number(value) })} />
+        {(['width', 'height'] as const).map(axis => <div key={axis} style={{ display: 'flex', minWidth: 0, gap: 2 }}>
+          <CompactNumberField prefix={axis === 'width' ? 'W' : 'H'} label={axis === 'width' ? 'Width' : 'Height'} min={0} value={single.rect[axis]} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ [axis]: Number(value) })} />
+          <select aria-label={`${axis} sizing`} style={{ width: 55, minWidth: 0 }} value={single.style.sizing?.[axis] ?? 'fixed'} disabled={busy} onChange={event => commitSizing({ [axis]: event.target.value })}>
+            <option value="fixed">Fixed</option><option value="fit">Hug</option><option value="fill">Fill</option>
+          </select></div>)}
         <CompactNumberField prefix="°" label="Rotation" value={single.rotation} disabled={busy} valid={validNumber} commit={value => update([{ id: single.id, rotation: Number(value) }])} />
       </div>}
+      {single && <>
+        <button type="button" className="dock-action" aria-expanded={limitsOpen} onClick={() => setLimitsOpen(value => !value)}>Min / max</button>
+        {limitsOpen && <div className="props-grid">{(['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const).map(key => <CompactNumberField key={key} prefix={key.startsWith('min') ? 'Min' : 'Max'} label={key.replace(/([A-Z])/g, ' $1')} min={0}
+          value={single.style.sizing?.[key] ?? ''} disabled={busy} valid={value => !value.trim() || (Number.isFinite(Number(value)) && Number(value) >= 0)}
+          commit={value => commitSizing({ [key]: value.trim() ? Number(value) : null })} />)}</div>}
+      </>}
       {sameKind && kind === 'box' && <>
         <div className="props-choice"><ChoiceRow label="Flow" value={layout?.kind ?? 'free'} choices={[['free', 'Free'], ['stack', 'Stack'], ['grid', 'Grid']]} disabled={busy}
           choose={flow => update(elements.map(element => sized({ id: element.id, layout: flow === 'free' ? { kind: 'free' } : flow === 'stack'
@@ -302,9 +338,9 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
       </>}
     </PropsSection>}
     {visual && <PropsSection id="props-appearance" title="Appearance">
-      {kind !== 'line' && <ColourField label="Fill" value={fill ?? ''} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; }); }} />}
+      {kind !== 'line' && <div style={{ display: 'flex', gap: 4 }}><ColourField label="Fill" value={fill ?? ''} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; style.references = { ...style.references, fill: null }; }); }} />{picker('fill')}</div>}
       <div className="props-stroke">
-        <ColourField label="Stroke" value={strokeColour ?? ''} fallback="#000000" disabled={busy} commit={value => { rememberColour('stroke', value.trim() || null); commitStyle(style => { style.stroke.color = value.trim() || null; }); }} />
+        <div style={{ display: 'flex', gap: 4 }}><ColourField label="Stroke" value={strokeColour ?? ''} fallback="#000000" disabled={busy} commit={value => { rememberColour('stroke', value.trim() || null); commitStyle(style => { style.stroke.color = value.trim() || null; style.references = { ...style.references, stroke: null }; }); }} />{picker('stroke')}</div>
         {showsStrokeWidth && <CompactNumberField prefix={<Icon name="line-weight" size={12} />} label="Stroke width" min={0} unit="px" value={strokeWidth ?? ''} disabled={busy} valid={value => Number(value) >= 0}
           commit={value => commitStyle(style => { style.stroke.width = Number(value); })} />}
       </div>
@@ -322,6 +358,7 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
       {mediaKind && <CompactTextField label="Address" value={url ?? ''} disabled={busy} valid={validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
     </PropsSection>}
     {textKind && <PropsSection id="props-text" title="Text">
+      {picker('text')}
       <CompactTextField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
       <div className="props-grid">
         <CompactNumberField prefix="S" label="Size" min={1} unit="px" value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1}
@@ -333,7 +370,7 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
         <CompactNumberField prefix="LS" label="Letter spacing" unit="px" value={textStyle?.letterSpacing ?? ''} disabled={busy} valid={validNumber}
           commit={value => commitStyle(style => { style.textStyle.letterSpacing = Number(value); })} />
       </div>
-      <ColourField label="Text colour" value={textStyle?.color ?? ''} disabled={busy} commit={value => { rememberColour('text', value.trim() || null); commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; }); }} />
+      <div style={{ display: 'flex', gap: 4 }}><ColourField label="Text colour" value={textStyle?.color ?? ''} disabled={busy} commit={value => { rememberColour('text', value.trim() || null); commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; style.references = { ...style.references, textColour: null }; }); }} />{picker('textColour')}</div>
       <label className="check-label"><input type="checkbox" disabled={busy} checked={!!textStyle?.italic} onChange={event => commitStyle(style => { style.textStyle.italic = event.target.checked; })} />Italic</label>
       <div className="props-choice"><ChoiceRow label="Align" value={textStyle?.align ?? 'left'} choices={[['left', 'Left'], ['center', 'Center'], ['right', 'Right']]} disabled={busy}
         choose={align => commitStyle(style => { style.textStyle.align = align; })} /></div>

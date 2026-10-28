@@ -30,11 +30,15 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | **Group** | A layer made of several elements (Ctrl/Cmd+G). | `ElementKind::Group`, `group_elements` |
 | **Request** (tool and box) | What you ask the AI for, aimed at targets you click with the Request tool (default Pick), an area you draw in a shape, or a selection (F), with text saying what to make or change. It targets whatever it covers or what was selected: layers, boundaries, reference items, pointers. | `PendingRequest`, `Project.requests`, `EditorTool` `request` |
 | **Insert** | Adds any kind of element by hand (Ctrl/Cmd+I). | `INSERT_GROUPS`, `EditorTool` `insert` |
-| **Linked element** | A named element whose copies are one element: edit one, all change. Each copy keeps its own position. | `Element.link`, `Project.linked`, `LinkedDefinition`, `resolve_element` |
-| **Link / Unlink** | Join elements under one name / detach a copy (Ctrl/Cmd+Alt+K / B). | `Command::LinkElements` / `UnlinkElements`, `link_elements`, `unlink_elements` |
+| **Name** | A layer's label, never a link. Make linked takes it for the linked name; on a copy it is the linked name every copy shares. | `Element.name`, `ElementPatch.name` |
+| **Linked element** | A layer made linked whose copies are one element: edit one, all change. Each copy keeps its own position. | `Element.link`, `Project.linked`, `LinkedDefinition`, `resolve_element` |
+| **Make linked / Unlink** | Make one layer linked, or join layers under one name / detach a copy (Ctrl/Cmd+Alt+K / B). | `Command::LinkElements` / `UnlinkElements`, `link_elements`, `unlink_elements` |
 | **Paste choice** | Inline Linked / Unlinked choice on paste, with "Use as default". | `Command::PasteLinkedInstances`, `src/projectCanvas/linkedChoices.tsx`, `src/pastePreference.ts` |
 | **Smart duplicate** | Ctrl/Cmd+D remembers the last copy's offset, so moving the copy and duplicating again repeats that offset until the selection changes. | `duplicateRepeat` in `ProjectCanvas` |
 | **Style** | The visual properties a layer carries: fill, stroke, radius, opacity, shadow and text style. Clipboard and painter copy only these, never position, size or text. | `ElementStyle` |
+| **Sizing mode** | Fixed dimensions, Hug content, or Fill available parent space, independently for width and height, with optional minimum and maximum limits. | `ElementStyle.sizing`, `SizingMode` |
+| **Shared style** | A project-level named colour or text style referenced by layers across all outputs. Deleting it preserves the resolved local appearance. | `Project.styles`, `ElementStyle.references` |
+| **Width scrubber** | A temporary linked-boundary width preview using the nearest smaller named size's overrides; release restores its named width. | `sizeAtWidth`, `ProjectCanvas` |
 | **Format painter** | Copies one layer's style to another: Ctrl/Cmd+Alt+C then Ctrl/Cmd+Alt+V over a selection, or Shift+Ctrl/Cmd+Alt+C to paint the next clicked layer. | `copyStyle`, `pasteStyle`, `paintFormat` |
 
 ## AI
@@ -49,13 +53,14 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | **Context** | What travels with a request: attachments, selected reference items, pointers touching it. | `RequestAttachment` |
 | **Generate** | Sends pending requests; the AI answers with elements, not code. | `GenerationCandidate`, `apply_generation_output` |
 | **Ask AI** | A request on the selected layer (Ctrl/Cmd+K). | — |
-| **Flexible / Precise** | How closely the export follows positions. Project setting. | `GenerationMode` `fuzzy` / `strict` |
+| **Flexible / Precise** | How closely AI follows visual request descriptions and placement. Project setting; frozen into generation jobs. | `GenerationMode` `fuzzy` / `strict` |
 
 ## Pointers
 
 | Term | Meaning | In code |
 |---|---|---|
-| **Pointer** | A line from a layer or boundary to something else. Intent and permission: the comment says what to do, the line lets the AI read and change the target within the project. | `Pointer` |
+| **Pointer** | A line from a layer or boundary to something else. Intent and permission: the comment says what to do, the kind decides what it may read or change. | `Pointer` |
+| **Pointer kind** | `reference` (default) reads the target as context only, drawn dashed and thin; `change` may read and change it, drawn solid with an arrowhead. | `Pointer.kind`, `PointerKind`, `pointer_grants_change` |
 | **Comment** | The pointer's instruction, written on the line. It is the spec. | `Pointer.comment` |
 | **Simple pointer** | Go to, show, hide, toggle or swap; runs visually in Play. | `Pointer.play` (`PlayAction`) |
 | **Wired** | The last export built the pointer and its code still matches. Solid line. | `Pointer.wiring`, `ExportRecord.pointers`, `pointer_states_with_fingerprints` |
@@ -78,7 +83,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 |---|---|---|
 | **Linked sizes** | Phone, tablet and desktop boundaries of one page, side by side, sharing elements with per-size overrides. | `PageSize`, `Page.sizes`, `ElementOverride`, `Element.overrides`, `resolve_for_size`, `src/projectCanvas/sizes.ts` |
 | **Base size** | The first linked size; its element values are what the other sizes inherit. | `Page::base_size`, `baseSize` |
-| **Single click / double click** | With Select: edit this size only / all linked sizes. | `ElementPatch.size_id` / `all_sizes`, `ElementTarget.sizeId`, `elementTargetAt`, `doubleClick` |
+| **This size / All sizes** | The selection bar and Properties control that chooses which linked sizes an edit lands in. Double-click enters a group or edits text. | `ElementPatch.size_id` / `all_sizes`, `ElementTarget.sizeId`, `EditScopeChoice` |
 | **Placeholder** | Faint dashed ghost of an element that exists in another size but not this one. | `ElementOverride.hidden` / `dismissed`, `element-placeholder`, `PlaceholderChoiceRow` |
 
 ## Running and output
@@ -87,7 +92,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 |---|---|---|
 | **Play** | Makes a boundary clickable and runs simple pointers visually (Shift+Space). | `PlayState`, `playClick`, `src/projectCanvas/play.ts`, `Pointer.play` |
 | **Preview export** | Exports the selected boundary in the background and runs the real result over it (Ctrl/Cmd+Enter). | `prepare_export` with `preview`, `LocalSite`, `preview-overlay` |
-| **Export** | Websites and apps: the AI builds real HTML, CSS and JS from the design. Slides: PDF. Images: PNG or SVG. (Ctrl/Cmd+E) | `ExportPlan`, `plan_export`, `ai_export_bundle`, `website_export.rs`, `ExportRecord` |
+| **Export** | Websites and app screens: the model compiles HTML/CSS, with AI for missing pointer behaviour in JavaScript. Slides: PDF. Images: PNG or eligible SVG. App screens export web files. (Ctrl/Cmd+E) | `ExportPlan`, `plan_export`, `ai_export_bundle`, `website_export.rs`, `ExportRecord` |
 | **Open in browser** | Serves the last export for a final check in a real browser. | `LocalSite::serve`, `export::open_in_browser` |
 | **Import** | Converts an existing website into boundaries, layers and elements. | `website_import.rs` |
 

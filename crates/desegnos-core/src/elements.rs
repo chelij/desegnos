@@ -163,9 +163,74 @@ pub struct ElementTextStyle {
     pub align: TextAlign,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SizingMode {
+    #[default]
+    Fixed,
+    Fit,
+    Fill,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ElementSizing {
+    #[serde(default)]
+    pub width: SizingMode,
+    #[serde(default)]
+    pub height: SizingMode,
+    pub min_width: Option<f64>,
+    pub max_width: Option<f64>,
+    pub min_height: Option<f64>,
+    pub max_height: Option<f64>,
+}
+impl ElementSizing {
+    pub fn constrain(&self, width: f64, height: f64) -> (f64, f64) {
+        (
+            width
+                .max(self.min_width.unwrap_or(0.0))
+                .min(self.max_width.unwrap_or(f64::MAX)),
+            height
+                .max(self.min_height.unwrap_or(0.0))
+                .min(self.max_height.unwrap_or(f64::MAX)),
+        )
+    }
+    fn validate(&self) -> Result<()> {
+        for (min, max) in [
+            (self.min_width, self.max_width),
+            (self.min_height, self.max_height),
+        ] {
+            ensure(
+                [min, max]
+                    .into_iter()
+                    .flatten()
+                    .all(|v| v.is_finite() && (0.0..=40_000.0).contains(&v)),
+                "Size limits must be between 0 and 40,000 pixels.",
+            )?;
+            ensure(
+                min.zip(max).is_none_or(|(min, max)| min <= max),
+                "Minimum size cannot exceed maximum size.",
+            )?;
+        }
+        Ok(())
+    }
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StyleReferences {
+    pub fill: Option<Uuid>,
+    pub stroke: Option<Uuid>,
+    pub text_colour: Option<Uuid>,
+    pub text: Option<Uuid>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementStyle {
+    #[serde(default)]
+    pub sizing: ElementSizing,
+    #[serde(default)]
+    pub references: StyleReferences,
     /// `None` fills nothing.
     pub fill: Option<String>,
     pub stroke: ElementStroke,
@@ -429,6 +494,7 @@ impl Element {
         }
         for over in self.overrides.values() {
             over.validate(self)?;
+            if let Some(style) = &over.style { project.styles.validate_references(&style.references)?; }
         }
         if self.link.is_some() {
             ensure(
@@ -446,6 +512,7 @@ impl Element {
             "Element text is limited to 16,384 characters.",
         )?;
         self.style.validate()?;
+        project.styles.validate_references(&self.style.references)?;
         self.layout.validate()?;
         self.meta.validate()?;
         ensure(
@@ -554,7 +621,8 @@ impl Element {
 }
 
 impl ElementStyle {
-    fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
+        self.sizing.validate()?;
         if let Some(fill) = &self.fill {
             validate_colour(fill, "Fill")?;
         }
@@ -640,7 +708,7 @@ fn validate_http_url(url: &str) -> Result<()> {
     )
 }
 
-fn validate_colour(value: &str, label: &str) -> Result<()> {
+pub(crate) fn validate_colour(value: &str, label: &str) -> Result<()> {
     let hex = value
         .strip_prefix('#')
         .or_else(|| value.eq_ignore_ascii_case("transparent").then_some(""));
@@ -827,7 +895,16 @@ pub fn resolve_elements(project: &Project, elements: &[Element]) -> Vec<Element>
 pub fn resolve_for_size(project: &Project, page: &Page, size_id: Uuid) -> Vec<Element> {
     let mut elements = resolve_elements(project, &page.elements);
     apply_size_overrides(&mut elements, size_id);
+    resolve_shared_styles(project, &mut elements);
     elements
+}
+
+/// Resolve tokens after size overrides so all outputs use the same values.
+pub fn resolve_shared_styles(project: &Project, elements: &mut [Element]) {
+    for element in elements {
+        project.styles.resolve(&mut element.style);
+        resolve_shared_styles(project, &mut element.children);
+    }
 }
 
 fn apply_size_overrides(elements: &mut [Element], size_id: Uuid) {
@@ -1260,8 +1337,6 @@ impl Project {
                 self.apply_linked_patch(location, patch, picture, target)?;
                 continue;
             }
-            let linking = matches!(&patch.name, Some(Some(name)) if !name.trim().is_empty());
-            let element_id = patch.id;
             let page = self
                 .pages
                 .iter_mut()
@@ -1277,9 +1352,6 @@ impl Project {
                 element.image = Some(picture);
             }
             apply_sized_patch(element, patch, target)?;
-            if linking {
-                self.promote_to_linked(element_id)?;
-            }
         }
         Ok(())
     }
@@ -1327,12 +1399,14 @@ impl Project {
             patch.image = Some(Some(picture));
         }
         if location.path.is_empty() {
-            if let Some(name) = patch.name.take() {
-                let name = name.map(|name| name.trim().to_string());
-                if name.as_deref().is_none_or(str::is_empty) {
-                    return self.detach_instance(location.instance);
-                }
-                let name = name.expect("a nonempty name");
+            // A copy's name is the linked name every copy shares; clearing it keeps the link.
+            let renamed = patch
+                .name
+                .take()
+                .flatten()
+                .map(|name| name.trim().to_string())
+                .filter(|name| !name.is_empty());
+            if let Some(name) = renamed {
                 self.rename_definition(location.definition, &name)?;
                 if let Some(element) = self.element_mut(location.instance) {
                     element.name = Some(name);
@@ -1417,25 +1491,12 @@ impl Project {
         Ok(node)
     }
 
-    /// Naming a layer makes it a linked element: its tree becomes the shared definition.
-    fn promote_to_linked(&mut self, element_id: Uuid) -> Result<()> {
+    /// Making a layer linked: its tree becomes the shared definition under the linked name.
+    fn promote_to_linked(&mut self, element_id: Uuid, name: String) -> Result<()> {
         let content = self
             .element(element_id)
             .map(|(_, element)| resolve_element(self, element))
             .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-        let name = content
-            .name
-            .clone()
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty())
-            .ok_or_else(|| Error("Give this layer a name to link it.".into()))?;
-        ensure(
-            !self
-                .linked
-                .values()
-                .any(|item| item.name.eq_ignore_ascii_case(&name)),
-            "A linked element with this name already exists.",
-        )?;
         let definition = Uuid::new_v4();
         self.linked.insert(
             definition,
@@ -1507,8 +1568,10 @@ impl Project {
         Ok(())
     }
 
+    /// Make one layer linked, or join two or more under one definition. A single layer's own
+    /// name labels the definition; otherwise the first unused name is taken.
     pub(crate) fn link_elements(&mut self, ids: Vec<Uuid>, source_id: Option<Uuid>) -> Result<()> {
-        ensure(ids.len() >= 2, "Select at least two layers to link.")?;
+        ensure(!ids.is_empty(), "Choose a layer to link.")?;
         let mut unique = BTreeSet::new();
         ensure(
             ids.iter().all(|id| unique.insert(*id)),
@@ -1521,6 +1584,10 @@ impl Project {
                 .ok_or_else(|| Error("These layers no longer exist.".into()))?;
             ensure(element.link.is_none(), "These layers are already linked.")?;
             contents.push((*id, resolve_element(self, element)));
+        }
+        if contents.len() == 1 {
+            let name = self.unique_link_name(contents[0].1.name.as_deref());
+            return self.promote_to_linked(contents[0].0, name);
         }
         let winner = source_id
             .and_then(|source| contents.iter().find(|(id, _)| *id == source))
@@ -2286,6 +2353,8 @@ pub fn empty_element(kind: ElementKind, rect: Rect) -> Element {
         visible: true,
         locked: false,
         style: ElementStyle {
+            sizing: ElementSizing::default(),
+            references: StyleReferences::default(),
             fill: None,
             stroke: ElementStroke {
                 color: None,
@@ -2400,6 +2469,45 @@ pub fn element_outline(elements: &[Element]) -> Vec<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizing_defaults_and_limits_are_validated() {
+        let sizing: ElementSizing = serde_json::from_str(r#"{"width":"fill","height":"fit","minWidth":30,"maxWidth":80}"#).unwrap();
+        assert_eq!(sizing.constrain(10.0, 50.0), (30.0, 50.0));
+        assert_eq!(sizing.constrain(100.0, 50.0), (80.0, 50.0));
+        assert!(sizing.validate().is_ok());
+        assert!(ElementSizing { min_width: Some(100.0), max_width: Some(50.0), ..Default::default() }.validate().is_err());
+        assert!(ElementSizing { min_height: Some(f64::NAN), ..Default::default() }.validate().is_err());
+        let mut legacy = serde_json::to_value(empty_element(ElementKind::Box, Rect { x: 0.0, y: 0.0, width: 100.0, height: 40.0 }).style).unwrap();
+        legacy.as_object_mut().unwrap().remove("sizing");
+        legacy.as_object_mut().unwrap().remove("references");
+        let style: ElementStyle = serde_json::from_value(legacy).unwrap();
+        assert_eq!(style.sizing.width, SizingMode::Fixed);
+    }
+
+    #[test]
+    fn shared_style_edits_resolve_after_overrides_and_delete_preserves_values() {
+        let mut project = Project::new("Styles".into(), crate::Viewport { width: 800, height: 600 }, crate::Appearance::Light).unwrap();
+        let colour = crate::ColourStyle { id: Uuid::new_v4(), name: "Ink".into(), value: "#123456".into() };
+        project = project.apply(project.revision, crate::Command::AddColourStyle { style: colour.clone() }).unwrap();
+        let size = project.pages[0].base_size_id();
+        let mut element = empty_element(ElementKind::Text, Rect { x: 0.0, y: 0.0, width: 100.0, height: 40.0 });
+        element.style.references.text_colour = Some(colour.id);
+        let mut over = element.style.clone(); over.references.fill = Some(colour.id);
+        element.overrides.insert(size, ElementOverride { style: Some(over), ..Default::default() });
+        project.pages[0].elements.push(element);
+        project.validate().unwrap();
+        let resolved = resolve_for_size(&project, &project.pages[0], size);
+        assert_eq!(resolved[0].style.text_style.color, "#123456");
+        assert_eq!(resolved[0].style.fill.as_deref(), Some("#123456"));
+        project = project.apply(project.revision, crate::Command::UpdateColourStyle { style: crate::ColourStyle { value: "#abcdef".into(), ..colour.clone() } }).unwrap();
+        assert_eq!(resolve_for_size(&project, &project.pages[0], size)[0].style.text_style.color, "#abcdef");
+        project = project.apply(project.revision, crate::Command::RemoveColourStyle { id: colour.id }).unwrap();
+        let resolved = resolve_for_size(&project, &project.pages[0], size);
+        assert_eq!(resolved[0].style.text_style.color, "#abcdef");
+        assert_eq!(resolved[0].style.references.text_colour, None);
+        assert!(project.apply(project.revision, crate::Command::AddColourStyle { style: crate::ColourStyle { value: "red".into(), ..colour } }).is_err());
+    }
 
     #[test]
     fn colours_accept_hex_and_transparent() {

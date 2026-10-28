@@ -545,7 +545,28 @@ function LayerGroup({ section, title, add, addLabel, children }: {
 }
 
 // Boundaries read top-left first, each opening onto its layers; reference items and pointers follow.
-export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectRequest, selectElement, updateElements, moveElement, removeLinked, removeElements, deleteBoundary, removeRequest, removeReference, removePointer, views, addView, jumpToView, renameView, removeView }: {
+export function StylesSection({ project, command, busy = false }: { project: Project; command?: (command: import('./types').Command) => Promise<unknown>; busy?: boolean }) {
+  const disabled = busy || !command;
+  const send = (edit: import('./types').Command) => { void command?.(edit).catch(() => {}); };
+  return <PropsSection id="project-styles" title="Styles">
+    {project.styles?.colours.map(style => <div key={style.id} className="dock-inline">
+      <CompactTextField label="Colour style name" value={style.name} disabled={disabled} valid={value => !!value.trim()} commit={name => send({ type: 'update_colour_style', style: { ...style, name: name.trim() } })} />
+      <input type="color" aria-label={`${style.name} colour`} value={style.value.length === 7 ? style.value : '#000000'} disabled={disabled} style={{ width: 28 }} onChange={event => send({ type: 'update_colour_style', style: { ...style, value: event.target.value } })} />
+      <button type="button" className="icon-button sm" aria-label={`Delete ${style.name} style`} disabled={disabled} onClick={() => send({ type: 'remove_colour_style', id: style.id })}><Icon name="close" size={12} /></button>
+    </div>)}
+    {project.styles?.text.map(style => <details key={style.id}>
+      <summary>{style.name}</summary>
+      <div className="dock-inline"><CompactTextField label="Text style name" value={style.name} disabled={disabled} valid={value => !!value.trim()} commit={name => send({ type: 'update_text_style', style: { ...style, name: name.trim() } })} />
+        <button type="button" className="icon-button sm" aria-label={`Delete ${style.name} style`} disabled={disabled} onClick={() => send({ type: 'remove_text_style', id: style.id })}><Icon name="close" size={12} /></button></div>
+      <CompactTextField label="Font family" value={style.fontFamily} disabled={disabled} commit={fontFamily => send({ type: 'update_text_style', style: { ...style, fontFamily } })} />
+      <div className="props-grid">{(['size', 'weight', 'lineHeight', 'letterSpacing'] as const).map(key => <CompactNumberField key={key} prefix={key === 'size' ? 'S' : key === 'weight' ? 'W' : key === 'lineHeight' ? 'LH' : 'LS'} label={`${style.name} ${key}`} value={style[key]} disabled={disabled}
+        valid={value => value.trim() !== '' && Number.isFinite(Number(value))} commit={value => send({ type: 'update_text_style', style: { ...style, [key]: Number(value) } })} />)}</div>
+      <label className="check-label"><input type="checkbox" checked={style.italic} disabled={disabled} onChange={event => send({ type: 'update_text_style', style: { ...style, italic: event.target.checked } })} />Italic</label>
+    </details>)}
+  </PropsSection>;
+}
+
+export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectRequest, selectElement, updateElements, moveElement, removeLinked, removeElements, deleteBoundary, removeRequest, removeReference, removePointer, views, addView, jumpToView, renameView, removeView, styleCommand }: {
   project: Project; boundaries: Boundary[]; selection: CanvasTarget[]; focused: string | null;
   selectBoundary: (pageId: string, sizeId?: string) => void;
   selectReference: (itemId: string) => void; selectPointer: (pointerId: string) => void; selectRequest: (requestId: string) => void;
@@ -558,6 +579,7 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   removeRequest: (id: string) => void;
   removeReference: (id: string) => void;
   removePointer: (id: string) => void;
+  styleCommand?: (command: import('./types').Command) => Promise<unknown>;
   views: NamedView[]; addView: () => void; jumpToView: (view: NamedView) => void;
   renameView: (view: NamedView, name: string) => void; removeView: (view: NamedView) => void;
 }) {
@@ -579,8 +601,9 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   const pointers = project.pointers ?? [];
   const linked = Object.values(project.linked ?? {}).sort((first, second) => first.name.localeCompare(second.name));
   const requests = project.requests ?? [];
-  if (!ordered.length && !project.reference.length && !pointers.length && !linked.length && !requests.length && !views.length) return null;
+  if (!ordered.length && !project.reference.length && !pointers.length && !linked.length && !requests.length && !views.length && !project.styles?.colours.length && !project.styles?.text.length) return null;
   return <ul className="dock-tree">
+    <li><StylesSection project={project} command={styleCommand} /></li>
     <LayerGroup section="views" title="Views" add={addView} addLabel="Save the current view">
       {views.length > 0 && views.map(view => <ViewRow key={view.id} view={view} jump={() => jumpToView(view)} rename={name => renameView(view, name)} remove={() => removeView(view)} />)}
     </LayerGroup>
