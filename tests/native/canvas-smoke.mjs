@@ -490,8 +490,9 @@ async function runIsolated() {
       await mouse.click({ x: box.left + 50, y: box.top + Math.max(340, box.height - 70) });
       await driver.ready('[aria-label="Edit text"]');
       await driver.fill('Edit text', 'Smoke text');
-      await driver.press('[aria-label="Edit text"]', '\uE007');
-      await waitFor(async () => (await driver.execute(() => document.querySelectorAll('[data-element-kind="text"]').length)) === 1, 'The text layer was not committed');
+      // Escape commits the typed text; Enter would add a new line.
+      await driver.press('[aria-label="Edit text"]', '\uE00C');
+      await waitFor(async () => (await driver.execute(() => document.querySelectorAll('[data-element-kind="text"]').length)) === 1, 'Escape did not commit the text layer');
       await pointer.combo('Control', 'z');
       await waitFor(async () => (await driver.execute(() => document.querySelectorAll('[data-element-kind="text"]').length)) === 0, 'Ctrl+Z after typing did not undo the text');
       await pointer.combo('Control', 'Shift', 'z');

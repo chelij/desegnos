@@ -10,6 +10,8 @@ export function FontField({ label, value, commit, disabled }: {
   const id = useId();
   const [draft, setDraft] = useState(value);
   const [open, setOpen] = useState(false);
+  // Opening lists every font; only typing filters, so the current family never hides the list.
+  const [query, setQuery] = useState('');
   const [active, setActive] = useState(-1);
   const input = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -17,9 +19,9 @@ export function FontField({ label, value, commit, disabled }: {
   const choosing = useRef(false);
   useEffect(() => { setDraft(value); }, [value]);
   const filtered = useMemo(() => {
-    const query = draft.trim().toLowerCase();
-    return query ? families.filter(name => name.toLowerCase().includes(query)) : families;
-  }, [families, draft]);
+    const needle = query.trim().toLowerCase();
+    return needle ? families.filter(name => name.toLowerCase().includes(needle)) : families;
+  }, [families, query]);
   useEffect(() => {
     if (!open) return;
     setActive(current => Math.min(current, filtered.length - 1));
@@ -48,8 +50,8 @@ export function FontField({ label, value, commit, disabled }: {
         aria-label={label} aria-expanded={open} aria-controls={`${id}-list`} aria-autocomplete="list"
         aria-activedescendant={open && active >= 0 ? `${id}-${active}` : undefined}
         disabled={disabled} value={draft}
-        onFocus={() => setOpen(true)}
-        onChange={event => { setDraft(event.target.value); setOpen(true); setActive(-1); }}
+        onFocus={event => { setQuery(''); setOpen(true); event.currentTarget.select(); }}
+        onChange={event => { setDraft(event.target.value); setQuery(event.target.value); setOpen(true); setActive(-1); }}
         onBlur={() => { setOpen(false); settle(); }}
         onKeyDown={event => {
           if (event.key === 'ArrowDown') {
@@ -72,7 +74,7 @@ export function FontField({ label, value, commit, disabled }: {
       <button type="button" className="font-field-toggle" tabIndex={-1} aria-label={open ? 'Hide fonts' : 'Show fonts'}
         title={open ? 'Hide fonts' : 'Show fonts'} disabled={disabled}
         onPointerDown={event => event.preventDefault()}
-        onClick={() => { setOpen(current => !current); input.current?.focus({ preventScroll: true }); }}>
+        onClick={() => { setQuery(''); setOpen(current => !current); input.current?.focus({ preventScroll: true }); }}>
         <Icon name="chevron-down" size={12} />
       </button>
       {open && <ul ref={list} id={`${id}-list`} className="font-field-list" role="listbox" aria-label={`${label} options`}>
