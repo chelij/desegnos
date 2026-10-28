@@ -1,7 +1,8 @@
 import { canvasView } from './projectCanvas/canvasView';
+import { MIN_ZOOM } from './canvasGeometry';
 import { useState } from 'react';
 import { type MenuItem } from './Menus';
-import { layoutBoundaries, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
+import { layoutBoundaries, MAX_ZOOM, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
 import { elementWorldRect, findElementIn, unionRects } from './projectCanvas/elementGeometry';
 import { type PaletteCommand } from './CommandPalette';
 import type { GridSettings, Page, Project, Rect, RecoveryInfo } from './types';
@@ -21,6 +22,7 @@ export type ActionEvent = { preventDefault: () => void; key: string; code?: stri
 export const NO_ACTION_EVENT: ActionEvent = { preventDefault: () => {}, key: '' };
 
 export const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
+export const PROJECT_NAME_MAX_LENGTH = 120;
 
 export function errorMessage(error: unknown) { if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message); return String(error ?? ''); }
 
@@ -69,13 +71,15 @@ export function menuPaletteCommands(items: MenuItem[], group = 'Menu'): PaletteC
   });
 }
 
+// The slider spans the canvas' own zoom range, so it can always reach the same zoom as the tool strip.
 export function zoomFromSlider(value: number) {
-  return Math.round(10 * Math.pow(40, Math.max(0, Math.min(1, value / 1000))) * 10) / 1000;
+  const fraction = Math.max(0, Math.min(1, value / 1000));
+  return Math.round(MIN_ZOOM * Math.pow(MAX_ZOOM / MIN_ZOOM, fraction) * 1e6) / 1e6;
 }
 
 export function sliderFromZoom(zoom: number) {
-  const percent = Math.max(10, Math.min(400, zoom * 100));
-  return Math.round(1000 * Math.log(percent / 10) / Math.log(40));
+  const bounded = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+  return Math.round(1000 * Math.log(bounded / MIN_ZOOM) / Math.log(MAX_ZOOM / MIN_ZOOM));
 }
 
 export function editedAgo(editedAtMs: number) {
@@ -110,7 +114,7 @@ export function RecoveryList({ items, busy, recover, dismiss }: { items: Recover
 export function RenameProject({ name, submit }: { name: string; submit: (value: string) => Promise<void> }) {
   const [value, setValue] = useState(name);
   const [busy, setBusy] = useState(false);
-  return <form className="dialog-body" onSubmit={event => { event.preventDefault(); setBusy(true); void submit(value.trim()).catch(() => {}).finally(() => setBusy(false)); }}><label>Project name<input autoFocus required maxLength={120} value={value} onChange={event => setValue(event.target.value)} /></label><div className="form-actions"><button className="primary" disabled={busy || !value.trim()}>Rename project</button></div></form>;
+  return <form className="dialog-body" onSubmit={event => { event.preventDefault(); setBusy(true); void submit(value.trim()).catch(() => {}).finally(() => setBusy(false)); }}><label>Project name<input autoFocus required maxLength={PROJECT_NAME_MAX_LENGTH} value={value} onChange={event => setValue(event.target.value)} /></label><div className="form-actions"><button className="primary" disabled={busy || !value.trim()}>Rename project</button></div></form>;
 }
 
 export function suggestedPagePath(name: string, paths: string[]) {

@@ -9,6 +9,7 @@ import { ColourField } from './projectCanvas/ColourField';
 import { ElementLayers } from './projectCanvas/elementLayers';
 import { SIZE_PRESETS, resolveForSize, sizeLabel } from './projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from './projectCanvas/requests';
+import { PROJECT_NAME_MAX_LENGTH } from './editorShared';
 
 const DOCK_WIDTH_KEY = 'desegnos.dock-width';
 const DOCK_COLLAPSED_KEY = 'desegnos.dock-collapsed';
@@ -240,14 +241,14 @@ function wholeSize(draft: string, min: number, max: number) {
 }
 
 // A field commits on Enter or blur and Escape puts the old value back.
-export function PropertyField({ label, value, commit, valid, type = 'text', min, max, disabled, field }: {
-  label: string; value: string | number; commit: (value: string) => void;
+export function PropertyField({ label, ariaLabel, value, commit, valid, type = 'text', min, max, maxLength, disabled, field }: {
+  label: string; ariaLabel?: string; value: string | number; commit: (value: string) => void;
   valid?: (draft: string) => boolean;
-  type?: 'text' | 'number'; min?: number; max?: number; disabled?: boolean; field?: string;
+  type?: 'text' | 'number'; min?: number; max?: number; maxLength?: number; disabled?: boolean; field?: string;
 }) {
   const state = useFieldDraft(value, commit, valid);
   return <label className="dock-field">{label}
-    <input type={type} value={state.draft} disabled={disabled} min={min} max={max} spellCheck={false} data-field={field}
+    <input type={type} aria-label={ariaLabel} value={state.draft} disabled={disabled} min={min} max={max} maxLength={maxLength} spellCheck={false} data-field={field}
       onChange={event => state.setDraft(event.target.value)}
       onBlur={state.settle}
       onKeyDown={event => {
@@ -282,7 +283,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   const [customWidth, setCustomWidth] = useState('1280');
   const [customHeight, setCustomHeight] = useState('800');
   const [customOpen, setCustomOpen] = useState(false);
-  const customValid = wholeSize(customWidth, 1, 32768) && wholeSize(customHeight, 1, 100000);
+  const customValid = wholeSize(customWidth, 1, 100000) && wholeSize(customHeight, 1, 100000);
   const presets = page.output === 'slide'
     ? [{ label: '16:9', width: 1920, height: 1080 }, { label: '4:3', width: 1024, height: 768 }]
     : page.output === 'image' ? [{ label: 'Square', width: 1080, height: 1080 }, { label: 'Portrait', width: 1080, height: 1350 }, { label: 'Story', width: 1080, height: 1920 }, { label: 'Landscape', width: 1200, height: 630 }] : null;
@@ -297,7 +298,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
       {hasPath && <CompactTextField prefix="URL" label="Path" placeholder="/path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />}
     </PropsSection>
     <PropsSection id="boundary-background" title="Background">
-      <ColourField label="Background" value={page.background} disabled={busy} valid={validColor} commit={background => commit({ background: background.trim().toLowerCase() })} />
+      <ColourField label="Background" value={page.background} disabled={busy} optional={false} commit={background => commit({ background })} />
       <div className="boundary-background-presets">{[['#ffffff', 'White'], ['#f7f7f5', 'Off-white'], ['#e9e9e9', 'Light grey'], ['#1f1f1f', 'Dark grey'], ['#121212', 'Near-black'], ['#000000', 'Black']].map(([colour, name]) =>
         <button key={colour} type="button" className="props-swatch" style={{ background: colour }} aria-label={`${name} background`} aria-pressed={page.background === colour} disabled={busy} onClick={() => commit({ background: colour })} />)}</div>
     </PropsSection>
@@ -306,8 +307,8 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
         {index === 0
           ? page.sizes.length > 1 && <span className="dock-size-tag">Base</span>
           : <span className="dock-size-name" title={labelForSize(size)}>{labelForSize(size)}</span>}
-        <CompactNumberField prefix="W" label={`Width of ${labelForSize(size)}`} min={1} max={32768} unit="px" value={size.width} disabled={busy} valid={width => wholeSize(width, 1, 32768)}
-          commit={width => { const value = Math.round(Number(width)); if (value >= 1 && value <= 32768) updateSize(size.id, { width: value }); }} />
+        <CompactNumberField prefix="W" label={`Width of ${labelForSize(size)}`} min={1} max={100000} unit="px" value={size.width} disabled={busy} valid={width => wholeSize(width, 1, 100000)}
+          commit={width => { const value = Math.round(Number(width)); if (value >= 1 && value <= 100000) updateSize(size.id, { width: value }); }} />
         <CompactNumberField prefix="H" label={`Height of ${labelForSize(size)}`} min={1} max={100000} unit="px" value={size.height} disabled={busy} valid={height => wholeSize(height, 1, 100000)}
           commit={height => { const value = Math.round(Number(height)); if (value >= 1 && value <= 100000) updateSize(size.id, { height: value }); }} />
         <div className="dock-size-tail">
@@ -323,7 +324,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
             aria-label={`Add ${preset.label}`} title={`Add ${preset.label} · ${preset.width} × ${preset.height}`} onClick={() => addSize(preset.preset)}>{preset.label}</button>)}
         </div>
         {customOpen && <div className="boundary-custom-row">
-          <CompactNumberField prefix="W" label="Custom width" min={1} max={32768} unit="px" value={customWidth} disabled={busy} valid={width => wholeSize(width, 1, 32768)} commit={setCustomWidth} />
+          <CompactNumberField prefix="W" label="Custom width" min={1} max={100000} unit="px" value={customWidth} disabled={busy} valid={width => wholeSize(width, 1, 100000)} commit={setCustomWidth} />
           <CompactNumberField prefix="H" label="Custom height" min={1} max={100000} unit="px" value={customHeight} disabled={busy} valid={height => wholeSize(height, 1, 100000)} commit={setCustomHeight} />
           <button type="button" className="dock-action" aria-label="Add custom size" title="Add custom size" disabled={busy || !customValid} onClick={() => addSize('custom', Math.round(Number(customWidth)), Math.round(Number(customHeight)))}>Add</button>
         </div>}
@@ -338,7 +339,6 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
 const validHttpUrl = (value: string) => {
   try { const url = new URL(value.trim()); return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname; } catch { return false; }
 };
-const validColor = (value: string) => /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value.trim());
 
 export function ReferenceProperties({ item, update, remove, busy }: {
   item: ReferenceItem; update: (patch: { text?: string; url?: string; title?: string; color?: string }) => void;
@@ -356,7 +356,7 @@ export function ReferenceProperties({ item, update, remove, busy }: {
       <PropertyField label="Address" value={item.kind.url} disabled={busy} valid={validHttpUrl} commit={url => update({ url: url.trim() })} />
       <PropertyField label="Title" value={item.kind.title} disabled={busy} commit={title => update({ title })} />
     </>}
-    {item.kind.kind === 'swatch' && <PropertyField label="Colour" value={item.kind.color} disabled={busy} valid={validColor} commit={color => update({ color: color.trim().toLowerCase() })} />}
+    {item.kind.kind === 'swatch' && <ColourField label="Colour" value={item.kind.color} disabled={busy} optional={false} commit={color => update({ color })} />}
     {item.kind.kind === 'image' && <div className="dock-field">Picture<input value={item.kind.name ?? ''} readOnly /></div>}
     <button type="button" className="dock-action" disabled={busy} onClick={remove}>Remove</button>
   </div>;
@@ -368,7 +368,8 @@ export function ProjectProperties({ project, rename, setGrid, setGridSettings, b
   busy: boolean; save?: () => void;
 }) {
   return <div className="dock-form">
-    <PropertyField label="Project" value={project.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => rename(name.trim())} />
+    <PropertyField label="Project" ariaLabel="Project name" maxLength={PROJECT_NAME_MAX_LENGTH} value={project.name} disabled={busy}
+      valid={name => name.trim().length > 0} commit={name => rename(name.trim())} />
     {save && <button type="button" className="dock-action" disabled={busy} onClick={save}>Save project…</button>}
     <div className="dock-checks">
       <label className="check-label"><input type="checkbox" checked={project.showGrid} disabled={busy} onChange={event => setGrid(event.target.checked)} />Dot grid</label>
@@ -416,7 +417,7 @@ export function UntitledSaveForm({ project, location, busy, chooseLocation, save
   return <form className="dock-form untitled-save" aria-label="Save untitled project" onSubmit={submit}>
     <h3>Save project</h3>
     <label className="dock-field">Project name
-      <input autoFocus required maxLength={120} value={name} disabled={locked} autoComplete="off"
+      <input autoFocus required maxLength={PROJECT_NAME_MAX_LENGTH} value={name} disabled={locked} autoComplete="off"
         onFocus={event => event.currentTarget.select()} onChange={event => setName(event.target.value)} />
     </label>
     <div className="dock-field">Location

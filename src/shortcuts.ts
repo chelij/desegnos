@@ -106,7 +106,7 @@ export const KEYMAP: Binding[] = [
   { action: 'minimap', label: 'Show or hide the minimap', group: 'View', keys: [shift('m')], display: 'Shift+M' },
   { action: 'saveView', label: 'Save the current view', group: 'View', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(altMod), display: 'Ctrl/Cmd+Alt+1…9' },
   { action: 'goToView', label: 'Go to a saved view', group: 'View', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(key => ({ key, alt: true, shift: false })), display: 'Alt+1…9' },
-  { action: 'hidePanels', label: 'Hide or show panels', group: 'View', keys: [plain('Tab')], display: 'Tab' },
+  { action: 'hidePanels', label: 'Hide or show panels', group: 'View', keys: [{ key: '\\', mod: true, shift: false }, { code: 'Backslash', mod: true, shift: false }], display: 'Ctrl/Cmd+\\' },
 
   // Run
   { action: 'play', label: 'Play', group: 'Run', keys: [{ key: ' ', code: 'Space', shift: true }], display: 'Shift+Space' },

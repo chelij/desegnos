@@ -516,7 +516,7 @@ try {
       'Save view / go to view (slots 1–9)': [['saveView', 'Ctrl/Cmd+Alt+1…9'], ['goToView', 'Alt+1…9']],
       'Minimap': [['minimap', 'Shift+M']],
       'Play / Preview export': [['play', 'Shift+Space'], ['preview', 'Ctrl/Cmd+Enter']],
-      'Hide panels': [['hidePanels', 'Tab']],
+      'Hide panels': [['hidePanels', 'Ctrl/Cmd+\\']],
       'Ask AI on selection': [['askAI', 'Ctrl/Cmd+K']],
       'Export': [['export', 'Ctrl/Cmd+E']],
       'Undo / Redo': [['undo', 'Ctrl/Cmd+Z'], ['redo', 'Shift+Ctrl/Cmd+Z']],
@@ -547,7 +547,8 @@ try {
     assert.equal(shortcuts.shortcutFor(event({ key: 'Enter', code: 'Enter' }), false), 'selectChild');
     assert.equal(shortcuts.shortcutFor(event({ key: 'Enter', code: 'Enter', shiftKey: true }), false), 'selectParent');
     assert.equal(shortcuts.shortcutFor(event({ key: 'Unidentified', code: 'Tab', shiftKey: true }), false), null);
-    assert.equal(shortcuts.shortcutFor(event({ key: 'Tab', code: 'Tab' }), false), 'hidePanels');
+    assert.equal(shortcuts.shortcutFor(event({ key: 'Tab', code: 'Tab' }), false), null, 'Tab keeps normal focus movement');
+    assert.equal(shortcuts.shortcutFor(event({ key: '\\', code: 'Backslash', ctrlKey: true }), false), 'hidePanels');
     assert.equal(shortcuts.shortcutFor(event({ key: 'c', code: 'KeyC', ctrlKey: true, altKey: true }), false), 'copyStyle');
     assert.equal(shortcuts.shortcutFor(event({ key: 'v', code: 'KeyV', ctrlKey: true, altKey: true }), false), 'pasteStyle');
     assert.equal(shortcuts.shortcutFor(event({ key: 'c', code: 'KeyC', ctrlKey: true, altKey: true, shiftKey: true }), false), 'paintFormat');

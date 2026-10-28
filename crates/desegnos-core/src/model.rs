@@ -90,8 +90,8 @@ pub struct Viewport {
 impl Viewport {
     pub fn validate(&self) -> Result<()> {
         ensure(
-            (1..=32_768).contains(&self.width) && (1..=100_000).contains(&self.height),
-            "Viewport dimensions must be between 1 and 32,768 pixels wide and 1 and 100,000 pixels high.",
+            (1..=100_000).contains(&self.width) && (1..=100_000).contains(&self.height),
+            "Viewport dimensions must be between 1 and 100,000 pixels wide and high.",
         )
     }
 }
@@ -707,7 +707,7 @@ impl ReferenceItem {
             }
             ReferenceKind::Swatch { color } => ensure(
                 valid_swatch(color),
-                "A swatch colour must be #rgb or #rrggbb.",
+                "A swatch colour must be #rgb, #rrggbb or #rrggbbaa.",
             )?,
         }
         Ok(())
@@ -1041,7 +1041,7 @@ fn valid_swatch(color: &str) -> bool {
     let Some(hex) = color.strip_prefix('#') else {
         return false;
     };
-    (hex.len() == 3 || hex.len() == 6) && hex.bytes().all(|b| b.is_ascii_hexdigit())
+    (hex.len() == 3 || hex.len() == 6 || hex.len() == 8) && hex.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn normalized_swatch(color: &str) -> String {

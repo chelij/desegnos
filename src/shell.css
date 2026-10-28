@@ -329,6 +329,7 @@
 /* ------------------------------------------------------------------ */
 .editor-shell { --panel-chrome: var(--surface); }
 .editor-shell .editor-body { display: flex; flex: 1; min-width: 0; min-height: 0; }
+.show-panels { position: absolute; z-index: 15; top: 10px; left: 10px; height: var(--control-md); min-height: var(--control-md); padding: 0 var(--space-4); box-shadow: var(--shadow-2); }
 .editor-shell .editor-work { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 
 /* The tool strip floats clear of the window edge as one rounded pill. */
@@ -441,6 +442,8 @@
 .props-swatch.is-empty::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to top right, transparent calc(50% - 1px), var(--danger) calc(50% - 1px), var(--danger) calc(50% + 1px), transparent calc(50% + 1px)); }
 .props-swatch input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
 .props-hex { flex: 1 1 auto; width: auto; min-width: 0; height: var(--props-field); min-height: var(--props-field); padding: 0 var(--space-3); font-variant-numeric: tabular-nums; }
+/* Invalid input keeps its draft visible briefly, then reverts, instead of failing silently. */
+.props-hex.is-invalid { border-color: var(--danger); outline: 2px solid var(--danger); outline-offset: 1px; }
 /* Stroke keeps its colour on one row with the line weight it applies to. */
 .props-stroke { display: flex; align-items: center; gap: var(--props-row); min-width: 0; }
 .props-stroke .props-num { flex: 0 0 96px; }
@@ -539,18 +542,21 @@
 .dock-code .code-editor-host .cm-editor { height: 100%; }
 
 /* Export panel: boundaries, destination and the paid-send decision, inline in the dock. */
-.export-panel { display: flex; flex-direction: column; gap: var(--space-2); }
+/* The export panel owns the dock body height: the page list scrolls, the actions stay below it. */
+.dock-panel-body:has(> .export-panel) { display: flex; flex-direction: column; overflow: hidden; }
+.export-panel { display: flex; flex: 1 1 auto; flex-direction: column; gap: var(--space-2); min-height: 0; }
+.export-panel > :not(.export-panel-list) { flex: none; }
 .export-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.export-panel-list { display: flex; flex-direction: column; gap: 2px; max-height: 240px; overflow-y: auto; }
+.export-panel-list { display: flex; flex: 1 1 auto; flex-direction: column; gap: 2px; min-height: 56px; overflow-y: auto; }
 .export-panel-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-2); padding-block: 2px; }
 .export-panel-name { overflow: hidden; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
-.export-panel-job { display: flex; flex-direction: column; gap: 2px; padding: var(--space-2); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
+.export-panel-job { display: flex; flex: 0 1 auto; flex-direction: column; gap: 2px; max-height: 40%; overflow-y: auto; padding: var(--space-2); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); }
 .export-panel-job p { margin: 0; font-size: var(--text-sm); }
 .export-panel-note { margin: 0; font-size: var(--text-xs); }
 .dock-warning { margin: 0; color: var(--warning); font-size: var(--text-xs); }
 .export-panel-files { margin: var(--space-1) 0 0; padding-inline-start: var(--space-5); color: var(--muted); font-size: var(--text-xs); }
-/* The export decision stays visible while the rest of the panel scrolls. */
-.export-panel-actions { position: sticky; bottom: 0; z-index: 2; margin: 0 calc(-1 * var(--space-5)); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--border-soft); background: var(--panel-chrome); }
+/* The page list scrolls above the actions, so the Export button never covers a row. */
+.export-panel-actions { position: static; flex: none; margin: 0 calc(-1 * var(--space-5)); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--border-soft); background: var(--panel-chrome); }
 
 /* Project tabs: one compact tab per open project, with a colour dot and close control. */
 .editor-shell .project-tabs { display: flex; flex: 1 1 auto; align-items: center; gap: 2px; min-width: 0; max-width: none; overflow-x: auto; scrollbar-width: none; }

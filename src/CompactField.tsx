@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { resolveNumberField } from './numberExpression';
+import { resolveNumberField, roundNumber } from './numberExpression';
 
 /** Display numbers rounded to at most two decimals; the full value survives untouched until edited. */
 function shownNumber(value: number): string {
@@ -14,9 +14,13 @@ export function useFieldDraft(value: string | number, commit: (value: string) =>
   useEffect(() => { setDraft(String(value)); }, [value]);
   function settle() {
     if (cancelled.current) { cancelled.current = false; setDraft(String(value)); return; }
+    // An unchanged draft never commits, so an inherited value outside a field's range stays as it is.
+    if (draft === String(value)) return;
     const resolved = resolve ? resolve(draft) : draft;
     if (resolved === null) { setDraft(String(value)); return; }
     if (resolved === String(value)) { if (resolved !== draft) setDraft(resolved); return; }
+    // Show the result the field will keep, including any clamping, before the edit is committed.
+    if (resolved !== draft) setDraft(resolved);
     if (!valid || valid(resolved)) commit(resolved); else setDraft(String(value));
   }
   return {
@@ -64,12 +68,20 @@ type Drag = { start: number; origin: number; value: number; moved: boolean };
  * Units typed by habit (`24px`, `50%`) are ignored, results are clamped and rounded to two
  * decimals, and invalid input reverts without committing.
  */
-export function CompactNumberField({ prefix, label, value, commit, valid, min, max, disabled, unit, field }: {
+export function CompactNumberField({ prefix, label, value, commit, valid, min, max, disabled, unit, field, optional, normalise }: {
   prefix: ReactNode; label: string; value: string | number; commit: (value: string) => void;
   valid?: (draft: string) => boolean; min?: number; max?: number; disabled?: boolean; unit?: string; field?: string;
+  /** Optional fields may be cleared with an empty draft; every other field reverts. */
+  optional?: boolean;
+  /** Wrap a clamped result, for values such as an angle that has a natural range. */
+  normalise?: (value: number) => number;
 }) {
   const formatted = typeof value === 'number' ? shownNumber(value) : value;
-  const state = useFieldDraft(formatted, commit, valid, draft => resolveNumberField(draft, formatted, min, max));
+  const state = useFieldDraft(formatted, commit, valid, draft => {
+    if (!draft.trim()) return optional ? '' : null;
+    const resolved = resolveNumberField(draft, formatted, min, max);
+    return resolved === null || !normalise ? resolved : String(roundNumber(normalise(Number(resolved))));
+  });
   const input = useRef<HTMLInputElement>(null);
   const drag = useRef<Drag | null>(null);
   const [scrubbed, setScrubbed] = useState<string | null>(null);
@@ -100,7 +112,7 @@ export function CompactNumberField({ prefix, label, value, commit, valid, min, m
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     setScrubbed(null);
     if (!active.moved) { input.current?.focus(); input.current?.select(); return; }
-    const next = shownNumber(active.value);
+    const next = shownNumber(normalise ? normalise(active.value) : active.value);
     if (next === state.draft) return;
     state.setDraft(next);
     commit(next);

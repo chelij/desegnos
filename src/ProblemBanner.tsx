@@ -66,22 +66,47 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
     const key = entry.dismissKey ?? `${entry.title ?? ''}:${entry.message}`;
     return isToast(entry)
       ? <ToastRow key={key} {...entry} dismiss={() => dismissEntry(entry)} />
-      : <NoticeRow key={key} {...entry} dismiss={() => dismissEntry(entry)} />;
+      : <DismissibleNoticeRow key={key} {...entry} dismiss={() => dismissEntry(entry)} />;
   });
   const stack: NoticeStack = { rows, toast: isToast(active), focus: active?.autoFocus, focusKey: active?.dismissKey };
   return <Notices.Provider value={context}><NoticeDisplay.Provider value={stack}>{children}</NoticeDisplay.Provider></Notices.Provider>;
+}
+
+const ERROR_NOTICE_LIFETIME = 10_000;
+
+/** Errors clear themselves after a while, but pointing at or focusing one keeps it open. */
+function DismissibleNoticeRow(props: NoticeProps) {
+  const [held, setHeld] = useState(false);
+  const close = useRef(props.dismiss);
+  close.current = props.dismiss;
+  useEffect(() => {
+    if (props.variant !== 'error' || held || !close.current) return;
+    const timer = setTimeout(() => close.current?.(), ERROR_NOTICE_LIFETIME);
+    return () => clearTimeout(timer);
+  }, [props.variant, held]);
+  return <NoticeRow {...props} onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)}
+    onMouseEnter={() => setHeld(true)} onMouseLeave={() => setHeld(false)}
+    onFocus={() => setHeld(true)} onBlur={() => setHeld(false)} />;
 }
 
 /// A toast closes itself, so it carries no dismiss button; a notice that waits for the user keeps one.
 export function showsDismissButton(notice: NoticeKind): boolean {
   return !isToast(notice);
 }
-export function NoticeRow({ variant = 'info', title, message, action, secondaryAction, dismiss, className = '', details, showDismiss = true }: NoticeProps) {
-  return <div className={`notice floating-bar notice-${variant} ${className}`.trim()} role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'} onPointerDown={event => event.stopPropagation()}>
+type HoverHold = { onPointerEnter?: () => void; onPointerLeave?: () => void; onMouseEnter?: () => void; onMouseLeave?: () => void; onFocus?: () => void; onBlur?: () => void };
+export function NoticeRow({ variant = 'info', title, message, action, secondaryAction, dismiss, className = '', details, showDismiss = true, onPointerEnter, onPointerLeave, onMouseEnter, onMouseLeave, onFocus, onBlur }: NoticeProps & HoverHold) {
+  const choose = (run: () => void, label: string) => {
+    run();
+    // The settings this notice points to replace it at once when opened from the notice.
+    if (label === 'AI settings') dismiss?.();
+  };
+  return <div className={`notice floating-bar notice-${variant} ${className}`.trim()} role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}
+    onPointerDown={event => event.stopPropagation()} onPointerEnter={onPointerEnter} onPointerLeave={onPointerLeave}
+    onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} onFocus={onFocus} onBlur={onBlur}>
     <div className="notice-copy" title={[title, message].filter(Boolean).join(' · ')}>{title && <strong>{title}</strong>}{message && <span>{message}</span>}</div>
     <div className="notice-actions">
-      {action && <button type="button" className="primary" disabled={action.disabled} onClick={action.onClick}>{action.label}</button>}
-      {secondaryAction && <button type="button" disabled={secondaryAction.disabled} onClick={secondaryAction.onClick}>{secondaryAction.label}</button>}
+      {action && <button type="button" className="primary" disabled={action.disabled} onClick={() => choose(action.onClick, action.label)}>{action.label}</button>}
+      {secondaryAction && <button type="button" disabled={secondaryAction.disabled} onClick={() => choose(secondaryAction.onClick, secondaryAction.label)}>{secondaryAction.label}</button>}
       {showDismiss && showsDismissButton({ variant, action, secondaryAction }) && <button type="button" className="close-button notice-dismiss icon-button sm" aria-label="Dismiss notice" title="Dismiss" onClick={dismiss}><Icon name="close" /></button>}
     </div>
     {details && <details className="notice-details"><summary>{details.summary}</summary><pre>{details.body}</pre></details>}

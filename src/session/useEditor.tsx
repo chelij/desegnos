@@ -70,8 +70,12 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [updateError, setUpdateError] = useState('');
   const [notices, setNotices] = useState<{ id: number; message: string; undo?: () => void }[]>([]);
   const noticeId = useRef(0);
-  // A notice may carry one reversible follow-up, which the toast offers as Undo.
-  const setNotice = useCallback((message: string, undo?: () => void) => { const id = ++noticeId.current; setNotices(items => [...items, { id, message, undo }]); }, []);
+  // A notice may carry one reversible follow-up, which the toast offers as Undo; repeating a
+  // message restarts that toast instead of stacking an identical row.
+  const setNotice = useCallback((message: string, undo?: () => void) => {
+    const id = ++noticeId.current;
+    setNotices(items => [...items.filter(item => item.message !== message), { id, message, undo }]);
+  }, []);
   const [showPalette, setShowPalette] = useState(false);
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
@@ -879,7 +883,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       ?? canvasBoundaries.find(item => item.pageId === canvasFocus) ?? null
     : null;
   const selectedBounds = project ? selectionBounds(project, canvasSelection) ?? (canvasSelection.length ? null : focusedBoundary?.rect ?? null) : null;
-  const zoomPercent = Math.max(10, Math.min(400, Math.round(canvasZoom * 100)));
+  const zoomPercent = Math.round(canvasZoom * 100);
   // The palette reaches canvas actions through the canvas's own dispatch, so a row runs exactly
   // what its key runs. A row stands down only while the action has nothing to change.
   const paletteCommands: PaletteCommand[] = [

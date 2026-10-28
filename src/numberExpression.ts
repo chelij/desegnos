@@ -95,6 +95,12 @@ export function clampNumber(value: number, min = Number.NEGATIVE_INFINITY, max =
   return Math.min(max, Math.max(min, value));
 }
 
+/** An angle in the range -180..180, so 99999° becomes -81°. */
+export function normalizeAngle(value: number): number {
+  const wrapped = ((value % 360) + 360) % 360;
+  return roundNumber(wrapped > 180 ? wrapped - 360 : wrapped);
+}
+
 /**
  * Evaluate a field draft. `current` enables relative entries; pass null when the field has no
  * usable previous value. Returns the rounded result, or null when the input is not arithmetic.

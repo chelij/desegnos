@@ -5,6 +5,7 @@ import { ATTACHMENT_ACCEPT, readRequestAttachments } from '../requestAttachments
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
 import { CompactNumberField, CompactTextField } from '../CompactField';
+import { normalizeAngle } from '../numberExpression';
 import { ChoiceRow, PropsSection } from '../EditorDock';
 import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
@@ -12,7 +13,6 @@ import type { Element, ElementLayout, ElementPatch, ElementStyle, InputType, Pag
 import { commonValue, elementKindLabel, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri, rememberColour } from './elementGeometry';
 import { EditScopeChoice, requestEditScope } from './selectionBar';
 
-const validColour = (value: string) => !value.trim() || /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim()) || value.trim().toLowerCase() === 'transparent';
 const validNumber = (value: string) => Number.isFinite(Number(value));
 const validUrl = (value: string) => {
   try { const url = new URL(value.trim()); return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname; } catch { return false; }
@@ -288,18 +288,25 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
     </div>}
     {(single || (sameKind && kind === 'box')) && <PropsSection id="props-layout" title="Layout">
       {single && <div className="props-grid">
-        <CompactNumberField prefix="X" label="X" value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
-        <CompactNumberField prefix="Y" label="Y" value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
-        {(['width', 'height'] as const).map(axis => <div key={axis} style={{ display: 'flex', minWidth: 0, gap: 2 }}>
-          <CompactNumberField prefix={axis === 'width' ? 'W' : 'H'} label={axis === 'width' ? 'Width' : 'Height'} min={0} value={single.rect[axis]} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ [axis]: Number(value) })} />
-          <select aria-label={`${axis} sizing`} style={{ width: 55, minWidth: 0 }} value={single.style.sizing?.[axis] ?? 'fixed'} disabled={busy} onChange={event => commitSizing({ [axis]: event.target.value })}>
-            <option value="fixed">Fixed</option><option value="fit">Hug</option><option value="fill">Fill</option>
-          </select></div>)}
-        <CompactNumberField prefix="°" label="Rotation" value={single.rotation} disabled={busy} valid={validNumber} commit={value => update([{ id: single.id, rotation: Number(value) }])} />
+        <CompactNumberField prefix="X" label="X" min={-1_000_000} max={1_000_000} value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
+        <CompactNumberField prefix="Y" label="Y" min={-1_000_000} max={1_000_000} value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
+        {(['width', 'height'] as const).map(axis => {
+          // A line's thickness axis may be zero; every other box keeps at least one pixel.
+          const minimum = axis === 'height' && single.kind === 'line' ? 0 : 1;
+          return <div key={axis} style={{ display: 'flex', minWidth: 0, gap: 2 }}>
+            <CompactNumberField prefix={axis === 'width' ? 'W' : 'H'} label={axis === 'width' ? 'Width' : 'Height'} min={minimum} max={100_000}
+              value={single.rect[axis]} disabled={busy} valid={value => Number(value) >= minimum && Number(value) <= 100_000}
+              commit={value => commitRect({ [axis]: Number(value) })} />
+            <select aria-label={`${axis} sizing`} style={{ width: 55, minWidth: 0 }} value={single.style.sizing?.[axis] ?? 'fixed'} disabled={busy} onChange={event => commitSizing({ [axis]: event.target.value })}>
+              <option value="fixed">Fixed</option><option value="fit">Hug</option><option value="fill">Fill</option>
+            </select></div>;
+        })}
+        <CompactNumberField prefix="°" label="Rotation" value={normalizeAngle(single.rotation)} disabled={busy} normalise={normalizeAngle}
+          valid={validNumber} commit={value => update([{ id: single.id, rotation: Number(value) }])} />
       </div>}
       {single && <>
         <button type="button" className="dock-action" aria-expanded={limitsOpen} onClick={() => setLimitsOpen(value => !value)}>Min / max</button>
-        {limitsOpen && <div className="props-grid">{(['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const).map(key => <CompactNumberField key={key} prefix={key.startsWith('min') ? 'Min' : 'Max'} label={key.replace(/([A-Z])/g, ' $1')} min={0}
+        {limitsOpen && <div className="props-grid">{(['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const).map(key => <CompactNumberField key={key} prefix={key.startsWith('min') ? 'Min' : 'Max'} label={key.replace(/([A-Z])/g, ' $1')} min={0} optional
           value={single.style.sizing?.[key] ?? ''} disabled={busy} valid={value => !value.trim() || (Number.isFinite(Number(value)) && Number(value) >= 0)}
           commit={value => commitSizing({ [key]: value.trim() ? Number(value) : null })} />)}</div>}
       </>}

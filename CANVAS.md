@@ -136,7 +136,7 @@ Every tool and action has a shortcut, using the keys other design tools use.
 | Save view / go to view (slots 1–9) | Ctrl/Cmd+Alt+1–9 / Alt+1–9 |
 | Minimap | Shift+M |
 | Play / Preview export | Shift+Space / Ctrl/Cmd+Enter |
-| Hide panels | Tab |
+| Hide panels | Ctrl/Cmd+\ |
 | Ask AI on selection | Ctrl/Cmd+K |
 | Export | Ctrl/Cmd+E |
 | Undo / Redo | Ctrl/Cmd+Z / Shift+Ctrl/Cmd+Z |
