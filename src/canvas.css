@@ -347,7 +347,7 @@
 .element-handle.ne, .element-handle.sw { cursor: nesw-resize; }
 .element-handle.n, .element-handle.s { cursor: ns-resize; }
 .element-handle.e, .element-handle.w { cursor: ew-resize; }
-.element-text-editor { position: absolute; z-index: 10; box-sizing: border-box; margin: 0; padding: 1px 2px; resize: none; overflow: hidden; border: 1px solid var(--accent); border-radius: 0; background: color-mix(in srgb, var(--surface-raised) 94%, transparent); outline: none; white-space: pre-wrap; overflow-wrap: break-word; }
+.element-text-editor { min-width: 0; min-height: 0; position: absolute; z-index: 10; box-sizing: border-box; margin: 0; padding: 0; resize: none; overflow: hidden; border: 0; border-radius: 0; background: transparent; outline: 1px solid var(--accent); white-space: pre-wrap; overflow-wrap: break-word; }
 .element-text-editor:focus-visible { box-shadow: 0 0 0 2px var(--focus); }
 
 /* Inline choices sit in native screen pixels above the canvas: paste, and which copy wins. */

@@ -352,7 +352,7 @@ export function createCanvasInteraction(context: () => Context) {
   }
 
   function pointerMove(event: DragInput) {
-    const { drag, touched, setCamera, worldPoint, lastPointer, camera, renderDrag } = context();
+    const { drag, touched, setCamera, worldPoint, lastPointer, camera, renderDrag, project } = context();
     const active = drag.current;
     if (!active || active.kind === 'polygon-request' || active.pointerId !== event.pointerId) return;
     if (active.kind === 'pan') {
@@ -365,7 +365,8 @@ export function createCanvasInteraction(context: () => Context) {
     }
     const point = worldPoint(event);
     lastPointer.current = point;
-    if (!active.moved && Math.hypot(point.x - active.start.x, point.y - active.start.y) * camera.zoom < 2) return;
+    const pointerStart = active.kind === 'draw-element' ? active.pointerStart : active.start;
+    if (!active.moved && Math.hypot(point.x - pointerStart.x, point.y - pointerStart.y) * camera.zoom < 2) return;
     active.moved = true;
     if (active.kind === 'move-boundary') {
       active.rect = { ...active.origin, x: Math.round(active.origin.x + point.x - active.start.x), y: Math.round(active.origin.y + point.y - active.start.y) };
@@ -380,16 +381,17 @@ export function createCanvasInteraction(context: () => Context) {
     }
     else if (active.kind === 'draw-note') active.rect = referenceNoteRect(active.start, point);
     else if (active.kind === 'draw-element') {
+      const endPoint = project.gridSettings.snap && !event.altKey ? snapPoint(point) : point;
       if (active.line) {
         // A drawn line's rotation snaps to 15 degree steps while Shift is held.
-        const end = event.shiftKey ? snappedLineEnd(active.start, point, 15) : point;
+        const end = event.shiftKey ? snappedLineEnd(active.start, endPoint, 15) : endPoint;
         const length = Math.max(1, Math.hypot(end.x - active.start.x, end.y - active.start.y));
         active.rotation = Math.atan2(end.y - active.start.y, end.x - active.start.x) * 180 / Math.PI;
         active.rect = { x: (active.start.x + end.x) / 2 - length / 2, y: (active.start.y + end.y) / 2, width: length, height: 0 };
       } else if (active.elementKind === 'box' || active.elementKind === 'ellipse') {
-        active.rect = drawRectWithKeys(active.start, point, { snap: true, square: event.shiftKey, fromCentre: event.altKey });
+        active.rect = drawRectWithKeys(active.start, endPoint, { square: event.shiftKey, fromCentre: event.altKey });
       } else {
-        active.rect = rectFromPoints(active.start, event.altKey ? point : snapPoint(point));
+        active.rect = rectFromPoints(active.start, endPoint);
       }
     } else if (active.kind === 'marquee') {
       active.current = point;
@@ -498,9 +500,10 @@ export function createCanvasInteraction(context: () => Context) {
       void placeElement(active.elementKind, active.pageId, active.sizeId, active.parentId, active.parentOrigin, active.boundary, rect, picture, active.rotation).then(element => {
         const createdNow = createdElement.current;
         if (element && createdNow) {
-          if (active.elementKind === 'text') setEditing({ pageId: active.pageId, sizeId: active.sizeId, elementId: createdNow, autoWidth: !active.moved, created: true });
+          if (active.elementKind === 'text') setEditing({ pageId: active.pageId, sizeId: active.sizeId, elementId: createdNow, autoWidth: element.style.sizing?.width === 'fit', created: true });
           else { createdElement.current = null; setEditing(null); }
-          if (active.elementKind === 'image') { setPendingImage(null); onTool('select'); }
+          if (active.elementKind === 'image') setPendingImage(null);
+          onTool('select');
         }
       }).catch(() => {}).finally(() => { busy.current = false; });
       return;

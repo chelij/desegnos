@@ -4,7 +4,7 @@ import type { Boundary, CanvasCamera, ElementTarget } from '../projectCanvasGeom
 import type { ElementCorner } from './elementGeometry';
 import { elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
 import { elementOrigin, resolveForSize } from './sizes';
-import { canvasFont, loadCanvasFont, useCanvasFont, useCanvasFontRevision } from './fonts';
+import { canvasFont, useCanvasFont, useCanvasFontRevision } from './fonts';
 import type { ScreenRect } from './surface';
 
 const FALLBACK_TEXT = '#1a1a1a';
@@ -187,7 +187,7 @@ function ElementBody({ project, pageId, element, flow, editingId, movingRects }:
     case 'group':
       return children;
     case 'text':
-      return editingId === element.id ? null : <div style={{ ...textStyle(element), whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>{element.text}</div>;
+      return <div style={{ ...textStyle(element), visibility: editingId === element.id ? 'hidden' : textStyle(element).visibility, whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>{element.text}</div>;
     case 'ellipse':
       return null;
     case 'line': {
@@ -302,43 +302,58 @@ export function ElementSelectionOverlay({ surface, project, selection, camera, v
 }
 
 /** Text is edited in fixed screen pixels, never inside the transformed layer. */
-export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus, onCommit, onCancel }: {
+export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus, onCommit }: {
   element: Element; screen: ScreenRect; zoom: number; autoWidth: boolean; autoFocus: boolean;
-  onCommit: (text: string, size?: { width: number; height: number }) => void;
-  onCancel: () => void;
+  onCommit: (text: string) => void;
 }) {
   const [draft, setDraft] = useState(element.text);
-  const cancelled = useRef(false);
   const done = useRef(false);
   const area = useRef<HTMLTextAreaElement>(null);
+  const mirror = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ width: screen.width, height: screen.height });
   const style = element.style.textStyle;
   const font = useCanvasFont(style);
   useEffect(() => { if (autoFocus && font) { area.current?.focus({ preventScroll: true }); area.current?.select(); } }, [autoFocus, element.id, font?.family]);
-  async function settle() {
-    if (cancelled.current || done.current) return;
+  useLayoutEffect(() => {
+    const box = mirror.current?.getBoundingClientRect();
+    if (box) setSize({ width: box.width, height: box.height });
+  }, [draft, font, zoom, screen.width, autoWidth, style, element.style.sizing]);
+  useEffect(() => {
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !area.current?.contains(event.target)) area.current?.blur();
+    };
+    document.addEventListener('pointerdown', outside, true);
+    return () => document.removeEventListener('pointerdown', outside, true);
+  }, []);
+  function settle() {
+    if (done.current) return;
     done.current = true;
-    if (autoWidth) await loadCanvasFont(style);
-    if (cancelled.current) return;
-    onCommit(draft, autoWidth ? measureText(draft, style) : undefined);
+    onCommit(area.current?.value ?? draft);
   }
-  const lines = Math.max(1, draft.split('\n').length);
-  const width = autoWidth ? Math.max(120, measureText(draft || 'Text', style).width * zoom + 24) : Math.max(40, screen.width);
-  const height = autoWidth ? Math.max(28, lines * style.size * style.lineHeight * zoom + 12) : Math.max(28, screen.height);
-  return <textarea ref={area} className="element-text-editor" aria-label="Edit text" spellCheck value={draft}
-    style={{ left: screen.left, top: screen.top, width, height, fontSize: style.size * zoom, lineHeight: style.lineHeight, visibility: font ? undefined : 'hidden', fontFamily: font?.family, fontWeight: style.weight, fontStyle: style.italic && !font?.italic ? 'italic' : 'normal', letterSpacing: style.letterSpacing * zoom, color: style.color, textAlign: style.align }}
-    onChange={event => setDraft(event.target.value)}
-    onPointerDown={event => event.stopPropagation()}
-    onBlur={settle}
-    onKeyDown={event => {
-      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); cancelled.current = true; done.current = true; onCancel(); return; }
-      if (event.key === 'Enter' && (!event.shiftKey || element.kind !== 'text')) {
-        event.preventDefault(); event.stopPropagation();
-        settle();
-        return;
-      }
-      // The textarea holds the keys; the editor's own shortcuts must not fire behind it.
-      event.stopPropagation();
-    }} />;
+  const typography = { ...textStyle(element), fontSize: style.size * zoom, letterSpacing: style.letterSpacing * zoom };
+  const sizing = element.style.sizing;
+  const constraints = { minWidth: sizing?.minWidth == null ? undefined : sizing.minWidth * zoom,
+    maxWidth: sizing?.maxWidth == null ? undefined : sizing.maxWidth * zoom,
+    minHeight: sizing?.minHeight == null ? undefined : sizing.minHeight * zoom,
+    maxHeight: sizing?.maxHeight == null ? undefined : sizing.maxHeight * zoom };
+  const width = autoWidth ? Math.max(1, size.width) : Math.max(1, screen.width);
+  const height = element.style.sizing?.height === 'fit' || autoWidth ? Math.max(style.size * style.lineHeight * zoom, size.height) : screen.height;
+  return <>
+    <div ref={mirror} aria-hidden style={{ ...typography, ...constraints, position: 'absolute', visibility: 'hidden', pointerEvents: 'none',
+      width: autoWidth ? 'max-content' : width, whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>{draft + (draft.endsWith('\n') ? '\u200b' : '') || '\u200b'}</div>
+    <textarea ref={area} className="element-text-editor" aria-label="Edit text" spellCheck value={draft}
+      style={{ ...typography, ...constraints, left: screen.left, top: screen.top, width, height }}
+      onChange={event => setDraft(event.target.value)}
+      onPointerDown={event => event.stopPropagation()}
+      onBlur={settle}
+      onKeyDown={event => {
+        event.stopPropagation();
+        if (event.nativeEvent.isComposing) return;
+        if (event.key === 'Escape' || event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+          event.preventDefault(); settle();
+        }
+      }} />
+  </>;
 }
 
 /** The world rect a text editor sits over, in screen pixels. */

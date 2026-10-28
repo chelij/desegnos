@@ -1,3 +1,4 @@
+import { isTextField } from '../WorkspaceSurface';
 import { arrangeSiblingOrder, type ArrangeOperation } from './arrange';
 import { type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
@@ -26,7 +27,7 @@ type Context = {
   draftArea: RequestShape | null;
   cancelRequestDraft: () => void;
   editing: { pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean; } | null;
-  cancelEditingText: () => void;
+  finishEditingText: () => void;
   selection: CanvasTarget[];
   selectBoundary: (pageId: string | null, sizeId?: string | null, additive?: boolean) => void;
   focused: string | null;
@@ -68,12 +69,12 @@ type Context = {
 
 export function createKeyboardActions(context: () => Context) {
   function escapeCanvas() {
-    const { drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea, cancelRequestDraft, editing, cancelEditingText, selection, selectBoundary, focused } = context();
+    const { drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea, cancelRequestDraft, editing, finishEditingText, selection, selectBoundary, focused } = context();
     if (drag.current) { cancelDrag(); return; }
     if (painterArmed) { setPainterArmed(false); return; }
     if (playIsActive(latest.current.play)) { onPlayExit(); return; }
     if (requestDraft || polygonDraft || draftArea) { cancelRequestDraft(); return; }
-    if (editing) { cancelEditingText(); return; }
+    if (editing) { finishEditingText(); return; }
     if (selection.length) {
       const target = selection.find(target => target.kind === 'element');
       selectBoundary(target?.pageId ?? null);
@@ -447,7 +448,7 @@ export function createKeyboardActions(context: () => Context) {
 
   function keyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     const { polygonDraft, closeRequestArea, focused, selection, openPage } = context();
-    if (event.defaultPrevented) return;
+    if (event.defaultPrevented || isTextField(event.target)) return;
     if (event.key === 'Enter' && polygonDraft && polygonDraft.length >= 3) { event.preventDefault(); closeRequestArea(polygonDraft, 'polygon'); return; }
     if (event.key === 'Enter' && focused && !selection.length) { event.preventDefault(); openPage(focused); }
     else if (event.key === 'Escape') { event.preventDefault(); escapeCanvas(); }

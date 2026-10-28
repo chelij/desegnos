@@ -1,3 +1,5 @@
+import { isTextField } from './WorkspaceSurface';
+
 // One keymap for the canvas: tool strip tooltips, the menu and the keyboard help all read it,
 // so a binding can never be added in one place and forgotten in another.
 export type ShortcutAction =
@@ -15,7 +17,7 @@ export type ShortcutAction =
   | 'commandPalette' | 'help';
 
 export type ShortcutGroup = 'File' | 'Edit' | 'Arrange' | 'Selection' | 'Tools' | 'View' | 'Run' | 'Help';
-export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented?: boolean; isComposing?: boolean };
+export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented?: boolean; isComposing?: boolean; target?: EventTarget | null };
 
 type KeyCombo = { key?: string; code?: string; mod?: boolean; shift?: boolean; alt?: boolean };
 type Binding = {
@@ -165,6 +167,7 @@ function comboMatches(combo: KeyCombo, event: ShortcutInput) {
 /** The action a key event performs, or null. Text fields keep their own editing keys. */
 export function shortcutFor(event: ShortcutInput, editingText: boolean): ShortcutAction | null {
   if (event.defaultPrevented || event.isComposing) return null;
+  editingText = editingText || !!event.target && isTextField(event.target);
   for (const binding of KEYMAP) {
     if (editingText && !binding.inText) continue;
     if (binding.keys.some(combo => comboMatches(combo, event))) return binding.action;

@@ -1,6 +1,6 @@
 import { createRequestTool } from './requestTool';
 import { createPointerTool } from './pointerTool';
-import { createDrawingActions } from './drawing';
+import { createDrawingActions, type PendingText } from './drawing';
 import { createMovingActions } from './moving';
 import { createPasteDrop } from './pasteDrop';
 import { createKeyboardActions } from './keyboardActions';
@@ -68,7 +68,7 @@ export function useProjectCanvas({
   const {
     chooseImage, insertionPoint, elementRectAt, placeElement, drawElementDrag, persistDraw,
   } = createDrawingActions(() => ({
-    setPendingImage, project, boundaryRect, createdElement, editingAllSizes, insertElements, selectElement,
+    setPendingImage, project, boundaryRect, createdElement, editingAllSizes, insertElements, selectElement, pendingText,
     boundaryUnder, beginPointerSession, drag, busy, boundaries, boundaryKind, referenceBoxes, createBoundary,
     selectBoundary,
   }));
@@ -97,7 +97,7 @@ export function useProjectCanvas({
     keyDown,
   } = createKeyboardActions(() => ({
     drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
-    cancelRequestDraft, editing, cancelEditingText, selection, selectBoundary, focused, project, selectTargets,
+    cancelRequestDraft, editing, finishEditingText, selection, selectBoundary, focused, project, selectTargets,
     pageFor, elementEntries, moveElements, copiedStyle, updateElements, surface, boundaryRect, removeSelection,
     elementScreenRect, setLinkChoice, linkElements, unlinkElements, groupElements, ungroupElements,
     rememberRepeatMove, clipboard, pasteTarget, deleteBoundary, focusedSize, startRequestOnSelection, onTool,
@@ -207,6 +207,7 @@ export function useProjectCanvas({
   const dragSession = useRef<{ move: (event: PointerEvent) => void; end: (event: PointerEvent) => void } | null>(null);
   const dragHandlers = useRef<{ move: (event: DragInput) => void; end: (event: DragInput) => void } | null>(null);
   const pasteHandler = useRef<(data: DataTransfer | null, target: EventTarget | null) => boolean>(() => false);
+  const pendingText = useRef<PendingText | null>(null);
   const [editing, setEditing] = useState<{ pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean } | null>(null);
   const [pendingImage, setPendingImage] = useState<{ uri: string; width: number; height: number; name: string } | null>(null);
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
@@ -362,7 +363,7 @@ export function useProjectCanvas({
               elements.push({ element, picture });
             } else {
               const worldRect = { x: Math.round(point.x + offset), y: Math.round(point.y + offset), width: 0, height: 0 };
-              const element = withPickedColours(forBackground(createTextElement(worldRect, droppedText(item.file)), page.background));
+              const element = withPickedColours(forBackground(createTextElement(worldRect, droppedText(item.file), page.output), page.background));
               element.rect = { ...elementLocalRect(worldRect, boundary.rect, { x: 0, y: 0 }), width: 0, height: 0 };
               elements.push({ element });
             }
@@ -567,7 +568,7 @@ export function useProjectCanvas({
     if (!element) return;
     const over = element.overrides?.[sizeId];
     const rect = over?.rect ?? element.rect;
-    setEditing({ pageId, sizeId, elementId, autoWidth: rect.width === 0, created });
+    setEditing({ pageId, sizeId, elementId, autoWidth: element.style.sizing?.width === 'fit' || rect.width === 0, created });
     selectElement(pageId, elementId, sizeId);
     surface.current?.focus({ preventScroll: true });
   }
@@ -697,10 +698,10 @@ export function useProjectCanvas({
     selectedElementTargets.forEach((target, index) => selectElement(target.pageId, target.elementId, sizeId, index > 0));
   }
   useEffect(() => onEditScope(setSelectionScope));
-  const editingElement = editing ? findElementIn(pageFor(editing.pageId, editing.sizeId)?.elements ?? [], editing.elementId) : null;
+  const editingElement = editing ? pendingText.current?.element ?? findElementIn(pageFor(editing.pageId, editing.sizeId)?.elements ?? [], editing.elementId) : null;
   const editingBoundary = editing ? boundaries.find(item => item.sizeId === editing.sizeId) ?? null : null;
   const editingScreen = editing && editingElement
-    ? elementScreenRect(editing.elementId, editing.sizeId) ?? (editingBoundary ? textEditorScreen(project, editing.pageId, editingElement, editingBoundary, camera, editing.sizeId) : null)
+    ? (pendingText.current ? screenRect(pendingText.current.worldRect, camera) : elementScreenRect(editing.elementId, editing.sizeId)) ?? (editingBoundary ? textEditorScreen(project, editing.pageId, editingElement, editingBoundary, camera, editing.sizeId) : null)
     : null;
 
   function elementScreenRect(elementId: string, sizeId?: string | null): ScreenRect | null {
@@ -712,28 +713,38 @@ export function useProjectCanvas({
     return { left: box.left - host.left, top: box.top - host.top, width: box.width, height: box.height };
   }
 
-  async function commitEditingText(text: string, size?: { width: number; height: number }) {
-    if (!editing) return;
-    const element = findElementIn(pageFor(editing.pageId, editing.sizeId)?.elements ?? [], editing.elementId);
-    if (!element) { setEditing(null); return; }
-    // Text is shared across sizes; an auto width belongs to the size it was typed in.
-    const patch: ElementPatch = { id: editing.elementId, text };
-    if (size && editing.autoWidth) patch.rect = { ...element.rect, width: size.width, height: size.height };
-    setEditing(null);
-    createdElement.current = null;
-    const page = project.pages.find(item => item.id === editing.pageId);
-    const sized = size && page && hasManySizes(page) ? { size_id: editing.sizeId } : {};
-    await Promise.resolve(updateElements(editing.pageId, [{ ...patch, ...(patch.rect ? sized : {}) }])).catch(() => {});
-    selectElement(editing.pageId, editing.elementId, page && hasManySizes(page) ? editing.sizeId : null);
-    surface.current?.focus({ preventScroll: true });
-  }
-
-  function cancelEditingText() {
+  async function commitEditingText(text: string) {
     if (!editing) return;
     const current = editing;
+    const retainFocus = document.activeElement === surface.current?.querySelector('.element-text-editor');
+    const pending = pendingText.current;
     setEditing(null);
-    if (current.created) removeElements([{ pageId: current.pageId, elementId: current.elementId }]);
-    else selectElement(current.pageId, current.elementId, current.sizeId);
+    pendingText.current = null;
+    createdElement.current = null;
+    if (!text.trim() && (pending || editingElement?.kind === 'text')) {
+      if (!pending) removeElements([{ pageId: current.pageId, elementId: current.elementId }]);
+      if (retainFocus) surface.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (pending) {
+      try {
+        await insertElements(pending.pageId, pending.parentId, pending.index, [{ ...pending.element, text }], undefined, pending.sizeId);
+      } catch {
+        pendingText.current = { ...pending, element: { ...pending.element, text } };
+        setEditing(current);
+        return;
+      }
+    } else {
+      await Promise.resolve(updateElements(current.pageId, [{ id: current.elementId, text }])).catch(() => {});
+    }
+    const page = project.pages.find(item => item.id === current.pageId);
+    if (retainFocus || pending) selectElement(current.pageId, current.elementId, page && hasManySizes(page) ? current.sizeId : null);
+    if (retainFocus) surface.current?.focus({ preventScroll: true });
+  }
+
+  function finishEditingText() {
+    // Blurring uses the editor's current draft, including when Escape originates on the canvas.
+    surface.current?.querySelector<HTMLTextAreaElement>('.element-text-editor')?.blur();
   }
 
   const previewBoundary = preview ? boundaries.find(item => item.pageId === preview.pageId) ?? null : null;
@@ -750,7 +761,7 @@ export function useProjectCanvas({
     setSelectionScope, startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements,
     deleteSelectedLayers, minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer,
     startReattach, selectedElementTargets, startElementResize, editingElement, editingScreen,
-    commitEditingText, cancelEditingText, placeholderChoice, resolvePlaceholder, setPlaceholderChoice,
+    commitEditingText, finishEditingText, placeholderChoice, resolvePlaceholder, setPlaceholderChoice,
     submitRequestDraft, cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, updateReference,
     startReferenceResize, pasteChoice, setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice,
     preview, previewScreen, previewRefresh, previewClose, dropNotice, setDropNotice,

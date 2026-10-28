@@ -1,5 +1,5 @@
 import { canvasFont } from './fonts';
-import type { Element, ElementKind, ElementLayout, ElementStyle, InputType, Page, Project, Rect } from '../types';
+import type { Element, ElementKind, ElementLayout, ElementStyle, InputType, OutputType, Page, Project, Rect } from '../types';
 import type { Point } from '../projectCanvasGeometry';
 import { resolveElements } from './links';
 import { resolveForSize } from './sizes';
@@ -144,8 +144,12 @@ export function createElement(kind: ElementKind, rect: Rect, patch: Partial<Elem
   return { ...base, ...patch };
 }
 
-export function createTextElement(rect: Rect, text = ''): Element {
-  return createElement('text', rect, { text, style: { ...defaultStyle('text'), fill: null, stroke: { color: null, width: 0 } } });
+export function createTextElement(rect: Rect, text = '', output?: OutputType): Element {
+  const style = defaultStyle('text');
+  return createElement('text', rect, { text, style: { ...style, fill: null, stroke: { color: null, width: 0 },
+    textStyle: { ...style.textStyle, size: output === 'slide' ? 48 : output === 'image' ? 40 : 20 },
+    sizing: { ...style.sizing, width: rect.width > 0 ? 'fixed' : 'fit', height: 'fit' },
+  } });
 }
 
 /** A copy that never shares ids, for paste and duplicate. */

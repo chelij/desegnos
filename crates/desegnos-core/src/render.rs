@@ -1146,6 +1146,97 @@ fn resolve_auto_size(fonts: &mut FontSet, element: &Element, mut at: Rect) -> Re
     at
 }
 
+/// Persist Hug dimensions in the same transaction as content, typography and layout changes.
+/// Resolve shared styles and linked sizes before measuring, just as rendering does. Only Hug
+/// axes are written; fixed dimensions and every layer's position remain editing intent.
+pub(crate) fn sync_fit_rects(project: &mut Project) {
+    fn measure_tree(fonts: &mut FontSet, elements: &mut [Element]) {
+        for element in elements {
+            measure_tree(fonts, &mut element.children);
+            let rect = resolve_auto_size(fonts, element, element.rect);
+            if element.style.sizing.width == crate::SizingMode::Fit {
+                element.rect.width = rect.width;
+            }
+            if element.style.sizing.height == crate::SizingMode::Fit {
+                element.rect.height = rect.height;
+            }
+        }
+    }
+
+    fn write_tree(stored: &mut [Element], measured: &[Element], size_id: Option<uuid::Uuid>) {
+        for (element, measured) in stored.iter_mut().zip(measured) {
+            let fit_width = measured.style.sizing.width == crate::SizingMode::Fit;
+            let fit_height = measured.style.sizing.height == crate::SizingMode::Fit;
+            if fit_width || fit_height {
+                let mut rect = size_id
+                    .and_then(|id| element.overrides.get(&id).and_then(|over| over.rect))
+                    .unwrap_or(element.rect);
+                let previous = rect;
+                if fit_width {
+                    rect.width = measured.rect.width;
+                }
+                if fit_height {
+                    rect.height = measured.rect.height;
+                }
+                if rect != previous {
+                    if let Some(id) = size_id {
+                        element.overrides.entry(id).or_default().rect = Some(rect);
+                    } else {
+                        element.rect = rect;
+                    }
+                }
+            }
+            if element.link.is_none() {
+                write_tree(&mut element.children, &measured.children, size_id);
+            }
+        }
+    }
+
+    // Keep resolved font faces across edit transactions, as the canvas does.
+    thread_local! {
+        static FONTS: std::cell::RefCell<FontSet> = std::cell::RefCell::new(FontSet::new());
+    }
+    FONTS.with_borrow_mut(|fonts| {
+        let definitions: Vec<_> = project
+            .linked
+            .iter()
+            .map(|(id, definition)| {
+                let mut elements = crate::elements::resolve_elements(
+                    project, std::slice::from_ref(&definition.master),
+                );
+                crate::elements::resolve_shared_styles(project, &mut elements);
+                measure_tree(fonts, &mut elements);
+                (*id, elements)
+            })
+            .collect();
+        for (id, elements) in definitions {
+            if let Some(definition) = project.linked.get_mut(&id) {
+                write_tree(std::slice::from_mut(&mut definition.master), &elements, None);
+            }
+        }
+        for index in 0..project.pages.len() {
+            let page = &project.pages[index];
+            let mut base = crate::elements::resolve_elements(project, &page.elements);
+            crate::elements::resolve_shared_styles(project, &mut base);
+            measure_tree(fonts, &mut base);
+            let sizes: Vec<_> = page
+                .sizes
+                .iter()
+                .map(|size| {
+                    let mut elements = crate::elements::resolve_for_size(project, page, size.id);
+                    measure_tree(fonts, &mut elements);
+                    (size.id, elements)
+                })
+                .collect();
+            let stored = &mut project.pages[index].elements;
+            write_tree(stored, &base, None);
+            for (id, elements) in sizes {
+                write_tree(stored, &elements, Some(id));
+            }
+        }
+    });
+}
+
 /// Where a text-bearing element's first line box starts, and how its lines align.
 fn text_box(element: &Element, content: Rect) -> (Rect, TextAlign) {
     let style = &element.style.text_style;

@@ -36,7 +36,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements, deleteSelectedLayers,
     minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer, startReattach,
     selectedElementTargets, startElementResize, editingElement, editingScreen, commitEditingText,
-    cancelEditingText, placeholderChoice, resolvePlaceholder, setPlaceholderChoice, submitRequestDraft,
+    placeholderChoice, resolvePlaceholder, setPlaceholderChoice, submitRequestDraft,
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, previewScreen, dropNotice,
     setDropNotice,
@@ -88,7 +88,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     {!editing && <ElementSelectionOverlay surface={surface} project={project} selection={selectedElementTargets} camera={camera}
       version={Object.entries(movingElements).map(([id, rect]) => `${id}:${rect.x},${rect.y},${rect.width},${rect.height}`).join('|')} onResizeStart={startElementResize} />}
     {editing && editingElement && editingScreen && <ElementTextEditor key={`${editing.elementId}:${editing.created}`} element={editingElement} screen={editingScreen} zoom={camera.zoom}
-      autoWidth={editing.autoWidth} autoFocus onCommit={commitEditingText} onCancel={cancelEditingText} />}
+      autoWidth={editing.autoWidth} autoFocus onCommit={commitEditingText} />}
     {placeholderChoice && <PlaceholderChoiceRow screen={placeholderChoice.screen}
       include={() => resolvePlaceholder(placeholderChoice, true)} dismiss={() => resolvePlaceholder(placeholderChoice, false)}
       close={() => { setPlaceholderChoice(null); surface.current?.focus({ preventScroll: true }); }} />}

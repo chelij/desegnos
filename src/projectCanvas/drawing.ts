@@ -5,11 +5,14 @@ import {
 } from '../projectCanvasGeometry';
 import type { BoundaryKind, Element, ElementKind, Project, Rect } from '../types';
 import { hasManySizes } from './sizes';
-import { elementLocalRect } from './elementGeometry';
+import { elementLocalRect, snapPoint } from './elementGeometry';
 import { createElement, createTextElement, forBackground, withPickedColours, elementChildrenOf } from './elementGeometry';
 import { DrawElementDrag, Drag, boxParentAt } from './interactionTypes';
 
+export type PendingText = { element: Element; pageId: string; parentId: string | null; index: number; sizeId: string | null; worldRect: Rect };
+
 type Context = {
+  pendingText: import("react").RefObject<PendingText | null>;
   setPendingImage: import("react").Dispatch<import("react").SetStateAction<{ uri: string; width: number; height: number; name: string; } | null>>;
   project: Project;
   boundaryRect: (sizeId: string) => Rect | null;
@@ -54,15 +57,19 @@ export function createDrawingActions(context: () => Context) {
   }
 
   async function placeElement(kind: ElementKind, pageId: string, sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect, picture?: string, rotation?: number) {
-    const { project, createdElement, editingAllSizes, insertElements, selectElement } = context();
+    const { project, createdElement, editingAllSizes, insertElements, selectElement, pendingText } = context();
     const page = project.pages.find(item => item.id === pageId);
-    const element = withPickedColours(forBackground(kind === 'text' ? createTextElement(rect)
+    const element = withPickedColours(forBackground(kind === 'text' ? createTextElement(rect, '', page?.output)
       : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.background ?? '#ffffff'));
     const local = elementRectAt(sizeId, parentId, parentOrigin, boundary, rect);
     element.rect = { ...local, width: rect.width, height: rect.height };
     if (kind === 'line' && rotation !== undefined) element.rotation = rotation;
     createdElement.current = element.id;
     const singleSize = !!page && hasManySizes(page) && !editingAllSizes(pageId);
+    if (kind === 'text') {
+      pendingText.current = { element, pageId, parentId, index: insertionPoint(pageId, parentId), sizeId: singleSize ? sizeId : null, worldRect: rect };
+      return element;
+    }
     await insertElements(pageId, parentId, insertionPoint(pageId, parentId), [element], picture, singleSize ? sizeId : null);
     selectElement(pageId, element.id, singleSize ? sizeId : null);
     return element;
@@ -75,8 +82,10 @@ export function createDrawingActions(context: () => Context) {
     const { parentId, parentOrigin } = boxParentAt(project, boundary.pageId, boundary.sizeId, event.target);
     event.preventDefault();
     beginPointerSession(event);
-    const rect = { ...point, width: 0, height: line ? 0 : 0 };
-    drag.current = { kind: 'draw-element', pointerId: event.pointerId, start: point, pageId: boundary.pageId, sizeId: boundary.sizeId, parentId, parentOrigin, boundary: boundary.rect, rect, elementKind: kind, line, rotation: 0, moved: false };
+    const pointerStart = point;
+    point = project.gridSettings.snap && !event.altKey ? snapPoint(point) : point;
+    const rect = { ...point, width: 0, height: 0 };
+    drag.current = { kind: 'draw-element', pointerId: event.pointerId, start: point, pointerStart, pageId: boundary.pageId, sizeId: boundary.sizeId, parentId, parentOrigin, boundary: boundary.rect, rect, elementKind: kind, line, rotation: 0, moved: false };
     return drag.current;
   }
 

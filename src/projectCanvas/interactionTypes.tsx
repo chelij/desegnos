@@ -46,7 +46,7 @@ export type MoveElementsDrag = { kind: 'move-elements'; pointerId: number; start
 
 export type ResizeElementDrag = { kind: 'resize-element'; pointerId: number; start: Point; corner: ElementCorner; entry: ElementEntry; rect: Rect; moved: boolean };
 
-export type DrawElementDrag = { kind: 'draw-element'; pointerId: number; start: Point; pageId: string; sizeId: string; parentId: string | null; parentOrigin: Point; boundary: Rect; rect: Rect; elementKind: ElementKind; line: boolean; rotation: number; moved: boolean };
+export type DrawElementDrag = { kind: 'draw-element'; pointerId: number; start: Point; pointerStart: Point; pageId: string; sizeId: string; parentId: string | null; parentOrigin: Point; boundary: Rect; rect: Rect; elementKind: ElementKind; line: boolean; rotation: number; moved: boolean };
 
 export type MarqueeDrag = { kind: 'marquee'; pointerId: number; start: Point; current: Point; pageId: string | null; additive: boolean; moved: boolean };
 

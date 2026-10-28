@@ -225,7 +225,7 @@ export function createPasteDrop(context: () => Context) {
     }
     const page = project.pages.find(item => item.id === boundary.pageId);
     const local = elementRectAt(boundary.sizeId, null, { x: 0, y: 0 }, boundary.rect, { ...point, width: 0, height: 0 });
-    const element = withPickedColours(forBackground(createTextElement({ ...local, width: 0, height: 0 }, text), page?.background ?? '#ffffff'));
+    const element = withPickedColours(forBackground(createTextElement({ ...local, width: 0, height: 0 }, text, page?.output), page?.background ?? '#ffffff'));
     const singleSize = !!page && hasManySizes(page) && !editingAllSizes(boundary.pageId);
     busy.current = true;
     try {
