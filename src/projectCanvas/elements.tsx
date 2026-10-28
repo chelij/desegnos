@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type 
 import type { Element, ElementKind, Project, Rect } from '../types';
 import type { Boundary, CanvasCamera, ElementTarget } from '../projectCanvasGeometry';
 import type { ElementCorner } from './elementGeometry';
-import { elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
+import { elementPadding, elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
 import { elementOrigin, resolveForSize } from './sizes';
 import { canvasFont, useCanvasFont, useCanvasFontRevision } from './fonts';
 import type { ScreenRect } from './surface';
@@ -88,14 +88,18 @@ function wrapperStyle(element: Element, flow: boolean, rect: Rect, parentLayout?
   };
 }
 
-function childrenStyle(layout: Element['layout'], sizing?: Element['style']['sizing']): CSSProperties | null {
+function childrenStyle(element: Element): CSSProperties | null {
+  const layout = element.layout;
   if (layout.kind === 'free') return null;
+  const padding = elementPadding(element);
+  const inset = `${padding.top}px ${padding.right}px ${padding.bottom}px ${padding.left}px`;
+  const sizing = element.style.sizing;
   if (layout.kind === 'stack') {
     return {
       display: 'flex',
       flexDirection: layout.direction,
       gap: layout.gap,
-      padding: layout.padding,
+      padding: inset,
       alignItems: layout.align === 'start' ? 'flex-start' : layout.align === 'end' ? 'flex-end' : layout.align,
       justifyContent: layout.justify === 'start' ? 'flex-start' : layout.justify === 'end' ? 'flex-end' : layout.justify === 'spaceBetween' ? 'space-between' : 'center',
       flexWrap: layout.wrap ? 'wrap' : 'nowrap',
@@ -108,7 +112,7 @@ function childrenStyle(layout: Element['layout'], sizing?: Element['style']['siz
     display: 'grid',
     gridTemplateColumns: `repeat(${layout.columns}, minmax(0, 1fr))`,
     gap: layout.gap,
-    padding: layout.padding,
+    padding: inset,
     width: '100%',
     height: '100%',
     boxSizing: 'border-box',
@@ -219,7 +223,7 @@ function ElementBody({ project, pageId, element, flow, editingId, movingRects }:
 }
 
 function ElementChildren({ project, pageId, element, editingId, movingRects }: { project: Project; pageId: string; element: Element; editingId: string | null; movingRects?: Record<string, Rect> }) {
-  const style = childrenStyle(element.layout, element.style.sizing);
+  const style = childrenStyle(element);
   if (!style) return <>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow={false} editingId={editingId} movingRects={movingRects} />)}</>;
   return <div className="canvas-element-layout" style={style}>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow parentLayout={element.layout} editingId={editingId} movingRects={movingRects} />)}</div>;
 }

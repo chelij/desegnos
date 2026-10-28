@@ -32,11 +32,13 @@ export type ElementTextStyle = { fontFamily: string; size: number; weight: numbe
 export type ElementOverride = { rect?: Rect | null; style?: ElementStyle | null; layout?: ElementLayout | null; hidden: boolean; dismissed: boolean };
 export type SizingMode = 'fixed' | 'fit' | 'fill';
 export type ElementSizing = { width: SizingMode; height: SizingMode; minWidth?: number | null; maxWidth?: number | null; minHeight?: number | null; maxHeight?: number | null };
+/** Content inset for a stack or grid; the layout's single padding is the all-sides fallback. */
+export type ElementPadding = { top: number; right: number; bottom: number; left: number };
 export type StyleReferences = { fill?: string | null; stroke?: string | null; textColour?: string | null; text?: string | null };
 export type ColourStyle = { id: string; name: string; value: string };
 export type TextStyle = { id: string; name: string; fontFamily: string; size: number; weight: number; lineHeight: number; letterSpacing: number; italic: boolean };
 export type ProjectStyles = { colours: ColourStyle[]; text: TextStyle[] };
-export type ElementStyle = { sizing?: ElementSizing; references?: StyleReferences; fill: string | null; stroke: ElementStroke; radius: number; opacity: number; shadow: ElementShadow; textStyle: ElementTextStyle };
+export type ElementStyle = { sizing?: ElementSizing; padding?: ElementPadding | null; references?: StyleReferences; fill: string | null; stroke: ElementStroke; radius: number; opacity: number; shadow: ElementShadow; textStyle: ElementTextStyle };
 export type ElementLayout =
   | { kind: 'free' }
   | { kind: 'stack'; direction: StackDirection; gap: number; padding: number; align: StackAlign; justify: StackJustify; wrap: boolean }

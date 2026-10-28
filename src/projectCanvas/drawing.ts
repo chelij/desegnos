@@ -3,7 +3,7 @@ import { type PointerEvent as ReactPointerEvent } from 'react';
 import type { Boundary, Point } from '../projectCanvasGeometry';
 import type { Element, ElementKind, Project, Rect } from '../types';
 import { hasManySizes } from './sizes';
-import { elementLocalRect, snapPoint } from './elementGeometry';
+import { elementLocalRect, findPageElement, snapPoint } from './elementGeometry';
 import { createElement, createTextElement, forBackground, withPickedColours, elementChildrenOf } from './elementGeometry';
 import { DrawElementDrag, Drag, boxParentAt } from './interactionTypes';
 
@@ -56,8 +56,11 @@ export function createDrawingActions(context: () => Context) {
   async function placeElement(kind: ElementKind, pageId: string, sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect, picture?: string, rotation?: number) {
     const { project, createdElement, editingAllSizes, insertElements, selectElement, pendingText } = context();
     const page = project.pages.find(item => item.id === pageId);
+    // A new shape must not repeat the fill of the box, or boundary, it is drawn into.
+    const container = parentId ? findPageElement(project, pageId, parentId, sizeId) : null;
+    const surface = container?.style.fill ?? page?.background ?? null;
     const element = withPickedColours(forBackground(kind === 'text' ? createTextElement(rect, '', page?.output)
-      : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.background ?? '#ffffff'));
+      : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.background ?? '#ffffff'), surface);
     const local = elementRectAt(sizeId, parentId, parentOrigin, boundary, rect);
     element.rect = { ...local, width: rect.width, height: rect.height };
     if (kind === 'line' && rotation !== undefined) element.rotation = rotation;

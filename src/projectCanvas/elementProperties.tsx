@@ -9,8 +9,8 @@ import { normalizeAngle } from '../numberExpression';
 import { ChoiceRow, PropsSection } from '../EditorDock';
 import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
-import type { Element, ElementLayout, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, RequestAttachment } from '../types';
-import { commonValue, elementKindLabel, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri, rememberColour } from './elementGeometry';
+import type { Element, ElementPadding, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, Rect, RequestAttachment } from '../types';
+import { commonValue, elementKindLabel, elementPadding, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri, rememberColour, uniformPadding } from './elementGeometry';
 import { EditScopeChoice, requestEditScope } from './selectionBar';
 
 const validNumber = (value: string) => Number.isFinite(Number(value));
@@ -63,6 +63,7 @@ function OpacityField({ value, disabled, commit }: { value: number | undefined; 
   }
   return <div className="props-opacity">
     <CompactNumberField prefix="O" label="Opacity" min={0} max={100} unit="%" value={shown} disabled={disabled}
+      placeholder={value === undefined ? 'Mixed' : undefined}
       valid={draft => Number(draft) >= 0 && Number(draft) <= 100}
       commit={draft => commit(Math.min(100, Math.max(0, Number(draft))))} />
     <input className="props-range" type="range" aria-label="Opacity slider" min={0} max={100} step={1} disabled={disabled}
@@ -168,6 +169,31 @@ function StylePicker({ project, category, label, value, choose, create, disabled
   </select>;
 }
 
+type PaddingSide = keyof ElementPadding;
+const PADDING_SIDES: PaddingSide[] = ['top', 'right', 'bottom', 'left'];
+
+/** A compact all-sides padding field that opens onto the four sides, like Figma's auto layout. */
+function PaddingFields({ uniform, sides, disabled, change }: {
+  uniform: number | undefined;
+  sides: Record<PaddingSide, number | undefined>;
+  disabled: boolean;
+  change: (change: (padding: ElementPadding) => ElementPadding) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  return <>
+    <div style={{ display: 'flex', gap: 4 }}>
+      <CompactNumberField prefix="P" label="Padding" min={0} unit="px" value={uniform ?? ''} placeholder={uniform === undefined ? 'Mixed' : undefined} disabled={disabled}
+        valid={value => Number(value) >= 0}
+        commit={value => { const next = Number(value); change(() => ({ top: next, right: next, bottom: next, left: next })); }} />
+      <button type="button" className="icon-button sm" aria-label="Padding per side" aria-expanded={expanded} title="Set padding per side"
+        onClick={() => setExpanded(value => !value)}><Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} /></button>
+    </div>
+    {expanded && <div className="props-grid">{PADDING_SIDES.map(side => <CompactNumberField key={side} prefix={side[0].toUpperCase()} label={`${side[0].toUpperCase()}${side.slice(1)} padding`}
+      min={0} unit="px" value={sides[side] ?? ''} placeholder={sides[side] === undefined ? 'Mixed' : undefined} disabled={disabled}
+      valid={value => Number(value) >= 0} commit={value => change(padding => ({ ...padding, [side]: Number(value) }))} />)}</div>}
+  </>;
+}
+
 export function ElementProperties({ project, page, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error, styleCommand }: {
   styleCommand?: (command: import('../types').Command) => Promise<unknown>;
   project: Project; page: Page; pageId: string; sizeId: string | null; elements: Element[]; busy: boolean;
@@ -181,7 +207,12 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   error: (message: string) => void;
 }) {
   const single = elements.length === 1 ? elements[0] : null;
+  const multi = elements.length > 1;
   const linked = single?.link ? project.linked?.[single.link] ?? null : null;
+  // Every selected layer in one linked group already shares its content; offer the group, not
+  // another link command that would only fail as "already linked".
+  const sharedLinkId = multi && elements.every(element => element.link && element.link === elements[0].link) ? elements[0].link! : null;
+  const sharedLinked = sharedLinkId ? project.linked?.[sharedLinkId] ?? null : null;
   // Edits in one size become that size's overrides; All sizes changes base values and clears
   // the same fields from every size.
   const sized = <T,>(patch: T): T & { size_id?: string | null; all_sizes?: boolean } =>
@@ -194,11 +225,22 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   const radius = commonValue(elements.map(element => element.style.radius));
   const opacity = commonValue(elements.map(element => element.style.opacity));
   const shadow = commonValue(elements.map(element => element.style.shadow));
+  const shadowColour = commonValue(elements.map(element => element.style.shadow.color));
   const textStyle = commonValue(elements.map(element => element.style.textStyle));
+  const textColour = commonValue(elements.map(element => element.style.textStyle.color));
   const font = useCanvasFont(textStyle);
   const text = commonValue(elements.map(element => element.text));
   const url = commonValue(elements.map(element => element.url));
   const layout = commonValue(elements.map(element => element.layout));
+  // Multi-selection geometry: a field shows the shared value, or Mixed when the layers differ.
+  const x = commonValue(elements.map(element => element.rect.x));
+  const y = commonValue(elements.map(element => element.rect.y));
+  const width = commonValue(elements.map(element => element.rect.width));
+  const height = commonValue(elements.map(element => element.rect.height));
+  const rotation = commonValue(elements.map(element => normalizeAngle(element.rotation)));
+  const paddingSides = { top: commonValue(elements.map(element => elementPadding(element).top)), right: commonValue(elements.map(element => elementPadding(element).right)), bottom: commonValue(elements.map(element => elementPadding(element).bottom)), left: commonValue(elements.map(element => elementPadding(element).left)) };
+  const paddingUniform = paddingSides.top !== undefined && paddingSides.top === paddingSides.right && paddingSides.right === paddingSides.bottom && paddingSides.bottom === paddingSides.left ? paddingSides.top : undefined;
+  const mixed = (value: unknown) => multi && value === undefined;
   const picture = useRef<HTMLInputElement>(null);
   const [pictureUri, setPictureUri] = useState<string | null>(null);
   const [limitsOpen, setLimitsOpen] = useState(false);
@@ -241,9 +283,20 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   function commitSizing(change: Partial<NonNullable<ElementStyle['sizing']>>) {
     commitStyle(style => { style.sizing = { width: 'fixed', height: 'fixed', ...style.sizing, ...change }; });
   }
-  function commitRect(rect: { x?: number; y?: number; width?: number; height?: number }) {
-    if (!single) return;
-    update([sized({ id: single.id, rect: { ...single.rect, ...rect } })]);
+  function commitRects(change: (rect: Rect) => Rect) {
+    update(elements.map(element => sized({ id: element.id, rect: change(element.rect) })));
+  }
+  function commitPadding(change: (padding: ElementPadding) => ElementPadding) {
+    update(elements.map(element => {
+      if (element.layout.kind === 'free') return sized({ id: element.id });
+      const next = change(elementPadding(element));
+      const shared = uniformPadding(next);
+      return sized({
+        id: element.id,
+        layout: { ...element.layout, padding: shared ?? next.top },
+        style: { ...element.style, padding: shared === null ? next : null },
+      });
+    }));
   }
   function choosePicture(file: File | undefined) {
     if (!file || !single) return;
@@ -267,8 +320,8 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
     update([{ id: single.id, url: value.trim() || null }]);
   }
   // Text and lines keep their box plain until a stroke or radius is actually set.
-  const showsStrokeWidth = kind === 'line' || (strokeColour ?? '').trim().length > 0 || (kind !== 'text' && (strokeWidth ?? 0) > 0);
-  const showsRadius = kind !== null && kind !== 'text' && kind !== 'line' ? true : (radius ?? 0) > 0;
+  const showsStrokeWidth = kind === 'line' || multi || (strokeColour ?? '').trim().length > 0 || (kind !== 'text' && (strokeWidth ?? 0) > 0);
+  const showsRadius = multi || (kind !== null && kind !== 'text' && kind !== 'line' ? true : (radius ?? 0) > 0);
 
   // A layer inside a linked copy is already shared; only a plain layer can be made linked.
   const makeLinkable = !!single && !single.link && !canUnlink;
@@ -282,28 +335,37 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
       {linked && <CompactTextField label="Linked element name" field="linked-name" value={linked.name} disabled={busy}
         valid={name => name.trim().length > 0} commit={name => update([{ id: single.id, linked_name: name }])} />}
     </>}
-    {(canLink || canUnlink || makeLinkable) && <div className="form-actions">
-      {(canLink || makeLinkable) && <button type="button" className="dock-action" disabled={busy} title="Make the selected layers linked (Ctrl/Cmd+Alt+K)" onClick={link}>{single ? 'Make linked' : `Make linked (${elements.length})`}</button>}
-      {canUnlink && <button type="button" className="dock-action" disabled={busy} title="Detach this copy (Ctrl/Cmd+Alt+B)" onClick={unlink}>Unlink</button>}
+    {(sharedLinkId || canLink || canUnlink || makeLinkable) && <div className="form-actions">
+      {sharedLinkId
+        ? <><span className="dock-hint" title="These layers share one linked element">Linked · {sharedLinked?.name ?? 'Linked element'}</span>
+          <button type="button" className="dock-action" disabled={busy} title="Unlink the selected layers (Ctrl/Cmd+Alt+B)" onClick={unlink}>Unlink</button></>
+        : <>
+          {(canLink || makeLinkable) && <button type="button" className="dock-action" disabled={busy} title="Make the selected layers linked (Ctrl/Cmd+Alt+K)" onClick={link}>{single ? 'Make linked' : `Make linked (${elements.length})`}</button>}
+          {canUnlink && <button type="button" className="dock-action" disabled={busy} title="Detach this copy (Ctrl/Cmd+Alt+B)" onClick={unlink}>Unlink</button>}
+        </>}
     </div>}
-    {(single || (sameKind && kind === 'box')) && <PropsSection id="props-layout" title="Layout">
-      {single && <div className="props-grid">
-        <CompactNumberField prefix="X" label="X" min={-1_000_000} max={1_000_000} value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
-        <CompactNumberField prefix="Y" label="Y" min={-1_000_000} max={1_000_000} value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
+    {(single || multi) && <PropsSection id="props-layout" title="Layout">
+      <div className="props-grid">
+        <CompactNumberField prefix="X" label="X" min={-1_000_000} max={1_000_000} value={x ?? ''} placeholder={mixed(x) ? 'Mixed' : undefined} disabled={busy}
+          valid={validNumber} commit={value => commitRects(rect => ({ ...rect, x: Number(value) }))} />
+        <CompactNumberField prefix="Y" label="Y" min={-1_000_000} max={1_000_000} value={y ?? ''} placeholder={mixed(y) ? 'Mixed' : undefined} disabled={busy}
+          valid={validNumber} commit={value => commitRects(rect => ({ ...rect, y: Number(value) }))} />
         {(['width', 'height'] as const).map(axis => {
           // A line's thickness axis may be zero; every other box keeps at least one pixel.
-          const minimum = axis === 'height' && single.kind === 'line' ? 0 : 1;
+          const minimum = axis === 'height' && single?.kind === 'line' ? 0 : 1;
+          const value = axis === 'width' ? width : height;
           return <div key={axis} style={{ display: 'flex', minWidth: 0, gap: 2 }}>
             <CompactNumberField prefix={axis === 'width' ? 'W' : 'H'} label={axis === 'width' ? 'Width' : 'Height'} min={minimum} max={100_000}
-              value={single.rect[axis]} disabled={busy} valid={value => Number(value) >= minimum && Number(value) <= 100_000}
-              commit={value => commitRect({ [axis]: Number(value) })} />
-            <select aria-label={`${axis} sizing`} style={{ width: 55, minWidth: 0 }} value={single.style.sizing?.[axis] ?? 'fixed'} disabled={busy} onChange={event => commitSizing({ [axis]: event.target.value })}>
+              value={value ?? ''} placeholder={mixed(value) ? 'Mixed' : undefined} disabled={busy} valid={draft => Number(draft) >= minimum && Number(draft) <= 100_000}
+              commit={draft => commitRects(rect => ({ ...rect, [axis]: Number(draft) }))} />
+            {single && <select aria-label={`${axis} sizing`} style={{ width: 55, minWidth: 0 }} value={single.style.sizing?.[axis] ?? 'fixed'} disabled={busy} onChange={event => commitSizing({ [axis]: event.target.value })}>
               <option value="fixed">Fixed</option><option value="fit">Hug</option><option value="fill">Fill</option>
-            </select></div>;
+            </select>}
+          </div>;
         })}
-        <CompactNumberField prefix="°" label="Rotation" value={normalizeAngle(single.rotation)} disabled={busy} normalise={normalizeAngle}
-          valid={validNumber} commit={value => update([{ id: single.id, rotation: Number(value) }])} />
-      </div>}
+        <CompactNumberField prefix="°" label="Rotation" value={rotation ?? ''} placeholder={mixed(rotation) ? 'Mixed' : undefined} disabled={busy} normalise={normalizeAngle}
+          valid={validNumber} commit={value => update(elements.map(element => ({ id: element.id, rotation: Number(value) })))} />
+      </div>
       {single && <>
         <button type="button" className="dock-action" aria-expanded={limitsOpen} onClick={() => setLimitsOpen(value => !value)}>Min / max</button>
         {limitsOpen && <div className="props-grid">{(['minWidth', 'maxWidth', 'minHeight', 'maxHeight'] as const).map(key => <CompactNumberField key={key} prefix={key.startsWith('min') ? 'Min' : 'Max'} label={key.replace(/([A-Z])/g, ' $1')} min={0} optional
@@ -312,32 +374,37 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
       </>}
       {sameKind && kind === 'box' && <>
         <div className="props-choice"><ChoiceRow label="Flow" value={layout?.kind ?? 'free'} choices={[['free', 'Free'], ['stack', 'Stack'], ['grid', 'Grid']]} disabled={busy}
-          choose={flow => update(elements.map(element => sized({ id: element.id, layout: flow === 'free' ? { kind: 'free' } : flow === 'stack'
-            ? { kind: 'stack', direction: 'row', gap: 8, padding: 0, align: 'start', justify: 'start', wrap: false }
-            : { kind: 'grid', columns: 2, gap: 8, padding: 0 } })))} /></div>
+          choose={flow => update(elements.map(element => {
+            // Switching from Free to Stack hugs the box to its children; Fixed stays available.
+            const hug = flow === 'stack' && element.layout.kind === 'free';
+            const next = flow === 'free' ? { kind: 'free' as const } : flow === 'stack'
+              ? { kind: 'stack' as const, direction: 'row' as const, gap: 8, padding: 0, align: 'start' as const, justify: 'start' as const, wrap: false }
+              : { kind: 'grid' as const, columns: 2, gap: 8, padding: 0 };
+            return sized({ id: element.id, layout: next, ...(hug ? { style: { ...element.style, sizing: { ...element.style.sizing, width: 'fit' as const, height: 'fit' as const } } } : {}) });
+          }))} /></div>
         {layout?.kind === 'stack' && <>
           <div className="props-choice"><ChoiceRow label="Direction" value={layout.direction} choices={[['row', 'Row'], ['column', 'Column']]} disabled={busy}
             choose={direction => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, direction } })))} /></div>
           <div className="props-grid">
             <CompactNumberField prefix="G" label="Gap" min={0} unit="px" value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
               commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
-            <CompactNumberField prefix="P" label="Padding" min={0} unit="px" value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
-              commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
           </div>
+          <PaddingFields uniform={paddingUniform} sides={paddingSides} disabled={busy} change={commitPadding} />
           <div className="props-choice"><ChoiceRow label="Align" value={layout.align} choices={[['start', 'Start'], ['center', 'Center'], ['end', 'End'], ['stretch', 'Stretch']]} disabled={busy}
             choose={align => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, align } })))} /></div>
           <div className="props-choice"><ChoiceRow label="Justify" value={layout.justify} choices={[['start', 'Start'], ['center', 'Center'], ['end', 'End'], ['spaceBetween', 'Between']]} disabled={busy}
             choose={justify => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, justify } })))} /></div>
           <label className="check-label"><input type="checkbox" checked={layout.wrap} disabled={busy} onChange={event => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, wrap: event.target.checked } })))} />Wrap</label>
         </>}
-        {layout?.kind === 'grid' && <div className="props-grid">
-          <CompactNumberField prefix="C" label="Columns" min={1} max={64} value={layout.columns} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 64}
-            commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, columns: Number(value) } })))} />
-          <CompactNumberField prefix="G" label="Gap" min={0} unit="px" value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
-            commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
-          <CompactNumberField prefix="P" label="Padding" min={0} unit="px" value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
-            commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
-        </div>}
+        {layout?.kind === 'grid' && <>
+          <div className="props-grid">
+            <CompactNumberField prefix="C" label="Columns" min={1} max={64} value={layout.columns} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 64}
+              commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, columns: Number(value) } })))} />
+            <CompactNumberField prefix="G" label="Gap" min={0} unit="px" value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
+              commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
+          </div>
+          <PaddingFields uniform={paddingUniform} sides={paddingSides} disabled={busy} change={commitPadding} />
+        </>}
       </>}
     </PropsSection>}
     {hyperlinkKind && single && <PropsSection id="props-link" title="Link">
@@ -353,13 +420,13 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
       {single.url && <button type="button" className="dock-action" disabled={busy} onClick={() => commitUrl('')}>Remove link</button>}
     </PropsSection>}
     {visual && <PropsSection id="props-appearance" title="Appearance">
-      {kind !== 'line' && <div style={{ display: 'flex', gap: 4 }}><ColourField label="Fill" value={fill ?? ''} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; style.references = { ...style.references, fill: null }; }); }} />{picker('fill')}</div>}
+      {kind !== 'line' && <div style={{ display: 'flex', gap: 4 }}><ColourField label="Fill" value={fill ?? ''} mixed={mixed(fill)} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; style.references = { ...style.references, fill: null }; }); }} />{picker('fill')}</div>}
       <div className="props-stroke">
-        <div style={{ display: 'flex', gap: 4 }}><ColourField label="Stroke" value={strokeColour ?? ''} fallback="#000000" disabled={busy} commit={value => { rememberColour('stroke', value.trim() || null); commitStyle(style => { style.stroke.color = value.trim() || null; style.references = { ...style.references, stroke: null }; }); }} />{picker('stroke')}</div>
-        {showsStrokeWidth && <CompactNumberField prefix={<Icon name="line-weight" size={12} />} label="Stroke width" min={0} unit="px" value={strokeWidth ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+        <div style={{ display: 'flex', gap: 4 }}><ColourField label="Stroke" value={strokeColour ?? ''} mixed={mixed(strokeColour)} fallback="#000000" disabled={busy} commit={value => { rememberColour('stroke', value.trim() || null); commitStyle(style => { style.stroke.color = value.trim() || null; style.references = { ...style.references, stroke: null }; }); }} />{picker('stroke')}</div>
+        {showsStrokeWidth && <CompactNumberField prefix={<Icon name="line-weight" size={12} />} label="Stroke width" min={0} unit="px" value={strokeWidth ?? ''} placeholder={mixed(strokeWidth) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 0}
           commit={value => commitStyle(style => { style.stroke.width = Number(value); })} />}
       </div>
-      {showsRadius && <CompactNumberField prefix={<Icon name="corner-radius" size={12} />} label="Radius" min={0} unit="px" value={radius ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+      {showsRadius && <CompactNumberField prefix={<Icon name="corner-radius" size={12} />} label="Radius" min={0} unit="px" value={radius ?? ''} placeholder={mixed(radius) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 0}
         commit={value => commitStyle(style => { style.radius = Number(value); })} />}
       <OpacityField value={opacity} disabled={busy} commit={percent => commitStyle(style => { style.opacity = percent / 100; })} />
     </PropsSection>}
@@ -377,16 +444,16 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
       <FontField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
       {font?.fellBack && <span className="field-help">Not installed — using Archivo</span>}
       <div className="props-grid">
-        <CompactNumberField prefix="S" label="Size" min={1} unit="px" value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1}
+        <CompactNumberField prefix="S" label="Size" min={1} unit="px" value={textStyle?.size ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 1}
           commit={value => commitStyle(style => { style.textStyle.size = Number(value); })} />
-        <CompactNumberField prefix="W" label="Weight" min={1} max={1000} value={textStyle?.weight ?? ''} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 1000}
+        <CompactNumberField prefix="W" label="Weight" min={1} max={1000} value={textStyle?.weight ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 1000}
           commit={value => commitStyle(style => { style.textStyle.weight = Number(value); })} />
-        <CompactNumberField prefix="LH" label="Line height" min={0} value={textStyle?.lineHeight ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+        <CompactNumberField prefix="LH" label="Line height" min={0} value={textStyle?.lineHeight ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 0}
           commit={value => commitStyle(style => { style.textStyle.lineHeight = Number(value); })} />
-        <CompactNumberField prefix="LS" label="Letter spacing" unit="px" value={textStyle?.letterSpacing ?? ''} disabled={busy} valid={validNumber}
+        <CompactNumberField prefix="LS" label="Letter spacing" unit="px" value={textStyle?.letterSpacing ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={validNumber}
           commit={value => commitStyle(style => { style.textStyle.letterSpacing = Number(value); })} />
       </div>
-      <div style={{ display: 'flex', gap: 4 }}><ColourField label="Text colour" value={textStyle?.color ?? ''} disabled={busy} commit={value => { rememberColour('text', value.trim() || null); commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; style.references = { ...style.references, textColour: null }; }); }} />{picker('textColour')}</div>
+      <div style={{ display: 'flex', gap: 4 }}><ColourField label="Text colour" value={textColour ?? ''} mixed={mixed(textColour)} disabled={busy} commit={value => { rememberColour('text', value.trim() || null); commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; style.references = { ...style.references, textColour: null }; }); }} />{picker('textColour')}</div>
       <label className="check-label"><input type="checkbox" disabled={busy} checked={!!textStyle?.italic} onChange={event => commitStyle(style => { style.textStyle.italic = event.target.checked; })} />Italic</label>
       <div className="props-choice"><ChoiceRow label="Align" value={textStyle?.align ?? 'left'} choices={[['left', 'Left'], ['center', 'Center'], ['right', 'Right']]} disabled={busy}
         choose={align => commitStyle(style => { style.textStyle.align = align; })} /></div>
@@ -401,14 +468,14 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
       <CodeField language={single.language ?? ''} source={single.source ?? ''} commit={source => update([{ id: single.id, source }])} />
     </PropsSection>}
     {visual && <PropsSection id="props-shadow" title="Shadow">
-        <ColourField label="Shadow colour" value={shadow?.color ?? ''} fallback="#000000" disabled={busy}
+        <ColourField label="Shadow colour" value={shadowColour ?? ''} mixed={mixed(shadowColour)} fallback="#000000" disabled={busy}
           commit={value => commitStyle(style => { style.shadow.color = value.trim() || null; })} />
         <div className="props-grid">
-          <CompactNumberField prefix="X" label="Shadow X" unit="px" value={shadow?.x ?? ''} disabled={busy} valid={validNumber}
+          <CompactNumberField prefix="X" label="Shadow X" unit="px" value={shadow?.x ?? ''} placeholder={mixed(shadow) ? 'Mixed' : undefined} disabled={busy} valid={validNumber}
             commit={value => commitStyle(style => { style.shadow.x = Number(value); })} />
-          <CompactNumberField prefix="Y" label="Shadow Y" unit="px" value={shadow?.y ?? ''} disabled={busy} valid={validNumber}
+          <CompactNumberField prefix="Y" label="Shadow Y" unit="px" value={shadow?.y ?? ''} placeholder={mixed(shadow) ? 'Mixed' : undefined} disabled={busy} valid={validNumber}
             commit={value => commitStyle(style => { style.shadow.y = Number(value); })} />
-          <CompactNumberField prefix="B" label="Shadow blur" min={0} unit="px" value={shadow?.blur ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+          <CompactNumberField prefix="B" label="Shadow blur" min={0} unit="px" value={shadow?.blur ?? ''} placeholder={mixed(shadow) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 0}
             commit={value => commitStyle(style => { style.shadow.blur = Number(value); })} />
         </div>
     </PropsSection>}

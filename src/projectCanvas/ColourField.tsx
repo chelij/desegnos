@@ -15,10 +15,12 @@ function keyDown(settle: () => void, cancel: () => void) {
 }
 
 /** Colour swatch plus hex text in one row; an empty value means no colour unless it is required. */
-export function ColourField({ label, value, commit, fallback = '#ffffff', disabled, optional = true, valid }: {
+export function ColourField({ label, value, commit, fallback = '#ffffff', disabled, optional = true, valid, mixed = false }: {
   label: string; value: string; commit: (value: string) => void; fallback?: string; disabled?: boolean;
   /** An optional colour clears to no colour; a required one rejects an empty draft. */
   optional?: boolean;
+  /** A multi-selection with different colours reads as "Mixed" rather than "None". */
+  mixed?: boolean;
   /** A final check on the normalised hex value, for models with a narrower colour format. */
   valid?: (value: string) => boolean;
 }) {
@@ -52,7 +54,7 @@ export function ColourField({ label, value, commit, fallback = '#ffffff', disabl
     <label className={`props-swatch${current ? '' : ' is-empty'}`} title={`${label} colour`} style={current ? { background: current } : undefined}>
       <input type="color" value={picker} disabled={disabled} aria-label={`${label} colour`} onChange={event => commit(event.target.value)} />
     </label>
-    <input className={`props-hex${invalid ? ' is-invalid' : ''}`} type="text" aria-label={label} placeholder="None" spellCheck={false}
+    <input className={`props-hex${invalid ? ' is-invalid' : ''}`} type="text" aria-label={label} placeholder={mixed ? 'Mixed' : 'None'} spellCheck={false}
       aria-invalid={invalid || undefined}
       value={state.draft} disabled={disabled} onChange={event => state.setDraft(event.target.value)}
       onBlur={() => state.settle()} onKeyDown={keyDown(() => state.settle(), state.cancel)} />

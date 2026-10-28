@@ -400,6 +400,7 @@ fn populated(mut project: Project) -> Project {
                     rect: Some(rect(12.0, 22.0, 100.0, 30.0)),
                     style: Some(ElementStyle {
                         sizing: Default::default(),
+                        padding: None,
                         references: Default::default(),
                         fill: Some("#ffffff".into()),
                         stroke: ElementStroke {

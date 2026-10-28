@@ -104,6 +104,43 @@ pub enum ElementKind {
     },
 }
 
+/// The name new layers of a kind are numbered from; a box reads as a rectangle.
+pub fn default_layer_name_base(kind: &ElementKind) -> &'static str {
+    match kind {
+        ElementKind::Box => "Rectangle",
+        kind => kind.label(),
+    }
+}
+
+/// The placeholder text a kind starts with; a layer still showing it reads by its name.
+fn default_element_text(kind: &ElementKind) -> &'static str {
+    match kind {
+        ElementKind::Text => "Text",
+        ElementKind::Button => "Button",
+        ElementKind::Link => "Link",
+        ElementKind::Input { .. } => "Input",
+        ElementKind::Textarea => "Textarea",
+        ElementKind::Select { .. } => "Option 1",
+        ElementKind::Checkbox => "Checkbox",
+        ElementKind::Radio => "Radio",
+        _ => "",
+    }
+}
+
+/// True when a name is the numbered default new layers receive, not one the user chose.
+pub fn is_default_layer_name(element: &Element) -> bool {
+    let Some(name) = element.name.as_deref().map(str::trim) else {
+        return false;
+    };
+    name.strip_prefix(default_layer_name_base(&element.kind))
+        .and_then(|rest| rest.strip_prefix(' '))
+        .is_some_and(|number| {
+            !number.is_empty()
+                && !number.starts_with('0')
+                && number.chars().all(|character| character.is_ascii_digit())
+        })
+}
+
 impl ElementKind {
     pub fn label(&self) -> &'static str {
         match self {
@@ -224,11 +261,36 @@ pub struct StyleReferences {
     pub text: Option<Uuid>,
 }
 
+/// Content inset for a stack or grid box, one value per side. The layout keeps its own
+/// all-sides `padding` as the fallback for files and renderers that predate per-side insets.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ElementPadding {
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub left: f64,
+}
+
+impl ElementPadding {
+    pub fn validate(&self) -> Result<()> {
+        ensure(
+            [self.top, self.right, self.bottom, self.left]
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=4096.0).contains(value)),
+            "Padding must be between 0 and 4,096 pixels on every side.",
+        )
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementStyle {
     #[serde(default)]
     pub sizing: ElementSizing,
+    /// Stack or grid padding per side; `None` uses the layout's all-sides padding.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub padding: Option<ElementPadding>,
     #[serde(default)]
     pub references: StyleReferences,
     /// `None` fills nothing.
@@ -595,23 +657,29 @@ impl Element {
     }
 
     pub fn label(&self) -> String {
-        if let Some(name) = &self.name
-            && !name.trim().is_empty()
+        let name = self
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty());
+        if let Some(name) = name
+            && !is_default_layer_name(self)
         {
-            return name.clone();
+            return name.to_string();
         }
-        match &self.kind {
-            ElementKind::Code { language, .. } => {
-                format!("{language} code")
-            }
-            kind => {
-                let line = self.text.trim().split('\n').next().unwrap_or("");
-                if line.is_empty() {
-                    kind.label().into()
-                } else {
-                    line.chars().take(80).collect()
-                }
-            }
+        // A layer still showing its kind's placeholder text reads by its numbered name; once the
+        // text is its own, text layers and controls show that text, as they always have.
+        let line = self.text.trim().split('\n').next().unwrap_or("");
+        if !line.is_empty() && line != default_element_text(&self.kind) {
+            return line.chars().take(80).collect();
+        }
+        if let ElementKind::Code { language, .. } = &self.kind {
+            return format!("{language} code");
+        }
+        match name {
+            Some(name) => name.to_string(),
+            None if !line.is_empty() => line.chars().take(80).collect(),
+            None => self.kind.label().into(),
         }
     }
 }
@@ -619,6 +687,9 @@ impl Element {
 impl ElementStyle {
     pub(crate) fn validate(&self) -> Result<()> {
         self.sizing.validate()?;
+        if let Some(padding) = &self.padding {
+            padding.validate()?;
+        }
         if let Some(fill) = &self.fill {
             validate_colour(fill, "Fill")?;
         }
@@ -1269,6 +1340,10 @@ impl Project {
                 }
             }
         }
+        // New layers get numbered default names per kind, counting the whole project so two
+        // boxes never share a name. Pasted and duplicated layers arrive with a name already.
+        let mut used = used_default_names(self);
+        assign_default_names(&mut elements, &mut used);
         let page = self
             .pages
             .iter_mut()
@@ -1895,6 +1970,8 @@ impl Project {
 
     pub(crate) fn group_elements(&mut self, page_id: Uuid, ids: Vec<Uuid>) -> Result<()> {
         ensure(ids.len() >= 2, "Choose at least two layers to group.")?;
+        // A new group is a new layer too, so it takes the next numbered name.
+        let group_name = next_default_name(self, &ElementKind::Group);
         let page = self
             .pages
             .iter_mut()
@@ -1944,6 +2021,7 @@ impl Project {
             children.remove(*index);
         }
         let mut group = group_element(union, grouped);
+        group.name = Some(group_name);
         for child in &mut group.children {
             child.rect.x -= union.x;
             child.rect.y -= union.y;
@@ -2375,6 +2453,58 @@ fn union_rect(first: &Rect, second: &Rect) -> Rect {
     }
 }
 
+/// The highest number already used for each default base name across the whole project.
+pub(crate) fn used_default_names(project: &Project) -> BTreeMap<String, u32> {
+    fn walk(elements: &[Element], used: &mut BTreeMap<String, u32>) {
+        for element in elements {
+            if let Some(name) = &element.name {
+                let name = name.trim();
+                let digits = name.len() - name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+                if digits > 0 {
+                    let (base, number) = name.split_at(name.len() - digits);
+                    if let Some(base) = base.strip_suffix(' ')
+                        && let Ok(number) = number.parse::<u32>()
+                    {
+                        used.entry(base.to_string())
+                            .and_modify(|seen| *seen = (*seen).max(number))
+                            .or_insert(number);
+                    }
+                }
+            }
+            walk(&element.children, used);
+        }
+    }
+    let mut used = BTreeMap::new();
+    for page in &project.pages {
+        walk(&page.elements, &mut used);
+    }
+    for definition in project.linked.values() {
+        walk(&definition.master.children, &mut used);
+    }
+    used
+}
+
+/// Gives every unnamed layer its next numbered default name, children included.
+pub(crate) fn assign_default_names(elements: &mut [Element], used: &mut BTreeMap<String, u32>) {
+    for element in elements {
+        if element.name.as_deref().is_none_or(|name| name.trim().is_empty()) {
+            let base = default_layer_name_base(&element.kind);
+            let next = used.get(base).copied().unwrap_or(0) + 1;
+            used.insert(base.to_string(), next);
+            element.name = Some(format!("{base} {next}"));
+        }
+        assign_default_names(&mut element.children, used);
+    }
+}
+
+/// The next free numbered default name for one new layer.
+fn next_default_name(project: &Project, kind: &ElementKind) -> String {
+    let used = used_default_names(project);
+    let base = default_layer_name_base(kind);
+    let next = used.get(base).copied().unwrap_or(0) + 1;
+    format!("{base} {next}")
+}
+
 /// An element with the neutral visuals every new layer starts from.
 pub fn empty_element(kind: ElementKind, rect: Rect) -> Element {
     Element {
@@ -2388,6 +2518,7 @@ pub fn empty_element(kind: ElementKind, rect: Rect) -> Element {
         locked: false,
         style: ElementStyle {
             sizing: ElementSizing::default(),
+            padding: None,
             references: StyleReferences::default(),
             fill: None,
             stroke: ElementStroke {
@@ -2517,6 +2648,80 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("references");
         let style: ElementStyle = serde_json::from_value(legacy).unwrap();
         assert_eq!(style.sizing.width, SizingMode::Fixed);
+    }
+
+    #[test]
+    fn per_side_padding_is_optional_serialized_and_validated() {
+        let mut style = empty_element(
+            ElementKind::Box,
+            Rect { x: 0.0, y: 0.0, width: 100.0, height: 40.0 },
+        )
+        .style;
+        assert!(style.padding.is_none());
+        let value = serde_json::to_value(&style).unwrap();
+        assert!(value.get("padding").is_none(), "an all-sides layout padding stays compact");
+        style.padding = Some(ElementPadding { top: 8.0, right: 16.0, bottom: 8.0, left: 16.0 });
+        assert!(style.validate().is_ok());
+        let value = serde_json::to_value(&style).unwrap();
+        assert_eq!(value["padding"]["top"], 8.0);
+        assert_eq!(value["padding"]["left"], 16.0);
+        style.padding = Some(ElementPadding { top: -1.0, right: 0.0, bottom: 0.0, left: 0.0 });
+        assert!(style.validate().is_err());
+        style.padding = Some(ElementPadding { top: 4097.0, right: 0.0, bottom: 0.0, left: 0.0 });
+        assert!(style.validate().is_err());
+        style.padding = Some(ElementPadding { top: f64::NAN, right: 0.0, bottom: 0.0, left: 0.0 });
+        assert!(style.validate().is_err());
+    }
+
+    #[test]
+    fn inserted_layers_get_numbered_default_names_per_kind() {
+        let project = Project::new(
+            "Names".into(),
+            crate::Viewport { width: 800, height: 600 },
+            crate::Appearance::Light,
+        )
+        .unwrap();
+        let page = project.pages[0].id;
+        let insert = |project: &Project, elements: Vec<Element>| {
+            project
+                .apply(
+                    project.revision,
+                    crate::Command::InsertElements {
+                        page_id: page,
+                        parent_id: None,
+                        index: 0,
+                        elements,
+                        picture_data_uri: None,
+                        size_id: None,
+                    },
+                )
+                .unwrap()
+        };
+        let mut text = empty_element(
+            ElementKind::Text,
+            Rect { x: 0.0, y: 0.0, width: 120.0, height: 24.0 },
+        );
+        text.text = "Hello".into();
+        let project = insert(
+            &project,
+            vec![
+                empty_element(ElementKind::Box, Rect { x: 0.0, y: 0.0, width: 100.0, height: 80.0 }),
+                text,
+            ],
+        );
+        let names: Vec<_> = project.pages[0]
+            .elements
+            .iter()
+            .map(|element| element.name.clone().unwrap())
+            .collect();
+        assert_eq!(names, vec!["Rectangle 1".to_string(), "Text 1".to_string()]);
+        // A default-named text layer still reads as its text in Layers and Properties.
+        assert_eq!(project.pages[0].elements[1].label(), "Hello");
+        let project = insert(
+            &project,
+            vec![empty_element(ElementKind::Box, Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 })],
+        );
+        assert_eq!(project.pages[0].elements[0].name.as_deref(), Some("Rectangle 2"));
     }
 
     #[test]

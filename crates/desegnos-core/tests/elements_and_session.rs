@@ -353,7 +353,7 @@ fn linked_copies_resolve_one_definition_and_edit_together() {
     let (project, left, right) = linked_boxes(&project());
     let definition = project.linked.values().next().cloned().unwrap();
     assert_eq!(project.linked.len(), 1);
-    assert_eq!(definition.name, "Box");
+    assert_eq!(definition.name, "Rectangle 1");
 
     let resolved_left = resolve_element(&project, project.element(left).unwrap().1);
     let resolved_right = resolve_element(&project, project.element(right).unwrap().1);
@@ -468,16 +468,16 @@ fn linked_copies_resolve_one_definition_and_edit_together() {
 fn linking_creates_a_named_definition_when_unnamed() {
     let left = Uuid::new_v4();
     let right = Uuid::new_v4();
-    let project = insert(
-        &project(),
-        vec![
-            element(left, ElementKind::Box, rect(0.0, 0.0, 50.0, 50.0)),
-            element(right, ElementKind::Box, rect(60.0, 0.0, 50.0, 50.0)),
-        ],
-    )
-    .unwrap();
+    // Built on the page directly, so both layers keep a missing name; insert would number them.
+    let mut start = project();
+    start.pages[0]
+        .elements
+        .push(element(left, ElementKind::Box, rect(0.0, 0.0, 50.0, 50.0)));
+    start.pages[0]
+        .elements
+        .push(element(right, ElementKind::Box, rect(60.0, 0.0, 50.0, 50.0)));
     let project = apply(
-        &project,
+        &start,
         Command::LinkElements {
             ids: vec![left, right],
             source_id: None,
