@@ -23,6 +23,23 @@ export type ElementLocation = { pageId: string; parentId: string | null; index: 
 const TEXT_COLOUR = '#1a1a1a';
 const DARK_TEXT_COLOUR = '#f2f2f2';
 
+/** The last colours picked in Properties; new layers start with them, like a paint program. */
+const picked: { fill?: string | null; stroke?: string | null; text?: string } = {};
+export function rememberColour(kind: 'fill' | 'stroke' | 'text', value: string | null) {
+  if (kind === 'text') picked.text = value ?? TEXT_COLOUR;
+  else picked[kind] = value;
+}
+export function withPickedColours(element: Element): Element {
+  const style = element.style;
+  const shape = element.kind === 'box' || element.kind === 'ellipse';
+  return { ...element, style: {
+    ...style,
+    fill: shape && picked.fill !== undefined ? picked.fill : style.fill,
+    stroke: (shape || element.kind === 'line') && picked.stroke !== undefined ? { ...style.stroke, color: picked.stroke } : style.stroke,
+    textStyle: element.kind === 'text' && picked.text !== undefined ? { ...style.textStyle, color: picked.text } : style.textStyle,
+  } };
+}
+
 /** New layers on a dark boundary start with light text and lines so they stay readable. */
 export function forAppearance(element: Element, appearance: Appearance): Element {
   if (appearance !== 'dark') return element;

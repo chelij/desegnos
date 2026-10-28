@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
+import { CompactNumberField, CompactTextField } from '../CompactField';
 import { ChoiceRow } from '../EditorDock';
 import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
 import type { Element, ElementLayout, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, RequestAttachment } from '../types';
-import { commonValue, elementKindLabel, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri } from './elementGeometry';
+import { commonValue, elementKindLabel, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri, rememberColour } from './elementGeometry';
 
 const validColour = (value: string) => !value.trim() || /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(value.trim()) || value.trim().toLowerCase() === 'transparent';
 const validNumber = (value: string) => Number.isFinite(Number(value));
@@ -19,9 +20,6 @@ function stylePatches(elements: Element[], change: (style: ElementStyle) => void
     return { id: element.id, style };
   });
 }
-
-// Display numbers rounded to at most two decimals; the full value survives untouched until edited.
-const shownNumber = (value: number) => String(Math.round(value * 100) / 100);
 
 function useDraft(value: string) {
   const [draft, setDraft] = useState(value);
@@ -45,32 +43,6 @@ function keyDown(settle: () => void, cancel: () => void) {
   };
 }
 
-/** A full-width text input with no visible label; the placeholder names the field. */
-function TextField({ label, placeholder, value, commit, valid, disabled, field }: {
-  label: string; placeholder?: string; value: string; commit: (value: string) => void;
-  valid?: (draft: string) => boolean; disabled?: boolean; field?: string;
-}) {
-  const state = useDraft(value);
-  return <input className="props-input" type="text" aria-label={label} placeholder={placeholder ?? label} data-field={field} spellCheck={false}
-    value={state.draft} disabled={disabled} onChange={event => state.setDraft(event.target.value)}
-    onBlur={() => state.settle(commit, valid)} onKeyDown={keyDown(() => state.settle(commit, valid), state.cancel)} />;
-}
-
-/** Compact number input: a tiny prefix label lives inside the field, spinners are gone. */
-function NumberField({ prefix, label, value, commit, valid, min, max, disabled }: {
-  prefix: string; label: string; value: string | number; commit: (value: string) => void;
-  valid?: (draft: string) => boolean; min?: number; max?: number; disabled?: boolean;
-}) {
-  const formatted = typeof value === 'number' ? shownNumber(value) : value;
-  const state = useDraft(formatted);
-  return <label className="props-num" title={label}>
-    <span className="props-num-prefix" aria-hidden="true">{prefix}</span>
-    <input type="number" inputMode="decimal" step="any" aria-label={label} value={state.draft} min={min} max={max} disabled={disabled}
-      onChange={event => state.setDraft(event.target.value)}
-      onBlur={() => state.settle(commit, valid)} onKeyDown={keyDown(() => state.settle(commit, valid), state.cancel)} />
-  </label>;
-}
-
 /** Colour swatch plus hex text in one row; an empty value means no colour. */
 function ColourField({ label, value, commit, fallback = '#ffffff', disabled }: {
   label: string; value: string; commit: (value: string) => void; fallback?: string; disabled?: boolean;
@@ -86,6 +58,28 @@ function ColourField({ label, value, commit, fallback = '#ffffff', disabled }: {
     <input className="props-hex" type="text" aria-label={label} placeholder="None" spellCheck={false}
       value={state.draft} disabled={disabled} onChange={event => state.setDraft(event.target.value)}
       onBlur={() => state.settle(commit, validColour)} onKeyDown={keyDown(() => state.settle(commit, validColour), state.cancel)} />
+  </div>;
+}
+
+/** Opacity reads as a percentage, stays stored as 0-1, and previews on a slim slider beside it. */
+function OpacityField({ value, disabled, commit }: { value: number | undefined; disabled: boolean; commit: (percent: number) => void }) {
+  const percent = value === undefined ? '' : Math.round(value * 100);
+  const [preview, setPreview] = useState<number | null>(null);
+  useEffect(() => { setPreview(null); }, [percent]);
+  const shown = preview ?? percent;
+  function settle() {
+    if (preview === null) return;
+    setPreview(null);
+    commit(preview);
+  }
+  return <div className="props-opacity">
+    <CompactNumberField prefix="O" label="Opacity" min={0} max={100} unit="%" value={shown} disabled={disabled}
+      valid={draft => Number(draft) >= 0 && Number(draft) <= 100}
+      commit={draft => commit(Math.min(100, Math.max(0, Number(draft))))} />
+    <input className="props-range" type="range" aria-label="Opacity slider" min={0} max={100} step={1} disabled={disabled}
+      value={typeof shown === 'number' ? shown : 0}
+      onChange={event => setPreview(Number(event.target.value))}
+      onPointerUp={settle} onPointerCancel={settle} onKeyUp={settle} onBlur={settle} />
   </div>;
 }
 
@@ -263,7 +257,7 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
   return <div className="dock-form props">
     <div className="dock-layer-title"><strong>{single ? elementKindLabel(single) : `${elements.length} layers`}</strong></div>
     {single && <>
-      <TextField label="Name" placeholder="Name" field="layer-name" value={single.name ?? ''} disabled={busy} commit={name => void commitName(name)} />
+      <CompactTextField label="Name" placeholder="Name" field="layer-name" value={single.name ?? ''} disabled={busy} commit={name => void commitName(name)} />
       {nameError && <p className="dock-field-error" role="alert">{nameError}</p>}
     </>}
     {(canLink || canUnlink) && <div className="form-actions">
@@ -273,11 +267,11 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
     {(single || (sameKind && kind === 'box')) && <section className="props-section">
       <h3 className="props-heading">Layout</h3>
       {single && <div className="props-grid">
-        <NumberField prefix="X" label="X" value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
-        <NumberField prefix="Y" label="Y" value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
-        <NumberField prefix="W" label="Width" min={0} value={single.rect.width} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ width: Number(value) })} />
-        <NumberField prefix="H" label="Height" min={0} value={single.rect.height} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ height: Number(value) })} />
-        <NumberField prefix="°" label="Rotation" value={single.rotation} disabled={busy} valid={validNumber} commit={value => update([{ id: single.id, rotation: Number(value) }])} />
+        <CompactNumberField prefix="X" label="X" value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
+        <CompactNumberField prefix="Y" label="Y" value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
+        <CompactNumberField prefix="W" label="Width" min={0} value={single.rect.width} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ width: Number(value) })} />
+        <CompactNumberField prefix="H" label="Height" min={0} value={single.rect.height} disabled={busy} valid={value => Number(value) >= 0} commit={value => commitRect({ height: Number(value) })} />
+        <CompactNumberField prefix="°" label="Rotation" value={single.rotation} disabled={busy} valid={validNumber} commit={value => update([{ id: single.id, rotation: Number(value) }])} />
       </div>}
       {sameKind && kind === 'box' && <>
         <div className="props-choice"><ChoiceRow label="Flow" value={layout?.kind ?? 'free'} choices={[['free', 'Free'], ['stack', 'Stack'], ['grid', 'Grid']]} disabled={busy}
@@ -288,9 +282,9 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
           <div className="props-choice"><ChoiceRow label="Direction" value={layout.direction} choices={[['row', 'Row'], ['column', 'Column']]} disabled={busy}
             choose={direction => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, direction } })))} /></div>
           <div className="props-grid">
-            <NumberField prefix="G" label="Gap" min={0} value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
+            <CompactNumberField prefix="G" label="Gap" min={0} unit="px" value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
               commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
-            <NumberField prefix="P" label="Padding" min={0} value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
+            <CompactNumberField prefix="P" label="Padding" min={0} unit="px" value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
               commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
           </div>
           <div className="props-choice"><ChoiceRow label="Align" value={layout.align} choices={[['start', 'Start'], ['center', 'Center'], ['end', 'End'], ['stretch', 'Stretch']]} disabled={busy}
@@ -300,27 +294,26 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
           <label className="check-label"><input type="checkbox" checked={layout.wrap} disabled={busy} onChange={event => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, wrap: event.target.checked } })))} />Wrap</label>
         </>}
         {layout?.kind === 'grid' && <div className="props-grid">
-          <NumberField prefix="C" label="Columns" min={1} max={64} value={layout.columns} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 64}
+          <CompactNumberField prefix="C" label="Columns" min={1} max={64} value={layout.columns} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 64}
             commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, columns: Number(value) } })))} />
-          <NumberField prefix="G" label="Gap" min={0} value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
+          <CompactNumberField prefix="G" label="Gap" min={0} unit="px" value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
             commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
-          <NumberField prefix="P" label="Padding" min={0} value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
+          <CompactNumberField prefix="P" label="Padding" min={0} unit="px" value={layout.padding} disabled={busy} valid={value => Number(value) >= 0}
             commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
         </div>}
       </>}
     </section>}
     {visual && <section className="props-section">
       <h3 className="props-heading">Appearance</h3>
-      {kind !== 'line' && <ColourField label="Fill" value={fill ?? ''} disabled={busy} commit={value => commitStyle(style => { style.fill = value.trim() || null; })} />}
-      <ColourField label="Stroke" value={strokeColour ?? ''} fallback="#000000" disabled={busy} commit={value => commitStyle(style => { style.stroke.color = value.trim() || null; })} />
-      <div className="props-grid">
-        {showsStrokeWidth && <NumberField prefix="S" label="Stroke width" min={0} value={strokeWidth ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+      {kind !== 'line' && <ColourField label="Fill" value={fill ?? ''} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; }); }} />}
+      <div className="props-stroke">
+        <ColourField label="Stroke" value={strokeColour ?? ''} fallback="#000000" disabled={busy} commit={value => { rememberColour('stroke', value.trim() || null); commitStyle(style => { style.stroke.color = value.trim() || null; }); }} />
+        {showsStrokeWidth && <CompactNumberField prefix={<Icon name="line-weight" size={12} />} label="Stroke width" min={0} unit="px" value={strokeWidth ?? ''} disabled={busy} valid={value => Number(value) >= 0}
           commit={value => commitStyle(style => { style.stroke.width = Number(value); })} />}
-        {showsRadius && <NumberField prefix="R" label="Radius" min={0} value={radius ?? ''} disabled={busy} valid={value => Number(value) >= 0}
-          commit={value => commitStyle(style => { style.radius = Number(value); })} />}
-        <NumberField prefix="O" label="Opacity" min={0} max={1} value={opacity ?? ''} disabled={busy} valid={value => Number(value) >= 0 && Number(value) <= 1}
-          commit={value => commitStyle(style => { style.opacity = Number(value); })} />
       </div>
+      {showsRadius && <CompactNumberField prefix={<Icon name="corner-radius" size={12} />} label="Radius" min={0} unit="px" value={radius ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+        commit={value => commitStyle(style => { style.radius = Number(value); })} />}
+      <OpacityField value={opacity} disabled={busy} commit={percent => commitStyle(style => { style.opacity = percent / 100; })} />
     </section>}
     {((imageKind && single) || mediaKind) && <section className="props-section">
       <h3 className="props-heading">Content</h3>
@@ -330,22 +323,22 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
         <button type="button" className="dock-action" disabled={busy} onClick={() => picture.current?.click()}>Replace</button>
         <input ref={picture} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { choosePicture(event.target.files?.[0]); event.target.value = ''; }} />
       </div>}
-      {mediaKind && <TextField label="Address" value={url ?? ''} disabled={busy} valid={validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
+      {mediaKind && <CompactTextField label="Address" value={url ?? ''} disabled={busy} valid={validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
     </section>}
     {textKind && <section className="props-section">
       <h3 className="props-heading">Text</h3>
-      <TextField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
+      <CompactTextField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
       <div className="props-grid">
-        <NumberField prefix="S" label="Size" min={1} value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1}
+        <CompactNumberField prefix="S" label="Size" min={1} unit="px" value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1}
           commit={value => commitStyle(style => { style.textStyle.size = Number(value); })} />
-        <NumberField prefix="W" label="Weight" min={1} max={1000} value={textStyle?.weight ?? ''} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 1000}
+        <CompactNumberField prefix="W" label="Weight" min={1} max={1000} value={textStyle?.weight ?? ''} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 1000}
           commit={value => commitStyle(style => { style.textStyle.weight = Number(value); })} />
-        <NumberField prefix="LH" label="Line height" min={0} value={textStyle?.lineHeight ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+        <CompactNumberField prefix="LH" label="Line height" min={0} value={textStyle?.lineHeight ?? ''} disabled={busy} valid={value => Number(value) >= 0}
           commit={value => commitStyle(style => { style.textStyle.lineHeight = Number(value); })} />
-        <NumberField prefix="LS" label="Letter spacing" value={textStyle?.letterSpacing ?? ''} disabled={busy} valid={validNumber}
+        <CompactNumberField prefix="LS" label="Letter spacing" unit="px" value={textStyle?.letterSpacing ?? ''} disabled={busy} valid={validNumber}
           commit={value => commitStyle(style => { style.textStyle.letterSpacing = Number(value); })} />
       </div>
-      <ColourField label="Text colour" value={textStyle?.color ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; })} />
+      <ColourField label="Text colour" value={textStyle?.color ?? ''} disabled={busy} commit={value => { rememberColour('text', value.trim() || null); commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; }); }} />
       <label className="check-label"><input type="checkbox" disabled={busy} checked={!!textStyle?.italic} onChange={event => commitStyle(style => { style.textStyle.italic = event.target.checked; })} />Italic</label>
       <div className="props-choice"><ChoiceRow label="Align" value={textStyle?.align ?? 'left'} choices={[['left', 'Left'], ['center', 'Center'], ['right', 'Right']]} disabled={busy}
         choose={align => commitStyle(style => { style.textStyle.align = align; })} /></div>
@@ -357,7 +350,7 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
     </section>}
     {codeKind && single && <section className="props-section">
       <h3 className="props-heading">Code</h3>
-      <TextField label="Language" value={single.language ?? ''} disabled={busy} valid={value => value.trim().length > 0} commit={value => update([{ id: single.id, language: value.trim() }])} />
+      <CompactTextField label="Language" value={single.language ?? ''} disabled={busy} valid={value => value.trim().length > 0} commit={value => update([{ id: single.id, language: value.trim() }])} />
       <CodeField language={single.language ?? ''} source={single.source ?? ''} commit={source => update([{ id: single.id, source }])} />
     </section>}
     {visual && <section className="props-section">
@@ -368,11 +361,11 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
         <ColourField label="Shadow colour" value={shadow?.color ?? ''} fallback="#000000" disabled={busy}
           commit={value => commitStyle(style => { style.shadow.color = value.trim() || null; })} />
         <div className="props-grid">
-          <NumberField prefix="X" label="Shadow X" value={shadow?.x ?? ''} disabled={busy} valid={validNumber}
+          <CompactNumberField prefix="X" label="Shadow X" unit="px" value={shadow?.x ?? ''} disabled={busy} valid={validNumber}
             commit={value => commitStyle(style => { style.shadow.x = Number(value); })} />
-          <NumberField prefix="Y" label="Shadow Y" value={shadow?.y ?? ''} disabled={busy} valid={validNumber}
+          <CompactNumberField prefix="Y" label="Shadow Y" unit="px" value={shadow?.y ?? ''} disabled={busy} valid={validNumber}
             commit={value => commitStyle(style => { style.shadow.y = Number(value); })} />
-          <NumberField prefix="B" label="Shadow blur" min={0} value={shadow?.blur ?? ''} disabled={busy} valid={value => Number(value) >= 0}
+          <CompactNumberField prefix="B" label="Shadow blur" min={0} unit="px" value={shadow?.blur ?? ''} disabled={busy} valid={value => Number(value) >= 0}
             commit={value => commitStyle(style => { style.shadow.blur = Number(value); })} />
         </div>
       </>}

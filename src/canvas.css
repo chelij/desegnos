@@ -83,6 +83,17 @@
 .project-canvas.panning, .project-canvas.pan-ready { cursor: grabbing; }
 .project-canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
 .project-canvas-layer { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+/* A file dragged from the file manager outlines the boundary it will land in, or the bed. */
+.project-canvas .canvas-drop-target {
+  position: absolute; z-index: 4; box-sizing: border-box; pointer-events: none;
+  border: 2px solid var(--annotation-focus); border-radius: 2px;
+  background: color-mix(in srgb, var(--annotation-focus) 7%, transparent);
+}
+.project-canvas.drop-bed::after {
+  content: ''; position: absolute; inset: 0; z-index: 18; box-sizing: border-box; pointer-events: none;
+  border: 2px solid color-mix(in srgb, var(--annotation-focus) 45%, transparent);
+  background: color-mix(in srgb, var(--annotation-focus) 4%, transparent);
+}
 .project-canvas .page-boundary { position: absolute; background: var(--site-light); box-shadow: 0 0 0 1px var(--border), var(--shadow-1); }
 /* A boundary shows its own Light/Dark appearance, matching what it exports as. */
 .project-canvas .page-boundary.dark { background: #121212; }

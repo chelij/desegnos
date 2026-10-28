@@ -1,4 +1,5 @@
 //! File access starts only at an operating-system drop, never at a renderer-supplied path.
+//! Drag positions stay in the physical pixels the window reports; the canvas converts them.
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::Serialize;
 use std::{fs::File, io::Read, path::Path};
@@ -110,17 +111,24 @@ pub fn handle(window: &Window, event: &WindowEvent) {
     let WindowEvent::DragDrop(event) = event else {
         return;
     };
-    let scale = match window.scale_factor() {
-        Ok(scale) if scale > 0.0 => scale,
-        _ => return,
-    };
     let position = match event {
         DragDropEvent::Enter { position, .. }
         | DragDropEvent::Over { position }
-        | DragDropEvent::Drop { position, .. } => Some(Position {
-            x: position.x / scale,
-            y: position.y / scale,
-        }),
+        | DragDropEvent::Drop { position, .. } => {
+            // Wry reports physical pixels on Windows but logical points on macOS and Linux.
+            // Normalize to physical pixels; the canvas divides by the webview pixel ratio.
+            #[cfg(target_os = "windows")]
+            let scale = 1.0;
+            #[cfg(not(target_os = "windows"))]
+            let scale = match window.scale_factor() {
+                Ok(scale) if scale > 0.0 => scale,
+                _ => return,
+            };
+            Some(Position {
+                x: position.x * scale,
+                y: position.y * scale,
+            })
+        }
         _ => None,
     };
     let id = uuid::Uuid::new_v4().to_string();

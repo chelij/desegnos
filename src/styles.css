@@ -254,17 +254,19 @@ p { margin-bottom: var(--space-5); }
 
 /* Sizes: one dense row per linked size, then the presets that add another. */
 .boundary-sizes { padding-top: var(--space-3); border-top: 1px solid var(--border-soft); }
-.dock-size-row { display: grid; grid-template-columns: minmax(0, 1fr) 42px 42px auto; align-items: center; gap: var(--space-1) var(--space-2); padding: var(--space-1) 0; }
+.dock-size-row { display: flex; align-items: center; gap: var(--space-1) var(--space-2); padding: var(--space-1) 0; }
 .dock-size-row + .dock-size-row { border-top: 1px solid var(--border-soft); }
-.dock-size-name { display: flex; align-items: center; gap: var(--space-2); min-width: 0; overflow: hidden; color: var(--muted); font-size: 10px; font-weight: var(--weight-medium); white-space: nowrap; }
-.dock-size-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dock-size-name { flex: none; color: var(--muted); font-size: 10px; font-weight: var(--weight-medium); white-space: nowrap; }
 .dock-size-tag { flex: none; padding: 0 3px; border: 1px solid var(--border); border-radius: var(--radius-xs); color: var(--muted); font-size: 9px; font-weight: var(--weight-semibold); line-height: 12px; letter-spacing: var(--tracking-label); text-transform: uppercase; }
-.dock-size-row .props-num { width: 100%; height: 22px; min-height: 22px; padding: 0 var(--space-2); gap: var(--space-1); }
+.dock-size-row .props-num { flex: 1 1 44px; width: auto; height: 26px; min-height: 26px; padding: 0 var(--space-2); gap: var(--space-1); }
 .dock-size-row .props-num-prefix { font-size: 9px; }
+.dock-size-row .props-num-unit { font-size: 9px; }
 .dock-size-row .props-num input { font-size: var(--text-xs); }
-.dock-size-tail { display: flex; align-items: center; gap: var(--space-1); }
-.dock-size-tail .icon-button.sm { width: 18px; min-width: 18px; height: 22px; min-height: 22px; }
-.dock-kind { width: 56px; height: 22px; min-height: 22px; padding: 0 var(--space-1); border-radius: var(--radius-xs); font-size: 10px; }
+.dock-size-tail { display: flex; flex: none; align-items: center; gap: var(--space-1); }
+.dock-size-tail .icon-button.sm { width: 18px; min-width: 18px; height: 26px; min-height: 26px; }
+.dock-kind { width: 62px; height: 26px; min-height: 26px; padding: 0 var(--space-1); border-radius: var(--radius-xs); font-size: 10px; }
+/* The size name is an extra: drop it rather than squeeze the fields when the dock has no room. */
+@container (max-width: 240px) { .dock-size-name { display: none; } }
 .dock-size-add { display: flex; flex-direction: column; gap: var(--space-2); }
 .boundary-add-row { display: flex; align-items: center; gap: var(--space-1); }
 .boundary-add-row > button { flex: 1 1 0; min-width: 0; }

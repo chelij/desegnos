@@ -1,14 +1,13 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { native } from './api';
 import { isTextField } from './WorkspaceSurface';
 import { automaticLinks, boundaryAt, boundaryKey, boundaryMoves, canvasRectFromPage, canvasTargetKey, dotGrid, drawnBoundaryRect, fitCamera, insideAnyBoundary, layoutBoundaries, pointerAt, POINTER_HIT_PX, referenceFrameRect, referenceItemAt, referenceMoves, referenceNoteRect, movedReferenceRect, nearestEdgeAnchors, pageRectFromCanvas, panCamera, pointerRoute, pushApartBoundaries, pushApartReference, resizedReferenceRect, sameBoundaries, samePointerEndpoint, selectedPointers, viewportWorldRect, type Boundary, type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point, type ReferenceBox, type ReferenceMove, type RequestBox } from './projectCanvasGeometry';
 import type { BoundaryKind, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, Page, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from './types';
 import type { ProjectTool, RequestToolShape } from './EditorTools';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { BoundaryLayer } from './projectCanvas/boundaries';
-import { coveredTargets, dedupeTargets, elementBoxes, elementBoxesNow, requestShapeBounds, requestTargetKey, RequestBoxEditor, RequestLayer } from './projectCanvas/requests';
+import { coveredTargets, dedupeTargets, elementBoxes, elementBoxesNow, pendingRequests, requestAreaContains, requestShapeBounds, requestTargetKey, RequestBoxEditor, RequestLayer } from './projectCanvas/requests';
 import { ReferenceLayer, ReferenceNoteEditor, shownReference } from './projectCanvas/reference';
 import { pointerEntries, pointerWorld, PointerComments, PointerHandles, PointerLines } from './projectCanvas/pointers';
 import { centre, screenRect, useCanvasCamera, type NativeDrag, type ScreenRect } from './projectCanvas/surface';
@@ -18,10 +17,13 @@ import { copySummary, linkNeedsChoice, nestedLayerIds, resolveElements, sameStru
 import { pasteDefault, setPasteDefault, usePasteDefault, type PasteMode } from './pastePreference';
 import { baseSizeId, hasManySizes, resolveForSize } from './projectCanvas/sizes';
 import { elementLocalRect } from './projectCanvas/elementGeometry';
+import { isClipboardMarker, newClipboardMarker, pastedImageFiles, pastedImageRect, pastedNoteRect, readPastedImage } from './projectCanvas/clipboardPaste';
+import { droppedDataUri, droppedFile, droppedFileKind, droppedImageSize, droppedText } from './projectCanvas/fileDrop';
+import { Notice } from './ProblemBanner';
 import { shortcutFor } from './shortcuts';
 import { playIsActive, type PlayState } from './projectCanvas/play';
 import {
-  cloneElement, createElement, createTextElement, forAppearance, elementBoundsHeight, elementChildrenOf, elementPath, elementParents, findElementIn, findPageElement, ratioResizedRect, rectFromPoints, resizedElementRect, snapPoint, snapValue,
+  cloneElement, createElement, createTextElement, forAppearance, withPickedColours, elementBoundsHeight, elementChildrenOf, elementPath, elementParents, findElementIn, findPageElement, ratioResizedRect, rectFromPoints, resizedElementRect, snapPoint, snapValue,
   type ElementCorner,
 } from './projectCanvas/elementGeometry';
 
@@ -171,8 +173,12 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   const createdElement = useRef<string | null>(null);
   const lastPointer = useRef<Point | null>(null);
   const nativeDrop = useRef<{ id: string; x: number; y: number } | null>(null);
+  const nativeOver = useRef<{ id: string; x: number; y: number } | null>(null);
+  const dropNoticeId = useRef(0);
   const imagePicker = useRef<HTMLInputElement>(null);
   const clipboard = useRef<ClipboardEntry[]>([]);
+  // The marker these layers left on the system clipboard; null when it could not be written.
+  const clipboardMark = useRef<string | null>(null);
   const pasteCount = useRef(0);
   const pasteMode = usePasteDefault();
   const [pasteChoice, setPasteChoice] = useState<PasteChoice | null>(null);
@@ -196,14 +202,19 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   // pointer capture, a retargeted event or an overlay layer cannot strand an active drag.
   const dragSession = useRef<{ move: (event: PointerEvent) => void; end: (event: PointerEvent) => void } | null>(null);
   const dragHandlers = useRef<{ move: (event: DragInput) => void; end: (event: DragInput) => void } | null>(null);
+  const pasteHandler = useRef<(data: DataTransfer | null, target: EventTarget | null) => boolean>(() => false);
   const [editing, setEditing] = useState<{ pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean } | null>(null);
   const [pendingImage, setPendingImage] = useState<{ uri: string; width: number; height: number; name: string } | null>(null);
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
+  // The boundary (or the canvas bed) under a native file drag, and the last drop message.
+  const [dropHover, setDropHover] = useState<{ key: string; rect: Rect | null } | null>(null);
+  const [dropNotice, setDropNotice] = useState<{ id: number; message: string; variant: 'info' | 'warning' } | null>(null);
 
   // Drop and bridge listeners need the latest canvas state without re-registering on every pan.
-  const latest = useRef({ camera, boundaries, project, selection, focused, addReference, attachToRequest, selectPointer, selectElement, removeElements, insertElements, updateElements, moveElements, groupElements, ungroupElements, tool, insertKind, editing, play, onPlayElement });
-  latest.current = { camera, boundaries, project, selection, focused, addReference, attachToRequest, selectPointer, selectElement, removeElements, insertElements, updateElements, moveElements, groupElements, ungroupElements, tool, insertKind, editing, play, onPlayElement };
+  const latest = useRef({ camera, boundaries, project, selection, focused, addReference, attachToRequest, selectPointer, selectReference, selectElement, clearSelection, removeElements, insertElements, updateElements, moveElements, groupElements, ungroupElements, tool, insertKind, editing, play, onPlayElement });
+  latest.current = { camera, boundaries, project, selection, focused, addReference, attachToRequest, selectPointer, selectReference, selectElement, clearSelection, removeElements, insertElements, updateElements, moveElements, groupElements, ungroupElements, tool, insertKind, editing, play, onPlayElement };
   dragHandlers.current = { move: pointerMove, end: pointerUp };
+  pasteHandler.current = pasteClipboard;
 
   const pageKey = project.pages.map(page => `${page.id}:${page.sizes.map(size => `${size.id}:${size.label}:${size.width}:${size.height}:${size.kind}:${size.x}:${size.y}:${elementBoundsHeight(resolveForSize(project, page, size.id), size.height)}`).join(',')}:${page.elements.length}`).join('|');
   useEffect(() => {
@@ -268,11 +279,18 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     return () => window.removeEventListener('keydown', handle);
   }, [selection, focused, focusedSize, editing, selectBoundary, removeSelection, removeElements, deleteBoundary, pasteChoice, linkChoice]);
 
-  // Files dropped on the project canvas: a layer attaches them to its request, the empty
-  // canvas keeps reference pictures.
+  // Files dropped on the project canvas: pictures and text land inside the boundary under
+  // the pointer or become reference outside every boundary, and other accepted files attach
+  // to a request. File access still starts only at the operating-system drop.
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false; let stop: (() => void) | undefined;
+
+    /** Native drag positions are physical pixels; the canvas draws in CSS pixels. */
+    function clientPoint(position: { x: number; y: number }): Point {
+      const ratio = window.devicePixelRatio || 1;
+      return { x: position.x / ratio, y: position.y / ratio };
+    }
     function worldFromClient(x: number, y: number): Point | null {
       const node = surface.current;
       if (!node) return null;
@@ -281,45 +299,164 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       const current = latest.current.camera;
       return { x: (x - box.left - current.x) / current.zoom, y: (y - box.top - current.y) / current.zoom };
     }
-    function filesOf(value: NativeDrag): typeof value.files {
-      if (value.files.length) return value.files;
-      return value.picture ? [value.picture] : [];
+    function highlight(point: Point | null) {
+      if (!point) { setDropHover(null); return; }
+      const boundary = boundaryAt(latest.current.boundaries, point);
+      const key = boundary ? `${boundary.pageId}:${boundary.sizeId}` : 'bed';
+      setDropHover(current => current?.key === key ? current : { key, rect: boundary?.rect ?? null });
     }
+    function requestAt(point: Point): string | null {
+      const rows = pendingRequests(latest.current.project);
+      for (let index = rows.length - 1; index >= 0; index--) {
+        const request = rows[index].request;
+        if (request.area && requestAreaContains(request.area.shape, point)) return request.id;
+      }
+      return null;
+    }
+    function requestForElement(elementId: string): string | null {
+      const project = latest.current.project;
+      const page = project.pages.find(item => !!findElementIn(item.elements, elementId));
+      const ids = page ? [elementId, ...elementParents(project, page.id, elementId)] : [elementId];
+      return (project.requests ?? []).find(request => request.targets.some(target => target.kind === 'element' && ids.includes(target.id)))?.id ?? null;
+    }
+    function showNotice(message: string, variant: 'info' | 'warning') {
+      if (!message) return;
+      setDropNotice({ id: ++dropNoticeId.current, message, variant });
+    }
+
+    async function dropFiles(point: Point, client: Point, value: NativeDrag) {
+      const state = latest.current;
+      const files = value.files.length ? value.files : value.picture ? [value.picture] : [];
+      const prepared = files.map(file => ({ file, kind: droppedFileKind(file) }));
+      const usable = prepared.filter(item => item.kind !== null);
+      const messages = [...value.fileErrors];
+      // The native fallback message is only useful when nothing else was readable; a text or
+      // zip drop is valid even though it is not a picture.
+      if (value.message && !value.fileErrors.length && !usable.length) messages.push(value.message);
+
+      // A request marker, a request area, or a layer a request targets all take attachments.
+      const hit = document.elementFromPoint(client.x, client.y);
+      const markerRequest = hit instanceof Element ? hit.closest<HTMLElement>('[data-request]')?.dataset.request ?? null : null;
+      const domElementId = hit instanceof Element ? hit.closest<HTMLElement>('[data-element]')?.dataset.element ?? null : null;
+      // Geometry covers overlays and the brief moment after a drag when hit testing is busy.
+      const elementId = domElementId ?? elementAt(elementBoxesNow(state.project, state.boundaries), point)?.elementId ?? null;
+      const targetRequest = requestAt(point) ?? markerRequest ?? (elementId ? requestForElement(elementId) : null);
+
+      const boundary = boundaryAt(state.boundaries, point);
+      const placeable = usable.filter(item => item.kind === 'image' || item.kind === 'text');
+      const other = usable.filter(item => item.kind === 'other');
+      const unplaceable = prepared.filter(item => item.kind === null);
+      const info: string[] = [];
+
+      if (other.length) {
+        if (targetRequest) state.attachToRequest(targetRequest, other.map(item => droppedFile(item.file)), []);
+        else info.push(`${other.map(item => item.file.name).join(', ')}: this file type can't be placed on the canvas.`);
+      }
+      if (unplaceable.length) info.push(`${unplaceable.map(item => item.file.name).join(', ')}: this file type can't be placed on the canvas.`);
+
+      const dropped: { pageId: string; elementId: string; sizeId: string | null }[] = [];
+      const references: string[] = [];
+
+      if (boundary && placeable.length) {
+        const page = state.project.pages.find(item => item.id === boundary.pageId);
+        if (page) {
+          const allSizes = state.selection.some(target => target.kind === 'element' && target.pageId === boundary.pageId && target.sizeId === null);
+          const sizeId = hasManySizes(page) && !allSizes ? boundary.sizeId : null;
+          const elements: { element: Element; picture?: string }[] = [];
+          for (const [index, item] of placeable.entries()) {
+            const offset = index * 24;
+            if (item.kind === 'image') {
+              const picture = droppedDataUri(item.file);
+              const size = await droppedImageSize(picture);
+              const worldRect = pastedImageRect({ x: point.x + offset, y: point.y + offset }, size.width, size.height);
+              const element = withPickedColours(forAppearance(createElement('image', worldRect, { image: null }), page.appearance));
+              element.rect = { ...elementLocalRect(worldRect, boundary.rect, { x: 0, y: 0 }), width: worldRect.width, height: worldRect.height };
+              elements.push({ element, picture });
+            } else {
+              const worldRect = { x: Math.round(point.x + offset), y: Math.round(point.y + offset), width: 0, height: 0 };
+              const element = withPickedColours(forAppearance(createTextElement(worldRect, droppedText(item.file)), page.appearance));
+              element.rect = { ...elementLocalRect(worldRect, boundary.rect, { x: 0, y: 0 }), width: 0, height: 0 };
+              elements.push({ element });
+            }
+          }
+          const images = elements.filter(item => item.picture);
+          let index = elementChildrenOf(state.project, boundary.pageId, null).length;
+          try {
+            if (images.length <= 1) {
+              // One command keeps the drop to one undo step; it carries one picture for the batch.
+              await state.insertElements(boundary.pageId, null, index, elements.map(item => item.element), images[0]?.picture, sizeId);
+              dropped.push(...elements.map(item => ({ pageId: boundary.pageId, elementId: item.element.id, sizeId })));
+            } else {
+              const text = elements.filter(item => !item.picture);
+              if (text.length) {
+                await state.insertElements(boundary.pageId, null, index, text.map(item => item.element), undefined, sizeId);
+                index += text.length;
+                dropped.push(...text.map(item => ({ pageId: boundary.pageId, elementId: item.element.id, sizeId })));
+              }
+              for (const item of images) {
+                await state.insertElements(boundary.pageId, null, index, [item.element], item.picture, sizeId);
+                index += 1;
+                dropped.push({ pageId: boundary.pageId, elementId: item.element.id, sizeId });
+              }
+            }
+          } catch { /* App surfaces the failed command. */ }
+        }
+      } else if (placeable.length) {
+        for (const [index, item] of placeable.entries()) {
+          const offset = index * 24;
+          const id = crypto.randomUUID();
+          try {
+            if (item.kind === 'image') {
+              const picture = droppedDataUri(item.file);
+              const size = await droppedImageSize(picture);
+              const rect = pastedImageRect({ x: point.x + offset, y: point.y + offset }, size.width, size.height);
+              await state.addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: item.file.name.slice(0, 120) } }, picture);
+            } else {
+              const rect = { ...pastedNoteRect(point), x: Math.round(point.x + offset), y: Math.round(point.y + offset) };
+              await state.addReference({ id, rect, kind: { kind: 'note', text: droppedText(item.file) } });
+            }
+            references.push(id);
+          } catch { /* App surfaces the failed command. */ }
+        }
+      }
+
+      if (dropped.length || references.length) {
+        state.clearSelection();
+        for (const item of dropped) state.selectElement(item.pageId, item.elementId, item.sizeId, true);
+        for (const id of references) state.selectReference(id, true);
+      }
+      const unique = [...new Set(messages.filter(Boolean))];
+      const notices = info.filter(Boolean);
+      if (unique.length) showNotice([...unique, ...notices].join(' '), 'warning');
+      else if (notices.length) showNotice(notices.join(' '), 'info');
+    }
+
     function handle(value: NativeDrag) {
+      if (value.phase === 'leave') { nativeDrop.current = null; nativeOver.current = null; setDropHover(null); return; }
+      const at = value.position ? clientPoint(value.position) : null;
+      if (value.phase === 'over') {
+        if (at) nativeOver.current = { id: value.id, x: at.x, y: at.y };
+        highlight(at ? worldFromClient(at.x, at.y) : null);
+        return;
+      }
       if (value.phase === 'pending') {
-        const at = value.position;
         if (at) nativeDrop.current = { id: value.id, x: at.x, y: at.y };
         return;
       }
       if (value.phase !== 'drop') return;
-      const pending = nativeDrop.current;
-      nativeDrop.current = null;
-      if (!pending || pending.id !== value.id) return;
-      const point = worldFromClient(pending.x, pending.y);
+      const pendingDrop = nativeDrop.current;
+      // The drop names the pending event; fall back to the last over position if it is missing.
+      const last = pendingDrop && pendingDrop.id === value.id ? pendingDrop : nativeOver.current;
+      nativeDrop.current = null; nativeOver.current = null; setDropHover(null);
+      if (!last) return;
+      const point = worldFromClient(last.x, last.y);
       if (!point) return;
-      const state = latest.current;
-      const boundariesNow = state.boundaries;
-      const boxes = elementBoxesNow(state.project, boundariesNow);
-      const element = elementAt(boxes, point);
-      const files = filesOf(value);
-      if (element) {
-        state.attachToRequest(element.elementId, files.map(file => new File([Uint8Array.from(atob(file.data), character => character.charCodeAt(0))], file.name, { type: file.mime })), []);
-        return;
-      }
-      if (boundaryAt(boundariesNow, point) || !files.length) return;
-      let index = 0;
-      for (const file of files) {
-        if (!file.mime.startsWith('image/')) continue;
-        const id = crypto.randomUUID();
-        const rect = { x: point.x + index * 24, y: point.y + index * 24, width: 200, height: 140 };
-        void state.addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: file.name.slice(0, 120) } }, `data:${file.mime};base64,${file.data}`)
-          .then(() => { createdItem.current = id; selectReference(id); }).catch(() => {});
-        index += 1;
-      }
+      void dropFiles(point, { x: last.x, y: last.y }, value);
     }
+
     void getCurrentWindow().listen<NativeDrag>('desegnos://image-drag', event => handle(event.payload)).then(unlisten => { if (disposed) unlisten(); else stop = unlisten; });
     return () => { disposed = true; stop?.(); };
-  }, [selectReference]);
+  }, []);
 
   function armPointer(pointerId: string) {
     const pointer = (latest.current.project.pointers ?? []).find(item => item.id === pointerId);
@@ -640,7 +777,12 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       element: structuredClone(entry.element), world: entry.world, rect: entry.rect }));
     pasteCount.current = 0;
     setPasteChoice(null);
-    void native('copy_text', { text: JSON.stringify(entries.map(entry => entry.element)) }).catch(() => {});
+    // The marker says a later paste reads these layers, not whatever was on the clipboard before.
+    // When it cannot be written, paste falls back to the layers copied here.
+    const mark = newClipboardMarker();
+    clipboardMark.current = mark;
+    const unwritten = () => { if (clipboardMark.current === mark) clipboardMark.current = null; };
+    try { void navigator.clipboard.writeText(mark).catch(unwritten); } catch { unwritten(); }
   }
 
   /** Where a paste lands: a selected box takes it as a child, otherwise the boundary under the pointer. */
@@ -837,7 +979,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         case 'unlink': if (elementTargets.length) { event.preventDefault(); unlinkSelection(); } return;
         case 'selectAll': event.preventDefault(); selectAllSiblings(); return;
         case 'copy': if (elementTargets.length) { event.preventDefault(); copyElements(); } return;
-        case 'paste': if (clipboard.current.length) { event.preventDefault(); pasteElements(false); } return;
+        // Plain paste is left to the paste event, which can also carry content from other apps.
+        case 'paste': return;
         case 'pasteChoice': if (clipboard.current.length) { event.preventDefault(); pasteElements(true); } return;
         case 'duplicate': if (elementTargets.length) { event.preventDefault(); duplicateElements(); } return;
         case 'group': if (elementTargets.length) { event.preventDefault(); groupSelection(); } return;
@@ -890,8 +1033,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 
   async function placeElement(kind: ElementKind, pageId: string, sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect, picture?: string, rotation?: number) {
     const page = project.pages.find(item => item.id === pageId);
-    const element = forAppearance(kind === 'text' ? createTextElement(rect)
-      : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.appearance ?? 'light');
+    const element = withPickedColours(forAppearance(kind === 'text' ? createTextElement(rect)
+      : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.appearance ?? 'light'));
     const local = elementRectAt(sizeId, parentId, parentOrigin, boundary, rect);
     element.rect = { ...local, width: rect.width, height: rect.height };
     if (kind === 'line' && rotation !== undefined) element.rotation = rotation;
@@ -1606,21 +1749,87 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     return true;
   }
 
+  /** Under the pointer when it is over the canvas, otherwise the middle of what is visible. */
   function referencePoint(): Point | null {
-    const node = surface.current;
-    if (!node) return null;
-    const box = node.getBoundingClientRect();
-    return lastPointer.current ?? { x: (box.width / 2 - camera.x) / camera.zoom, y: (box.height / 2 - camera.y) / camera.zoom };
+    if (lastPointer.current) return lastPointer.current;
+    if (viewSize.width < 1 || viewSize.height < 1) return null;
+    return { x: (viewSize.width / 2 - camera.x) / camera.zoom, y: (viewSize.height / 2 - camera.y) / camera.zoom };
+  }
+
+  /** Pasted text follows the bounds: a layer inside a boundary, reference outside every one. */
+  async function pasteText(text: string, point: Point) {
+    const boundary = boundaryUnder(point);
+    if (!boundary) {
+      if (createReference(text, point)) return;
+      const id = crypto.randomUUID();
+      await addReference({ id, rect: pastedNoteRect(point), kind: { kind: 'note', text: text.slice(0, 16384) } })
+        .then(() => selectReference(id)).catch(() => {});
+      return;
+    }
+    const page = project.pages.find(item => item.id === boundary.pageId);
+    const local = elementRectAt(boundary.sizeId, null, { x: 0, y: 0 }, boundary.rect, { ...point, width: 0, height: 0 });
+    const element = withPickedColours(forAppearance(createTextElement({ ...local, width: 0, height: 0 }, text), page?.appearance ?? 'light'));
+    const singleSize = !!page && hasManySizes(page) && !editingAllSizes(boundary.pageId);
+    busy.current = true;
+    try {
+      await insertElements(boundary.pageId, null, insertionPoint(boundary.pageId, null), [element], undefined, singleSize ? boundary.sizeId : null);
+      selectElement(boundary.pageId, element.id, singleSize ? boundary.sizeId : null);
+    } catch { /* App surfaces the failed command. */ }
+    finally { busy.current = false; }
+  }
+
+  /** Pasted pictures take the Image tool's path, or the reference path outside every boundary. */
+  async function pasteImage(files: File[]) {
+    // One picture per paste keeps the whole paste a single undo step.
+    const point = referencePoint();
+    const image = await readPastedImage(files[0]);
+    if (!image || !point) return;
+    const rect = pastedImageRect(point, image.width, image.height);
+    const boundary = boundaryUnder(point);
+    if (boundary) {
+      busy.current = true;
+      try { await placeElement('image', boundary.pageId, boundary.sizeId, null, { x: 0, y: 0 }, boundary.rect, rect, image.uri); }
+      catch { /* App surfaces the failed command. */ }
+      finally { busy.current = false; createdElement.current = null; }
+      return;
+    }
+    const id = crypto.randomUUID();
+    await addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: image.name.slice(0, 120) } }, image.uri)
+      .then(() => selectReference(id)).catch(() => {});
+  }
+
+  /** One paste path for the surface and for focus that sits elsewhere: content, not the event. */
+  function pasteClipboard(data: DataTransfer | null, target: EventTarget | null): boolean {
+    if (!data || isTextField(target)) return false;
+    const images = pastedImageFiles(data);
+    if (images.length) { void pasteImage(images); return true; }
+    const text = data.getData('text').trim();
+    const internal = clipboard.current.length > 0;
+    // Our marker on the clipboard means the layers copied here; unreadable text falls back to them.
+    if (internal && (!clipboardMark.current || !text || text === clipboardMark.current)) { pasteElements(false); return true; }
+    if (!text) return false;
+    if (isClipboardMarker(text)) return true;
+    const point = referencePoint();
+    if (!point) return false;
+    void pasteText(text, point);
+    return true;
   }
 
   function paste(event: React.ClipboardEvent<HTMLDivElement>) {
-    if (isTextField(event.target)) return;
-    if (clipboard.current.length) { event.preventDefault(); pasteElements(); return; }
-    const text = event.clipboardData.getData('text').trim();
-    const point = text ? referencePoint() : null;
-    if (!point) return;
-    if (createReference(text, point)) event.preventDefault();
+    if (pasteClipboard(event.clipboardData, event.target)) event.preventDefault();
   }
+
+  // Layers copied here, or content from another app, pasted while focus sits outside the surface
+  // (the Layers panel, say) still lands on the canvas, like the other canvas-wide keys.
+  useEffect(() => {
+    const handle = (event: ClipboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (surface.current && event.target instanceof Node && surface.current.contains(event.target)) return;
+      if (pasteHandler.current(event.clipboardData, event.target)) event.preventDefault();
+    };
+    window.addEventListener('paste', handle);
+    return () => window.removeEventListener('paste', handle);
+  }, []);
 
   function dropText(event: ReactDragEvent<HTMLDivElement>) {
     if (isTextField(event.target) || event.dataTransfer.files.length) return;
@@ -1719,7 +1928,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 
   const previewBoundary = preview ? boundaries.find(item => item.pageId === preview.pageId) ?? null : null;
   const previewScreen = previewBoundary ? screenRect(previewBoundary.rect, camera) : null;
-  return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${playIsActive(play) ? ' playing' : ''}`} style={dotStyle} tabIndex={0}
+  return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${playIsActive(play) ? ' playing' : ''}${dropHover && !dropHover.rect ? ' drop-bed' : ''}`} style={dotStyle} tabIndex={0}
     onPointerDown={pointerDown} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { chooseImage(event.target.files?.[0]); event.target.value = ''; }} />
@@ -1727,6 +1936,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       <BoundaryLayer project={project} boundaries={boundaries} focused={focused} selection={selection}
         moving={moving} tool={tool} spaceHeld={spaceHeld} openPage={openPage} editingId={editing?.elementId ?? null}
         movingElements={movingElements} onPlaceholder={openPlaceholder} play={play} />
+      {dropHover?.rect && <div className="canvas-drop-target" style={{ left: dropHover.rect.x, top: dropHover.rect.y, width: dropHover.rect.width, height: dropHover.rect.height, borderWidth: 2 * inverse }} />}
       <RequestLayer project={project} boundaries={boundaries} selection={selection} draft={requestDraft}
         draftArea={draftArea} inverse={inverse} selectRequest={selectRequest} />
       <ReferenceLayer project={project} movingItems={movingItems} selection={selection} draftNote={draftNote} />
@@ -1772,6 +1982,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       </div>
       <iframe className="preview-overlay-frame" title="Preview export" src={preview.url} sandbox="allow-scripts allow-forms allow-popups allow-modals" />
     </div>}
+    {dropNotice && <Notice key={dropNotice.id} variant={dropNotice.variant} message={dropNotice.message} dismiss={() => setDropNotice(null)} />}
   </div>;
 });
 

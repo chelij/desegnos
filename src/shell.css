@@ -365,12 +365,12 @@
 .dock-panel { display: flex; flex: 1 1 0; flex-direction: column; min-height: 160px; border-bottom: 1px solid var(--border-soft); }
 .dock-panel.is-collapsed { flex: 0 0 auto; min-height: 0; }
 .dock-panel:last-child { border-bottom: 0; }
-.dock-panel-header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-3); height: var(--control-lg); min-height: var(--control-lg); padding: 0 var(--space-3) 0 var(--space-5); border-bottom: 1px solid var(--border-soft); }
+.dock-panel-header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-3); height: var(--control-lg); min-height: var(--control-lg); padding: 0 var(--space-4) 0 var(--space-5); border-bottom: 1px solid var(--border-soft); }
 .dock-panel-header h2 { margin: 0; font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; color: var(--muted); }
 .dock-panel-header .icon-button { color: var(--muted); }
 .dock-panel-header .icon-button:hover:not(:disabled) { color: var(--text); }
 .dock-panel-header .icon.expanded { transform: rotate(90deg); }
-.dock-panel-body { flex: 1; min-height: 0; padding: var(--space-4) var(--space-5) var(--space-5); overflow-y: auto; }
+.dock-panel-body { flex: 1; min-height: 0; padding: var(--space-5); overflow-y: auto; }
 .dock-splitter { position: relative; flex: 0 0 7px; cursor: row-resize; touch-action: none; }
 .dock-splitter::before { content: ''; position: absolute; inset: 2px 40%; border-radius: var(--radius-xs); background: var(--border); opacity: .6; }
 .dock-splitter:hover::before, .dock-splitter:active::before { background: var(--accent); opacity: 1; }
@@ -382,44 +382,68 @@
 .dock-field { font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .dock-field input { width: 100%; }
 
-/* Element properties: compact Figma-style sections. */
-.dock-form.props { gap: var(--space-4); }
-.props-section { display: flex; flex-direction: column; gap: var(--space-3); }
+/* Element properties: one rhythm — 8px between rows, 16px between sections,
+   6px under a section heading, 26px fields and 12px side padding. */
+.props { --props-row: var(--space-4); --props-field: 26px; }
+.dock-form.props { gap: var(--props-row); }
+.props-section { display: flex; flex-direction: column; min-width: 0; margin-top: var(--props-row); }
+.props-section > * + * { margin-top: var(--props-row); }
+.props-section > .props-heading + * { margin-top: var(--space-3); }
 .props-heading { margin: 0; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; }
-.props-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-3); }
-.props-input { width: 100%; height: var(--control-sm); min-height: var(--control-sm); padding: 0 var(--space-3); }
-.props-num { display: flex; flex-direction: row; align-items: center; gap: var(--space-2); min-width: 0; height: var(--control-sm); min-height: var(--control-sm); padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); cursor: text; }
+.props-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--props-row); }
+.props-row { display: flex; align-items: center; gap: var(--props-row); min-width: 0; }
+.props-input { width: 100%; height: var(--props-field); min-height: var(--props-field); padding: 0 var(--space-3); }
+.props-num { display: flex; flex-direction: row; align-items: center; gap: var(--space-2); min-width: 0; height: var(--props-field); min-height: var(--props-field); padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); cursor: text; }
 .props-num:hover { border-color: var(--text); }
 .props-num:focus-within { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: 1px; }
-.props-num-prefix { flex: none; color: var(--muted); font-size: var(--text-xs); line-height: 1; }
+.props-num-prefix { display: inline-flex; flex: none; align-items: center; justify-content: center; min-width: 10px; color: var(--muted); font-size: var(--text-xs); line-height: 1; }
+.props-num-prefix .icon { width: 12px; height: 12px; }
+.props-num-prefix.is-scrubby { cursor: ew-resize; touch-action: none; user-select: none; }
+.props-num-prefix.is-scrubby:hover, .props-num-prefix.is-scrubby:active { color: var(--text); }
+.props-num-unit { flex: none; color: var(--muted); font-size: var(--text-xs); line-height: 1; }
 .props-num input { flex: 1; min-width: 0; width: 100%; height: 100%; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; font-size: var(--text-sm); }
 .props-num input:hover, .props-num input:focus-visible { border: 0; outline: none; }
 .props-num input::-webkit-outer-spin-button, .props-num input::-webkit-inner-spin-button { margin: 0; -webkit-appearance: none; }
 .props-num input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
-.props-colour { display: flex; align-items: center; gap: var(--space-2); }
-.props-swatch { position: relative; flex: none; width: var(--control-sm); height: var(--control-sm); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); cursor: pointer; }
+.props-colour { display: flex; flex: 1 1 auto; align-items: center; gap: var(--space-2); min-width: 0; }
+.props-swatch { position: relative; flex: none; width: var(--props-field); height: var(--props-field); overflow: hidden; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); cursor: pointer; }
 .props-swatch.is-empty::after { content: ''; position: absolute; inset: 0; background: linear-gradient(to top right, transparent calc(50% - 1px), var(--danger, #b3261e) calc(50% - 1px), var(--danger, #b3261e) calc(50% + 1px), transparent calc(50% + 1px)); }
 .props-swatch input[type="color"] { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; padding: 0; border: 0; opacity: 0; cursor: pointer; }
-.props-hex { flex: 1; min-width: 0; height: var(--control-sm); min-height: var(--control-sm); padding: 0 var(--space-3); font-variant-numeric: tabular-nums; }
-.props-choice .dock-choice { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-3); }
-.props-choice .dock-choice-label { color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-regular); }
-.props-choice .segmented { flex: 1; max-width: 72%; }
-.props-choice .segmented button { padding-inline: 0; }
+.props-hex { flex: 1 1 auto; width: auto; min-width: 0; height: var(--props-field); min-height: var(--props-field); padding: 0 var(--space-3); font-variant-numeric: tabular-nums; }
+/* Stroke keeps its colour on one row with the line weight it applies to. */
+.props-stroke { display: flex; align-items: center; gap: var(--props-row); min-width: 0; }
+.props-stroke .props-num { flex: 0 0 96px; }
+/* Opacity: a percentage field beside a slim slider; the stored value stays 0-1. */
+.props-opacity { display: flex; align-items: center; gap: var(--props-row); min-width: 0; }
+.props-opacity .props-num { flex: 0 0 92px; }
+.props-range { flex: 1 1 auto; width: auto; min-width: 0; height: var(--props-field); min-height: var(--props-field); padding: 0; border: 0; background: transparent; appearance: none; -webkit-appearance: none; accent-color: var(--accent); }
+.props-range::-webkit-slider-runnable-track { height: 3px; border-radius: var(--radius-pill); background: var(--border); }
+.props-range::-webkit-slider-thumb { width: 12px; height: 12px; margin-top: -4.5px; border: 0; border-radius: 50%; background: var(--accent); -webkit-appearance: none; appearance: none; }
+.props-range::-moz-range-track { height: 3px; border-radius: var(--radius-pill); background: var(--border); }
+.props-range::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: var(--accent); }
+.props-choice .dock-choice { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--props-row); min-width: 0; }
+.props-choice .dock-choice-label { flex: none; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-regular); }
+.props-choice .segmented { flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
+.props-choice .segmented button { flex: 1 1 auto; min-width: max-content; height: calc(var(--props-field) - 4px); min-height: calc(var(--props-field) - 4px); padding-inline: var(--space-2); }
+.props .dock-action { flex: none; height: var(--props-field); min-height: var(--props-field); padding: 0 var(--space-4); font-size: var(--text-xs); }
+.props .icon-button { height: var(--props-field); min-height: var(--props-field); }
+.props .dock-inline { flex-wrap: wrap; }
+.props .dock-inline .dock-value { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .props-textarea { width: 100%; min-height: 64px; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); font-size: var(--text-sm); line-height: var(--leading-normal); resize: vertical; }
-.props-disclosure { display: flex; align-items: center; justify-content: space-between; width: 100%; height: var(--control-sm); min-height: var(--control-sm); padding: 0; border: 0; background: transparent; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.props-disclosure { display: flex; align-items: center; justify-content: space-between; width: 100%; height: 20px; min-height: 20px; padding: 0; border: 0; background: transparent; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .props-disclosure:hover:not(:disabled) { background: transparent; color: var(--text); }
 .props-section .check-label { font-size: var(--text-xs); font-weight: var(--weight-regular); }
 
 /* Boundary properties: the same compact vocabulary, fitted to the dock's narrow column. */
-.boundary-props { gap: var(--space-3); }
+.boundary-props { gap: var(--props-row); container-type: inline-size; }
 .boundary-props .dock-choice .segmented { flex: 1; width: 100%; max-width: none; flex-wrap: nowrap; }
 .boundary-props .segmented button { min-width: 0; padding-inline: var(--space-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .boundary-props .check-label { gap: var(--space-2); font-size: var(--text-xs); font-weight: var(--weight-regular); white-space: nowrap; }
-.boundary-props .dock-action { flex: none; height: var(--control-sm); min-height: var(--control-sm); padding: 0 var(--space-3); font-size: var(--text-xs); }
 .boundary-props .dock-action.danger { border-color: transparent; background: transparent; color: var(--danger); }
 .boundary-props .dock-action.danger:hover:not(:disabled) { border-color: var(--danger); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
-.boundary-actions { display: flex; align-items: center; gap: var(--space-2); }
-.boundary-actions .danger { margin-left: auto; }
+.boundary-export-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.boundary-export-actions .dock-action { margin-left: auto; }
+.boundary-footer { display: flex; justify-content: flex-end; padding-top: var(--space-3); border-top: 1px solid var(--border-soft); }
 .dock-choice { display: flex; flex-direction: column; gap: var(--space-3); }
 .dock-choice-label { font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .dock-choice .segmented button { padding-inline: var(--space-3); }

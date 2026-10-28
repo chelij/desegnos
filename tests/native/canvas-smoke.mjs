@@ -556,6 +556,19 @@ async function runIsolated() {
       }), 'The Properties fill change did not reach the text layer');
     });
 
+    await step('A new rectangle starts with the last picked fill', async () => {
+      const box = await boundary();
+      const before = await driver.execute(() => document.querySelectorAll('[data-element-kind="box"]').length);
+      await chooseTool('Rectangle');
+      await mouse.drag({ x: box.left + 40, y: box.top + 70 }, { x: box.left + 200, y: box.top + 150 });
+      await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element-kind="box"]').length > previous, before), 'The Rectangle drag did not create a rectangle');
+      const colour = await driver.execute(() => { const nodes = document.querySelectorAll('[data-element-kind="box"]'); return getComputedStyle(nodes[nodes.length - 1]).backgroundColor; });
+      assert.equal(colour, 'rgb(255, 0, 0)', 'The new rectangle did not keep the picked fill');
+      await pointer.focusCanvas();
+      await pointer.combo('Control', 'z');
+      await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element-kind="box"]').length === previous, before), 'Ctrl+Z did not remove the new rectangle');
+    });
+
     await step('Select both layers, group and ungroup them', async () => {
       await chooseTool('Select');
       await pointer.focusCanvas();

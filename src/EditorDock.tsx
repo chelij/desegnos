@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Icon, type IconName } from './icons';
+import { CompactNumberField, CompactTextField, useFieldDraft } from './CompactField';
 import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
 import type { Appearance, BoundaryKind, ElementPatch, OutputType, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
@@ -172,21 +173,6 @@ function wholeSize(draft: string, min: number, max: number) {
 }
 
 // A field commits on Enter or blur and Escape puts the old value back.
-function useFieldDraft(value: string | number, commit: (value: string) => void, valid?: (draft: string) => boolean) {
-  const [draft, setDraft] = useState(String(value));
-  const cancelled = useRef(false);
-  useEffect(() => { setDraft(String(value)); }, [value]);
-  function settle() {
-    if (cancelled.current) { cancelled.current = false; setDraft(String(value)); return; }
-    if (draft === String(value)) return;
-    if (!valid || valid(draft)) commit(draft); else setDraft(String(value));
-  }
-  return {
-    draft, setDraft, settle,
-    cancel: () => { cancelled.current = true; setDraft(String(value)); },
-  };
-}
-
 export function PropertyField({ label, value, commit, valid, type = 'text', min, max, disabled, field }: {
   label: string; value: string | number; commit: (value: string) => void;
   valid?: (draft: string) => boolean;
@@ -197,38 +183,6 @@ export function PropertyField({ label, value, commit, valid, type = 'text', min,
     <input type={type} value={state.draft} disabled={disabled} min={min} max={max} spellCheck={false} data-field={field}
       onChange={event => state.setDraft(event.target.value)}
       onBlur={state.settle}
-      onKeyDown={event => {
-        if (event.key === 'Enter') { event.preventDefault(); state.settle(); event.currentTarget.blur(); }
-        else if (event.key === 'Escape') { event.preventDefault(); state.cancel(); event.currentTarget.blur(); }
-      }} />
-  </label>;
-}
-
-/** A compact Properties-style text input: the placeholder names the field. */
-function CompactTextField({ label, placeholder, value, commit, valid, disabled, field }: {
-  label: string; placeholder?: string; value: string; commit: (value: string) => void;
-  valid?: (draft: string) => boolean; disabled?: boolean; field?: string;
-}) {
-  const state = useFieldDraft(value, commit, valid);
-  return <input className="props-input" type="text" aria-label={label} placeholder={placeholder ?? label} spellCheck={false} data-field={field}
-    value={state.draft} disabled={disabled} onChange={event => state.setDraft(event.target.value)}
-    onBlur={state.settle}
-    onKeyDown={event => {
-      if (event.key === 'Enter') { event.preventDefault(); state.settle(); event.currentTarget.blur(); }
-      else if (event.key === 'Escape') { event.preventDefault(); state.cancel(); event.currentTarget.blur(); }
-    }} />;
-}
-
-/** Compact number input: a tiny prefix label lives inside the field, spinners are gone. */
-function CompactNumberField({ prefix, label, value, commit, valid, min, max, disabled }: {
-  prefix: string; label: string; value: string | number; commit: (value: string) => void;
-  valid?: (draft: string) => boolean; min?: number; max?: number; disabled?: boolean;
-}) {
-  const state = useFieldDraft(value, commit, valid);
-  return <label className="props-num" title={label}>
-    <span className="props-num-prefix" aria-hidden="true">{prefix}</span>
-    <input type="number" inputMode="numeric" aria-label={label} value={state.draft} min={min} max={max} disabled={disabled}
-      onChange={event => state.setDraft(event.target.value)} onBlur={state.settle}
       onKeyDown={event => {
         if (event.key === 'Enter') { event.preventDefault(); state.settle(); event.currentTarget.blur(); }
         else if (event.key === 'Escape') { event.preventDefault(); state.cancel(); event.currentTarget.blur(); }
@@ -248,7 +202,7 @@ export function ChoiceRow<T extends string>({ label, value, choices, choose, dis
   </div>;
 }
 
-/** One boundary per linked size, each with its dimensions and kind; removing asks first. */
+/** Boundary properties: one rhythm — 8px rows inside a section, 16px between sections. */
 export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy, setOutput, preview }: {
   page: Page;
   commit: (patch: { name?: string; path?: string; appearance?: Appearance; included?: boolean }) => void;
@@ -267,21 +221,29 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   const hasPath = page.output === 'webpage' || page.output === 'appScreen';
   return <div className="dock-form props boundary-props">
     <div className="dock-layer-title"><strong>Boundary</strong></div>
-    <CompactTextField label="Name" placeholder="Name" value={page.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => commit({ name: name.trim() })} />
-    {hasPath && <CompactTextField label="Path" placeholder="/path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />}
-    <div className="props-choice"><ChoiceRow label="Appearance" hideLabel value={page.appearance} choices={[['light', 'Light'], ['dark', 'Dark']]} names={{ light: 'Light', dark: 'Dark' }} disabled={busy} choose={appearance => commit({ appearance })} /></div>
-    <div className="props-choice"><ChoiceRow label="Output" hideLabel value={page.output} choices={[['webpage', 'Web'], ['appScreen', 'App'], ['slide', 'Slide'], ['image', 'Image']]}
-      names={{ webpage: 'Webpage', appScreen: 'App screen', slide: 'Slide', image: 'Image' }} disabled={busy} choose={setOutput} /></div>
+    <section className="props-section">
+      <CompactTextField label="Name" placeholder="Name" value={page.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => commit({ name: name.trim() })} />
+      {hasPath && <CompactTextField prefix="URL" label="Path" placeholder="/path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />}
+      <div className="props-choice"><ChoiceRow label="Appearance" hideLabel value={page.appearance} choices={[['light', 'Light'], ['dark', 'Dark']]} names={{ light: 'Light', dark: 'Dark' }} disabled={busy} choose={appearance => commit({ appearance })} /></div>
+    </section>
+    <div className="props-section boundary-export">
+      <h3 className="props-heading">Export as</h3>
+      <div className="props-choice"><ChoiceRow label="Output" hideLabel value={page.output} choices={[['webpage', 'Web'], ['appScreen', 'App'], ['slide', 'Slide'], ['image', 'Image']]}
+        names={{ webpage: 'Webpage', appScreen: 'App screen', slide: 'Slide', image: 'Image' }} disabled={busy} choose={setOutput} /></div>
+      <div className="boundary-export-actions">
+        <label className="check-label"><input type="checkbox" checked={page.included} disabled={busy} onChange={event => commit({ included: event.target.checked })} />Include in export</label>
+        {hasPath && <button type="button" className="dock-action" disabled={busy} onClick={preview}>Preview export</button>}
+      </div>
+    </div>
     <div className="props-section boundary-sizes" role="group" aria-label="Sizes">
       <h3 className="props-heading">Sizes</h3>
       {page.sizes.map((size, index) => <div key={size.id} className="dock-size-row" data-size-row={size.id}>
-        <span className="dock-size-name" title={sizeLabel(size.width)}>
-          <span className="dock-size-text">{sizeLabel(size.width)}</span>
-          {index === 0 && <span className="dock-size-tag">Base</span>}
-        </span>
-        <CompactNumberField prefix="W" label={`Width of ${sizeLabel(size.width)}`} min={1} max={32768} value={size.width} disabled={busy} valid={width => wholeSize(width, 1, 32768)}
+        {index === 0
+          ? page.sizes.length > 1 && <span className="dock-size-tag">Base</span>
+          : <span className="dock-size-name" title={sizeLabel(size.width)}>{sizeLabel(size.width)}</span>}
+        <CompactNumberField prefix="W" label={`Width of ${sizeLabel(size.width)}`} min={1} max={32768} unit="px" value={size.width} disabled={busy} valid={width => wholeSize(width, 1, 32768)}
           commit={width => { const value = Math.round(Number(width)); if (value >= 1 && value <= 32768) updateSize(size.id, { width: value }); }} />
-        <CompactNumberField prefix="H" label={`Height of ${sizeLabel(size.width)}`} min={1} max={100000} value={size.height} disabled={busy} valid={height => wholeSize(height, 1, 100000)}
+        <CompactNumberField prefix="H" label={`Height of ${sizeLabel(size.width)}`} min={1} max={100000} unit="px" value={size.height} disabled={busy} valid={height => wholeSize(height, 1, 100000)}
           commit={height => { const value = Math.round(Number(height)); if (value >= 1 && value <= 100000) updateSize(size.id, { height: value }); }} />
         <div className="dock-size-tail">
           <select className="dock-kind" value={size.kind} disabled={busy} title="Kind" aria-label={`Kind of ${sizeLabel(size.width)}`} onChange={event => updateSize(size.id, { kind: event.target.value as BoundaryKind })}>
@@ -299,15 +261,13 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
           </button>
         </div>
         {customOpen && <div className="boundary-custom-row">
-          <CompactNumberField prefix="W" label="Custom width" min={1} max={32768} value={customWidth} disabled={busy} valid={width => wholeSize(width, 1, 32768)} commit={setCustomWidth} />
-          <CompactNumberField prefix="H" label="Custom height" min={1} max={100000} value={customHeight} disabled={busy} valid={height => wholeSize(height, 1, 100000)} commit={setCustomHeight} />
+          <CompactNumberField prefix="W" label="Custom width" min={1} max={32768} unit="px" value={customWidth} disabled={busy} valid={width => wholeSize(width, 1, 32768)} commit={setCustomWidth} />
+          <CompactNumberField prefix="H" label="Custom height" min={1} max={100000} unit="px" value={customHeight} disabled={busy} valid={height => wholeSize(height, 1, 100000)} commit={setCustomHeight} />
           <button type="button" className="dock-action" aria-label="Add custom size" title="Add custom size" disabled={busy || !customValid} onClick={() => addSize('custom', Math.round(Number(customWidth)), Math.round(Number(customHeight)))}>Add</button>
         </div>}
       </div>
     </div>
-    <label className="check-label"><input type="checkbox" checked={page.included} disabled={busy} onChange={event => commit({ included: event.target.checked })} />Include in export</label>
-    <div className="boundary-actions">
-      {hasPath && <button type="button" className="dock-action" disabled={busy} onClick={preview}>Preview export</button>}
+    <div className="boundary-footer">
       <button type="button" className="dock-action danger" disabled={busy} onClick={remove}>Delete boundary</button>
     </div>
   </div>;

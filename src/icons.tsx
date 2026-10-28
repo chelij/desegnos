@@ -10,6 +10,7 @@ export type IconName =
   | 'link' | 'text' | 'info' | 'properties' | 'arrange-front' | 'arrange-forward'
   | 'arrange-backward' | 'arrange-back' | 'monitor' | 'tablet' | 'phone' | 'canvas'
   | 'rectangle' | 'ellipse' | 'line' | 'image' | 'video' | 'audio' | 'code' | 'note' | 'group'
+  | 'line-weight' | 'corner-radius'
   | 'eye' | 'eye-off' | 'lock' | 'unlock' | 'insert' | 'history' | 'pin' | 'home' | 'folder'
   | 'redo' | 'play' | 'download';
 
@@ -63,6 +64,8 @@ const paths: Record<IconName, ReactNode> = {
   rectangle: <rect x="2.2" y="3.2" width="11.6" height="9.6" rx="1" />,
   ellipse: <ellipse cx="8" cy="8" rx="5.8" ry="4.8" />,
   line: <path d="M2.5 13.2 13.5 2.8" />,
+  'line-weight': <><path d="M3 4.1h10" strokeWidth={1} /><path d="M3 8h10" strokeWidth={2} /><path d="M3 11.9h10" strokeWidth={3.2} /></>,
+  'corner-radius': <path d="M13 3.2H8.6A5.4 5.4 0 0 0 3.2 8.6V13" />,
   image: <><rect x="2.2" y="3" width="11.6" height="10" rx="1" /><circle cx="6" cy="6.4" r="1.1" /><path d="M3 12 6.8 8.2l2.2 2.2 1.9-1.9 2 2.5" /></>,
   video: <><rect x="1.8" y="3.6" width="9.4" height="8.8" rx="1" /><path d="M11.2 7.2 14 5.2v5.6l-2.8-2Z" /></>,
   audio: <><path d="M3 6.2h2.2L8.6 3v10L5.2 9.8H3Z" /><path d="M10.6 5.8a3 3 0 0 1 0 4.4M12.4 4.2a5.2 5.2 0 0 1 0 7.6" /></>,
