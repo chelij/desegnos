@@ -2016,9 +2016,14 @@ impl Project {
                     if matches!(element.layout, ElementLayout::Stack { .. }) {
                         return Ok(());
                     }
+                    // Like switching to Stack in Properties, the box then hugs its children.
+                    let mut style = element.style.clone();
+                    style.sizing.width = SizingMode::Fit;
+                    style.sizing.height = SizingMode::Fit;
                     return self.update_elements(page_id, vec![ElementPatch {
                         id: ids[0],
                         layout: Some(default_stack()),
+                        style: Some(style),
                         ..Default::default()
                     }]);
                 }
