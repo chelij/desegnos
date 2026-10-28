@@ -432,7 +432,8 @@ async function runIsolated() {
         error.message += `\nEvents: ${JSON.stringify(await driver.execute(() => window.__smokeEvents.slice(-20)))}`;
         throw error;
       }
-      assert.equal(await driver.execute(() => document.querySelector('[aria-label="Canvas tools"] button[aria-label="Boundary"]')?.getAttribute('aria-pressed')), 'true');
+      // One boundary per use: the tool returns to Select, so stray clicks don't add pages.
+      assert.equal(await driver.execute(() => document.querySelector('[aria-label="Canvas tools"] button[aria-label="Select"]')?.getAttribute('aria-pressed')), 'true');
       assert.equal((await boundary()).screen, false, 'The Page boundary rendered as a Screen boundary');
     });
 
