@@ -166,8 +166,8 @@ button.status-chip { height: 20px; min-height: 20px; padding: 0 var(--space-4); 
 .free-workspace .annotation.selected textarea, .free-workspace .annotation:focus-within textarea { text-shadow: none; }
 .free-workspace .request-number { top: -20px; border-radius: var(--radius-sm); box-shadow: var(--shadow-1); }
 
-/* Notices sit inside the canvas area, below the ruler, never over tabs or rulers. */
-.design-pane > .notice-host { position: absolute; z-index: 26; inset: calc(var(--ruler-size, 28px) + var(--space-4)) 0 auto; }
+/* Notices sit inside the canvas area, below the project tabs and never over them. */
+.design-pane > .notice-host { position: absolute; z-index: 26; inset: var(--space-4) 0 auto; }
 .design-pane > .notice-host.toast { position: fixed; inset: auto 0 96px; }
 .design-pane > .notice-host > .notice { top: 0; margin: 0; }
 .notice-copy { padding-inline: var(--space-3); -webkit-user-select: text; user-select: text; }

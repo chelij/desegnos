@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
 import { native } from '../api';
 import type { Element } from '../types';
 
@@ -44,6 +44,26 @@ export function loadCanvasFont(style: TextStyle): Promise<LoadedFont> {
     requests.set(requestKey, request);
   }
   return request;
+}
+
+let familiesRequest: Promise<string[]> | null = null;
+
+/** Family names the editor can offer: the bundled face, then installed system families. */
+export function loadFontFamilies(): Promise<string[]> {
+  familiesRequest ??= native<string[]>('list_canvas_fonts')
+    .then(list => list.filter(name => name.trim()).sort((first, second) => first === 'Archivo' ? -1 : second === 'Archivo' ? 1 : first.localeCompare(second)))
+    .catch(() => ['Archivo']);
+  return familiesRequest;
+}
+
+export function useFontFamilies(): string[] {
+  const [families, setFamilies] = useState<string[]>(['Archivo']);
+  useEffect(() => {
+    let live = true;
+    void loadFontFamilies().then(list => { if (live && list.length) setFamilies(list); });
+    return () => { live = false; };
+  }, []);
+  return families;
 }
 
 export function useCanvasFontRevision(): number {

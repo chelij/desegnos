@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { documentDir, join } from '@tauri-apps/api/path';
 import { native } from '../api';
 import { isTextField } from '../WorkspaceSurface';
 import type { Command, PointerStateView, Project, WorkspaceView, ExportCheck, ExportJobView } from '../types';
@@ -25,10 +26,34 @@ type Context = {
   setPlay: import("react").Dispatch<import("react").SetStateAction<PlayState>>;
 };
 
+const EXPORT_FOLDERS_KEY = 'desegnos.export-folders';
+
+/** Folders are remembered per project, so switching tabs keeps each project's own choice. */
+function readExportFolders(): Record<string, string> {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(EXPORT_FOLDERS_KEY) ?? '{}');
+    if (!raw || typeof raw !== 'object') return {};
+    return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
+  } catch { return {}; }
+}
+
+/** A project name is a folder name here, never a path. */
+function exportFolderName(name: string): string {
+  const clean = name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').replace(/^[.\s]+|[.\s]+$/g, '').slice(0, 80);
+  return clean || 'Untitled project';
+}
+
+/** The platform's Documents folder, then Desegnos/<project name>. */
+async function defaultExportFolder(name: string): Promise<string> {
+  return join(await documentDir(), 'Desegnos', exportFolderName(name));
+}
+
 export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHistory' | 'play' | 'setPlay'>, context: () => Context) {
   const { current, view, showHistory, play, setPlay } = input;
   const [showExport, setShowExport] = useState(false);
-  const [exportDestination, setExportDestination] = useState<string | null>(() => { try { return localStorage.getItem('desegnos.export-folder'); } catch { return null; } });
+  const [exportFolders, setExportFolders] = useState<Record<string, string>>(readExportFolders);
+  const projectId = view?.project?.id ?? null;
+  const exportDestination = projectId ? exportFolders[projectId] ?? null : null;
   const [exportJob, setExportJob] = useState<ExportJobView | null>(null);
   const [exportError, setExportError] = useState('');
   const [exportSending, setExportSending] = useState(false);
@@ -61,7 +86,18 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
     return () => window.removeEventListener('focus', onFocus);
   }, [scheduleExportCheck]);
   useEffect(() => { if (showHistory) scheduleExportCheck(); }, [showHistory, scheduleExportCheck]);
-  useEffect(() => { if (!view?.project) setShowExport(false); setExportJob(null); setExportError(''); setPreview(null); setPlay(idlePlay); }, [view?.project?.id]);
+  useEffect(() => { setShowExport(false); setExportJob(null); setExportError(''); setPreview(null); setPlay(idlePlay); }, [view?.project?.id]);
+  useEffect(() => { try { localStorage.setItem(EXPORT_FOLDERS_KEY, JSON.stringify(exportFolders)); } catch { /* Preferences can be unavailable. */ } }, [exportFolders]);
+  // A new project starts in Documents/Desegnos/<project name>, so Export is one click.
+  useEffect(() => {
+    const project = view?.project;
+    if (!project) return;
+    let live = true;
+    void defaultExportFolder(project.name).then(path => {
+      if (live) setExportFolders(current => current[project.id] ? current : { ...current, [project.id]: path });
+    }).catch(() => { /* Without a Documents folder, Choose folder… still works. */ });
+    return () => { live = false; };
+  }, [view?.project?.id, view?.project?.name]);
   useEffect(() => {
     if (!preview && !playIsActive(play)) return;
     const escape = (event: KeyboardEvent) => {
@@ -85,13 +121,22 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
     if (panels.collapsed) panelActions.setCollapsed(false);
   }
 
-  async function chooseExportDestination() {
+  async function ensureExportDestination(project: Project): Promise<string | null> {
+    const saved = exportFolders[project.id];
+    if (saved) return saved;
+    const path = await defaultExportFolder(project.name).catch(() => null);
+    if (!path) return null;
+    setExportFolders(current => current[project.id] ? current : { ...current, [project.id]: path });
+    return path;
+  }
 
+  async function chooseExportDestination() {
+    const project = current.current?.project;
+    if (!project) return;
     try {
       const picked = await native<{ path: string } | null>('pick_export_destination');
       if (!picked) return;
-      setExportDestination(picked.path);
-      try { localStorage.setItem('desegnos.export-folder', picked.path); } catch { /* Preferences can be unavailable. */ }
+      setExportFolders(current => ({ ...current, [project.id]: picked.path }));
     } catch (error) { setExportError(errorMessage(error)); }
   }
 
@@ -115,12 +160,13 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
     await settle();
     const project = current.current?.project;
     if (!project) return;
-    if (!previewPageId && !exportDestination) { await chooseExportDestination(); return; }
+    const destination = previewPageId ? null : await ensureExportDestination(project);
+    if (!previewPageId && !destination) { await chooseExportDestination(); return; }
     setExportError(''); setShowExport(true); setExportSending(false); setExportJob(null);
     try {
       const job = await native<ExportJobView>('prepare_export', {
         projectId: project.id, revision: project.revision,
-        destination: previewPageId ? null : exportDestination,
+        destination,
         pageIds: previewPageId ? [previewPageId] : null,
         preview: !!previewPageId,
       });

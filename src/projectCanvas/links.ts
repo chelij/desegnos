@@ -58,7 +58,8 @@ export function resolveElement(project: Project, element: Element): Element {
   // The copy's own size overrides apply after resolution, exactly like a plain layer's.
   concrete.overrides = element.overrides ? structuredClone(element.overrides) : {};
   concrete.link = element.link ?? null;
-  concrete.name = definition.name;
+  // A copy keeps its own name; the definition names the linked group elsewhere.
+  concrete.name = element.name ?? null;
   assignNestedIds(element.id, concrete, []);
   return concrete;
 }

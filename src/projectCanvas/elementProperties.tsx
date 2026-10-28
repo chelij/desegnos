@@ -1,4 +1,5 @@
 import { ColourField } from './ColourField';
+import { FontField } from './FontField';
 import { useCanvasFont } from './fonts';
 import { ATTACHMENT_ACCEPT, readRequestAttachments } from '../requestAttachments';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -16,6 +17,8 @@ const validNumber = (value: string) => Number.isFinite(Number(value));
 const validUrl = (value: string) => {
   try { const url = new URL(value.trim()); return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname; } catch { return false; }
 };
+/** A hyperlink is a web address or a path to one of this project's boundaries. */
+const validLink = (value: string) => !value.trim() || (value.trim().startsWith('/') && !value.trim().startsWith('//')) || validUrl(value);
 
 function stylePatches(elements: Element[], change: (style: ElementStyle) => void): ElementPatch[] {
   return elements.map(element => {
@@ -178,6 +181,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   error: (message: string) => void;
 }) {
   const single = elements.length === 1 ? elements[0] : null;
+  const linked = single?.link ? project.linked?.[single.link] ?? null : null;
   // Edits in one size become that size's overrides; All sizes changes base values and clears
   // the same fields from every size.
   const sized = <T,>(patch: T): T & { size_id?: string | null; all_sizes?: boolean } =>
@@ -257,6 +261,11 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   const codeKind = kind === 'code';
   const mediaKind = kind === 'link' || kind === 'video' || kind === 'audio' || kind === 'embed';
   const imageKind = kind === 'image';
+  const hyperlinkKind = !!single && (single.kind === 'text' || single.kind === 'box' || single.kind === 'button');
+  function commitUrl(value: string) {
+    if (!single) return;
+    update([{ id: single.id, url: value.trim() || null }]);
+  }
   // Text and lines keep their box plain until a stroke or radius is actually set.
   const showsStrokeWidth = kind === 'line' || (strokeColour ?? '').trim().length > 0 || (kind !== 'text' && (strokeWidth ?? 0) > 0);
   const showsRadius = kind !== null && kind !== 'text' && kind !== 'line' ? true : (radius ?? 0) > 0;
@@ -270,6 +279,8 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
     {single && <>
       <CompactTextField label="Name" placeholder="Name" field="layer-name" value={single.name ?? ''} disabled={busy} commit={name => void commitName(name)} />
       {nameError && <p className="dock-field-error" role="alert">{nameError}</p>}
+      {linked && <CompactTextField label="Linked element name" field="linked-name" value={linked.name} disabled={busy}
+        valid={name => name.trim().length > 0} commit={name => update([{ id: single.id, linked_name: name }])} />}
     </>}
     {(canLink || canUnlink || makeLinkable) && <div className="form-actions">
       {(canLink || makeLinkable) && <button type="button" className="dock-action" disabled={busy} title="Make the selected layers linked (Ctrl/Cmd+Alt+K)" onClick={link}>{single ? 'Make linked' : `Make linked (${elements.length})`}</button>}
@@ -322,6 +333,18 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
         </div>}
       </>}
     </PropsSection>}
+    {hyperlinkKind && single && <PropsSection id="props-link" title="Link">
+      <label className="dock-field">Link to…
+        <select aria-label="Link to a project page" value={project.pages.some(page => page.path === single.url) ? single.url ?? '' : ''} disabled={busy}
+          onChange={event => { if (event.target.value) commitUrl(event.target.value); }}>
+          <option value="">Project page…</option>
+          {project.pages.map(page => <option key={page.id} value={page.path}>{page.name} · {page.path}</option>)}
+        </select>
+      </label>
+      <CompactTextField label="Link address" field="element-link" placeholder="https://example.com or /page" value={single.url ?? ''}
+        disabled={busy} valid={validLink} commit={commitUrl} />
+      {single.url && <button type="button" className="dock-action" disabled={busy} onClick={() => commitUrl('')}>Remove link</button>}
+    </PropsSection>}
     {visual && <PropsSection id="props-appearance" title="Appearance">
       {kind !== 'line' && <div style={{ display: 'flex', gap: 4 }}><ColourField label="Fill" value={fill ?? ''} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; style.references = { ...style.references, fill: null }; }); }} />{picker('fill')}</div>}
       <div className="props-stroke">
@@ -344,7 +367,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
     </PropsSection>}
     {textKind && <PropsSection id="props-text" title="Text">
       {picker('text')}
-      <CompactTextField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
+      <FontField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
       {font?.fellBack && <span className="field-help">Not installed — using Archivo</span>}
       <div className="props-grid">
         <CompactNumberField prefix="S" label="Size" min={1} unit="px" value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1}

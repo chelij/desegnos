@@ -12,7 +12,7 @@ export type IdentityCandidate = { jobId: string; requirementsSha256: string; sum
 export type IdentityAnalysis = { jobId: string; sourceId: string; source: IdentitySource; fileIds: string[]; authentication?: AuthenticationMethod | null; chatgptAccountId?: string | null; status: 'analyzing' | 'complete' | 'failed' | 'unknown' | 'cancelled'; message: string; receivedBytes: number; candidate: IdentityCandidate | null; error: string | null };
 export type GenerationMode = 'fuzzy' | 'strict';
 export type Viewport = { width: number; height: number };
-export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: boolean; rulers: boolean };
+export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: boolean };
 export type Rect = { x: number; y: number; width: number; height: number };
 export type NamedView = { id: string; name: string; x: number; y: number; zoom: number };
 export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; preview?: string; text?: string; url?: string };
@@ -64,7 +64,7 @@ export type Element = {
 export type LinkedDefinition = { id: string; name: string; master: Element };
 export type LinkedPasteInstance = { id: string; sourceId: string; pageId: string; parentId: string | null; index: number; rect: Rect };
 export type ElementPatch = { id: string; rect?: Rect; rotation?: number; style?: ElementStyle; text?: string; image?: string | null; url?: string | null; layout?: ElementLayout;
-  visible?: boolean; locked?: boolean; name?: string | null; input_type?: InputType; options?: string[]; language?: string; source?: string; picture_data_uri?: string;
+  visible?: boolean; locked?: boolean; name?: string | null; linked_name?: string | null; input_type?: InputType; options?: string[]; language?: string; source?: string; picture_data_uri?: string;
   size_id?: string | null; all_sizes?: boolean; dismissed?: boolean };
 export type ElementMove = { id: string; to_page_id: string; to_parent_id: string | null; index: number; rect: Rect; size_id?: string | null; all_sizes?: boolean };
 export type Placements = { page_id: string; size_id: string; x: number; y: number; kind: BoundaryKind }[];

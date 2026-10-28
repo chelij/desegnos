@@ -40,6 +40,11 @@ pub fn resolve_canvas_font(
 }
 
 #[tauri::command]
+pub fn list_canvas_fonts() -> Vec<String> {
+    desegnos_core::font_families()
+}
+
+#[tauri::command]
 pub fn load_canvas_font(id: String) -> Result<String, String> {
     let faces = faces().lock().map_err(|e| e.to_string())?;
     let face = faces

@@ -49,14 +49,15 @@ const hex = (value: string) => {
  * The contextual bar for the current layer selection. It lives in screen pixels above the
  * selection, so it never scales with the canvas and never lands inside a boundary.
  */
-export function SelectionBar({ screen, viewWidth, fill, linked, linkable, scope, onFill, onAlign, onScope, onRequest, onLink, onUnlink, onDuplicate, onDelete }: {
+export function SelectionBar({ screen, viewWidth, fill, linked, linkable, hyperlink, scope, onFill, onAlign, onScope, onRequest, onLinkTo, onLink, onUnlink, onDuplicate, onDelete }: {
   screen: ScreenRect; viewWidth: number;
-  fill: string; linked: boolean; linkable: boolean;
+  fill: string; linked: boolean; linkable: boolean; hyperlink: boolean;
   scope: EditScope | null;
   onFill: (value: string) => void;
   onAlign: (edge: SelectionAlign) => void;
   onScope: (scope: EditScope) => void;
   onRequest: () => void;
+  onLinkTo: () => void;
   onLink: () => void;
   onUnlink: () => void;
   onDuplicate: () => void;
@@ -64,7 +65,7 @@ export function SelectionBar({ screen, viewWidth, fill, linked, linkable, scope,
 }) {
   // Enough room for the rounded bar above the layer; otherwise it drops underneath.
   const below = screen.top < 52;
-  const half = Math.min(210, Math.max(0, viewWidth / 2 - 8));
+  const half = Math.min(250, Math.max(0, viewWidth / 2 - 8));
   const centre = screen.left + screen.width / 2;
   const left = Math.min(Math.max(centre, half), Math.max(half, viewWidth - half));
   const position: CSSProperties = below
@@ -88,8 +89,9 @@ export function SelectionBar({ screen, viewWidth, fill, linked, linkable, scope,
       <EditScopeChoice scope={scope} choose={onScope} /></>}
     <span className="floating-bar-divider" aria-hidden="true" />
     <button type="button" className="selection-action" aria-label="Request" title={withShortcut('Request', 'requestTool')} onClick={onRequest}><Icon name="note" /></button>
+    <button type="button" className="selection-action" aria-label="Link to…" title="Link to…" disabled={!hyperlink} onClick={onLinkTo}><Icon name="link" /></button>
     <button type="button" className="selection-action" aria-label={linked ? 'Unlink layer' : 'Make linked'} title={withShortcut(linked ? 'Unlink' : 'Make linked', linked ? 'unlink' : 'link')}
-      disabled={!linked && !linkable} onClick={linked ? onUnlink : onLink}><Icon name="link" /></button>
+      disabled={!linked && !linkable} onClick={linked ? onUnlink : onLink}><Icon name="linked-copies" /></button>
     <button type="button" className="selection-action" aria-label="Duplicate" title={withShortcut('Duplicate', 'duplicate')} onClick={onDuplicate}><Icon name="copy" /></button>
     <button type="button" className="selection-action" aria-label="Delete" title={withShortcut('Delete', 'delete')} onClick={onDelete}><Icon name="trash" /></button>
   </div>;

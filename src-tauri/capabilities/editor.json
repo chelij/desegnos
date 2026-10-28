@@ -3,7 +3,7 @@
   "description": "The trusted editor can use explicit project commands.",
   "windows": ["editor"],
   "permissions": [
-    "allow-resolve-canvas-font", "allow-load-canvas-font",
+    "allow-resolve-canvas-font", "allow-list-canvas-fonts", "allow-load-canvas-font",
     "allow-get-project-location", "allow-pick-project-location", "allow-set-project-location", "allow-move-into-project-folder",
     "allow-unpack-request-zip", "allow-open-export-folder",
     "allow-prepare-export", "allow-start-export", "allow-cancel-export", "allow-get-export-job",

@@ -47,8 +47,10 @@ function LayerRow({ project, pageId, sizeId, element, parentId, index, selection
   const hasChildren = canContain && element.children.length > 0;
   const open = !collapsed.has(`${sizeId}:${element.id}`);
   const definition = element.link ? project.linked?.[element.link] ?? null : null;
-  const label = definition?.name ?? elementLabel(element);
-  const renameable = movable && !definition;
+  const linkedName = definition?.name ?? null;
+  const label = elementLabel(element);
+  // A linked copy keeps its own name; the group name appears in the row title and Properties.
+  const renameable = movable;
   const [draft, setDraft] = useState<string | null>(null);
   // Enter commits and sets the draft back to null; the blur that follows must not rename twice.
   const editing = useRef(false);
@@ -70,7 +72,8 @@ function LayerRow({ project, pageId, sizeId, element, parentId, index, selection
     <div className="dock-tree-row element-row-line" draggable={movable && draft === null}
       data-element-row={element.id}
       data-selected={selection.includes(element.id) || undefined}
-      title={renameable ? `${label} · double-click to rename` : definition ? `${label} · linked` : label}
+      title={renameable ? `${label}${linkedName ? ` · linked as ${linkedName}` : ''} · double-click to rename`
+        : linkedName ? `${label} · linked as ${linkedName}` : label}
       onDragStart={event => {
         if (!movable) { event.preventDefault(); return; }
         event.stopPropagation();
@@ -105,7 +108,7 @@ function LayerRow({ project, pageId, sizeId, element, parentId, index, selection
         : <button type="button" className="dock-tree-select element" aria-pressed={selection.includes(element.id)}
           onClick={event => select(pageId, element.id, sizeId, event.shiftKey || event.ctrlKey || event.metaKey)}
           onDoubleClick={renameable ? () => { editing.current = true; setDraft(element.name ?? ''); } : undefined}>
-          <Icon name={definition ? 'link' : KIND_ICONS[element.kind]} size={12} /><span className={definition || element.name?.trim() ? undefined : 'muted'}>{label}</span>
+          <Icon name={definition ? 'linked-copies' : KIND_ICONS[element.kind]} size={12} /><span className={element.name?.trim() ? undefined : 'muted'}>{label}</span>
         </button>}
       <button type="button" className="icon-button sm dock-row-toggle" aria-label={`${element.locked ? 'Unlock' : 'Lock'} ${elementLabel(element)}`} title={element.locked ? 'Unlock' : 'Lock'}
         aria-pressed={element.locked} onClick={() => update(pageId, sizeId, [{ id: element.id, locked: !element.locked }])}><Icon name={element.locked ? 'lock' : 'unlock'} size={13} /></button>

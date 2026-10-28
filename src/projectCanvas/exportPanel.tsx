@@ -64,7 +64,7 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
         <button type="button" className="dock-action" onClick={openInBrowser}>Open in browser</button>
       </div>}
     </div>}
-    <div className="form-actions">
+    <div className="form-actions export-panel-actions">
       {!running && <button type="button" className={prepared ? 'dock-action' : 'primary'} disabled={busy || !destination || !boundaries.some(page => page.included)} onClick={runExport}>{prepared ? 'Start a new export' : 'Export'}</button>}
       {prepared && <button type="button" className="primary" disabled={sending} onClick={sendExport}>{sending ? 'Sending…' : job?.kind === 'comment' ? 'Send to rewrite the comment' : 'Generate behaviour'}</button>}
       {prepared && <button type="button" className="dock-action" disabled={sending} onClick={cancelExport}>Cancel</button>}

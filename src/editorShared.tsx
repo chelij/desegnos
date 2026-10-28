@@ -34,8 +34,6 @@ export function sizeBoundaries(project: Project): Boundary[] {
 
 export function initialZoom(width: number, height = 900) { const fit = width > 600 ? (window.innerWidth - 96) / width : (window.innerHeight - 240) / height; return Math.max(0.1, Math.min(1, fit)); }
 
-export function readRulerUnit(): 'pixels' | 'percent' { try { return localStorage.getItem('desegnos.ruler-unit') === 'percent' ? 'percent' : 'pixels'; } catch { return 'pixels'; } }
-
 export function readTheme(): Theme {
   try {
     const saved = localStorage.getItem('desegnos.editor-theme');
@@ -131,7 +129,7 @@ export function suggestedPagePath(name: string, paths: string[]) {
   return path;
 }
 
-export function GridForm({ settings, showGrid, busy, submit, rulerUnit, changeRulerUnit }: { rulerUnit: 'pixels' | 'percent'; changeRulerUnit: (value: 'pixels' | 'percent') => void; settings: GridSettings; showGrid: boolean; busy: boolean; submit: (settings: GridSettings, visible: boolean) => Promise<void> }) {
+export function GridForm({ settings, showGrid, busy, submit }: { settings: GridSettings; showGrid: boolean; busy: boolean; submit: (settings: GridSettings, visible: boolean) => Promise<void> }) {
   const [draft, setDraft] = useState(settings);
   const [visible, setVisible] = useState(showGrid);
   const [saving, setSaving] = useState(false);
@@ -148,8 +146,6 @@ export function GridForm({ settings, showGrid, busy, submit, rulerUnit, changeRu
         setDraft({ ...draft, unit, spacing: unit === 'percent' ? Math.max(0.25, Math.min(100, draft.spacing)) : Math.max(1, Math.min(512, draft.spacing)) });
       }}><option value="pixels">Pixels</option><option value="percent">Percent</option></select></label></div>
     <label className="check-label"><input type="checkbox" checked={draft.snap} onChange={event => setDraft({ ...draft, snap: event.target.checked })} />Snap requests to the grid</label>
-    <label className="check-label"><input type="checkbox" checked={draft.rulers} onChange={event => setDraft({ ...draft, rulers: event.target.checked })} />Show rulers</label>
-    <label>Ruler units<select value={rulerUnit} onChange={event => changeRulerUnit(event.target.value as 'pixels' | 'percent')}><option value="pixels">Pixels</option><option value="percent">Percent</option></select></label>
     <div className="form-actions"><button className="primary" disabled={busy || saving || !valid}>Save grid settings</button></div>
   </form>;
 }
