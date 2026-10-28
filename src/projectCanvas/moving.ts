@@ -187,6 +187,8 @@ export function createMovingActions(context: () => Context) {
     const delta = elementMoveDelta(active.entries, active.start, point, snap, active.axisLocked);
     rememberRepeatMove(active.entries, delta);
     let converted = false;
+    // Every entry is dropped at the same pointer position with the same excluded subtree.
+    const dropBoxes = new Map<string, ReturnType<typeof boxAtPoint>>();
     for (const entry of active.entries) {
       const world = { ...entry.world, x: entry.world.x + delta.x, y: entry.world.y + delta.y };
       if (!targetBoundary && entry.parentId === null) {
@@ -207,7 +209,8 @@ export function createMovingActions(context: () => Context) {
         : null;
       const boundary = pageChanged ? baseBoundary ?? targetBoundary?.rect ?? null : boundaryRect(sizeId ?? entry.sizeId);
       if (!boundary) continue;
-      const box = targetBoundary && sizeId ? boxAtPoint(pageId, sizeId, point, skip) : null;
+      if (targetBoundary && sizeId && !dropBoxes.has(sizeId)) dropBoxes.set(sizeId, boxAtPoint(pageId, sizeId, point, skip));
+      const box = targetBoundary && sizeId ? dropBoxes.get(sizeId) : null;
       const parentId = box?.id ?? (pageChanged ? null : entry.parentId);
       const parentOrigin = box && parentId !== entry.parentId ? box.origin : parentId === entry.parentId && !pageChanged ? entry.parentOrigin : { x: 0, y: 0 };
       const sameParent = pageId === entry.pageId && parentId === entry.parentId;

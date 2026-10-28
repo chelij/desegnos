@@ -3397,8 +3397,9 @@ impl Project {
         }
         next.store_inline_images()?;
         next.validate()?;
-        crate::render::sync_fit_rects(&mut next);
-        next.validate()?;
+        if crate::render::sync_fit_rects(&mut next) {
+            next.validate()?;
+        }
         Ok(next)
     }
 }

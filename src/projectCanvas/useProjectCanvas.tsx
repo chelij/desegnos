@@ -1,3 +1,4 @@
+import { selectionEntries as resolveSelectionEntries } from './selectionGeometry';
 import { createRequestTool } from './requestTool';
 import { createPointerTool } from './pointerTool';
 import { createDrawingActions, type PendingText } from './drawing';
@@ -535,27 +536,7 @@ export function useProjectCanvas({
   }
 
   function elementEntries(targets: CanvasTarget[]): ElementEntry[] {
-    const entries: ElementEntry[] = [];
-    for (const target of targets.filter(isElementTarget)) {
-      const page = project.pages.find(item => item.id === target.pageId);
-      if (!page) continue;
-      const allSizes = target.sizeId === null;
-      const sizeId = target.sizeId ?? baseSizeId(page);
-      const path = elementPath(project, target.pageId, target.elementId, sizeId);
-      const boundary = boundaryRect(sizeId);
-      const last = path?.[path.length - 1];
-      if (!last || !boundary) continue;
-      const over = last.element.overrides?.[sizeId];
-      const rect = over?.rect ?? last.element.rect;
-      const origin = { x: last.parentOrigin.x + rect.x, y: last.parentOrigin.y + rect.y };
-      entries.push({
-        id: last.element.id, element: last.element, pageId: target.pageId, sizeId, allSizes, parentId: last.parentId, index: last.index, rect,
-        parentOrigin: last.parentOrigin, boundaryOrigin: { x: boundary.x, y: boundary.y },
-        world: { x: boundary.x + origin.x, y: boundary.y + origin.y, width: rect.width, height: rect.height },
-      });
-    }
-    // A selected ancestor moves its subtree; never move both.
-    return entries.filter(entry => !entries.some(other => other.id !== entry.id && elementParents(project, entry.pageId, entry.id).includes(other.id)));
+    return resolveSelectionEntries(project, targets, boundaryRect);
   }
 
   function selectTargets(targets: { pageId: string; elementId: string; sizeId?: string | null }[]) {
@@ -670,13 +651,14 @@ export function useProjectCanvas({
   const selectedPointerId = selection.length === 1 && selection[0].kind === 'pointer' ? selection[0].pointerId : null;
   const choosePointer = (pointerId: string) => { selectPointer(pointerId); surface.current?.focus({ preventScroll: true }); };
   const autoLinks = useMemo(() => automaticLinks(project, boundaries, elementBoxes(project, boundaries, moving)), [project, boundaries, moving]);
-  const selectedElementTargets = selection.flatMap(target => target.kind === 'element' ? [target] : []);
+  const selectedElementTargets = useMemo(() => selection.filter(isElementTarget), [selection]);
   // The contextual bar stays out of every canvas gesture and every inline editor.
   const selectionBarVisible = tool === 'select' && !playIsActive(play) && !panning && !editing && !preview
     && !moving && !draft && !draftElement && !draftArea && !draftNote && !marquee && !zoomRect && !pointerDraft
     && !requestDraft && !pasteChoice && !linkChoice && !placeholderChoice
     && !Object.keys(movingElements).length && !Object.keys(movingItems).length;
-  const selectionEntries = selectionBarVisible ? elementEntries(selectedElementTargets) : [];
+  const selectionEntries = useMemo(() => selectionBarVisible ? elementEntries(selectedElementTargets) : [],
+    [project, project.revision, boundaries, selectedElementTargets, selectionBarVisible]);
   const selectionScreen = selectionEntries.length ? screenRect(unionRects(selectionEntries.map(entry => entry.world)), camera) : null;
   const selectionFills = [...new Set(selectionEntries.map(entry => entry.element.style.fill ?? ''))];
   const selectionFill = selectionFills.length === 1 ? selectionFills[0] : '';

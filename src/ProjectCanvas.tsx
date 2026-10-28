@@ -1,3 +1,4 @@
+import { boundaryVisible } from './projectCanvas/canvasView';
 import { fitCamera } from './projectCanvasGeometry';
 import { useProjectCanvas } from './projectCanvas/useProjectCanvas';
 export type { ProjectCanvasHandle, ProjectCanvasProps, PreviewState } from './projectCanvas/interactionTypes';
@@ -121,7 +122,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       move={next => { stopTransition(); touched.current = true; setCamera(next); }} />}
     <PointerHandles entries={entries} camera={camera} selectedId={selectedPointerId} armed={armedPointer} onStart={startReattach} />
     {!editing && <ElementSelectionOverlay surface={surface} project={project} selection={selectedElementTargets} camera={camera}
-      version={Object.entries(movingElements).map(([id, rect]) => `${id}:${rect.x},${rect.y},${rect.width},${rect.height}`).join('|')} onResizeStart={startElementResize} />}
+      version={scrubbed.boundaries.filter(boundary => boundaryVisible(moving?.sizeId === boundary.sizeId ? moving.rect : boundary.rect, viewport, 200 / camera.zoom)).map(boundary => boundary.sizeId).join(',') + '|'
+        + Object.entries(movingElements).map(([id, rect]) => `${id}:${rect.x},${rect.y},${rect.width},${rect.height}`).join('|')} onResizeStart={startElementResize} />}
     {editing && editingElement && editingScreen && <ElementTextEditor key={`${editing.elementId}:${editing.created}`} element={editingElement} screen={editingScreen} zoom={camera.zoom}
       autoWidth={editing.autoWidth} autoFocus onCommit={commitEditingText} />}
     {placeholderChoice && <PlaceholderChoiceRow screen={placeholderChoice.screen}

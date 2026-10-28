@@ -1149,10 +1149,41 @@ fn resolve_auto_size(fonts: &mut FontSet, element: &Element, mut at: Rect) -> Re
 /// Persist Hug dimensions in the same transaction as content, typography and layout changes.
 /// Resolve shared styles and linked sizes before measuring, just as rendering does. Only Hug
 /// axes are written; fixed dimensions and every layer's position remain editing intent.
-pub(crate) fn sync_fit_rects(project: &mut Project) {
+/// Returns whether measurement ran, requiring validation of the resulting geometry.
+pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
+    fn has_fit(elements: &[Element]) -> bool {
+        elements.iter().any(|element| {
+            let fits = |style: &crate::ElementStyle| {
+                style.sizing.width == crate::SizingMode::Fit
+                    || style.sizing.height == crate::SizingMode::Fit
+            };
+            fits(&element.style)
+                || element
+                    .overrides
+                    .values()
+                    .any(|over| over.style.as_ref().is_some_and(fits))
+                || has_fit(&element.children)
+        })
+    }
+
+    // Fixed-only projects cannot change here. Avoid resolving/cloning every size and loading
+    // font resources on ordinary moves, inserts and unrelated project edits.
+    if !project.pages.iter().any(|page| has_fit(&page.elements))
+        && !project
+            .linked
+            .values()
+            .any(|definition| has_fit(std::slice::from_ref(&definition.master)))
+    {
+        return false;
+    }
     fn measure_tree(fonts: &mut FontSet, elements: &mut [Element]) {
         for element in elements {
             measure_tree(fonts, &mut element.children);
+            if element.style.sizing.width != crate::SizingMode::Fit
+                && element.style.sizing.height != crate::SizingMode::Fit
+            {
+                continue;
+            }
             let rect = resolve_auto_size(fonts, element, element.rect);
             if element.style.sizing.width == crate::SizingMode::Fit {
                 element.rect.width = rect.width;
@@ -1235,6 +1266,7 @@ pub(crate) fn sync_fit_rects(project: &mut Project) {
             }
         }
     });
+    true
 }
 
 /// Where a text-bearing element's first line box starts, and how its lines align.

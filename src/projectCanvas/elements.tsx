@@ -250,11 +250,20 @@ export const ELEMENT_CORNERS: ElementCorner[] = ['nw', 'n', 'ne', 'e', 'se', 's'
 export type MeasuredSelection = { elementId: string; sizeId: string; rect: ScreenRect; inherited: boolean };
 
 // One layer draws in every linked size, so a selection measures each of its instances.
-function measure(surface: HTMLElement, selection: ElementTarget[]): MeasuredSelection[] {
+export function measureElementSelection(surface: HTMLElement, selection: ElementTarget[]): MeasuredSelection[] {
   const host = surface.getBoundingClientRect();
   const rows: MeasuredSelection[] = [];
+  const selected = new Set(selection.map(target => target.elementId));
+  const nodes = new Map<string, HTMLElement[]>();
+  for (const node of surface.querySelectorAll<HTMLElement>('[data-element]')) {
+    const id = node.dataset.element!;
+    if (!selected.has(id)) continue;
+    const instances = nodes.get(id) ?? [];
+    instances.push(node);
+    nodes.set(id, instances);
+  }
   for (const target of selection) {
-    for (const node of surface.querySelectorAll<HTMLElement>(`[data-element="${CSS.escape(target.elementId)}"]`)) {
+    for (const node of nodes.get(target.elementId) ?? []) {
       const sizeId = node.closest<HTMLElement>('[data-size]')?.dataset.size ?? '';
       const box = node.getBoundingClientRect();
       // Solid in the edited size (or every size for a double-click selection); dashed where
@@ -266,26 +275,43 @@ function measure(surface: HTMLElement, selection: ElementTarget[]): MeasuredSele
   return rows;
 }
 
+/** A camera change transforms measured bounds without another DOM/layout read. */
+export function projectMeasuredSelection(rows: MeasuredSelection[], from: CanvasCamera, to: CanvasCamera): MeasuredSelection[] {
+  const scale = to.zoom / from.zoom;
+  return rows.map(row => ({ ...row, rect: {
+    left: (row.rect.left - from.x) * scale + to.x,
+    top: (row.rect.top - from.y) * scale + to.y,
+    width: row.rect.width * scale, height: row.rect.height * scale,
+  } }));
+}
+
 /** Selection lives in screen pixels above the transformed layer. */
 export function ElementSelectionOverlay({ surface, project, selection, camera, version, onResizeStart }: {
   surface: { current: HTMLDivElement | null }; project: Project; selection: ElementTarget[]; camera: CanvasCamera; version: string;
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>, elementId: string, corner: ElementCorner, sizeId: string | null) => void;
 }) {
-  const [rects, setRects] = useState<MeasuredSelection[]>([]);
+  const [measured, setMeasured] = useState<{ rows: MeasuredSelection[]; camera: CanvasCamera } | null>(null);
+  const latest = useRef({ selection, camera });
+  latest.current = { selection, camera };
   const fontRevision = useCanvasFontRevision();
-  const key = `${project.revision}:${fontRevision}:${camera.x}:${camera.y}:${camera.zoom}:${selection.map(target => `${target.elementId}:${target.sizeId ?? 'all'}`).join(',')}:${version}`;
+  // Pan and zoom only transform the canvas layer; its measured element geometry stays valid.
+  const key = `${project.revision}:${fontRevision}:${selection.map(target => `${target.elementId}:${target.sizeId ?? 'all'}`).join(',')}:${version}`;
   useLayoutEffect(() => {
     const node = surface.current;
-    if (!node || !selection.length) { setRects(current => current.length ? [] : current); return; }
-    setRects(measure(node, selection));
+    if (!node || !selection.length) { setMeasured(null); return; }
+    setMeasured({ rows: measureElementSelection(node, selection), camera });
   }, [key]);
   useEffect(() => {
     const node = surface.current;
     if (!node) return;
-    const observer = new ResizeObserver(() => setRects(measure(node, selection)));
+    const observer = new ResizeObserver(() => {
+      const { selection, camera } = latest.current;
+      setMeasured(selection.length ? { rows: measureElementSelection(node, selection), camera } : null);
+    });
     observer.observe(node);
     return () => observer.disconnect();
-  }, [selection.map(target => `${target.elementId}:${target.sizeId ?? 'all'}`).join(',')]);
+  }, [surface]);
+  const rects = measured ? projectMeasuredSelection(measured.rows, measured.camera, camera) : [];
   if (!selection.length) return null;
   const editable = selection.length === 1 ? rects.find(row => !row.inherited) ?? rects[0] ?? null : null;
   return <>
