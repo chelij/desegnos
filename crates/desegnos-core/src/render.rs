@@ -821,7 +821,7 @@ fn paint_children(
             wrap,
         } => {
             let row = matches!(direction, crate::StackDirection::Row);
-            let inner = inset(content, *padding);
+            let inner = inset_sides(content, effective_padding(element, *padding));
             let extent = if row { inner.width } else { inner.height };
             let cross_extent = if row { inner.height } else { inner.width };
             let mut rects: Vec<_> = children
@@ -940,7 +940,7 @@ fn paint_children(
             gap,
             padding,
         } => {
-            let inner = inset(content, *padding);
+            let inner = inset_sides(content, effective_padding(element, *padding));
             let columns = *columns as usize;
             let width =
                 ((inner.width - gap * columns.saturating_sub(1) as f64) / columns as f64).max(0.0);
@@ -991,6 +991,31 @@ fn offset(content: Rect, rect: Rect) -> Rect {
         y: content.y + rect.y,
         width: rect.width,
         height: rect.height,
+    }
+}
+
+/// The content inset a stack or grid applies: the four sides when the layer names them, else the
+/// layout's all-sides value that older projects carry.
+fn effective_padding(element: &Element, fallback: f64) -> crate::ElementPadding {
+    element.style.padding.unwrap_or(crate::ElementPadding {
+        top: fallback,
+        right: fallback,
+        bottom: fallback,
+        left: fallback,
+    })
+}
+
+/// A rect shrunk by each named side, never below zero.
+fn inset_sides(rect: Rect, padding: crate::ElementPadding) -> Rect {
+    let left = padding.left.max(0.0);
+    let right = padding.right.max(0.0);
+    let top = padding.top.max(0.0);
+    let bottom = padding.bottom.max(0.0);
+    Rect {
+        x: rect.x + left,
+        y: rect.y + top,
+        width: (rect.width - left - right).max(0.0),
+        height: (rect.height - top - bottom).max(0.0),
     }
 }
 
@@ -1101,16 +1126,19 @@ fn resolve_auto_size(fonts: &mut FontSet, element: &Element, mut at: Rect) -> Re
                 padding,
                 ..
             } => {
+                let padding = effective_padding(element, *padding);
+                let sides = padding.left + padding.right;
+                let ends = padding.top + padding.bottom;
                 let gaps = gap * children.len().saturating_sub(1) as f64;
                 if *direction == crate::StackDirection::Row {
                     (
-                        children.iter().map(|r| r.width).sum::<f64>() + gaps + padding * 2.0,
-                        children.iter().map(|r| r.height).fold(0.0, f64::max) + padding * 2.0,
+                        children.iter().map(|r| r.width).sum::<f64>() + gaps + sides,
+                        children.iter().map(|r| r.height).fold(0.0, f64::max) + ends,
                     )
                 } else {
                     (
-                        children.iter().map(|r| r.width).fold(0.0, f64::max) + padding * 2.0,
-                        children.iter().map(|r| r.height).sum::<f64>() + gaps + padding * 2.0,
+                        children.iter().map(|r| r.width).fold(0.0, f64::max) + sides,
+                        children.iter().map(|r| r.height).sum::<f64>() + gaps + ends,
                     )
                 }
             }
@@ -1119,17 +1147,20 @@ fn resolve_auto_size(fonts: &mut FontSet, element: &Element, mut at: Rect) -> Re
                 gap,
                 padding,
             } => {
+                let padding = effective_padding(element, *padding);
                 let columns = *columns as usize;
                 (
                     children.iter().map(|r| r.width).fold(0.0, f64::max) * columns as f64
                         + gap * columns.saturating_sub(1) as f64
-                        + padding * 2.0,
+                        + padding.left
+                        + padding.right,
                     children
                         .chunks(columns)
                         .map(|row| row.iter().map(|r| r.height).fold(0.0, f64::max))
                         .sum::<f64>()
                         + gap * children.len().div_ceil(columns).saturating_sub(1) as f64
-                        + padding * 2.0,
+                        + padding.top
+                        + padding.bottom,
                 )
             }
         };
@@ -2333,6 +2364,97 @@ mod tests {
         parent.layout = ElementLayout::Stack { direction: crate::StackDirection::Row, gap: 8.0, padding: 4.0, align: StackAlign::Start, justify: StackJustify::Start, wrap: false };
         let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect);
         assert_eq!((hugged.width, hugged.height), (48.0, 38.0));
+    }
+
+    /// Every axis-aligned box painted by a scene, in paint order, read from its outline.
+    fn painted_boxes(scene: &Scene, items: &[Item]) -> Vec<Rect> {
+        let mut boxes = Vec::new();
+        for item in items {
+            match item {
+                Item::Shape(Shape { path_ref, .. }) => {
+                    let point = |index: usize| match scene.paths[*path_ref].segments[index] {
+                        Segment::Move(point) | Segment::Line(point) => point,
+                        _ => panic!("a box outline starts with two corners"),
+                    };
+                    let (origin, across, down) = (point(0), point(1), point(2));
+                    boxes.push(rect(
+                        origin.x,
+                        origin.y,
+                        across.x - origin.x,
+                        down.y - origin.y,
+                    ));
+                }
+                Item::Group(group) => boxes.extend(painted_boxes(scene, &group.items)),
+                _ => {}
+            }
+        }
+        boxes
+    }
+
+    #[test]
+    fn uneven_padding_insets_children_and_hug_on_each_named_side() {
+        let mut fonts = FontSet::new();
+        let mut parent = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 200.0, 200.0));
+        parent.style.sizing.width = crate::SizingMode::Fit;
+        parent.style.sizing.height = crate::SizingMode::Fit;
+        parent.style.padding = Some(crate::ElementPadding {
+            top: 8.0,
+            right: 16.0,
+            bottom: 4.0,
+            left: 24.0,
+        });
+        parent.layout = ElementLayout::Stack {
+            direction: crate::StackDirection::Column,
+            gap: 6.0,
+            padding: 2.0,
+            align: StackAlign::Start,
+            justify: StackJustify::Start,
+            wrap: false,
+        };
+        let mut first = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 40.0, 20.0));
+        let mut second = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 30.0, 10.0));
+        for child in [&mut first, &mut second] {
+            child.style.fill = Some("#000000".into());
+        }
+        parent.children = vec![first, second];
+        let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect);
+        assert_eq!(
+            (hugged.width, hugged.height),
+            (80.0, 48.0),
+            "40 wide + 24 left + 16 right, 20 + 6 + 10 tall + 8 top + 4 bottom"
+        );
+
+        let project = Project::new(
+            "Padding".into(),
+            crate::Viewport {
+                width: 200,
+                height: 200,
+            },
+            crate::Appearance::Dark,
+        )
+        .unwrap();
+        let mut target = scene();
+        let mut items = Vec::new();
+        paint_children(
+            &project,
+            &mut target,
+            &mut fonts,
+            &parent,
+            parent.rect,
+            &mut items,
+        );
+        assert_eq!(
+            painted_boxes(&target, &items),
+            vec![rect(24.0, 8.0, 40.0, 20.0), rect(24.0, 34.0, 30.0, 10.0)]
+        );
+
+        parent.style.padding = None;
+        let uniform = resolve_auto_size(&mut fonts, &parent, parent.rect);
+        assert_eq!(
+            (uniform.width, uniform.height),
+            (44.0, 40.0),
+            "the layout's all-sides padding remains the fallback"
+        );
     }
 
     #[test]
