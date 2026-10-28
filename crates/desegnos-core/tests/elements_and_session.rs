@@ -623,11 +623,11 @@ fn new_layers_are_shared_and_can_still_be_hidden_per_size() {
     assert!(phone_element.visible);
     assert!(!project.element(added).unwrap().1.overrides.contains_key(&base));
 
-    // Explicit This size edits can still hide the element without a ghost.
+    // Explicit This size edits can still hide the element in one size without a ghost.
     let mut dismiss = patch(added);
     dismiss.visible = Some(false);
     dismiss.dismissed = Some(true);
-    dismiss.size_id = Some(base);
+    dismiss.size_id = Some(phone);
     let dismissed = apply(
         &project,
         Command::UpdateElements {
@@ -637,18 +637,18 @@ fn new_layers_are_shared_and_can_still_be_hidden_per_size() {
     )
     .unwrap();
     let page_ref = dismissed.page(page).unwrap();
-    let base_element = resolve_for_size(&dismissed, page_ref, base)
+    let phone_element = resolve_for_size(&dismissed, page_ref, phone)
         .into_iter()
         .find(|element| element.id == added)
         .unwrap();
-    assert!(!base_element.visible);
-    let over = &dismissed.element(added).unwrap().1.overrides[&base];
+    assert!(!phone_element.visible);
+    let over = &dismissed.element(added).unwrap().1.overrides[&phone];
     assert!(over.hidden && over.dismissed);
 
-    // Including it in the base size clears the placeholder override.
+    // Including it in the phone size clears the placeholder override.
     let mut include = patch(added);
     include.visible = Some(true);
-    include.size_id = Some(base);
+    include.size_id = Some(phone);
     let included = apply(
         &dismissed,
         Command::UpdateElements {
@@ -658,13 +658,13 @@ fn new_layers_are_shared_and_can_still_be_hidden_per_size() {
     )
     .unwrap();
     let page_ref = included.page(page).unwrap();
-    let base_element = resolve_for_size(&included, page_ref, base)
+    let phone_element = resolve_for_size(&included, page_ref, phone)
         .into_iter()
         .find(|element| element.id == added)
         .unwrap();
-    assert!(base_element.visible);
+    assert!(phone_element.visible);
     assert!(
-        !included.element(added).unwrap().1.overrides.contains_key(&base),
+        !included.element(added).unwrap().1.overrides.contains_key(&phone),
         "including removed the empty override"
     );
 
