@@ -1,7 +1,7 @@
 use desegnos_core::{Appearance, BoundaryKind, CanvasTemplate, OutputType, Project};
 
 fn untitled(template: CanvasTemplate) -> Project {
-    Project::untitled("Canvas 1".into(), Appearance::Light, template).unwrap()
+    Project::untitled("Untitled canvas".into(), Appearance::Light, template).unwrap()
 }
 
 #[test]
@@ -17,6 +17,7 @@ fn website_starts_with_linked_desktop_tablet_and_phone_sizes() {
     let project = untitled(CanvasTemplate::Website);
     assert_eq!(project.pages.len(), 1);
     let page = &project.pages[0];
+    assert_eq!(page.name, "Page 1");
     assert_eq!(page.output, OutputType::Webpage);
     assert_eq!(page.path, "/");
     assert_eq!(page.id, project.home_page_id);
@@ -47,6 +48,7 @@ fn website_starts_with_linked_desktop_tablet_and_phone_sizes() {
 fn app_screen_and_social_image_are_single_fixed_screens() {
     let app = untitled(CanvasTemplate::AppScreen);
     assert_eq!(app.pages.len(), 1);
+    assert_eq!(app.pages[0].name, "Screen 1");
     assert_eq!(app.pages[0].output, OutputType::AppScreen);
     assert_eq!(app.pages[0].base_size().width, 390);
     assert_eq!(app.pages[0].base_size().height, 844);
@@ -54,6 +56,7 @@ fn app_screen_and_social_image_are_single_fixed_screens() {
 
     let image = untitled(CanvasTemplate::SocialImage);
     assert_eq!(image.pages.len(), 1);
+    assert_eq!(image.pages[0].name, "Image 1");
     assert_eq!(image.pages[0].output, OutputType::Image);
     assert_eq!(image.pages[0].base_size().width, 1080);
     assert_eq!(image.pages[0].base_size().height, 1080);

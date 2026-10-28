@@ -1,7 +1,8 @@
+import { fitCamera } from './projectCanvasGeometry';
 import { useProjectCanvas } from './projectCanvas/useProjectCanvas';
 export type { ProjectCanvasHandle, ProjectCanvasProps, PreviewState } from './projectCanvas/interactionTypes';
 import { CORNERS, ProjectCanvasHandle, ProjectCanvasProps } from './projectCanvas/interactionTypes';
-import { forwardRef } from 'react';
+import { forwardRef, useEffect } from 'react';
 import { isTextField } from './WorkspaceSurface';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { SelectionBar } from './projectCanvas/selectionBar';
@@ -24,7 +25,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
   addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout,
-  play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
+  play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
 }, ref) {
   const {
     surface, panning, spaceHeld, zoomHeld, painterArmed, dropHover, dotStyle, pointerDown, keyDown,
@@ -40,7 +41,41 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, previewScreen, dropNotice,
     setDropNotice,
-  } = useProjectCanvas({ project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout, play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
+  } = useProjectCanvas({ project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
+  const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
+  const slides = project.pages;
+  const slideIndex = Math.max(0, slides.findIndex(page => page.id === play.boundary));
+  const advance = (delta: number) => onPlayBoundary(slides[Math.max(0, Math.min(slides.length - 1, slideIndex + delta))].id);
+  useEffect(() => {
+    if (!presenting) return;
+    const handle = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      const next = ['ArrowRight', 'ArrowDown', ' ', 'PageDown'].includes(event.key);
+      const previous = ['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key);
+      if (!next && !previous && event.key !== 'Escape') return;
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (event.key === 'Escape') onPlayExit(); else advance(next ? 1 : -1);
+    };
+    window.addEventListener('keydown', handle, true);
+    return () => window.removeEventListener('keydown', handle, true);
+  }, [presenting, slideIndex, project, onPlayBoundary, onPlayExit]);
+  if (presenting) {
+    const boundary = boundaries.find(boundary => boundary.pageId === slides[slideIndex].id)!;
+    const size = slides[slideIndex].sizes[0];
+    const slide = { ...boundary, rect: { ...boundary.rect, width: size.width, height: size.height } };
+    const displayCamera = fitCamera(slide.rect, viewSize);
+    return <div ref={surface} id="project-canvas" className="project-canvas playing presenting" tabIndex={0}>
+      <div className="project-canvas-layer" style={{ transform: `translate(${displayCamera.x}px, ${displayCamera.y}px) scale(${displayCamera.zoom})` }}>
+        <BoundaryLayer project={project} boundaries={[slide]} focused={null} selection={[]} moving={null} tool="select" spaceHeld={false} openPage={() => {}} editingId={null} movingElements={{}} onPlaceholder={() => {}} play={play} viewport={slide.rect} />
+      </div>
+      <div className="presentation-controls">
+        <button type="button" aria-label="Previous slide" disabled={slideIndex === 0} onClick={() => advance(-1)}>←</button>
+        <span>{slideIndex + 1} / {slides.length}</span>
+        <button type="button" aria-label="Next slide" disabled={slideIndex === slides.length - 1} onClick={() => advance(1)}>→</button>
+        <button type="button" onClick={onPlayExit}>Stop</button>
+      </div>
+    </div>;
+  }
   return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${zoomHeld ? ' zoom-ready' : ''}${painterArmed ? ' paint-format' : ''}${playIsActive(play) ? ' playing' : ''}${dropHover && !dropHover.rect ? ' drop-bed' : ''}`} style={dotStyle} tabIndex={0}
     onPointerDown={pointerDown} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>

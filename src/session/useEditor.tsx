@@ -1,3 +1,4 @@
+import { type BoundaryToolKind, boundaryDefaults, layoutKind, outputKind, pageKind, projectKind, nextBoundaryName } from '../projectCanvas/boundaryDefaults';
 import { canvasView } from '../projectCanvas/canvasView';
 import { useProjectSession } from './useProjectSession';
 import { createProjectCommands } from './projectCommands';
@@ -5,7 +6,7 @@ import { useExportJobs } from '../exportJobs/useExportJobs';
 import { createEditorShortcuts } from '../editorShortcuts';
 import {
   Theme, Replacement, UntitledSaveRequest, Confirmation, errorMessage, sizeName, sizeBoundaries, initialZoom,
-  readRulerUnit, readTheme, ownerPageId, selectionBounds, menuPaletteCommands, canvasPageName,
+  readRulerUnit, readTheme, ownerPageId, selectionBounds, menuPaletteCommands,
   suggestedPagePath,
 } from '../editorShared';
 import { readRequestAttachments } from '../requestAttachments';
@@ -26,7 +27,7 @@ import { type DossierSection } from '../Notes';
 import { type MenuItem } from '../Menus';
 import { KEYMAP, shortcutFor, shortcutLabel, viewNameForSlot } from '../shortcuts';
 import {
-  boundaryMoves, pushApartBoundaries, toggleCanvasTarget, selectedReference, type Boundary, type BoundaryMove,
+  BOUNDARY_GAP, unionBounds, referenceMoves, pushApartReference, boundaryMoves, pushApartBoundaries, toggleCanvasTarget, selectedReference, type Boundary, type BoundaryMove,
   type CanvasCamera, type CanvasTarget, type ReferenceMove,
 } from '../projectCanvasGeometry';
 import { findPageElement } from '../projectCanvas/elementGeometry';
@@ -82,7 +83,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [canvasTool, setCanvasTool] = useState<ProjectTool>('select');
   const [insertKind, setInsertKind] = useState<ElementKind | null>(null);
   const [insertSignal, setInsertSignal] = useState(0);
-  const [boundaryKind, setBoundaryKind] = useState<BoundaryKind>('page');
+  const [boundaryKind, setBoundaryKind] = useState<BoundaryToolKind>('page');
   const [requestToolShape, setRequestToolShape] = useState<RequestToolShape>('pick');
   const [canvasSelection, setCanvasSelection] = useState<CanvasTarget[]>([]);
   const [canvasFocus, setCanvasFocus] = useState<string | null>(null);
@@ -183,21 +184,58 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }
   useEffect(() => { try { localStorage.setItem('desegnos.ruler-unit', rulerUnit); } catch {} }, [rulerUnit]);
 
-  const createCanvasBoundary = useCallback(async (bounds: Rect, kind: BoundaryKind, moves: BoundaryMove[], reference: ReferenceMove[]) => {
-    const added = await mutate(project => {
-      const first = project.pages.length === 0;
-      const name = canvasPageName(project.pages);
-      const width = Math.round(bounds.width), height = Math.round(bounds.height);
-      const size: PageSize = { id: crypto.randomUUID(), label: sizeName(width), width, height, kind, x: bounds.x, y: bounds.y };
-      return {
-        type: 'add_canvas_page' as const, name, path: first ? '/' : suggestedPagePath(name, project.pages.map(page => page.path)),
-        size,
-        moves: moves.map(({ pageId, sizeId, x, y, kind }) => ({ page_id: pageId, size_id: sizeId, x, y, kind })),
+  useEffect(() => {
+    if (view?.project) setBoundaryKind(projectKind(view.project));
+  }, [view?.project?.id]);
+
+  const createCanvasBoundary = useCallback(async (bounds: Rect, kind: BoundaryToolKind, sourceId?: string) => {
+    let createdId: string | null = null;
+    await mutate(project => {
+      const source = project.pages.find(page => page.id === sourceId);
+      const first = project.pages.find(page => pageKind(page) === kind);
+      const template = source ?? (kind === 'page' && (first?.sizes.length ?? 0) > 1 ? first : null);
+      const name = nextBoundaryName(project, kind);
+      const size: PageSize = { id: crypto.randomUUID(), label: sizeName(bounds.width), width: Math.round(bounds.width), height: Math.round(bounds.height), kind: layoutKind(kind), x: bounds.x, y: bounds.y };
+      let nextX = bounds.x;
+      const sizes = template ? template.sizes.map((old, index) => {
+        const next = { ...old, id: index === 0 ? size.id : crypto.randomUUID(),
+          x: source ? bounds.x + old.x - template.sizes[0].x : nextX,
+          y: source ? bounds.y + old.y - template.sizes[0].y : bounds.y,
+          ...(index === 0 ? { width: size.width, height: size.height } : {}) };
+        nextX = next.x + next.width + BOUNDARY_GAP;
+        return next;
+      }) : [size];
+      const sizeIds = new Map(template?.sizes.map((old, index) => [old.id, sizes[index].id]));
+      const copy = (element: Element): Element => ({ ...structuredClone(element), id: crypto.randomUUID(), children: element.children.map(copy), overrides: Object.fromEntries(Object.entries(element.overrides ?? {}).flatMap(([id, value]) => sizeIds.has(id) ? [[sizeIds.get(id)!, value]] : [])) });
+      createdId = crypto.randomUUID();
+      const page = { id: createdId, name, path: project.pages.length ? suggestedPagePath(name, project.pages.map(page => page.path)) : '/', included: true, output: outputKind(kind), background: source?.background ?? '#ffffff', sizes, elements: source?.elements.map(copy) ?? [] };
+      const before = sizeBoundaries(project);
+      const additions = sizes.map(item => ({ pageId: page.id, sizeId: item.id, label: item.label, rect: { x: item.x, y: item.y, width: item.width, height: item.height }, kind: item.kind }));
+      // Keep the whole linked-size row fixed while making room around it.
+      const anchor = { ...additions[0], rect: unionBounds(additions.map(item => item.rect)) };
+      const rowWidth = anchor.rect.width + BOUNDARY_GAP;
+      const prepared = source ? before.map(item => item.rect.x >= anchor.rect.x
+        && item.rect.y < anchor.rect.y + anchor.rect.height && item.rect.y + item.rect.height > anchor.rect.y
+        ? { ...item, rect: { ...item.rect, x: item.rect.x + rowWidth } } : item) : before;
+      const pushed = pushApartBoundaries([...prepared, anchor], anchor.sizeId, BOUNDARY_GAP).filter(item => item.sizeId !== anchor.sizeId);
+      const placed = [...pushed, ...additions];
+      const boxes = project.reference.map(item => ({ itemId: item.id, rect: item.rect }));
+      const reference = referenceMoves(pushApartReference(boxes, placed), boxes);
+      return { type: 'create_boundary' as const, page, after_page_id: sourceId,
+        moves: boundaryMoves(placed, [...before, ...additions]).map(({ pageId, sizeId, x, y, kind }) => ({ page_id: pageId, size_id: sizeId, x, y, kind })),
         reference: reference.map(({ itemId, x, y }) => ({ item_id: itemId, x, y })),
       };
     });
-    return added.project!.pages.at(-1)!.id;
+    return createdId;
   }, [mutate]);
+  async function addProjectBoundary() {
+    const project = current.current?.project;
+    if (!project) return;
+    const kind = projectKind(project);
+    const id = await createCanvasBoundary(boundaryDefaults(project, kind), kind);
+    selectCanvasBoundary(id);
+    if (id) requestAnimationFrame(() => canvasRef.current?.focusBoundary(id));
+  }
   const saveCanvasPlacements = useCallback(async (placements: BoundaryMove[], reference: ReferenceMove[]) => {
     if (!placements.length && !reference.length) return;
     await mutate({
@@ -494,7 +532,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
 
   // Play and Preview export.
   function togglePlay(pageId?: string | null) {
-    const target = pageId ?? canvasFocus ?? (selectedElementPageId ?? null);
+    const target = pageId ?? canvasFocus ?? selectedElementPageId ?? current.current?.project?.pages[0]?.id ?? null;
     if (!target) { setNotice('Select a boundary to play.'); return; }
     if (preview) closePreview();
     setPlay(current => current.boundary === target ? idlePlay : { ...idlePlay, boundary: target });
@@ -871,7 +909,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     loading, load, pending, newUntitled, open, appSettings, changeShowStartPage, recentProjects, openRecent,
     forgetRecent, pinRecent, recover, dismissRecoveries, canvasTool, chooseTool, canvasZoom, canvasRef,
     boundaryKind, setBoundaryKind, requestToolShape, setRequestToolShape, armInsert, insertSignal,
-    selectCanvasBoundary, createCanvasBoundary, saveCanvasPlacements, addNamedViewAt, saveCurrentView,
+    selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, saveCanvasPlacements, addNamedViewAt, saveCurrentView,
     canvasSelection, canvasFocus, canvasFocusSize, selectCanvasReference, selectCanvasPointer,
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, addCanvasReference,
     updateCanvasReference, elementToReference, referenceToElement, attachToRequest, addCanvasRequest,

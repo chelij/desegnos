@@ -84,7 +84,7 @@ For websites and app screens, export compiles the resolved element tree and link
 - Element positions and sizes are exact on the canvas. At export the resolved tree and linked sizes supply the HTML/CSS layout.
 - Each screen size is its own boundary (phone, tablet, desktop), linked to the others and laid out side by side. Linked sizes share their elements; each size can override position, size and style.
 - Two editing modes on linked sizes, chosen with the **This size / All sizes** control on the selection bar and in the Properties header while the boundary has more than one linked size. **This size** edits that size only; **All sizes** edits every linked size together. The selection highlights in every size it affects. Double-click still enters a group or edits text.
-- When an element is added to one size only, the other linked sizes show a faint dashed placeholder where it would go. Click it to include the element in that size, or dismiss it to hide it there.
+- New elements are shared and visible in every linked size. Narrower sizes scale the horizontal position and shrink the width only when needed to fit. This size edits can hide an element in an individual size; hidden elements show a faint dashed placeholder until dismissed.
 - Two kinds of boundary. **Screen** has a fixed size, like an app screen or one-screen page; content beyond it scrolls inside. **Page** has a fixed width and grows taller as elements are added.
 - Boundaries never overlap. Moving or growing one pushes its neighbours aside, so every element belongs to exactly one boundary.
 - Boundary **Background** uses the shared swatch and hex control, with white, off-white, light grey, dark grey, near-black and black presets. New boundaries start at `#ffffff`; new text and lines choose readable defaults from background luminance. The editor theme changes only the editor. Canvas and SVG/PNG/PDF/web exports use the boundary background.
@@ -94,7 +94,7 @@ For websites and app screens, export compiles the resolved element tree and link
 ## Rendering, Play and Preview export
 
 - The canvas draws elements directly. There are no snapshots of code and no per-page editor; everything is edited on the canvas.
-- **Play** (Shift+Space on a boundary): the boundary becomes clickable and simple pointers run visually. Escape stops.
+- **Play** (Shift+Space on a boundary): the boundary becomes clickable and simple pointers run visually. In slide decks, Play presents one slide at a time, starting from the selected slide or the first; arrows, Space and Page Up/Down navigate. Escape stops.
 - **Preview export**: exports the focused webpage/app-screen boundary in the background, requesting AI behaviour only when needed and runs the real result in place over the boundary, in a sandbox. It shows the last preview until the design changes; Escape returns to the design.
 - Web exports set CSS `color-scheme` on `:root` and a matching meta tag. AI behaviour requests judge light/dark suitability from the boundary background and content colours; direct exports and invalid AI values use background luminance.
 - **Open in browser** serves the last export for a final check in a real browser.

@@ -1268,45 +1268,63 @@ impl Project {
             .iter_mut()
             .find(|page| page.id == page_id)
             .ok_or_else(|| Error("This page no longer exists.".into()))?;
+        let source = size_id.unwrap_or(page.base_size_id());
+        ensure(
+            page.size(source).is_some(),
+            "This size is not part of the boundary.",
+        )?;
+        let parent = parent_id.and_then(|id| find_element(&page.elements, id));
+        let widths: Vec<(Uuid, f64)> = page
+            .sizes
+            .iter()
+            .map(|size| {
+                let width = parent
+                    .map(|element| {
+                        element.overrides.get(&size.id)
+                            .and_then(|over| over.rect.as_ref())
+                            .unwrap_or(&element.rect).width
+                    })
+                    .unwrap_or(f64::from(size.width));
+                (size.id, width)
+            })
+            .collect();
+        let source_width = widths.iter().find(|(id, _)| *id == source).unwrap().1;
+        // New layers inherit everywhere. Only geometry that would overflow a narrower parent
+        // needs a per-size override; later This size edits still control visibility and style.
+        fn fit(elements: &mut [Element], widths: &[(Uuid, f64)], source: Uuid, source_width: f64) {
+            for element in elements {
+                let original = element.rect.clone();
+                let mut child_widths = Vec::new();
+                for &(id, width) in widths {
+                    let mut rect = original.clone();
+                    if width < source_width {
+                        rect.x = (original.x * width / source_width)
+                            .clamp(0.0, (width - 1.0).max(0.0));
+                        rect.width = original.width.min((width - rect.x).max(1.0));
+                    }
+                    if id != source && !element.overrides.contains_key(&id) && rect != original {
+                        element.overrides.entry(id).or_default().rect = Some(rect.clone());
+                    }
+                    let child_width = element.overrides.get(&id)
+                        .and_then(|over| over.rect.as_ref())
+                        .unwrap_or(&rect).width;
+                    child_widths.push((id, child_width));
+                }
+                fit(&mut element.children, &child_widths, source, original.width.max(1.0));
+            }
+        }
+        fit(&mut elements, &widths, source, source_width.max(1.0));
         let children = match parent_id {
             None => &mut page.elements,
             Some(parent_id) => {
                 let parent = find_element_mut(&mut page.elements, parent_id)
                     .ok_or_else(|| Error("This box no longer exists.".into()))?;
-                ensure(
-                    parent.kind.holds_children(),
-                    "Only a box or a group can hold children.",
-                )?;
+                ensure(parent.kind.holds_children(), "Only a box or a group can hold children.")?;
                 &mut parent.children
             }
         };
         let at = index.min(children.len());
-        let inserted: Vec<Uuid> = elements.iter().map(|element| element.id).collect();
         children.splice(at..at, elements);
-        if let Some(size_id) = size_id {
-            let page = self
-                .pages
-                .iter_mut()
-                .find(|page| page.id == page_id)
-                .ok_or_else(|| Error("This page no longer exists.".into()))?;
-            ensure(
-                page.size(size_id).is_some(),
-                "This size is not part of the boundary.",
-            )?;
-            let others: Vec<Uuid> = page
-                .sizes
-                .iter()
-                .map(|size| size.id)
-                .filter(|id| *id != size_id)
-                .collect();
-            for id in inserted {
-                if let Some(element) = find_element_mut(&mut page.elements, id) {
-                    for other in &others {
-                        element.overrides.entry(*other).or_default().hidden = true;
-                    }
-                }
-            }
-        }
         Ok(())
     }
 

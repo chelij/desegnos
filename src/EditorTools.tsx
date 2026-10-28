@@ -1,10 +1,11 @@
+import { type BoundaryToolKind, boundaryName, boundaryIcon } from './projectCanvas/boundaryDefaults';
 import { useEffect } from 'react';
 import { MenuButton } from './Menus';
 import { zoomLabel, ZOOM_LEVELS, MIN_ZOOM } from './canvasGeometry';
 import { Icon } from './icons';
 import { INSERT_GROUPS, ELEMENT_KIND_LABELS } from './projectCanvas/elementGeometry';
 import { shortcutLabel, withShortcut, type ShortcutAction } from './shortcuts';
-import type { BoundaryKind, ElementKind } from './types';
+import type { ElementKind } from './types';
 
 export type CanvasTool = 'select' | 'request' | 'pan';
 export type EditorTool = 'select' | 'request' | 'boundary' | 'pointer' | 'text' | 'pan' | 'rect' | 'ellipse' | 'line' | 'image' | 'note' | 'insert';
@@ -60,7 +61,7 @@ const REQUEST_SHAPES: { id: RequestToolShape; label: string; icon: string }[] = 
 export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, boundaryKind, onBoundaryKind, requestShape, onRequestShape, onInsert, insertSignal }: {
   tool: EditorTool; onTool: (tool: EditorTool) => void;
   zoom: number; onZoomStep: (direction: number) => void; onZoom: (zoom: number) => void; onFit: () => void;
-  boundaryKind?: BoundaryKind; onBoundaryKind?: (kind: BoundaryKind) => void;
+  boundaryKind?: BoundaryToolKind; onBoundaryKind?: (kind: BoundaryToolKind) => void;
   requestShape?: RequestToolShape; onRequestShape?: (shape: RequestToolShape) => void;
   onInsert?: (kind: ElementKind) => void; insertSignal?: number;
 }) {
@@ -97,8 +98,8 @@ export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, bound
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d={ICONS[value]} /></svg>
           </button>}
         {value === 'boundary' && boundaryKind && onBoundaryKind && <MenuButton className="tool-flyout" showChevron={false}
-          label={<Icon name={boundaryKind === 'screen' ? 'monitor' : 'canvas'} size={12} />} ariaLabel="Boundary kind" title={`Boundary kind · ${boundaryKind === 'screen' ? 'Screen' : 'Page'}`}
-          items={([['page', 'Page'], ['screen', 'Screen']] as const).map(([kind, label]) => ({ id: kind, label, checked: boundaryKind === kind, action: () => { onBoundaryKind(kind); onTool('boundary'); } }))} />}
+          label={<Icon name={boundaryIcon(boundaryKind)} size={12} />} ariaLabel="Boundary kind" title={`Boundary kind · ${boundaryName(boundaryKind)}`}
+          items={([['page', 'Page'], ['screen', 'Screen'], ['slide', 'Slide'], ['image', 'Image']] as const).map(([kind, label]) => ({ id: kind, label, checked: boundaryKind === kind, action: () => { onBoundaryKind(kind); onTool('boundary'); } }))} />}
         {value === 'request' && requestShape && onRequestShape && <MenuButton className="tool-flyout" showChevron={false}
           label={<svg viewBox="0 0 16 16" aria-hidden="true"><path d={REQUEST_SHAPES.find(shape => shape.id === requestShape)?.icon ?? ICONS.request} /></svg>}
           ariaLabel="Request area shape" title={`Request area shape · ${REQUEST_SHAPES.find(shape => shape.id === requestShape)?.label ?? 'Pick'}`}

@@ -1,3 +1,4 @@
+import { boundaryName, boundaryIcon, pageKind, projectKind } from './projectCanvas/boundaryDefaults';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Icon, type IconName } from './icons';
 import { CompactNumberField, CompactTextField, useFieldDraft } from './CompactField';
@@ -282,6 +283,12 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   const [customHeight, setCustomHeight] = useState('800');
   const [customOpen, setCustomOpen] = useState(false);
   const customValid = wholeSize(customWidth, 1, 32768) && wholeSize(customHeight, 1, 100000);
+  const presets = page.output === 'slide'
+    ? [{ label: '16:9', width: 1920, height: 1080 }, { label: '4:3', width: 1024, height: 768 }]
+    : page.output === 'image' ? [{ label: 'Square', width: 1080, height: 1080 }, { label: 'Portrait', width: 1080, height: 1350 }, { label: 'Story', width: 1080, height: 1920 }, { label: 'Landscape', width: 1200, height: 630 }] : null;
+  const labelForSize = (size: PageSize) => presets
+    ? presets.find(preset => preset.width === size.width && preset.height === size.height)?.label ?? `${size.width} × ${size.height}`
+    : sizeLabel(size.width);
   const hasPath = page.output === 'webpage' || page.output === 'appScreen';
   return <div className="dock-form props boundary-props">
     <div className="dock-layer-title"><strong>Boundary</strong></div>
@@ -298,21 +305,21 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
       {page.sizes.map((size, index) => <div key={size.id} className="dock-size-row" data-size-row={size.id}>
         {index === 0
           ? page.sizes.length > 1 && <span className="dock-size-tag">Base</span>
-          : <span className="dock-size-name" title={sizeLabel(size.width)}>{sizeLabel(size.width)}</span>}
-        <CompactNumberField prefix="W" label={`Width of ${sizeLabel(size.width)}`} min={1} max={32768} unit="px" value={size.width} disabled={busy} valid={width => wholeSize(width, 1, 32768)}
+          : <span className="dock-size-name" title={labelForSize(size)}>{labelForSize(size)}</span>}
+        <CompactNumberField prefix="W" label={`Width of ${labelForSize(size)}`} min={1} max={32768} unit="px" value={size.width} disabled={busy} valid={width => wholeSize(width, 1, 32768)}
           commit={width => { const value = Math.round(Number(width)); if (value >= 1 && value <= 32768) updateSize(size.id, { width: value }); }} />
-        <CompactNumberField prefix="H" label={`Height of ${sizeLabel(size.width)}`} min={1} max={100000} unit="px" value={size.height} disabled={busy} valid={height => wholeSize(height, 1, 100000)}
+        <CompactNumberField prefix="H" label={`Height of ${labelForSize(size)}`} min={1} max={100000} unit="px" value={size.height} disabled={busy} valid={height => wholeSize(height, 1, 100000)}
           commit={height => { const value = Math.round(Number(height)); if (value >= 1 && value <= 100000) updateSize(size.id, { height: value }); }} />
         <div className="dock-size-tail">
-          <select className="dock-kind" value={size.kind} disabled={busy} title="Kind" aria-label={`Kind of ${sizeLabel(size.width)}`} onChange={event => updateSize(size.id, { kind: event.target.value as BoundaryKind })}>
+          {!presets && <select className="dock-kind" value={size.kind} disabled={busy} title="Kind" aria-label={`Kind of ${labelForSize(size)}`} onChange={event => updateSize(size.id, { kind: event.target.value as BoundaryKind })}>
             <option value="page">Page</option><option value="screen">Screen</option>
-          </select>
-          {index > 0 && <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Remove ${sizeLabel(size.width)} size`} title={`Remove ${sizeLabel(size.width)} size`} disabled={busy} onClick={() => removeSize(size)}><Icon name="trash" size={13} /></button>}
+          </select>}
+          {index > 0 && <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Remove ${labelForSize(size)} size`} title={`Remove ${labelForSize(size)} size`} disabled={busy} onClick={() => removeSize(size)}><Icon name="trash" size={13} /></button>}
         </div>
       </div>)}
       <div className="dock-size-add">
         <div className="boundary-add-row">
-          {SIZE_PRESETS.map(preset => <button key={preset.preset} type="button" className="dock-action" disabled={busy}
+          {presets ? presets.map(preset => <button key={preset.label} type="button" className="dock-action" disabled={busy} title={`${preset.width} × ${preset.height}`} onClick={() => updateSize(page.sizes[0].id, { label: preset.label, width: preset.width, height: preset.height })}>{preset.label}</button>) : SIZE_PRESETS.map(preset => <button key={preset.preset} type="button" className="dock-action" disabled={busy}
             aria-label={`Add ${preset.label}`} title={`Add ${preset.label} · ${preset.width} × ${preset.height}`} onClick={() => addSize(preset.preset)}>{preset.label}</button>)}
         </div>
         {customOpen && <div className="boundary-custom-row">
@@ -559,7 +566,7 @@ export function StylesSection({ project, command, busy = false }: { project: Pro
   </PropsSection>;
 }
 
-export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectRequest, selectElement, updateElements, moveElement, removeLinked, removeElements, deleteBoundary, removeRequest, removeReference, removePointer, views, addView, jumpToView, renameView, removeView, styleCommand }: {
+export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectRequest, selectElement, updateElements, moveElement, removeLinked, removeElements, deleteBoundary, removeRequest, removeReference, removePointer, addBoundary, views, addView, jumpToView, renameView, removeView, styleCommand }: {
   project: Project; boundaries: Boundary[]; selection: CanvasTarget[]; focused: string | null;
   selectBoundary: (pageId: string, sizeId?: string) => void;
   selectReference: (itemId: string) => void; selectPointer: (pointerId: string) => void; selectRequest: (requestId: string) => void;
@@ -573,6 +580,7 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   removeReference: (id: string) => void;
   removePointer: (id: string) => void;
   styleCommand?: (command: import('./types').Command) => Promise<unknown>;
+  addBoundary: () => void;
   views: NamedView[]; addView: () => void; jumpToView: (view: NamedView) => void;
   renameView: (view: NamedView, name: string) => void; removeView: (view: NamedView) => void;
 }) {
@@ -594,13 +602,13 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   const pointers = project.pointers ?? [];
   const linked = Object.values(project.linked ?? {}).sort((first, second) => first.name.localeCompare(second.name));
   const requests = project.requests ?? [];
-  if (!ordered.length && !project.reference.length && !pointers.length && !linked.length && !requests.length && !views.length && !project.styles?.colours.length && !project.styles?.text.length) return null;
   return <ul className="dock-tree">
+    <li><button type="button" className="dock-action" onClick={addBoundary}><Icon name="plus" />Add {boundaryName(projectKind(project)).toLowerCase()}</button></li>
     <li><StylesSection project={project} command={styleCommand} /></li>
     <LayerGroup section="views" title="Views" add={addView} addLabel="Save the current view">
       {views.length > 0 && views.map(view => <ViewRow key={view.id} view={view} jump={() => jumpToView(view)} rename={name => renameView(view, name)} remove={() => removeView(view)} />)}
     </LayerGroup>
-    {ordered.map(({ pageId, sizeId, label, kind }) => {
+    {ordered.map(({ pageId, sizeId, label }) => {
       const page = project.pages.find(item => item.id === pageId);
       const size = page?.sizes.find(item => item.id === sizeId);
       if (!page || !size) return null;
@@ -618,7 +626,7 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
             </button>
             : <span className="dock-tree-spacer" aria-hidden="true" />}
           <button type="button" className="dock-tree-select" data-boundary-row={sizeId} aria-pressed={boundarySelected} title={page.path} onClick={() => selectBoundary(pageId, sizeId)}>
-            <Icon name={kind === 'screen' ? 'monitor' : 'canvas'} size={13} /><span>{name}</span>
+            <Icon name={boundaryIcon(pageKind(page))} size={13} /><span>{name}</span>
           </button>
           <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${name}`} title="Delete boundary" onClick={() => deleteBoundary(pageId, sizeId)}><Icon name="trash" size={13} /></button>
         </div>

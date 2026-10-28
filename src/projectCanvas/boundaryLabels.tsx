@@ -1,6 +1,7 @@
+import { boundaryName as kindName, type BoundaryToolKind } from './boundaryDefaults';
 import { boundaryName } from './sizes';
 import type { Boundary, CanvasCamera, CanvasTarget } from '../projectCanvasGeometry';
-import type { BoundaryKind, Project, Rect } from '../types';
+import type { Project, Rect } from '../types';
 
 const sizeLabel = (rect: Rect) => `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
 
@@ -13,7 +14,7 @@ const sizeLabel = (rect: Rect) => `${Math.round(rect.width)} × ${Math.round(rec
 export function BoundaryLabels({ project, boundaries, moving, draft, draftKind = 'page', focused, selection, camera, openPage }: {
   project: Project; boundaries: Boundary[];
   moving: { sizeId: string; pageId: string; rect: Rect } | null;
-  draft?: Rect | null; draftKind?: BoundaryKind;
+  draft?: Rect | null; draftKind?: BoundaryToolKind;
   focused: string | null; selection: CanvasTarget[];
   camera: CanvasCamera; openPage: (pageId: string) => void;
 }) {
@@ -38,7 +39,7 @@ export function BoundaryLabels({ project, boundaries, moving, draft, draftKind =
     })}
     {drafting && <div className="boundary-label draft" data-boundary-draft-size
       style={{ left: camera.x + drafting.x * camera.zoom, top: camera.y + drafting.y * camera.zoom, maxWidth: Math.max(72, drafting.width * camera.zoom) }}>
-      <span className="boundary-label-name">{draftKind === 'screen' ? 'Screen' : 'Page'}</span>
+      <span className="boundary-label-name">{kindName(draftKind)}</span>
       <span className="boundary-label-size">{sizeLabel(drafting)}</span>
     </div>}
   </div>;

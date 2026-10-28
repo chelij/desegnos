@@ -1,9 +1,10 @@
+import { type BoundaryToolKind } from './boundaryDefaults';
 import {
   drawnBoundaryRect, MIN_BOUNDARY_DRAW_HEIGHT, MIN_BOUNDARY_WIDTH, snapToBoundaryGrid, type Boundary,
   type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point,
   type ReferenceMove, type RequestBox,
 } from '../projectCanvasGeometry';
-import type { BoundaryKind, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, NamedView, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem } from '../types';
+import type { Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, NamedView, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem } from '../types';
 import type { ProjectTool, RequestToolShape } from '../EditorTools';
 import { type ScreenRect } from './surface';
 import { type LinkCopy } from './linkedChoices';
@@ -62,7 +63,6 @@ export const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 
 export const DRAW_TOOLS: ProjectTool[] = ['rect', 'ellipse', 'line', 'insert'];
 
-export const CLICK_BOUNDARY_SIZE = { width: 480, height: 360 };
 
 export const REQUEST_EDITOR_WIDTH = 280;
 
@@ -86,7 +86,7 @@ export type DuplicateRepeat = { key: string; offset: Point };
 
 export type ProjectCanvasProps = {
   project: Project; openPage: (pageId: string) => void;
-  createBoundary: (bounds: Rect, kind: BoundaryKind, moves: BoundaryMove[], reference: ReferenceMove[]) => Promise<string | null>;
+  createBoundary: (bounds: Rect, kind: BoundaryToolKind, sourceId?: string) => Promise<string | null>;
   savePlacements: (placements: BoundaryMove[], reference: ReferenceMove[]) => Promise<void>;
   /** Persists the camera as a numbered view, or as the next free one when slot is null. */
   saveView: (slot: number | null, camera: CanvasCamera) => void;
@@ -116,8 +116,9 @@ export type ProjectCanvasProps = {
   updatePointer: (pointerId: string, patch: { from?: PointerSource; to?: PointerTarget; comment?: string; kind?: Pointer['kind'] }) => Promise<unknown>;
   pointerStates: Record<string, PointerStateView>;
   tool: ProjectTool; insertKind: ElementKind | null; onTool: (tool: ProjectTool) => void;
-  boundaryKind: BoundaryKind; requestShape: RequestToolShape; onRequestShape: (shape: RequestToolShape) => void; focusedSize: string | null;
+  boundaryKind: BoundaryToolKind; requestShape: RequestToolShape; onRequestShape: (shape: RequestToolShape) => void; focusedSize: string | null;
   onZoom: (zoom: number) => void; onLayout: (boundaries: Boundary[]) => void;
+  onPlayBoundary: (id: string) => void;
   play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; onPlayExit: () => void;
   preview: PreviewState | null; previewClose: () => void; previewRefresh: () => void;
 };

@@ -595,7 +595,7 @@ fn size_override_edits_only_that_size_and_all_sizes_edits_clear_overrides() {
 }
 
 #[test]
-fn a_layer_added_in_one_size_is_a_placeholder_elsewhere_until_dismissed() {
+fn new_layers_are_shared_and_can_still_be_hidden_per_size() {
     let (project, page, base, phone) = project_with_phone();
     let added = Uuid::new_v4();
     let project = apply(
@@ -604,7 +604,7 @@ fn a_layer_added_in_one_size_is_a_placeholder_elsewhere_until_dismissed() {
             page_id: page,
             parent_id: None,
             index: 1,
-            elements: vec![text(added, "Phone only")],
+            elements: vec![text(added, "Shared from phone")],
             picture_data_uri: None,
             size_id: Some(phone),
         },
@@ -619,12 +619,11 @@ fn a_layer_added_in_one_size_is_a_placeholder_elsewhere_until_dismissed() {
         .into_iter()
         .find(|element| element.id == added)
         .unwrap();
-    assert!(!base_element.visible, "the base size shows a placeholder");
+    assert!(base_element.visible, "new elements are shared with the base size");
     assert!(phone_element.visible);
-    let over = &project.element(added).unwrap().1.overrides[&base];
-    assert!(over.hidden && !over.dismissed);
+    assert!(!project.element(added).unwrap().1.overrides.contains_key(&base));
 
-    // Dismissing the placeholder in the base size keeps it hidden without a ghost.
+    // Explicit This size edits can still hide the element without a ghost.
     let mut dismiss = patch(added);
     dismiss.visible = Some(false);
     dismiss.dismissed = Some(true);
@@ -684,6 +683,37 @@ fn a_layer_added_in_one_size_is_a_placeholder_elsewhere_until_dismissed() {
     .unwrap();
     let over = &phone_dismissed.element(added).unwrap().1.overrides[&phone];
     assert!(over.hidden && over.dismissed);
+}
+
+#[test]
+fn new_layers_scale_x_and_only_shrink_width_when_narrower_sizes_need_it() {
+    let (project, page, base, phone) = project_with_phone();
+    let wide = Uuid::new_v4();
+    let small = Uuid::new_v4();
+    let project = apply(
+        &project,
+        Command::InsertElements {
+            page_id: page,
+            parent_id: None,
+            index: 1,
+            elements: vec![
+                element(wide, ElementKind::Box, rect(400.0, 20.0, 300.0, 40.0)),
+                element(small, ElementKind::Box, rect(100.0, 80.0, 100.0, 40.0)),
+            ],
+            picture_data_uri: None,
+            size_id: Some(base),
+        },
+    ).unwrap();
+    let page_ref = project.page(page).unwrap();
+    let desktop = resolve_for_size(&project, page_ref, base);
+    let phone_tree = resolve_for_size(&project, page_ref, phone);
+    let desktop_wide = desktop.iter().find(|element| element.id == wide).unwrap();
+    let phone_wide = phone_tree.iter().find(|element| element.id == wide).unwrap();
+    let phone_small = phone_tree.iter().find(|element| element.id == small).unwrap();
+    assert_eq!(desktop_wide.rect, rect(400.0, 20.0, 300.0, 40.0));
+    assert_eq!(phone_wide.rect, rect(195.0, 20.0, 195.0, 40.0));
+    assert_eq!(phone_small.rect, rect(48.75, 80.0, 100.0, 40.0));
+    assert!(phone_wide.visible && phone_small.visible && desktop_wide.visible);
 }
 
 #[test]

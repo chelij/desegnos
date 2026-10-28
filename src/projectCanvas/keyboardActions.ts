@@ -1,8 +1,10 @@
 import { isTextField } from '../WorkspaceSurface';
+import { pageKind } from './boundaryDefaults';
+import type { ProjectCanvasProps } from './interactionTypes';
 import { arrangeSiblingOrder, type ArrangeOperation } from './arrange';
 import { type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
-  selectedPointers, type Boundary, type CanvasCamera, type CanvasTarget, type ElementTarget, type Point,
+  BOUNDARY_GAP, selectedPointers, type Boundary, type CanvasCamera, type CanvasTarget, type ElementTarget, type Point,
 } from '../projectCanvasGeometry';
 import type { Element, ElementKind, ElementMove, ElementPatch, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
 import type { ProjectTool } from '../EditorTools';
@@ -16,6 +18,7 @@ import { unionRects, elementChildrenOf, elementParents, findPageElement } from '
 import { ElementEntry, ClipboardEntry, PasteTarget, LinkDecision, Drag, CanvasActionOptions, isElementTarget } from './interactionTypes';
 
 type Context = {
+  createBoundary: ProjectCanvasProps['createBoundary'];
   drag: { current: Drag | null; };
   cancelDrag: () => void;
   painterArmed: boolean;
@@ -327,7 +330,8 @@ export function createKeyboardActions(context: () => Context) {
       case 'paste': case 'pasteChoice': return clipboard.current.length > 0 && pasteTarget() !== null;
       case 'pasteStyle': return elements.length > 0 && copiedStyle.current !== null;
       case 'paintFormat': return elements.length > 0 || copiedStyle.current !== null;
-      case 'copy': case 'cut': case 'duplicate': case 'copyStyle': case 'unlink':
+      case 'duplicate': return elements.length > 0 || (!!focused && !selection.length);
+      case 'copy': case 'cut': case 'copyStyle': case 'unlink':
       case 'forward': case 'backward': case 'front': case 'back':
       case 'selectParent': case 'nudge': case 'nudgeFar':
         return elements.length > 0;
@@ -383,7 +387,14 @@ export function createKeyboardActions(context: () => Context) {
         pasteElements(true);
         return true;
       case 'duplicate':
-        if (!elements.length) return false;
+        if (!elements.length) {
+          const page = project.pages.find(page => page.id === focused);
+          if (!page || selection.length) return false;
+          const base = page.sizes[0];
+          const bounds = { x: Math.max(...page.sizes.map(size => size.x + size.width)) + BOUNDARY_GAP, y: base.y, width: base.width, height: base.height };
+          void context().createBoundary(bounds, pageKind(page), page.id).then(id => { if (id) context().selectBoundary(id); }).catch(() => {});
+          return true;
+        }
         duplicateElements();
         return true;
       case 'copyStyle':

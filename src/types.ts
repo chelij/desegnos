@@ -185,6 +185,7 @@ export type Command =
   | { type: 'set_page_output'; page_id: string; output: OutputType }
   | { type: 'forget_export_pointer'; pointer_id: string }
   | { type: 'update_page_size'; page_id: string; size_id: string; label?: string; width?: number; height?: number; kind?: BoundaryKind; moves?: Placements; reference?: ReferencePlacement[] }
+  | { type: 'create_boundary'; page: Page; after_page_id?: string; moves: Placements; reference: ReferencePlacement[] }
   | { type: 'add_canvas_page'; name: string; path: string; size: PageSize; moves: Placements; reference: ReferencePlacement[] }
   | { type: 'add_page_size'; page_id: string; size: PageSize; moves: Placements; reference: ReferencePlacement[] }
   | { type: 'remove_page_size'; page_id: string; size_id: string }

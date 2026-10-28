@@ -19,7 +19,7 @@ import {
 } from './elementGeometry';
 import {
   MoveTarget, MoveSelectionDrag, ElementEntry, PasteChoice, LinkDecision, MoveElementsDrag, DrawElementDrag,
-  Drag, DRAW_TOOLS, CLICK_BOUNDARY_SIZE, DragInput, elementChain, chainPage, elementTargetAt, elementMoveDelta,
+  Drag, DRAW_TOOLS, DragInput, elementChain, chainPage, elementTargetAt, elementMoveDelta,
   boundaryDrawRect, defaultSize,
 } from './interactionTypes';
 
@@ -78,7 +78,7 @@ type Context = {
   renderDrag: import("react").Dispatch<import("react").SetStateAction<number>>;
   worldToScreen: (point: Point) => Point;
   persistMove: (sizeId: string, rect: Rect) => Promise<void>;
-  persistDraw: (rect: Rect) => Promise<void>;
+  persistDraw: (rect: Rect, clicked?: boolean) => Promise<void>;
   addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>;
   createdItem: import("react").RefObject<string | null>;
   boundaryRect: (sizeId: string) => Rect | null;
@@ -464,7 +464,7 @@ export function createCanvasInteraction(context: () => Context) {
     if (active.kind === 'move-boundary') { if (active.moved) void persistMove(active.sizeId, active.rect); return; }
     if (active.kind === 'draw-boundary') {
       // A click places the tool's default boundary, as a click does with every other draw tool.
-      if (!active.moved) { void persistDraw({ x: active.start.x, y: active.start.y, ...CLICK_BOUNDARY_SIZE }); return; }
+      if (!active.moved) { void persistDraw(active.rect, true); return; }
       void persistDraw(active.rect);
       return;
     }
