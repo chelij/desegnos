@@ -13,7 +13,7 @@
   min-height: var(--floating-height);
   padding: var(--space-1);
   border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface-raised);
   box-shadow: var(--shadow-2);
   color: var(--text);
@@ -42,8 +42,8 @@
 .floating-bar .floating-bar-group > button:hover:not(:disabled) { background: var(--surface-muted); }
 .floating-bar > button[aria-pressed="true"],
 .floating-bar .floating-bar-group > button[aria-pressed="true"] { background: var(--selected); border-color: var(--accent); color: var(--text); }
-.floating-bar > button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.floating-bar > button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.floating-bar > button.primary { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--accent-on); }
+.floating-bar > button.primary:hover:not(:disabled) { background: var(--accent-strong-hover); border-color: var(--accent-strong-hover); }
 .floating-bar .icon-button { width: var(--control-md); padding: 0; }
 .floating-bar .icon { width: var(--icon-md); height: var(--icon-md); }
 .floating-bar-label { display: inline-flex; align-items: center; height: var(--control-md); padding: 0 var(--space-3); color: var(--text); font-weight: var(--weight-semibold); white-space: nowrap; }
@@ -67,7 +67,7 @@
 .live-path-field {
   display: inline-flex; align-items: center; gap: var(--space-2); flex: 0 1 auto; min-width: 0; max-width: min(260px, 42vw); height: var(--control-md);
   padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--surface-muted); color: var(--muted); font: 12px/1 var(--font-mono); text-align: left;
+  background: var(--surface-muted); color: var(--muted); font: var(--text-sm)/1 var(--font-mono); text-align: left;
 }
 .live-path-field > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 button.live-path-field { cursor: pointer; color: var(--text); }
@@ -89,16 +89,19 @@ button.live-path-field:hover:not(:disabled) { border-color: var(--border); backg
 button.status-chip { height: 20px; min-height: 20px; padding: 0 var(--space-4); }
 .status-chip-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
 .status-chip-neutral { background: var(--surface-muted); border-color: var(--border-soft); color: var(--muted); }
-.status-chip-success { background: color-mix(in srgb, var(--success) 14%, transparent); border-color: color-mix(in srgb, var(--success) 42%, transparent); color: var(--success); }
-.status-chip-warning { background: var(--notice-warning-bg); border-color: var(--notice-warning-border); color: var(--notice-warning-fg); }
-.status-chip-danger { background: var(--error-surface); border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); }
-.status-chip-info { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); }
+.status-chip-success { background: var(--success-tint); border-color: color-mix(in srgb, var(--success) 40%, transparent); color: var(--success); }
+.status-chip-warning { background: var(--warning-tint); border-color: color-mix(in srgb, var(--warning) 40%, transparent); color: var(--warning); }
+.status-chip-danger { background: var(--danger-tint); border-color: color-mix(in srgb, var(--danger) 40%, transparent); color: var(--danger); }
+.status-chip-info { background: var(--accent-tint); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent-ink); }
 
 /* One disclosure row, including the chevron from the shared icon set. */
 .disclosure { width: 100%; border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--surface-raised); color: var(--text); }
 .disclosure > summary { display: flex; align-items: center; gap: var(--space-3); min-height: var(--control-lg); padding: var(--space-1) var(--space-4); cursor: pointer; list-style: none; font-size: var(--text-sm); font-weight: var(--weight-medium); font-weight: var(--weight-medium); }
 .disclosure > summary::-webkit-details-marker { display: none; }
 .disclosure > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.disclosure { transition: border-color var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard); }
+.disclosure > summary:hover { background: var(--surface-muted); }
+.disclosure > summary:active { background: var(--surface-sunken); }
 .disclosure-summary { min-width: 0; overflow-wrap: anywhere; }
 .disclosure-chevron { color: var(--muted); transition: transform var(--duration-fast) var(--ease-standard); }
 .disclosure[open] > summary { border-bottom: 1px solid var(--border-soft); }
@@ -139,11 +142,11 @@ button.status-chip { height: 20px; min-height: 20px; padding: 0 var(--space-4); 
 /* Notices use the shared button language; only the container keeps warning/error colour. */
 .notice .notice-actions button { border: 1px solid var(--border); background: var(--surface-raised); color: var(--text); }
 .notice .notice-actions button:hover:not(:disabled) { background: var(--surface-muted); }
-.notice .notice-actions .primary, .area-problem button:first-child { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
-.notice .notice-actions .primary:hover:not(:disabled), .area-problem button:first-child:hover:not(:disabled) { border-color: var(--accent-hover); background: var(--accent-hover); opacity: 1; }
+.notice .notice-actions .primary, .area-problem button:first-child { border-color: var(--accent-strong); background: var(--accent-strong); color: var(--accent-on); }
+.notice .notice-actions .primary:hover:not(:disabled), .area-problem button:first-child:hover:not(:disabled) { border-color: var(--accent-strong-hover); background: var(--accent-strong-hover); opacity: 1; }
 .notice .notice-actions .close-button { border: 0; background: transparent; }
 .notice .notice-actions .close-button:hover:not(:disabled) { background: color-mix(in srgb, var(--notice-fg) 12%, transparent); }
-.notice button:focus-visible, .area-problem button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.notice button:focus-visible, .area-problem button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 
 /* Requests are see-through at rest, with a soft halo and a quiet dashed outline. */
 .free-workspace .annotation {

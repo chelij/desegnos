@@ -1,0 +1,69 @@
+/* ------------------------------------------------------------------ */
+/* Command palette: quick actions anchored under the top bar.          */
+/* Also holds the status bar's zoom readout, the one piece of editor   */
+/* chrome that ships with the palette.                                 */
+/* ------------------------------------------------------------------ */
+.palette-layer {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: calc(44px + var(--space-3)) var(--space-4) 0;
+}
+.command-palette {
+  display: flex; flex-direction: column; width: min(560px, 100%); max-height: min(60vh, 460px);
+  border: 1px solid var(--border); border-radius: var(--radius-xl);
+  background: var(--surface-raised); box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+.command-palette .palette-input {
+  flex: none; height: var(--control-lg); min-height: var(--control-lg);
+  padding: 0 var(--space-5); border: 0; border-bottom: 1px solid var(--border-soft);
+  border-radius: 0; background: transparent; color: var(--text);
+  font: var(--text-md)/var(--leading-control) var(--font-ui); outline: none;
+}
+.command-palette .palette-input::placeholder { color: var(--muted); }
+.palette-list { display: grid; gap: 1px; margin: 0; padding: var(--space-2); overflow-y: auto; list-style: none; }
+.palette-row {
+  display: flex; align-items: center; gap: var(--space-4);
+  height: var(--control-md); min-height: var(--control-md); padding: 0 var(--space-4);
+  border-radius: var(--radius-sm); color: var(--text); cursor: pointer;
+  font-size: var(--text-sm);
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+.palette-row.active { background: var(--selected); }
+.palette-row:active:not(.unavailable) { background: var(--accent-tint); }
+.palette-row.unavailable { opacity: .4; cursor: not-allowed; }
+.palette-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.palette-key {
+  flex: none; color: var(--muted); font-size: var(--text-xs); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.palette-empty { padding: var(--space-4); color: var(--muted); font-size: var(--text-sm); }
+
+@keyframes palette-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.command-palette { animation: palette-in var(--duration-fast) var(--ease-standard); }
+@media (prefers-reduced-motion: reduce) { .command-palette { animation: none; } }
+
+/* ------------------------------------------------------------------ */
+/* Status bar: selection readout and the log-scale zoom slider.        */
+/* ------------------------------------------------------------------ */
+.status-selection { display: flex; align-items: center; gap: var(--space-4); min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.status-selection > span { overflow: hidden; text-overflow: ellipsis; }
+.status-bounds { display: flex; align-items: baseline; gap: var(--space-4); color: var(--text); }
+.status-coordinate { color: var(--muted); }
+.status-zoom { display: flex; align-items: center; flex: none; gap: var(--space-1); }
+.status-zoom > button, .status-zoom > .status-zoom-value {
+  height: 20px; min-height: 20px; padding: 0 var(--space-2);
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--muted);
+  font: var(--weight-regular) var(--text-xs)/1 var(--font-ui); white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.status-zoom > button:hover:not(:disabled), .status-zoom > .status-zoom-value:hover:not(:disabled) { background: var(--surface-muted); color: var(--text); }
+.status-zoom > button:active:not(:disabled), .status-zoom > .status-zoom-value:active:not(:disabled) { background: var(--surface-sunken); }
+.status-zoom > .status-zoom-value { min-width: 44px; text-align: right; }
+.status-zoom input[type="range"] {
+  width: 84px; height: 20px; min-height: 20px; margin: 0; padding: 0;
+  border: 0; background: transparent; accent-color: var(--accent); cursor: pointer;
+}
+@media (max-width: 720px) { .status-zoom input[type="range"] { width: 56px; } }

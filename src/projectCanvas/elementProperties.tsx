@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
 import { CompactNumberField, CompactTextField } from '../CompactField';
-import { ChoiceRow } from '../EditorDock';
+import { ChoiceRow, PropsSection } from '../EditorDock';
 import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
 import type { Element, ElementLayout, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, RequestAttachment } from '../types';
@@ -221,7 +221,6 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
   const picture = useRef<HTMLInputElement>(null);
   const [pictureUri, setPictureUri] = useState<string | null>(null);
   const [nameError, setNameError] = useState('');
-  const [shadowOpen, setShadowOpen] = useState(false);
   async function commitName(name: string) {
     setNameError('');
     if (name.trim() === (single?.name ?? '')) return;
@@ -264,8 +263,7 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
       {canLink && <button type="button" className="dock-action" disabled={busy} title="Link the selected layers (Ctrl/Cmd+Alt+K)" onClick={link}>Link {elements.length} layers</button>}
       {canUnlink && <button type="button" className="dock-action" disabled={busy} title="Detach this copy (Ctrl/Cmd+Alt+B)" onClick={unlink}>Unlink</button>}
     </div>}
-    {(single || (sameKind && kind === 'box')) && <section className="props-section">
-      <h3 className="props-heading">Layout</h3>
+    {(single || (sameKind && kind === 'box')) && <PropsSection id="props-layout" title="Layout">
       {single && <div className="props-grid">
         <CompactNumberField prefix="X" label="X" value={single.rect.x} disabled={busy} valid={validNumber} commit={value => commitRect({ x: Number(value) })} />
         <CompactNumberField prefix="Y" label="Y" value={single.rect.y} disabled={busy} valid={validNumber} commit={value => commitRect({ y: Number(value) })} />
@@ -302,9 +300,8 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
             commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, padding: Number(value) } })))} />
         </div>}
       </>}
-    </section>}
-    {visual && <section className="props-section">
-      <h3 className="props-heading">Appearance</h3>
+    </PropsSection>}
+    {visual && <PropsSection id="props-appearance" title="Appearance">
       {kind !== 'line' && <ColourField label="Fill" value={fill ?? ''} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; }); }} />}
       <div className="props-stroke">
         <ColourField label="Stroke" value={strokeColour ?? ''} fallback="#000000" disabled={busy} commit={value => { rememberColour('stroke', value.trim() || null); commitStyle(style => { style.stroke.color = value.trim() || null; }); }} />
@@ -314,9 +311,8 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
       {showsRadius && <CompactNumberField prefix={<Icon name="corner-radius" size={12} />} label="Radius" min={0} unit="px" value={radius ?? ''} disabled={busy} valid={value => Number(value) >= 0}
         commit={value => commitStyle(style => { style.radius = Number(value); })} />}
       <OpacityField value={opacity} disabled={busy} commit={percent => commitStyle(style => { style.opacity = percent / 100; })} />
-    </section>}
-    {((imageKind && single) || mediaKind) && <section className="props-section">
-      <h3 className="props-heading">Content</h3>
+    </PropsSection>}
+    {((imageKind && single) || mediaKind) && <PropsSection id="props-content" title="Content">
       {imageKind && single && <div className="dock-inline">
         {projectPictureUri(project, single.image) && <img className="dock-picture" src={projectPictureUri(project, single.image)!} alt="" />}
         <span className="dock-value">{pictureName(project, single.image)}</span>
@@ -324,9 +320,8 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
         <input ref={picture} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { choosePicture(event.target.files?.[0]); event.target.value = ''; }} />
       </div>}
       {mediaKind && <CompactTextField label="Address" value={url ?? ''} disabled={busy} valid={validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
-    </section>}
-    {textKind && <section className="props-section">
-      <h3 className="props-heading">Text</h3>
+    </PropsSection>}
+    {textKind && <PropsSection id="props-text" title="Text">
       <CompactTextField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
       <div className="props-grid">
         <CompactNumberField prefix="S" label="Size" min={1} unit="px" value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1}
@@ -347,17 +342,12 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
       {kind === 'select' && <LongTextField label="Options" placeholder="One option per line" rows={5} value={(elements[0].options ?? []).join('\n')}
         commit={value => { const options = value.split('\n').map(option => option.trim()).filter(Boolean); if (options.length) update(elements.map(element => ({ id: element.id, options }))); }} />}
       <LongTextField label="Text" placeholder="Text" value={text ?? ''} commit={value => update(elements.map(element => ({ id: element.id, text: value })))} />
-    </section>}
-    {codeKind && single && <section className="props-section">
-      <h3 className="props-heading">Code</h3>
+    </PropsSection>}
+    {codeKind && single && <PropsSection id="props-code" title="Code">
       <CompactTextField label="Language" value={single.language ?? ''} disabled={busy} valid={value => value.trim().length > 0} commit={value => update([{ id: single.id, language: value.trim() }])} />
       <CodeField language={single.language ?? ''} source={single.source ?? ''} commit={source => update([{ id: single.id, source }])} />
-    </section>}
-    {visual && <section className="props-section">
-      <button type="button" className="props-disclosure" aria-expanded={shadowOpen} aria-label="Shadow" onClick={() => setShadowOpen(open => !open)}>
-        <span>Shadow</span><Icon name={shadowOpen ? 'minus' : 'plus'} size={12} />
-      </button>
-      {shadowOpen && <>
+    </PropsSection>}
+    {visual && <PropsSection id="props-shadow" title="Shadow">
         <ColourField label="Shadow colour" value={shadow?.color ?? ''} fallback="#000000" disabled={busy}
           commit={value => commitStyle(style => { style.shadow.color = value.trim() || null; })} />
         <div className="props-grid">
@@ -368,8 +358,7 @@ export function ElementProperties({ project, pageId, sizeId, elements, busy, upd
           <CompactNumberField prefix="B" label="Shadow blur" min={0} unit="px" value={shadow?.blur ?? ''} disabled={busy} valid={value => Number(value) >= 0}
             commit={value => commitStyle(style => { style.shadow.blur = Number(value); })} />
         </div>
-      </>}
-    </section>}
+    </PropsSection>}
     {single && <RequestArea element={single} project={project} request={request} setRequest={setRequest} generate={generate} error={error} />}
     {!single && <p className="dock-hint">{elements.map(element => elementKindLabel(element)).filter((label, index, all) => all.indexOf(label) === index).join(', ')}</p>}
   </div>;

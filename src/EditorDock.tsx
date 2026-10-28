@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Icon, type IconName } from './icons';
 import { CompactNumberField, CompactTextField, useFieldDraft } from './CompactField';
 import { useDraftText } from './DraftText';
@@ -27,6 +27,71 @@ function readString(key: string): string | null {
 }
 function store(key: string, value: string) {
   try { localStorage.setItem(key, value); } catch { /* Preferences can be unavailable. */ }
+}
+
+const SECTION_COLLAPSED_KEY = 'desegnos.dock-section-collapsed';
+
+/** Properties and Layers sections remember which ones are closed. */
+function readCollapsedSections(): Set<string> {
+  try {
+    const raw: unknown = JSON.parse(readString(SECTION_COLLAPSED_KEY) ?? '[]');
+    return new Set(Array.isArray(raw) ? raw.filter((key): key is string => typeof key === 'string') : []);
+  } catch { return new Set(); }
+}
+function storeCollapsedSections(collapsed: ReadonlySet<string>) {
+  store(SECTION_COLLAPSED_KEY, JSON.stringify([...collapsed]));
+}
+
+// One shared snapshot keeps separately mounted sections in step and on disk;
+// every toggle merges into the latest stored set instead of overwriting it.
+let collapsedSections: ReadonlySet<string> | null = null;
+const sectionSubscribers = new Set<() => void>();
+function collapsedSnapshot(): ReadonlySet<string> {
+  collapsedSections ??= readCollapsedSections();
+  return collapsedSections;
+}
+function subscribeSections(listener: () => void) {
+  sectionSubscribers.add(listener);
+  return () => { sectionSubscribers.delete(listener); };
+}
+function setSectionCollapsed(key: string, collapsed: boolean) {
+  const next = new Set(collapsedSnapshot());
+  if (collapsed) next.add(key); else next.delete(key);
+  collapsedSections = next;
+  storeCollapsedSections(next);
+  for (const listener of sectionSubscribers) listener();
+}
+function useCollapsedSections(): ReadonlySet<string> {
+  return useSyncExternalStore(subscribeSections, collapsedSnapshot, collapsedSnapshot);
+}
+
+export function useSectionOpen(key: string): [boolean, () => void] {
+  const collapsed = useCollapsedSections();
+  const toggle = useCallback(() => setSectionCollapsed(key, !collapsedSnapshot().has(key)), [key]);
+  return [!collapsed.has(key), toggle];
+}
+
+/** The one section-header row: sentence-case label, optional add action, collapse chevron. */
+export function SectionHeader({ title, open, toggle, add, addLabel, addExpanded }: {
+  title: string; open: boolean; toggle: () => void; add?: () => void; addLabel?: string; addExpanded?: boolean;
+}) {
+  return <div className="dock-section-head">
+    <h3 className="dock-section-title">{title}</h3>
+    {add && <button type="button" className="dock-section-add" aria-label={addLabel} title={addLabel} aria-expanded={addExpanded} onClick={add}><Icon name="plus" size={12} /></button>}
+    <button type="button" className="dock-section-toggle" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${title.toLowerCase()}`}
+      title={`${open ? 'Collapse' : 'Expand'} ${title}`} onClick={toggle}><Icon name="chevron-right" size={12} className={open ? 'expanded' : undefined} /></button>
+  </div>;
+}
+
+/** One collapsible Properties section; sections sit between 1px dividers, never boxes. */
+export function PropsSection({ id, title, children, add, addLabel, addExpanded, group }: {
+  id: string; title: string; children: ReactNode; add?: () => void; addLabel?: string; addExpanded?: boolean; group?: boolean;
+}) {
+  const [open, toggle] = useSectionOpen(id);
+  return <div className={`props-section${open ? '' : ' is-collapsed'}`} {...(group ? { role: 'group', 'aria-label': title } : {})}>
+    <SectionHeader title={title} open={open} toggle={toggle} add={add} addLabel={addLabel} addExpanded={addExpanded} />
+    {open && <div className="props-section-body">{children}</div>}
+  </div>;
 }
 export function clampDockWidth(width: number): number {
   return Number.isFinite(width) ? Math.min(MAX_DOCK_WIDTH, Math.max(MIN_DOCK_WIDTH, Math.round(width))) : DEFAULT_DOCK_WIDTH;
@@ -221,22 +286,22 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   const hasPath = page.output === 'webpage' || page.output === 'appScreen';
   return <div className="dock-form props boundary-props">
     <div className="dock-layer-title"><strong>Boundary</strong></div>
-    <section className="props-section">
+    <PropsSection id="boundary-layout" title="Layout">
       <CompactTextField label="Name" placeholder="Name" value={page.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => commit({ name: name.trim() })} />
       {hasPath && <CompactTextField prefix="URL" label="Path" placeholder="/path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />}
+    </PropsSection>
+    <PropsSection id="boundary-appearance" title="Appearance">
       <div className="props-choice"><ChoiceRow label="Appearance" hideLabel value={page.appearance} choices={[['light', 'Light'], ['dark', 'Dark']]} names={{ light: 'Light', dark: 'Dark' }} disabled={busy} choose={appearance => commit({ appearance })} /></div>
-    </section>
-    <div className="props-section boundary-export">
-      <h3 className="props-heading">Export as</h3>
+    </PropsSection>
+    <PropsSection id="boundary-export" title="Export as">
       <div className="props-choice"><ChoiceRow label="Output" hideLabel value={page.output} choices={[['webpage', 'Web'], ['appScreen', 'App'], ['slide', 'Slide'], ['image', 'Image']]}
         names={{ webpage: 'Webpage', appScreen: 'App screen', slide: 'Slide', image: 'Image' }} disabled={busy} choose={setOutput} /></div>
       <div className="boundary-export-actions">
         <label className="check-label"><input type="checkbox" checked={page.included} disabled={busy} onChange={event => commit({ included: event.target.checked })} />Include in export</label>
         {hasPath && <button type="button" className="dock-action" disabled={busy} onClick={preview}>Preview export</button>}
       </div>
-    </div>
-    <div className="props-section boundary-sizes" role="group" aria-label="Sizes">
-      <h3 className="props-heading">Sizes</h3>
+    </PropsSection>
+    <PropsSection id="boundary-sizes" title="Sizes" group add={() => setCustomOpen(open => !open)} addLabel="Add custom size" addExpanded={customOpen}>
       {page.sizes.map((size, index) => <div key={size.id} className="dock-size-row" data-size-row={size.id}>
         {index === 0
           ? page.sizes.length > 1 && <span className="dock-size-tag">Base</span>
@@ -256,9 +321,6 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
         <div className="boundary-add-row">
           {SIZE_PRESETS.map(preset => <button key={preset.preset} type="button" className="dock-action" disabled={busy}
             aria-label={`Add ${preset.label}`} title={`Add ${preset.label} · ${preset.width} × ${preset.height}`} onClick={() => addSize(preset.preset)}>{preset.label}</button>)}
-          <button type="button" className="icon-button sm" aria-label="Add custom size" title="Add custom size" aria-expanded={customOpen} disabled={busy} onClick={() => setCustomOpen(open => !open)}>
-            <Icon name={customOpen ? 'minus' : 'plus'} size={13} />
-          </button>
         </div>
         {customOpen && <div className="boundary-custom-row">
           <CompactNumberField prefix="W" label="Custom width" min={1} max={32768} unit="px" value={customWidth} disabled={busy} valid={width => wholeSize(width, 1, 32768)} commit={setCustomWidth} />
@@ -266,7 +328,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
           <button type="button" className="dock-action" aria-label="Add custom size" title="Add custom size" disabled={busy || !customValid} onClick={() => addSize('custom', Math.round(Number(customWidth)), Math.round(Number(customHeight)))}>Add</button>
         </div>}
       </div>
-    </div>
+    </PropsSection>
     <div className="boundary-footer">
       <button type="button" className="dock-action danger" disabled={busy} onClick={remove}>Delete boundary</button>
     </div>
@@ -471,6 +533,17 @@ function ViewRow({ view, jump, rename, remove }: { view: NamedView; jump: () => 
   </li>;
 }
 
+/** A Layers group: one header row with an optional add action and a chevron. */
+function LayerGroup({ section, title, add, addLabel, children }: {
+  section: string; title: string; add?: () => void; addLabel?: string; children?: ReactNode;
+}) {
+  const [open, toggle] = useSectionOpen(`layers:${section}`);
+  return <li className="dock-tree-group">
+    <SectionHeader title={title} open={open} toggle={toggle} add={add} addLabel={addLabel} />
+    {open && children && <ul className="dock-tree-items">{children}</ul>}
+  </li>;
+}
+
 // Boundaries read top-left first, each opening onto its layers; reference items and pointers follow.
 export function CanvasLayers({ project, boundaries, selection, focused, selectBoundary, selectReference, selectPointer, selectRequest, selectElement, updateElements, moveElement, removeLinked, removeElements, deleteBoundary, removeRequest, removeReference, removePointer, views, addView, jumpToView, renameView, removeView }: {
   project: Project; boundaries: Boundary[]; selection: CanvasTarget[]; focused: string | null;
@@ -488,7 +561,9 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   views: NamedView[]; addView: () => void; jumpToView: (view: NamedView) => void;
   renameView: (view: NamedView, name: string) => void; removeView: (view: NamedView) => void;
 }) {
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  // Boundary trees share the dock's remembered section state with every other section.
+  const collapsed = useCollapsedSections();
+  const toggleSection = (key: string) => setSectionCollapsed(key, !collapsed.has(key));
   const ordered = boundariesByPosition(boundaries);
   const selected = new Set(selection.map(canvasTargetKey));
   const selectedElements = selection.flatMap(target => target.kind === 'element' ? [target.elementId] : []);
@@ -500,88 +575,72 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
       case 'swatch': return item.kind.color;
     }
   };
-  const referenceIcon = (item: ReferenceItem): IconName => item.kind.kind === 'link' ? 'link' : item.kind.kind === 'swatch' ? 'fill-color' : item.kind.kind === 'image' ? 'canvas' : 'text';
+  const referenceIcon = (item: ReferenceItem): IconName => item.kind.kind === 'link' ? 'link' : item.kind.kind === 'swatch' ? 'fill-color' : item.kind.kind === 'image' ? 'image' : 'note';
   const pointers = project.pointers ?? [];
   const linked = Object.values(project.linked ?? {}).sort((first, second) => first.name.localeCompare(second.name));
   const requests = project.requests ?? [];
   if (!ordered.length && !project.reference.length && !pointers.length && !linked.length && !requests.length && !views.length) return null;
   return <ul className="dock-tree">
-    <li className="dock-tree-group views-group">
-      <div className="dock-tree-row">
-        <span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Views</span>
-        <button type="button" className="icon-button sm dock-row-toggle" aria-label="Save the current view" title="Save the current view" onClick={addView}><Icon name="plus" size={13} /></button>
-      </div>
-      {views.length > 0 && <ul className="dock-tree-items">
-        {views.map(view => <ViewRow key={view.id} view={view} jump={() => jumpToView(view)} rename={name => renameView(view, name)} remove={() => removeView(view)} />)}
-      </ul>}
-    </li>
+    <LayerGroup section="views" title="Views" add={addView} addLabel="Save the current view">
+      {views.length > 0 && views.map(view => <ViewRow key={view.id} view={view} jump={() => jumpToView(view)} rename={name => renameView(view, name)} remove={() => removeView(view)} />)}
+    </LayerGroup>
     {ordered.map(({ pageId, sizeId, label, kind }) => {
       const page = project.pages.find(item => item.id === pageId);
       const size = page?.sizes.find(item => item.id === sizeId);
       if (!page || !size) return null;
-      const open = !collapsed.has(sizeId);
+      const sectionKey = `boundary:${sizeId}`;
+      const open = !collapsed.has(sectionKey);
       const elements = resolveForSize(project, page, sizeId);
       const name = page.sizes.length > 1 ? `${page.name} · ${label}` : page.name;
+      const boundarySelected = focused === pageId && !selection.some(target => target.kind === 'element' && target.pageId === pageId);
       return <li key={sizeId} className="dock-tree-group">
-        <div className="dock-tree-row">
+        <div className="dock-tree-row layer-head-row" data-selected={boundarySelected || undefined}>
           {elements.length > 0
             ? <button type="button" className="dock-tree-disclosure" aria-label={`${open ? 'Collapse' : 'Expand'} ${name}`} aria-expanded={open}
-              onClick={() => setCollapsed(current => { const next = new Set(current); if (next.has(sizeId)) next.delete(sizeId); else next.add(sizeId); return next; })}>
+              onClick={() => toggleSection(sectionKey)}>
               <Icon name="chevron-right" size={12} className={open ? 'expanded' : undefined} />
             </button>
             : <span className="dock-tree-spacer" aria-hidden="true" />}
-          <button type="button" className="dock-tree-select" data-boundary-row={sizeId} aria-pressed={focused === pageId && !selection.some(target => target.kind === 'element' && target.pageId === pageId)} title={page.path} onClick={() => selectBoundary(pageId, sizeId)}>
-            <Icon name={kind === 'screen' ? 'monitor' : 'canvas'} size={14} /><span>{name}</span>
+          <button type="button" className="dock-tree-select" data-boundary-row={sizeId} aria-pressed={boundarySelected} title={page.path} onClick={() => selectBoundary(pageId, sizeId)}>
+            <Icon name={kind === 'screen' ? 'monitor' : 'canvas'} size={13} /><span>{name}</span>
           </button>
+          <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${name}`} title="Delete boundary" onClick={() => deleteBoundary(pageId, sizeId)}><Icon name="trash" size={13} /></button>
         </div>
-        <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${name}`} title="Delete boundary" onClick={() => deleteBoundary(pageId, sizeId)}><Icon name="trash" size={13} /></button>
         {open && elements.length > 0 && <ElementLayers project={project} pageId={pageId} sizeId={sizeId} elements={elements} selection={selectedElements}
           select={selectElement} update={updateElements} remove={(page, size, id) => removeElements([id])} move={moveElement} />}
       </li>;
     })}
-    {requests.length > 0 && <li className="dock-tree-group request-group">
-      <div className="dock-tree-row"><span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Requests</span></div>
-      <ul className="dock-tree-items">
-        {requests.map(request => <li key={request.id} className="dock-linked-row">
-          <button type="button" className="dock-tree-select" data-request-row={request.id} aria-pressed={selected.has(canvasTargetKey({ kind: 'request', requestId: request.id }))} onClick={() => selectRequest(request.id)}>
-            <Icon name="text" size={12} /><span>{request.text.trim().split('\n')[0] || 'Empty request'}</span>
-          </button>
-          <button type="button" className="icon-button sm dock-row-toggle" aria-label="Delete request" title="Delete request" onClick={() => removeRequest(request.id)}><Icon name="trash" size={13} /></button>
-        </li>)}
-      </ul>
-    </li>}
-    {project.reference.length > 0 && <li className="dock-tree-group reference-group">
-      <div className="dock-tree-row"><span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Reference</span></div>
-      <ul className="dock-tree-items">
-        {[...project.reference].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x).map(item => <li key={item.id}>
-          <button type="button" className="dock-tree-select dock-tree-item" aria-pressed={selected.has(canvasTargetKey({ kind: 'reference', itemId: item.id }))} onClick={() => selectReference(item.id)}>
-            <Icon name={referenceIcon(item)} size={12} /><span>{referenceLabel(item)}</span>
-          </button>
-          <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${referenceLabel(item)}`} title="Delete reference item" onClick={() => removeReference(item.id)}><Icon name="trash" size={13} /></button>
-        </li>)}
-      </ul>
-    </li>}
-    {linked.length > 0 && <li className="dock-tree-group linked-group">
-      <div className="dock-tree-row"><span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Linked</span></div>
-      <ul className="dock-tree-items">
-        {linked.map(definition => <li key={definition.id} className="dock-linked-row">
-          <span className="dock-tree-select dock-tree-item" title={`Linked element ${definition.name}`}><Icon name="link" size={12} /><span>{definition.name}</span></span>
-          <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete linked element ${definition.name}`} title="Delete linked element"
-            onClick={() => removeLinked(definition.id)}><Icon name="trash" size={13} /></button>
-        </li>)}
-      </ul>
-    </li>}
-    {pointers.length > 0 && <li className="dock-tree-group pointers-group">
-      <div className="dock-tree-row"><span className="dock-tree-spacer" aria-hidden="true" /><span className="dock-tree-heading">Pointers</span></div>
-      <ul className="dock-tree-items">
-        {pointers.map(pointer => <li key={pointer.id}>
-          <button type="button" className={`dock-tree-select dock-tree-item${pointerBroken(pointer, project) ? ' broken' : ''}`} aria-pressed={selected.has(canvasTargetKey({ kind: 'pointer', pointerId: pointer.id }))}
-            title={pointerLabel(pointer, project)} onClick={() => selectPointer(pointer.id)}>
-            <Icon name="link" size={12} /><span>{pointerLabel(pointer, project)}</span>
-          </button>
-          <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${pointerLabel(pointer, project)}`} title="Delete pointer" onClick={() => removePointer(pointer.id)}><Icon name="trash" size={13} /></button>
-        </li>)}
-      </ul>
-    </li>}
+    {requests.length > 0 && <LayerGroup section="requests" title="Requests">
+      {requests.map(request => <li key={request.id} className="dock-linked-row">
+        <button type="button" className="dock-tree-select" data-request-row={request.id} aria-pressed={selected.has(canvasTargetKey({ kind: 'request', requestId: request.id }))} onClick={() => selectRequest(request.id)}>
+          <Icon name="text" size={12} /><span>{request.text.trim().split('\n')[0] || 'Empty request'}</span>
+        </button>
+        <button type="button" className="icon-button sm dock-row-toggle" aria-label="Delete request" title="Delete request" onClick={() => removeRequest(request.id)}><Icon name="trash" size={13} /></button>
+      </li>)}
+    </LayerGroup>}
+    {project.reference.length > 0 && <LayerGroup section="reference" title="Reference">
+      {[...project.reference].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x).map(item => <li key={item.id}>
+        <button type="button" className="dock-tree-select dock-tree-item" aria-pressed={selected.has(canvasTargetKey({ kind: 'reference', itemId: item.id }))} onClick={() => selectReference(item.id)}>
+          <Icon name={referenceIcon(item)} size={12} /><span>{referenceLabel(item)}</span>
+        </button>
+        <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${referenceLabel(item)}`} title="Delete reference item" onClick={() => removeReference(item.id)}><Icon name="trash" size={13} /></button>
+      </li>)}
+    </LayerGroup>}
+    {linked.length > 0 && <LayerGroup section="linked" title="Linked">
+      {linked.map(definition => <li key={definition.id} className="dock-linked-row">
+        <span className="dock-tree-select dock-tree-item" title={`Linked element ${definition.name}`}><Icon name="link" size={12} /><span>{definition.name}</span></span>
+        <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete linked element ${definition.name}`} title="Delete linked element"
+          onClick={() => removeLinked(definition.id)}><Icon name="trash" size={13} /></button>
+      </li>)}
+    </LayerGroup>}
+    {pointers.length > 0 && <LayerGroup section="pointers" title="Pointers">
+      {pointers.map(pointer => <li key={pointer.id}>
+        <button type="button" className={`dock-tree-select dock-tree-item${pointerBroken(pointer, project) ? ' broken' : ''}`} aria-pressed={selected.has(canvasTargetKey({ kind: 'pointer', pointerId: pointer.id }))}
+          title={pointerLabel(pointer, project)} onClick={() => selectPointer(pointer.id)}>
+          <Icon name="arrow-right" size={12} /><span>{pointerLabel(pointer, project)}</span>
+        </button>
+        <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${pointerLabel(pointer, project)}`} title="Delete pointer" onClick={() => removePointer(pointer.id)}><Icon name="trash" size={13} /></button>
+      </li>)}
+    </LayerGroup>}
   </ul>;
 }

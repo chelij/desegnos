@@ -15,6 +15,8 @@ export type NoticeProps = {
   autoFocus?: 'primary' | 'dismiss';
   details?: { summary: string; body: string };
   showDismiss?: boolean;
+  /** A single affordance on a notice that closes itself, such as Undo after a delete. */
+  undo?: ProblemAction;
 };
 type Entry = NoticeProps & { dismiss: () => void };
 export function noticePriority(notice: NoticeProps): number {
@@ -27,27 +29,18 @@ type NoticeKind = Pick<NoticeProps, 'variant' | 'action' | 'secondaryAction'>;
 export function isToast(notice?: NoticeKind): boolean {
   return !!notice && (notice.variant === 'info' || notice.variant === 'success' || !notice.variant) && !notice.action && !notice.secondaryAction;
 }
-const NoticeDisplay = createContext<ReactElement<NoticeProps> | null>(null);
+type NoticeStack = { rows: ReactElement[]; toast: boolean; focus?: NoticeProps['autoFocus']; focusKey?: string };
+const NoticeDisplay = createContext<NoticeStack | null>(null);
 export function NoticeHost() {
-  const notice = useContext(NoticeDisplay);
+  const stack = useContext(NoticeDisplay);
   const host = useRef<HTMLDivElement>(null);
-  const focus = notice?.props.autoFocus;
-  const focusKey = notice?.props.dismissKey;
+  const focus = stack?.focus;
+  const focusKey = stack?.focusKey;
   useLayoutEffect(() => {
     if (focus) host.current?.querySelector<HTMLButtonElement>(focus === 'primary' ? '.primary' : '.notice-dismiss')?.focus({ preventScroll: true });
   }, [focus, focusKey]);
-  // Plain confirmations are brief toasts above the canvas tools; anything with a choice stays until handled.
-  const toast = isToast(notice?.props);
-  const [held, setHeld] = useState(false);
-  // The dismiss callback is recreated every render; keep the latest without restarting the timer.
-  const dismiss = useRef(notice?.props.dismiss); dismiss.current = notice?.props.dismiss;
-  const toastKey = toast ? `${notice?.props.title ?? ''}:${notice?.props.message}` : null;
-  useEffect(() => {
-    if (!toastKey || held) return;
-    const timer = setTimeout(() => dismiss.current?.(), 4000);
-    return () => clearTimeout(timer);
-  }, [toastKey, held]);
-  return <div className={`notice-host${toast ? ' toast' : ''}`} ref={host} onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)} onFocus={() => setHeld(true)} onBlur={() => setHeld(false)}>{notice}</div>;
+  // A toast closes itself; anything that waits for a choice stays in the middle of the canvas.
+  return <div className={`notice-host${stack?.toast ? ' toast' : ''}`} ref={host}>{stack?.rows}</div>;
 }
 const Notices = createContext<{ update: (id: string, entry: Entry | null) => void } | null>(null);
 
@@ -61,11 +54,22 @@ export function NoticeProvider({ children }: { children: ReactNode }) {
     return next;
   }), []);
   const context = useMemo(() => ({ update }), [update]);
-  const active = firstNotice([...entries.values()]);
-  return <Notices.Provider value={context}><NoticeDisplay.Provider value={active ? <NoticeRow {...active} dismiss={() => {
-      // The same error may be reported by both a page and its editor. Dismiss it once.
-      for (const entry of entries.values()) if (entry.message === active.message && entry.title === active.title && entry.variant === active.variant) entry.dismiss();
-    }} /> : null}>{children}</NoticeDisplay.Provider></Notices.Provider>;
+  const list = [...entries.values()];
+  const active = firstNotice(list);
+  // The same error may be reported by both a page and its editor. Dismiss it once.
+  function dismissEntry(target: Entry) {
+    for (const entry of entries.values()) if (entry.message === target.message && entry.title === target.title && entry.variant === target.variant) entry.dismiss();
+  }
+  // Toasts stack, newest last, up to three; a notice with a choice keeps the canvas to itself.
+  const shown = !active ? [] : isToast(active) ? [active, ...list.filter(entry => entry !== active && isToast(entry)).slice(-2)] : [active];
+  const rows = shown.map(entry => {
+    const key = entry.dismissKey ?? `${entry.title ?? ''}:${entry.message}`;
+    return isToast(entry)
+      ? <ToastRow key={key} {...entry} dismiss={() => dismissEntry(entry)} />
+      : <NoticeRow key={key} {...entry} dismiss={() => dismissEntry(entry)} />;
+  });
+  const stack: NoticeStack = { rows, toast: isToast(active), focus: active?.autoFocus, focusKey: active?.dismissKey };
+  return <Notices.Provider value={context}><NoticeDisplay.Provider value={stack}>{children}</NoticeDisplay.Provider></Notices.Provider>;
 }
 
 /// A toast closes itself, so it carries no dismiss button; a notice that waits for the user keeps one.
@@ -84,17 +88,45 @@ export function NoticeRow({ variant = 'info', title, message, action, secondaryA
   </div>;
 }
 
+const TOAST_LIFETIME = 4000;
+const TOAST_FADE = 200;
+
+/** A toast disappears on its own; pointing at it, or tabbing to its Undo, holds it open. */
+export function ToastRow({ variant = 'info', title, message, undo, dismiss, className = '' }: NoticeProps) {
+  const [held, setHeld] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  const close = useRef(dismiss); close.current = dismiss;
+  const deadline = useRef(Date.now() + TOAST_LIFETIME);
+  useEffect(() => {
+    if (held || leaving) return;
+    const timer = setTimeout(() => setLeaving(true), Math.max(0, deadline.current - Date.now()));
+    return () => clearTimeout(timer);
+  }, [held, leaving]);
+  useEffect(() => {
+    if (!leaving) return;
+    const timer = setTimeout(() => close.current?.(), TOAST_FADE);
+    return () => clearTimeout(timer);
+  }, [leaving]);
+  return <div className={`notice floating-bar notice-${variant} toast${leaving ? ' leaving' : ''}${className ? ` ${className}` : ''}`}
+    role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}
+    onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)}
+    onFocus={() => setHeld(true)} onBlur={() => setHeld(false)}>
+    <div className="notice-copy" title={[title, message].filter(Boolean).join(' · ')}>{title && <strong>{title}</strong>}{message && <span>{message}</span>}</div>
+    {undo && <div className="notice-actions"><button type="button" className="primary" onClick={() => { close.current?.(); undo.onClick(); }}>{undo.label}</button></div>}
+  </div>;
+}
+
 export function Notice(props: NoticeProps) {
   const context = useContext(Notices);
   const id = useId();
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const { variant = 'info', title, message, action, secondaryAction, dismiss, priority, dismissKey, className, autoFocus, details, showDismiss } = props;
+  const { variant = 'info', title, message, action, secondaryAction, undo, dismiss, priority, dismissKey, className, autoFocus, details, showDismiss } = props;
   const identity = dismissKey ?? `${title ?? ''}:${message}`;
   const visible = !!(message || title) && dismissed !== identity;
   const close = useCallback(() => { setDismissed(identity); dismiss?.(); }, [identity, dismiss]);
   useLayoutEffect(() => {
-    context?.update(id, visible ? { variant, title, message, action, secondaryAction, priority, className, autoFocus, dismissKey, details, showDismiss, dismiss: close } : null);
-  }, [context, id, visible, variant, title, message, action, secondaryAction, priority, className, autoFocus, dismissKey, details, showDismiss, close]);
+    context?.update(id, visible ? { variant, title, message, action, secondaryAction, undo, priority, className, autoFocus, dismissKey, details, showDismiss, dismiss: close } : null);
+  }, [context, id, visible, variant, title, message, action, secondaryAction, undo, priority, className, autoFocus, dismissKey, details, showDismiss, close]);
   useLayoutEffect(() => () => context?.update(id, null), [context, id]);
   // Standalone rendering also supports previews and server-rendered component tests.
   return !context && visible ? <NoticeRow {...props} dismiss={close} /> : null;

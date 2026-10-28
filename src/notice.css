@@ -1,17 +1,34 @@
 .notice-host { container-type: inline-size; flex: none; min-width: 0; position: relative; height: 0; z-index: 30; }
 /* Notices float over the canvas so showing or hiding one never shifts the page. */
-.notice-host > .notice { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: max-content; max-width: min(760px, calc(100% - 24px)); margin: var(--space-3) 0; box-shadow: var(--shadow-3); }
-/* Toasts sit centred just above the floating canvas tools. */
-.notice-host.toast { position: fixed; left: 0; right: 0; bottom: 96px; height: 0; }
-.notice-host.toast > .notice { top: auto; bottom: 0; max-width: min(480px, calc(100% - 24px)); min-height: 40px; padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5); }
+.notice-host > .notice { position: absolute; top: 0; left: 50%; transform: translateX(-50%); width: max-content; max-width: min(760px, calc(100% - 24px)); margin: var(--space-3) 0; box-shadow: var(--shadow-2); }
+/* Toasts stack bottom-centre just above the status bar, newest closest to it. The host stays
+   transparent to the pointer so the canvas remains usable between toasts. */
+.notice-host.toast { position: fixed; left: 0; right: 0; bottom: 32px; height: auto; z-index: 40; display: flex; flex-direction: column; align-items: center; gap: var(--space-2); pointer-events: none; }
+.notice-host.toast > .notice { position: static; transform: none; pointer-events: auto; margin: 0; width: max-content; max-width: min(480px, calc(100% - 24px)); min-height: 36px; padding: var(--space-1) var(--space-2) var(--space-1) var(--space-5); animation: toast-in var(--duration-base) var(--ease-standard); }
+.notice-host.toast > .notice .notice-copy span, .notice-host.toast > .notice .notice-copy strong { white-space: nowrap; }
+.notice-host.toast > .notice.leaving { opacity: 0; transform: translateY(4px); transition: opacity var(--duration-fast) var(--ease-standard), transform var(--duration-fast) var(--ease-standard); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .notice-host.toast > .notice { animation: none; }
+  .notice-host.toast > .notice.leaving { transition: none; }
+}
 .notice, .area-problem {
   --notice-bg: var(--surface-raised); --notice-fg: var(--text); --notice-border: var(--border);
   color: var(--notice-fg); background: var(--notice-bg); border: 1px solid var(--notice-border);
-  border-radius: var(--radius-md); padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-xl); padding: var(--space-4) var(--space-5);
   font: var(--text-md)/var(--leading-control) var(--font-ui);
   box-sizing: border-box; box-shadow: var(--shadow-2);
 }
-.notice { display: flex; align-items: center; gap: var(--space-5); min-height: 48px; min-width: 0; margin: var(--space-3) var(--space-5); border-radius: var(--radius-md); }
+/* Variants tint the surface; the copy stays neutral and only the title carries the status hue. */
+.notice-error { --notice-bg: var(--notice-error-bg); --notice-border: var(--notice-error-border); }
+.notice-error .notice-copy strong { color: var(--notice-error-fg); }
+.notice-warning { --notice-bg: var(--notice-warning-bg); --notice-border: var(--notice-warning-border); }
+.notice-warning .notice-copy strong { color: var(--notice-warning-fg); }
+.notice-success { --notice-bg: var(--notice-success-bg); --notice-border: var(--notice-success-border); }
+.notice-success .notice-copy strong { color: var(--notice-success-fg); }
+.notice-info { --notice-bg: var(--accent-tint); --notice-border: color-mix(in srgb, var(--accent) 40%, transparent); }
+.notice-info .notice-copy strong { color: var(--accent-ink); }
+.notice { display: flex; align-items: center; gap: var(--space-5); min-height: 48px; min-width: 0; margin: var(--space-3) var(--space-5); border-radius: var(--radius-xl); }
 .notice-copy { display: flex; align-items: baseline; gap: var(--space-4); flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
 .notice-copy strong { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; font-weight: var(--weight-semibold); }
 .notice-copy span { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -26,8 +43,8 @@
 .notice .notice-actions .primary, .area-problem button:first-child { color: var(--notice-bg); background: var(--notice-fg); border-color: var(--notice-fg); }
 .notice .notice-actions .primary:hover:not(:disabled), .area-problem button:first-child:hover:not(:disabled) { background: var(--notice-fg); opacity: .92; }
 .notice .notice-actions .notice-dismiss { width: var(--control-sm); padding: 0; border-color: transparent; color: var(--notice-fg); }
-.notice button:disabled, .area-problem button:disabled { opacity: .65; }
-.notice button:focus-visible, .area-problem button:focus-visible { outline: 3px solid var(--notice-fg); outline-offset: 2px; }
+.notice button:disabled, .area-problem button:disabled { opacity: .4; cursor: not-allowed; }
+.notice button:focus-visible, .area-problem button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
 @container (max-width: 440px) {
   .notice { flex-wrap: wrap; gap: var(--space-3); }
   .notice-copy { flex-basis: 100%; }
@@ -53,4 +70,4 @@
 .notice:has(.notice-details) { flex-wrap: wrap; }
 .notice-details { flex-basis: 100%; order: 3; min-width: 0; }
 .notice-details summary { width: max-content; font: var(--weight-medium) var(--text-sm)/var(--leading-control) var(--font-ui); cursor: pointer; }
-.notice-details pre { max-height: 180px; overflow: auto; margin: var(--space-2) 0 0; padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface); font: 11px/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.notice-details pre { max-height: 180px; overflow: auto; margin: var(--space-2) 0 0; padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface); font: var(--text-xs)/1.45 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }

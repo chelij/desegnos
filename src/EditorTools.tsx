@@ -1,8 +1,9 @@
+import { useEffect } from 'react';
 import { MenuButton } from './Menus';
 import { zoomLabel, ZOOM_LEVELS, MIN_ZOOM } from './canvasGeometry';
 import { Icon } from './icons';
 import { INSERT_GROUPS, ELEMENT_KIND_LABELS } from './projectCanvas/elementGeometry';
-import { withShortcut, type ShortcutAction } from './shortcuts';
+import { shortcutLabel, withShortcut, type ShortcutAction } from './shortcuts';
 import type { BoundaryKind, ElementKind } from './types';
 
 export type CanvasTool = 'select' | 'request' | 'pan';
@@ -37,6 +38,12 @@ const SHORTCUTS: Record<EditorTool, ShortcutAction> = {
 // Strip order follows the order tools are reached for in a normal design pass; Pan sits last
 // beside the zoom controls.
 const PROJECT_TOOLS: EditorTool[] = ['select', 'boundary', 'request', 'text', 'rect', 'ellipse', 'line', 'image', 'insert', 'pointer', 'note', 'pan'];
+const SHAPE_TOOLS = ['rect', 'ellipse', 'line'] as const;
+type ShapeTool = typeof SHAPE_TOOLS[number];
+
+// The shape group keeps the last shape used, so R, O and L stay one click away after a restart
+// of the strip (the dock can be hidden and shown again).
+let rememberedShape: ShapeTool = 'rect';
 
 function toolTitle(tool: EditorTool) {
   return withShortcut(LABELS[tool], SHORTCUTS[tool]);
@@ -58,10 +65,27 @@ export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, bound
   onInsert?: (kind: ElementKind) => void; insertSignal?: number;
 }) {
   const tools = PROJECT_TOOLS;
+  const isShape = (value: EditorTool): value is ShapeTool => (SHAPE_TOOLS as readonly EditorTool[]).includes(value);
+  const activeShape: ShapeTool = isShape(tool) ? tool : rememberedShape;
+  useEffect(() => { if (isShape(tool)) rememberedShape = tool; }, [tool]);
   return <div className="tool-strip" role="toolbar" aria-orientation="vertical" aria-label="Canvas tools">
     <div className="tool-strip-group">
-      {tools.map(value => <div className="tool-strip-slot" key={value}>
-        {value === 'insert' && onInsert
+      {tools.map(value => <div className={`tool-strip-slot${isShape(value) ? ' tool-shape-slot' : ''}${isShape(value) && value !== activeShape ? ' is-alternate' : ''}`} key={value}>
+        {isShape(value) && value !== activeShape
+          ? <button type="button" tabIndex={-1} aria-hidden="true" className="tool-strip-button tool-shape-proxy" aria-label={LABELS[value]} title={toolTitle(value)}
+            onClick={() => onTool(value)} />
+          : isShape(value)
+          ? <>
+            <button type="button" className={`tool-strip-button tool-${value}`} aria-pressed={tool === value} aria-label={LABELS[value]} title={toolTitle(value)}
+              onPointerDown={event => { if (event.button === 0 && tool !== value) onTool(value); }} onClick={() => onTool(value)}>
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path d={ICONS[value]} /></svg>
+            </button>
+            <MenuButton className="tool-flyout tool-shape-flyout" showChevron={false}
+              label={<svg viewBox="0 0 10 10" className="tool-shape-caret" aria-hidden="true"><path d="M9.6 0.4v9.2H0.4Z" /></svg>}
+              ariaLabel="Shape tools" title={`Shape tools · ${LABELS[activeShape]}`}
+              items={SHAPE_TOOLS.map(shape => ({ id: `shape-${shape}`, label: LABELS[shape], checked: activeShape === shape, shortcut: shortcutLabel(SHORTCUTS[shape]), action: () => onTool(shape) }))} />
+          </>
+          : value === 'insert' && onInsert
           ? <MenuButton className={`tool-insert${tool === "insert" ? " active" : ""}`} showChevron={false} openSignal={insertSignal} label={<Icon name="insert" />}
             ariaLabel="Insert" title={withShortcut('Insert any element', 'insert')}
             items={INSERT_GROUPS.map(group => ({

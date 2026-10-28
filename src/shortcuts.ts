@@ -12,7 +12,7 @@ export type ShortcutAction =
   | 'minimap' | 'saveView' | 'goToView'
   | 'play' | 'preview' | 'askAI' | 'export'
   | 'new' | 'open' | 'save' | 'saveAs' | 'closeProject'
-  | 'help';
+  | 'commandPalette' | 'help';
 
 export type ShortcutGroup = 'File' | 'Edit' | 'Arrange' | 'Selection' | 'Tools' | 'View' | 'Run' | 'Help';
 export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented?: boolean; isComposing?: boolean };
@@ -113,6 +113,7 @@ export const KEYMAP: Binding[] = [
   { action: 'export', label: 'Export', group: 'Run', keys: [mod('e')], display: 'Ctrl/Cmd+E' },
 
   // Help
+  { action: 'commandPalette', label: 'Command palette', group: 'Help', keys: [mod('/')], display: 'Ctrl/Cmd+/' },
   { action: 'help', label: 'Keyboard shortcuts', group: 'Help', keys: [{ key: 'F1', shift: false }], display: 'F1' },
 ];
 
@@ -179,6 +180,11 @@ export function viewSlot(event: { key: string; code?: string }): number | null {
   if (key) return Number(key[0]);
   const code = /^(?:Digit|Numpad)([1-9])$/.exec(event.code ?? '');
   return code ? Number(code[1]) : null;
+}
+
+/** Saved views keep their number in the name, so a slot survives deletions and reordering. */
+export function viewNameForSlot(slot: number): string {
+  return `View ${slot}`;
 }
 
 /** The keyboard help is generated from the keymap, grouped in reading order. */

@@ -7,6 +7,7 @@ import { steppedZoom } from './canvasGeometry';
 import type { BoundaryKind, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, NamedView, Page, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from './types';
 import type { ProjectTool, RequestToolShape } from './EditorTools';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
+import { SelectionBar, type SelectionAlign } from './projectCanvas/selectionBar';
 import { BoundaryLayer } from './projectCanvas/boundaries';
 import { coveredTargets, dedupeTargets, elementBoxes, elementBoxesNow, pendingRequests, requestAreaContains, requestShapeBounds, requestTargetKey, RequestBoxEditor, RequestLayer } from './projectCanvas/requests';
 import { ReferenceLayer, ReferenceNoteEditor, shownReference } from './projectCanvas/reference';
@@ -23,7 +24,7 @@ import { elementLocalRect } from './projectCanvas/elementGeometry';
 import { isClipboardMarker, newClipboardMarker, pastedImageFiles, pastedImageRect, pastedNoteRect, readPastedImage } from './projectCanvas/clipboardPaste';
 import { droppedDataUri, droppedFile, droppedFileKind, droppedImageSize, droppedText } from './projectCanvas/fileDrop';
 import { Notice } from './ProblemBanner';
-import { shortcutFor } from './shortcuts';
+import { shortcutFor, viewNameForSlot, viewSlot, type ShortcutAction } from './shortcuts';
 import { playIsActive, type PlayState } from './projectCanvas/play';
 import {
   cloneElement, createElement, createTextElement, forAppearance, withPickedColours, elementBoundsHeight, elementChildrenOf, elementPath, elementParents, findElementIn, findPageElement, axisLockedDelta, drawRectWithKeys, rectFromPoints, resizedRectWithKeys, snappedLineEnd, snapPoint, snapValue,
@@ -63,9 +64,15 @@ const REQUEST_EDITOR_HEIGHT = 84;
 type DragInput = Pick<PointerEvent, 'pointerId' | 'clientX' | 'clientY' | 'button' | 'shiftKey' | 'altKey' | 'ctrlKey' | 'metaKey'>;
 
 export type PreviewState = { pageId: string; url: string; stale: boolean };
+/** What a caller without a key event can add to an action; the key itself supplies these when typed. */
+export type CanvasActionOptions = { key?: string; slot?: number; repeat?: boolean };
 export type ProjectCanvasHandle = { focusCanvas: () => void; fit: () => void; fitSelection: () => void; zoomStep: (direction: number) => void; zoomTo: (zoom: number) => void; focusBoundary: (pageId: string) => void; armPointer: (pointerId: string) => void; linkSelection: () => void; unlinkSelection: () => void;
   copyStyle: () => void; pasteStyle: () => void; paintFormat: () => void;
-  currentCamera: () => CanvasCamera; goToView: (view: NamedView) => void; };
+  currentCamera: () => CanvasCamera; goToView: (view: NamedView) => void;
+  /** Runs one keymap action through the same path its key uses; true when the canvas took it. */
+  runCanvasAction: (action: ShortcutAction, options?: CanvasActionOptions) => boolean;
+  /** True when the action applies now, false when it cannot, and null when the canvas does not own it. */
+  canRunCanvasAction: (action: ShortcutAction) => boolean | null; };
 
 /** A repeated duplicate: the selection that was just made, and how far it sat from its source. */
 type DuplicateRepeat = { key: string; offset: Point };
@@ -74,11 +81,13 @@ export type ProjectCanvasProps = {
   project: Project; openPage: (pageId: string) => void;
   createBoundary: (bounds: Rect, kind: BoundaryKind, moves: BoundaryMove[], reference: ReferenceMove[]) => Promise<string | null>;
   savePlacements: (placements: BoundaryMove[], reference: ReferenceMove[]) => Promise<void>;
+  /** Persists the camera as a numbered view, or as the next free one when slot is null. */
+  saveView: (slot: number | null, camera: CanvasCamera) => void;
   selection: CanvasTarget[]; focused: string | null;
   selectBoundary: (pageId: string | null, sizeId?: string | null, additive?: boolean) => void;
   selectReference: (itemId: string, additive?: boolean) => void; selectPointer: (pointerId: string, additive?: boolean) => void; selectElement: (pageId: string, elementId: string, sizeId: string | null, additive?: boolean) => void; clearSelection: () => void;
   removeSelection: (referenceIds: string[], pointerIds: string[], requestIds: string[], elementIds?: { pageId: string; elementId: string }[]) => void;
-  removeElements: (elements: { pageId: string; elementId: string }[], ask?: boolean) => void;
+  removeElements: (elements: { pageId: string; elementId: string }[]) => void;
   deleteBoundary: (pageId: string, sizeId: string | null) => void;
   addRequest: (request: PendingRequest) => Promise<void>;
   updateRequest: (request: PendingRequest) => Promise<void>;
@@ -165,8 +174,16 @@ function elementAt<T extends RequestBox>(boxes: T[], point: Point): T | null {
 
 const intersects = (first: Rect, second: Rect) => first.x < second.x + second.width && first.x + first.width > second.x && first.y < second.y + second.height && first.y + first.height > second.y;
 
+function unionRects(rects: Rect[]): Rect {
+  const left = Math.min(...rects.map(rect => rect.x));
+  const top = Math.min(...rects.map(rect => rect.y));
+  const right = Math.max(...rects.map(rect => rect.x + rect.width));
+  const bottom = Math.max(...rects.map(rect => rect.y + rect.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>(function ProjectCanvas({
-  project, openPage, createBoundary, savePlacements, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
+  project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
   addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
@@ -294,14 +311,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       }
       if (shortcutFor(event, false) !== 'delete') return;
       event.preventDefault();
-      if (!selection.length) {
-        if (focused) deleteBoundary(focused, focusedSize);
-        return;
-      }
-      const elements = selection.flatMap(target => target.kind === 'element' ? [{ pageId: target.pageId, elementId: target.elementId }] : []);
-      const requests = selection.flatMap(target => target.kind === 'request' ? [target.requestId] : []);
-      const items = selection.flatMap(target => target.kind === 'reference' ? [target.itemId] : []);
-      removeSelection(items, selectedPointers(selection), requests, elements);
+      runCanvasAction('delete');
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
@@ -540,7 +550,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     setCamera(fitCamera({ x: left, y: top, width: right - left, height: bottom - top }, { width: box.width, height: box.height }));
   }
 
-  useImperativeHandle(ref, () => ({ focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView }));
+  useImperativeHandle(ref, () => ({ focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView, runCanvasAction, canRunCanvasAction }));
 
   /** Double-click editing is the all-sizes mode: a layer drawn then belongs to every size. */
   const editingAllSizes = (pageId: string): boolean =>
@@ -973,6 +983,70 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     }
   }
 
+  /** One edge of the selection bar: layers align to each other inside their boundary, or a lone
+   *  layer to its parent. Layers in different boundaries align within their own boundary. */
+  function alignSelection(edge: SelectionAlign) {
+    const entries = elementEntries(selection);
+    if (!entries.length) return;
+    const groups = new Map<string, ElementEntry[]>();
+    for (const entry of entries) {
+      const key = `${entry.pageId}\u0000${entry.allSizes ? '*' : entry.sizeId}`;
+      const group = groups.get(key);
+      if (group) group.push(entry); else groups.set(key, [entry]);
+    }
+    const moves: ElementMove[] = [];
+    for (const group of groups.values()) {
+      let box = unionRects(group.map(entry => entry.world));
+      if (group.length === 1) {
+        const only = group[0];
+        const parent = only.parentId
+          ? elementEntries([{ kind: 'element', pageId: only.pageId, elementId: only.parentId, sizeId: only.allSizes ? null : only.sizeId }])[0]
+          : undefined;
+        const boundary = boundaryRect(only.sizeId);
+        box = parent?.world ?? boundary ?? only.world;
+      }
+      for (const entry of group) {
+        let dx = 0; let dy = 0;
+        if (edge === 'left') dx = box.x - entry.world.x;
+        else if (edge === 'centre') dx = box.x + (box.width - entry.world.width) / 2 - entry.world.x;
+        else if (edge === 'right') dx = box.x + box.width - entry.world.width - entry.world.x;
+        else if (edge === 'top') dy = box.y - entry.world.y;
+        else if (edge === 'middle') dy = box.y + (box.height - entry.world.height) / 2 - entry.world.y;
+        else if (edge === 'bottom') dy = box.y + box.height - entry.world.height - entry.world.y;
+        if (!dx && !dy) continue;
+        moves.push({
+          id: entry.id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index: entry.index,
+          rect: { ...entry.rect, x: Math.round(entry.rect.x + dx), y: Math.round(entry.rect.y + dy) },
+          size_id: entry.allSizes ? null : entry.sizeId, all_sizes: entry.allSizes,
+        });
+      }
+    }
+    if (moves.length) void Promise.resolve(moveElements(moves)).catch(() => {});
+  }
+
+  /** One colour pick writes one style patch per page, so it costs one undo step per page. */
+  function setSelectionFill(value: string) {
+    const groups = new Map<string, { id: string; style: Element['style'] }[]>();
+    for (const target of selection.filter(isElementTarget)) {
+      const element = findPageElement(project, target.pageId, target.elementId);
+      if (!element) continue;
+      const list = groups.get(target.pageId) ?? [];
+      if (!list.some(item => item.id === element.id)) list.push({ id: element.id, style: structuredClone(element.style) });
+      groups.set(target.pageId, list);
+    }
+    for (const [pageId, items] of groups) {
+      void Promise.resolve(updateElements(pageId, items.map(item => ({ id: item.id, style: { ...item.style, fill: value } })))).catch(() => {});
+    }
+  }
+
+  /** Delete from the bar goes through the same removal the Delete key uses. */
+  function deleteSelectedLayers() {
+    const elements = selection.flatMap(target => target.kind === 'element' ? [{ pageId: target.pageId, elementId: target.elementId }] : []);
+    const requests = selection.flatMap(target => target.kind === 'request' ? [target.requestId] : []);
+    const items = selection.flatMap(target => target.kind === 'reference' ? [target.itemId] : []);
+    removeSelection(items, selectedPointers(selection), requests, elements);
+  }
+
   function linkSelection() {
     const targets = selection.filter(isElementTarget);
     const copies: { id: string; element: Element; pageId: string }[] = [];
@@ -1047,52 +1121,163 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     else selectBoundary(target.pageId, target.sizeId);
   }
 
+  /**
+   * Whether an action would change the canvas right now. The palette greys out the rows that
+   * would not, and null says the canvas does not own the action at all.
+   */
+  function canRunCanvasAction(action: ShortcutAction): boolean | null {
+    const elements = selection.filter(isElementTarget);
+    const views = project.views ?? [];
+    switch (action) {
+      case 'requestTool': case 'selectAll': case 'minimap': case 'saveView': return true;
+      case 'goToView': return views.length > 0;
+      case 'delete': return selection.length > 0 || !!focused;
+      case 'requestFromShape': return elements.length === 1;
+      case 'link': return elements.length >= 2;
+      case 'group': return elements.length >= 2;
+      case 'ungroup': {
+        const only = elements.length === 1 ? findPageElement(project, elements[0].pageId, elements[0].elementId) : null;
+        return only?.kind === 'group';
+      }
+      case 'selectChild': {
+        const first = elements[0];
+        return !!first && elementChildrenOf(project, first.pageId, first.elementId).length > 0;
+      }
+      case 'paste': case 'pasteChoice': return clipboard.current.length > 0 && pasteTarget() !== null;
+      case 'pasteStyle': return elements.length > 0 && copiedStyle.current !== null;
+      case 'paintFormat': return elements.length > 0 || copiedStyle.current !== null;
+      case 'copy': case 'cut': case 'duplicate': case 'copyStyle': case 'unlink':
+      case 'forward': case 'backward': case 'front': case 'back':
+      case 'selectParent': case 'nudge': case 'nudgeFar':
+        return elements.length > 0;
+      default: return null;
+    }
+  }
+
+  /**
+   * One path for every canvas key: its keydown listeners and the command palette both call this,
+   * so a palette row runs exactly what its shortcut runs. True means the canvas took the action,
+   * which is also when a key event may skip the browser's default.
+   */
+  function runCanvasAction(action: ShortcutAction, options: CanvasActionOptions = {}): boolean {
+    const elements = selection.filter(isElementTarget);
+    switch (action) {
+      case 'delete': {
+        if (!selection.length) { if (focused) deleteBoundary(focused, focusedSize); return true; }
+        const elementIds = elements.map(target => ({ pageId: target.pageId, elementId: target.elementId }));
+        const requests = selection.flatMap(target => target.kind === 'request' ? [target.requestId] : []);
+        const items = selection.flatMap(target => target.kind === 'reference' ? [target.itemId] : []);
+        removeSelection(items, selectedPointers(selection), requests, elementIds);
+        return true;
+      }
+      case 'requestTool':
+        // With something selected F starts a request on it; otherwise it picks the Request tool.
+        if (!startRequestOnSelection()) onTool('request');
+        return true;
+      case 'requestFromShape':
+        if (elements.length !== 1) return false;
+        startRequestFromShape();
+        return true;
+      case 'link':
+        if (!elements.length) return false;
+        linkSelection();
+        return true;
+      case 'unlink':
+        if (!elements.length) return false;
+        unlinkSelection();
+        return true;
+      case 'selectAll': selectAllSiblings(); return true;
+      case 'copy':
+        if (!elements.length) return false;
+        copyElements();
+        return true;
+      case 'cut':
+        if (!elements.length) return false;
+        copyElements();
+        removeSelection([], [], [], elements.map(target => ({ pageId: target.pageId, elementId: target.elementId })));
+        return true;
+      // Plain paste belongs to the paste event, which can also carry content from other apps.
+      case 'paste':
+        if (!clipboard.current.length) return false;
+        pasteElements(false);
+        return true;
+      case 'pasteChoice':
+        if (!clipboard.current.length) return false;
+        pasteElements(true);
+        return true;
+      case 'duplicate':
+        if (!elements.length) return false;
+        duplicateElements();
+        return true;
+      case 'copyStyle':
+        if (!elements.length) return false;
+        copyStyle();
+        return true;
+      case 'pasteStyle':
+        if (!elements.length || !copiedStyle.current) return false;
+        pasteStyle();
+        return true;
+      case 'paintFormat':
+        if (!elements.length && !copiedStyle.current) return false;
+        paintFormat();
+        return true;
+      case 'group':
+        if (!elements.length) return false;
+        groupSelection();
+        return true;
+      case 'ungroup':
+        if (!elements.length) return false;
+        ungroupSelection();
+        return true;
+      case 'forward': case 'front':
+        if (!elements.length) return false;
+        arrangeElements(true);
+        return true;
+      case 'backward': case 'back':
+        if (!elements.length) return false;
+        arrangeElements(false);
+        return true;
+      case 'selectChild':
+        if (!elements.length) return false;
+        focusElement('child');
+        return true;
+      case 'selectParent':
+        if (!elements.length) return false;
+        focusElement('parent');
+        return true;
+      case 'nudge': case 'nudgeFar': {
+        if (!elements.length) return false;
+        const key = options.key ?? 'ArrowRight';
+        const step = action === 'nudgeFar' ? 10 : 1;
+        nudgeElements(key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0, key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0);
+        return true;
+      }
+      case 'minimap': setMinimapPreference(minimapVisible ? 'off' : 'on'); return true;
+      // A held key must not keep overwriting the same view.
+      case 'saveView':
+        if (options.repeat) return false;
+        saveView(options.slot ?? null, currentCamera());
+        return true;
+      case 'goToView': {
+        const views = project.views ?? [];
+        const view = options.slot ? views.find(item => item.name === viewNameForSlot(options.slot!)) ?? null : views[0] ?? null;
+        if (!view) return false;
+        goToView(view);
+        return true;
+      }
+      default: return false;
+    }
+  }
+
   // Canvas-wide keys, so focus can sit in the Layers panel or Properties. The actions and keys
   // come from the same keymap the tool strip and keyboard help read.
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
       if (event.defaultPrevented || isTextField(event.target)) return;
       const action = shortcutFor(event, false);
-      if (!action) return;
-      const elementTargets = selection.filter(isElementTarget);
-      switch (action) {
-        case 'requestTool':
-          event.preventDefault();
-          if (!startRequestOnSelection()) onTool('request');
-          return;
-        case 'requestFromShape':
-          if (elementTargets.length === 1) { event.preventDefault(); startRequestFromShape(); }
-          return;
-        case 'link': if (elementTargets.length) { event.preventDefault(); linkSelection(); } return;
-        case 'unlink': if (elementTargets.length) { event.preventDefault(); unlinkSelection(); } return;
-        case 'selectAll': event.preventDefault(); selectAllSiblings(); return;
-        case 'copy': if (elementTargets.length) { event.preventDefault(); copyElements(); } return;
-        // Plain paste is left to the paste event, which can also carry content from other apps.
-        case 'paste': return;
-        case 'pasteChoice': if (clipboard.current.length) { event.preventDefault(); pasteElements(true); } return;
-        case 'duplicate': if (elementTargets.length) { event.preventDefault(); duplicateElements(); } return;
-        case 'copyStyle': if (elementTargets.length) { event.preventDefault(); copyStyle(); } return;
-        case 'pasteStyle': if (elementTargets.length && copiedStyle.current) { event.preventDefault(); pasteStyle(); } return;
-        case 'paintFormat': if (elementTargets.length || copiedStyle.current) { event.preventDefault(); paintFormat(); } return;
-        case 'group': if (elementTargets.length) { event.preventDefault(); groupSelection(); } return;
-        case 'ungroup': if (elementTargets.length) { event.preventDefault(); ungroupSelection(); } return;
-        case 'forward': case 'front': if (elementTargets.length) { event.preventDefault(); arrangeElements(true); } return;
-        case 'backward': case 'back': if (elementTargets.length) { event.preventDefault(); arrangeElements(false); } return;
-        case 'selectChild': if (elementTargets.length) { event.preventDefault(); focusElement('child'); } return;
-        case 'selectParent': if (elementTargets.length) { event.preventDefault(); focusElement('parent'); } return;
-        case 'nudge': case 'nudgeFar': {
-          if (!elementTargets.length) return;
-          event.preventDefault();
-          const key = event.key;
-          const step = action === 'nudgeFar' ? 10 : 1;
-          nudgeElements(key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0, key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0);
-          return;
-        }
-        case 'minimap':
-          event.preventDefault();
-          setMinimapPreference(minimapVisible ? 'off' : 'on');
-          return;
-      }
+      // Plain paste is left to the paste event, which can also carry content from other apps.
+      if (!action || action === 'paste') return;
+      if (runCanvasAction(action, { key: event.key, slot: viewSlot(event) ?? undefined, repeat: event.repeat })) event.preventDefault();
     };
     window.addEventListener('keydown', handle);
     return () => window.removeEventListener('keydown', handle);
@@ -2038,6 +2223,16 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   const choosePointer = (pointerId: string) => { selectPointer(pointerId); surface.current?.focus({ preventScroll: true }); };
   const autoLinks = automaticLinks(project, boundaries, elementBoxes(project, boundaries, moving));
   const selectedElementTargets = selection.flatMap(target => target.kind === 'element' ? [target] : []);
+  // The contextual bar stays out of every canvas gesture and every inline editor.
+  const selectionBarVisible = tool === 'select' && !playIsActive(play) && !panning && !editing && !preview
+    && !moving && !draft && !draftElement && !draftArea && !draftNote && !marquee && !zoomRect && !pointerDraft
+    && !requestDraft && !pasteChoice && !linkChoice && !placeholderChoice
+    && !Object.keys(movingElements).length && !Object.keys(movingItems).length;
+  const selectionEntries = selectionBarVisible ? elementEntries(selectedElementTargets) : [];
+  const selectionScreen = selectionEntries.length ? screenRect(unionRects(selectionEntries.map(entry => entry.world)), camera) : null;
+  const selectionFills = [...new Set(selectionEntries.map(entry => entry.element.style.fill ?? ''))];
+  const selectionFill = selectionFills.length === 1 ? selectionFills[0] : '';
+  const selectionLinked = selectionEntries.length > 0 && selectionEntries.every(entry => !!entry.element.link);
   const editingElement = editing ? findElementIn(pageFor(editing.pageId, editing.sizeId)?.elements ?? [], editing.elementId) : null;
   const editingBoundary = editing ? boundaries.find(item => item.sizeId === editing.sizeId) ?? null : null;
   const editingScreen = editing && editingElement
@@ -2073,7 +2268,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     if (!editing) return;
     const current = editing;
     setEditing(null);
-    if (current.created) removeElements([{ pageId: current.pageId, elementId: current.elementId }], false);
+    if (current.created) removeElements([{ pageId: current.pageId, elementId: current.elementId }]);
     else selectElement(current.pageId, current.elementId, current.sizeId);
   }
 
@@ -2101,7 +2296,10 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     <PointerComments entries={entries} camera={camera} selected={selectedPointerIds} pointerStates={pointerStates} interactive={tool === 'select'} onSelect={choosePointer}
       change={(pointerId, comment) => updatePointer(pointerId, { comment })}
       autoFocusId={createdPointer.current} close={() => { createdPointer.current = null; surface.current?.focus({ preventScroll: true }); }} />
-    <BoundaryLabels project={project} boundaries={boundaries} moving={moving} focused={focused} selection={selection} camera={camera} openPage={openPage} />
+    <BoundaryLabels project={project} boundaries={boundaries} moving={moving} draft={draft} draftKind={boundaryKind} focused={focused} selection={selection} camera={camera} openPage={openPage} />
+    {selectionScreen && <SelectionBar screen={selectionScreen} viewWidth={viewSize.width} fill={selectionFill} count={selectionEntries.length} linked={selectionLinked}
+      onFill={setSelectionFill} onAlign={alignSelection} onRequest={() => { startRequestOnSelection(); }}
+      onLink={linkSelection} onUnlink={unlinkSelection} onDuplicate={duplicateElements} onDelete={deleteSelectedLayers} />}
     {minimapVisible && <Minimap boundaries={boundaries} reference={project.reference} camera={camera} viewSize={viewSize}
       move={next => { stopTransition(); touched.current = true; setCamera(next); }} />}
     <PointerHandles entries={entries} camera={camera} selectedId={selectedPointerId} armed={armedPointer} onStart={startReattach} />

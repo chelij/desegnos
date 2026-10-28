@@ -613,9 +613,13 @@ async function runIsolated() {
       await driver.click('[data-element-row] .dock-tree-select.element');
       await waitFor(() => driver.execute(() => !!document.querySelector('.element-selection-box')), 'Clicking a Layers row did not select the layer');
       await pointer.combo('Delete');
-      await driver.ready('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');
-      await driver.click('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');
       await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element]').length < previous, before), 'Delete did not remove the selected layer');
+      // Deleting asks nothing; the toast's Undo brings the layer back.
+      await driver.click('//button[normalize-space(.)="Undo"]', 'xpath');
+      await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element]').length === previous, before), 'Undo in the toast did not restore the layer');
+      await driver.click('[data-element-row] .dock-tree-select.element');
+      await pointer.combo('Delete');
+      await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-element]').length < previous, before), 'Delete did not remove the layer again');
     });
 
     await step('Delete removes a selected boundary from Layers', async () => {
@@ -632,8 +636,6 @@ async function runIsolated() {
       await waitFor(() => driver.execute(id => !!document.querySelector(`.page-boundary.dark[data-size="${id}"]`), screenRow), 'The Dark appearance did not darken the boundary');
       await driver.click(`//button[@data-boundary-row=${xpathString(screenRow)}]`, 'xpath');
       await pointer.combo('Delete');
-      await driver.ready('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');
-      await driver.click('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');
       await waitFor(async () => (await boundaries()).length === before - 1, 'Delete did not remove the selected boundary');
       assert.ok(rows.length >= 1);
     });

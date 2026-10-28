@@ -20,16 +20,16 @@ import type { ProjectLocationView } from './types';
 import { Notes, type DossierSection } from './Notes';
 import { MenuButton, type MenuItem } from './Menus';
 import './shell.css';
-import { shortcutFor, shortcutLabel, viewSlot, SHORTCUT_GROUPS, withShortcut } from './shortcuts';
+import { KEYMAP, shortcutFor, shortcutLabel, SHORTCUT_GROUPS, viewNameForSlot, withShortcut, type ShortcutAction } from './shortcuts';
 import { Icon } from './icons';
 import { StatusChip } from './StatusChip';
 import { steppedZoom } from './canvasGeometry';
-import { boundaryMoves, layoutBoundaries, pushApartBoundaries, toggleCanvasTarget, selectedReference, selectedElementIds, type Boundary, type BoundaryMove, type CanvasTarget, type ReferenceMove } from './projectCanvasGeometry';
+import { boundaryMoves, layoutBoundaries, pushApartBoundaries, toggleCanvasTarget, selectedReference, selectedElementIds, type Boundary, type BoundaryMove, type CanvasCamera, type CanvasTarget, type ReferenceMove } from './projectCanvasGeometry';
 import { findPageElement } from './projectCanvas/elementGeometry';
 import { isNestedLayer } from './projectCanvas/links';
 import { setPasteDefault, usePasteDefault } from './pastePreference';
 import { ElementProperties } from './projectCanvas/elementProperties';
-import { elementPath, findElementIn } from './projectCanvas/elementGeometry';
+import { elementPath, elementWorldRect, findElementIn, unionRects } from './projectCanvas/elementGeometry';
 import { BoundaryProperties, CanvasLayers, EditorDock, PointerProperties, ProjectProperties, ReferenceProperties, RequestProperties, UntitledSaveForm, usePanelState } from './EditorDock';
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
@@ -39,9 +39,9 @@ import { ImportContext } from './ImportContext';
 import { WebsiteImport } from './WebsiteImport';
 import { announcedDraftCount, announcesStatus } from './generationSession.js';
 import { GenerationLog } from './GenerationLog';
-import { askBeforeDelete, setAskBeforeDelete, useAskBeforeDelete } from './deletePreference';
 import { useHistory } from './useHistory';
 import { HistoryPanel } from './HistoryPanel';
+import { CommandPalette, type PaletteCommand } from './CommandPalette';
 import { activeGeneration, useGeneration } from './useGeneration';
 import type { AiSettingsView, AppSettingsView, Appearance, BoundaryKind, Brief, CanvasTemplate, Command, CompactReport, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, NamedView, Page, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, RecoveryInfo, ReferenceItem, RequestAttachment, RequestRecord, SizePreset, WorkspaceView, RecentProjectsView, RecentProject, ExportCheck, ExportJobView, OutputType } from './types';
 import { baseSizeId, resolveForSize } from './projectCanvas/sizes';
@@ -53,7 +53,10 @@ import type { PreviewState } from './ProjectCanvas';
 type Theme = 'system' | 'light' | 'dark';
 type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
 type UntitledSaveRequest = { name: string };
-type Confirmation = { title: string; message: string; action: () => Promise<void>; skippable?: boolean; confirmLabel?: string };
+type Confirmation = { title: string; message: string; action: () => Promise<void>; confirmLabel?: string };
+/** The part of a key event an action needs; the palette calls actions without one. */
+type ActionEvent = { preventDefault: () => void; key: string; code?: string; repeat?: boolean; target?: EventTarget | null };
+const NO_ACTION_EVENT: ActionEvent = { preventDefault: () => {}, key: '' };
 
 const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
 function errorMessage(error: unknown) { if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message); return String(error ?? ''); }
@@ -90,6 +93,40 @@ function ownerPageId(project: Project, elementId: string): string | null {
   return project.pages.find(page => !!findElementIn(page.elements, elementId))?.id ?? null;
 }
 
+/** Where a target sits on the canvas, or null for targets that carry no box of their own. */
+function targetCanvasRect(project: Project, target: CanvasTarget): Rect | null {
+  if (target.kind === 'reference') return project.reference.find(item => item.id === target.itemId)?.rect ?? null;
+  if (target.kind !== 'element') return null;
+  const page = project.pages.find(item => item.id === target.pageId);
+  const size = page ? page.sizes.find(item => item.id === target.sizeId) ?? page.sizes[0] : null;
+  if (!page || !size) return null;
+  return elementWorldRect(project, page.id, target.elementId, { x: size.x, y: size.y });
+}
+
+/** The status bar reads the selection the way a spreadsheet reads the cells being worked on. */
+function selectionBounds(project: Project, selection: CanvasTarget[]): Rect | null {
+  const rects = selection.flatMap(target => { const rect = targetCanvasRect(project, target); return rect ? [rect] : []; });
+  return rects.length ? unionRects(rects) : null;
+}
+
+/** Quick actions mirror the menu: leaf commands, with the ones a shortcut already covers left out. */
+function menuPaletteCommands(items: MenuItem[], group = 'Menu'): PaletteCommand[] {
+  return items.flatMap(item => {
+    if (item.separator) return [];
+    if (item.children?.length) return menuPaletteCommands(item.children, item.label);
+    if (item.shortcut || item.disabled || !item.action) return [];
+    return [{ id: `menu:${item.id}`, label: item.label, group, run: item.action }];
+  });
+}
+
+function zoomFromSlider(value: number) {
+  return Math.round(10 * Math.pow(40, Math.max(0, Math.min(1, value / 1000))) * 10) / 1000;
+}
+
+function sliderFromZoom(zoom: number) {
+  const percent = Math.max(10, Math.min(400, zoom * 100));
+  return Math.round(1000 * Math.log(percent / 10) / Math.log(40));
+}
 
 export default function App({ initialView }: { initialView?: WorkspaceView } = {}) {
   return <NoticeProvider><WorkspaceSurfaces><EditorCrashBoundary><Editor initialView={initialView} /></EditorCrashBoundary></WorkspaceSurfaces></NoticeProvider>;
@@ -107,9 +144,11 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateSummary | null>(null);
   const [updateError, setUpdateError] = useState('');
-  const [notices, setNotices] = useState<{ id: number; message: string }[]>([]);
+  const [notices, setNotices] = useState<{ id: number; message: string; undo?: () => void }[]>([]);
   const noticeId = useRef(0);
-  const setNotice = useCallback((message: string) => { const id = ++noticeId.current; setNotices(items => [...items, { id, message }]); }, []);
+  // A notice may carry one reversible follow-up, which the toast offers as Undo.
+  const setNotice = useCallback((message: string, undo?: () => void) => { const id = ++noticeId.current; setNotices(items => [...items, { id, message, undo }]); }, []);
+  const [showPalette, setShowPalette] = useState(false);
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
   const [selected, setSelected] = useState<string | null>(null);
@@ -167,9 +206,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const [showLog, setShowLog] = useState(false);
   const [logFocus, setLogFocus] = useState(0);
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
-  const askDelete = useAskBeforeDelete();
   const pasteMode = usePasteDefault();
-  const [skipNextAsk, setSkipNextAsk] = useState(false);
   const history = useHistory();
   const [showHistory, setShowHistory] = useState(false);
   const [historyEpoch, setHistoryEpoch] = useState(0);
@@ -348,11 +385,10 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   }, [mutate]);
   const removeLinkedDefinition = useCallback((id: string) => {
     const name = current.current?.project?.linked?.[id]?.name ?? 'this linked element';
-    const action = async () => { await mutate({ type: 'delete_items', linked_ids: [id] }); };
-    if (!askBeforeDelete()) { run(action); return; }
-    setSkipNextAsk(false);
-    setConfirmation({ title: 'Remove this linked element?', message: `Remove ${name}? Every copy becomes a plain layer.`, action, skippable: true });
-  }, [mutate]);
+    void mutate({ type: 'delete_items', linked_ids: [id] })
+      .then(() => setNotice(`Removed ${name}.`, () => { void travel('undo_project').catch(() => {}); }))
+      .catch(() => {});
+  }, [mutate, setNotice]);
   // An inline field reports its own error, so a rejected name never leaves the panel.
   const renameCanvasElement = useCallback((pageId: string, elementId: string, name: string | null) => {
     return queue(async workspace => {
@@ -909,6 +945,72 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const changeBrief = useCallback((patch: Partial<Brief>) => mutate(project => ({ type: 'set_brief', brief: { ...project.brief, ...patch } }))
     .then(workspace => workspace.project!.brief), [mutate]);
 
+  // One callable path per keymap action the canvas does not own; its keyboard listener and the
+  // command palette both use it.
+  function performAction(action: ShortcutAction, event: ActionEvent = NO_ACTION_EVENT) {
+    // The start page has no canvas: project commands wait until a canvas is open again.
+    if ((showStartPage || !current.current?.project) && !['new', 'open', 'help', 'commandPalette'].includes(action)) return;
+    const project = current.current?.project;
+    if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels'].includes(action)) return;
+    switch (action) {
+      // The canvas owns these; its listener runs first and prevents the default.
+      case 'copy': case 'cut': case 'paste': case 'pasteChoice': case 'duplicate':
+      case 'link': case 'unlink': case 'group': case 'ungroup': case 'forward': case 'backward': case 'front': case 'back':
+      case 'selectAll': case 'selectChild': case 'selectParent': case 'nudge': case 'nudgeFar': case 'delete':
+      case 'copyStyle': case 'pasteStyle': case 'paintFormat': case 'minimap': case 'saveView': case 'goToView':
+        return;
+      case 'help': event.preventDefault(); setShowShortcuts(true); return;
+      case 'commandPalette': event.preventDefault(); setShowPalette(true); return;
+      case 'new': event.preventDefault(); void newUntitled().catch(() => {}); return;
+      case 'open': event.preventDefault(); void open().catch(() => {}); return;
+      case 'renameLayer': {
+        const field = document.querySelector<HTMLInputElement>('[data-field="layer-name"]');
+        if (!field) return;
+        event.preventDefault(); field.focus({ preventScroll: true }); field.select(); return;
+      }
+      case 'insert': event.preventDefault(); setInsertKind(null); setInsertSignal(value => value + 1); return;
+      case 'imageTool': event.preventDefault(); setInsertKind(null); setCanvasTool('image'); return;
+      case 'selectTool': case 'boundaryTool': case 'pointerTool': case 'textTool': case 'panTool':
+      case 'rectTool': case 'ellipseTool': case 'lineTool': case 'noteTool': {
+        event.preventDefault(); setInsertKind(null);
+        setCanvasTool(action === 'selectTool' ? 'select' : action === 'boundaryTool' ? 'boundary'
+          : action === 'pointerTool' ? 'pointer' : action === 'textTool' ? 'text' : action === 'panTool' ? 'pan'
+            : action === 'rectTool' ? 'rect' : action === 'ellipseTool' ? 'ellipse' : action === 'lineTool' ? 'line' : 'note');
+        return;
+      }
+      case 'requestTool': case 'requestFromShape':
+        // The canvas starts a request on the selection; with nothing selected F picks the tool.
+        return;
+      case 'askAI': event.preventDefault(); document.querySelector<HTMLElement>('[data-element-request]')?.focus(); return;
+      case 'hidePanels':
+        if (!project) return;
+        if (event.target instanceof Element && event.target.closest('.workspace-surface, .editor-menu, .layers-popover')) return;
+        event.preventDefault(); panelActions.toggleHidden(); return;
+      case 'zoomIn': event.preventDefault(); canvasRef.current?.zoomStep(1); return;
+      case 'zoomOut': event.preventDefault(); canvasRef.current?.zoomStep(-1); return;
+      case 'zoomReset': event.preventDefault(); canvasRef.current?.zoomTo(1); return;
+      case 'fitAll': event.preventDefault(); canvasRef.current?.fit(); return;
+      case 'fitSelection': event.preventDefault(); canvasRef.current?.fitSelection(); return;
+      case 'play': if (!project) return; event.preventDefault(); togglePlay(); return;
+      case 'preview': if (!project) return; event.preventDefault(); previewSelectedBoundary(); return;
+      case 'export':
+        if (!project) return;
+        event.preventDefault(); openExportPanel();
+        if (exportDestination) void runExport(); else void chooseExportDestination();
+        return;
+      case 'undo': case 'redo':
+        if (!project) return;
+        event.preventDefault();
+        if (action === 'undo' ? current.current?.canUndo : current.current?.canRedo) {
+          void travel(action === 'undo' ? 'undo_project' : 'redo_project').catch(() => {});
+        }
+        return;
+      case 'save': if (!project) return; event.preventDefault(); void save().catch(() => {}); return;
+      case 'saveAs': if (!project) return; event.preventDefault(); void save(true).catch(() => {}); return;
+      case 'closeProject': if (!project) return; event.preventDefault(); void closeProject().catch(() => {}); return;
+    }
+  }
+
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if (event.defaultPrevented) return;
@@ -918,76 +1020,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         event.preventDefault(); document.execCommand(event.shiftKey ? 'redo' : 'undo'); return;
       }
       const action = shortcutFor(event, editingText);
-      if (!action) return;
-      // The start page has no canvas: project commands wait until a canvas is open again.
-      if ((showStartPage || !current.current?.project) && !['new', 'open', 'help'].includes(action)) return;
-      const project = current.current?.project;
-      if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels', 'saveView'].includes(action)) return;
-      switch (action) {
-        // The canvas owns these; its listener runs first and prevents the default.
-        case 'copy': case 'cut': case 'paste': case 'pasteChoice': case 'duplicate':
-        case 'link': case 'unlink': case 'group': case 'ungroup': case 'forward': case 'backward': case 'front': case 'back':
-        case 'selectAll': case 'selectChild': case 'selectParent': case 'nudge': case 'nudgeFar': case 'delete':
-          return;
-        case 'help': event.preventDefault(); setShowShortcuts(true); return;
-        case 'new': event.preventDefault(); void newUntitled().catch(() => {}); return;
-        case 'open': event.preventDefault(); void open().catch(() => {}); return;
-        case 'renameLayer': {
-          const field = document.querySelector<HTMLInputElement>('[data-field="layer-name"]');
-          if (!field) return;
-          event.preventDefault(); field.focus({ preventScroll: true }); field.select(); return;
-        }
-        case 'insert': event.preventDefault(); setInsertKind(null); setInsertSignal(value => value + 1); return;
-        case 'imageTool': event.preventDefault(); setInsertKind(null); setCanvasTool('image'); return;
-        case 'selectTool': case 'boundaryTool': case 'pointerTool': case 'textTool': case 'panTool':
-        case 'rectTool': case 'ellipseTool': case 'lineTool': case 'noteTool': {
-          event.preventDefault(); setInsertKind(null);
-          setCanvasTool(action === 'selectTool' ? 'select' : action === 'boundaryTool' ? 'boundary'
-            : action === 'pointerTool' ? 'pointer' : action === 'textTool' ? 'text' : action === 'panTool' ? 'pan'
-              : action === 'rectTool' ? 'rect' : action === 'ellipseTool' ? 'ellipse' : action === 'lineTool' ? 'line' : 'note');
-          return;
-        }
-        case 'requestTool': case 'requestFromShape':
-          // The canvas starts a request on the selection; with nothing selected F picks the tool.
-          return;
-        case 'askAI': event.preventDefault(); document.querySelector<HTMLElement>('[data-element-request]')?.focus(); return;
-        case 'hidePanels':
-          if (!project) return;
-          if (event.target instanceof Element && event.target.closest('.workspace-surface, .editor-menu, .layers-popover')) return;
-          event.preventDefault(); panelActions.toggleHidden(); return;
-        case 'zoomIn': event.preventDefault(); canvasRef.current?.zoomStep(1); return;
-        case 'zoomOut': event.preventDefault(); canvasRef.current?.zoomStep(-1); return;
-        case 'zoomReset': event.preventDefault(); canvasRef.current?.zoomTo(1); return;
-        case 'fitAll': event.preventDefault(); canvasRef.current?.fit(); return;
-        case 'fitSelection': event.preventDefault(); canvasRef.current?.fitSelection(); return;
-        case 'saveView': {
-          const slot = viewSlot(event);
-          if (!project || !slot) return;
-          event.preventDefault(); saveCurrentView(slot); return;
-        }
-        case 'goToView': {
-          const slot = viewSlot(event);
-          if (!project || !slot) return;
-          event.preventDefault(); goToViewSlot(slot); return;
-        }
-        case 'play': if (!project) return; event.preventDefault(); togglePlay(); return;
-        case 'preview': if (!project) return; event.preventDefault(); previewSelectedBoundary(); return;
-        case 'export':
-          if (!project) return;
-          event.preventDefault(); openExportPanel();
-          if (exportDestination) void runExport(); else void chooseExportDestination();
-          return;
-        case 'undo': case 'redo':
-          if (!project) return;
-          event.preventDefault();
-          if (action === 'undo' ? current.current?.canUndo : current.current?.canRedo) {
-            void travel(action === 'undo' ? 'undo_project' : 'redo_project').catch(() => {});
-          }
-          return;
-        case 'save': if (!project) return; event.preventDefault(); void save().catch(() => {}); return;
-        case 'saveAs': if (!project) return; event.preventDefault(); void save(true).catch(() => {}); return;
-        case 'closeProject': if (!project) return; event.preventDefault(); void closeProject().catch(() => {}); return;
-      }
+      if (action) performAction(action, event);
     };
     window.addEventListener('keydown', listener);
     return () => window.removeEventListener('keydown', listener);
@@ -1137,10 +1170,11 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       await mutate(project => { const page = project.pages.find(entry => entry.id === item.id); return page && page.appearance !== next ? { type: 'update_page', page_id: page.id, name: page.name, path: page.path, appearance: next, included: page.included } : null; });
     }
   }
-  // One confirmation covers a whole canvas selection, then each item removes itself.
-  function removeCanvasSelection(referenceIds: string[], pointerIds: string[] = [], requestIds: string[] = [], elementIds: { pageId: string; elementId: string }[] = [], ask = true) {
-    if (!referenceIds.length && !pointerIds.length && !requestIds.length && !elementIds.length) return;
-    const action = async () => {
+  // One undoable step covers a whole canvas selection, so removing never interrupts the work.
+  function removeCanvasSelection(referenceIds: string[], pointerIds: string[] = [], requestIds: string[] = [], elementIds: { pageId: string; elementId: string }[] = []) {
+    const count = referenceIds.length + pointerIds.length + requestIds.length + elementIds.length;
+    if (!count) return;
+    run(async () => {
       await mutate({
         type: 'delete_items',
         elements: elementIds.map(item => [item.pageId, item.elementId]) as [string, string][],
@@ -1150,11 +1184,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       });
       setSelected(null); setCanvasSelection([]);
       requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
-    };
-    const plural = referenceIds.length + pointerIds.length + requestIds.length + elementIds.length > 1;
-    if (!ask || !askBeforeDelete()) { run(action); return; }
-    setSkipNextAsk(false);
-    setConfirmation({ title: plural ? 'Remove these items?' : 'Remove this item?', message: plural ? 'Remove these layers, reference items, pointers and requests?' : 'Remove this item?', action, skippable: true });
+      setNotice(`${count} ${count === 1 ? 'item' : 'items'} deleted.`, () => { void travel('undo_project').catch(() => {}); });
+    });
   }
   // A boundary is deleted as a whole page, or as the selected linked size.
   function deleteBoundary(pageId: string, sizeId: string | null) {
@@ -1163,14 +1194,12 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     const size = sizeId ? page.sizes.find(item => item.id === sizeId) : null;
     const removeSize = !!size && page.sizes.length > 1;
     const name = removeSize ? `${page.name} · ${size.label}` : page.name;
-    const action = async () => {
+    run(async () => {
       await mutate(removeSize ? { type: 'delete_items', size_ids: [[pageId, size!.id]] } : { type: 'delete_items', page_ids: [pageId] });
       setCanvasFocus(null); setCanvasFocusSize(null); setCanvasSelection([]);
       requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
-    };
-    if (!askBeforeDelete()) { run(action); return; }
-    setSkipNextAsk(false);
-    setConfirmation({ title: removeSize ? 'Remove this size?' : 'Remove this boundary?', message: removeSize ? `Remove ${name}? Its layers stay in the other sizes.` : `Remove ${name} and everything in it?`, action, skippable: true });
+      setNotice(`Removed ${name}.`, () => { void travel('undo_project').catch(() => {}); });
+    });
   }
   const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
   const canEditProject = !!project && !onStartPage;
@@ -1179,30 +1208,27 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   // Named views live in the project file. Ctrl/Cmd+Alt+N saves into the view named "View N",
   // matching the names the '+' button creates, so numbered slots survive deletions and reordering.
   function viewForSlot(slot: number) {
-    return views.find(view => view.name === `View ${slot}`) ?? null;
+    return views.find(view => view.name === viewNameForSlot(slot)) ?? null;
   }
   function nextViewName() {
     const names = new Set(views.map(view => view.name));
     let index = 1;
-    while (names.has(`View ${index}`)) index += 1;
-    return `View ${index}`;
+    while (names.has(viewNameForSlot(index))) index += 1;
+    return viewNameForSlot(index);
   }
-  function saveCurrentView(slot: number) {
-    const camera = canvasRef.current?.currentCamera();
-    if (!camera || !project) return;
+  function saveCurrentView(slot: number, camera: CanvasCamera) {
+    if (!project) return;
     const existing = viewForSlot(slot);
     run(() => mutate(existing
       ? { type: 'update_named_view', view_id: existing.id, x: camera.x, y: camera.y, zoom: camera.zoom }
-      : { type: 'add_named_view', name: `View ${slot}`, x: camera.x, y: camera.y, zoom: camera.zoom }));
+      : { type: 'add_named_view', name: viewNameForSlot(slot), x: camera.x, y: camera.y, zoom: camera.zoom }));
   }
-  function goToViewSlot(slot: number) {
-    const view = viewForSlot(slot);
-    if (view) canvasRef.current?.goToView(view);
+  function addNamedViewAt(camera: CanvasCamera) {
+    run(() => mutate({ type: 'add_named_view', name: nextViewName(), x: camera.x, y: camera.y, zoom: camera.zoom }));
   }
   function addNamedView() {
     const camera = canvasRef.current?.currentCamera();
-    if (!camera) return;
-    run(() => mutate({ type: 'add_named_view', name: nextViewName(), x: camera.x, y: camera.y, zoom: camera.zoom }));
+    if (camera) addNamedViewAt(camera);
   }
   function renameNamedView(view: NamedView, name: string) {
     run(() => mutate({ type: 'update_named_view', view_id: view.id, name }));
@@ -1246,7 +1272,6 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       { id: 'preferences-divider', label: '', separator: true },
       { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
       { id: 'project-location', label: 'Default project location', action: () => setShowProjectLocation(true) },
-      { id: 'ask-delete', label: 'Ask before deleting', checked: askDelete, action: () => setAskBeforeDelete(!askDelete) },
       { id: 'paste-default', label: 'Ask on paste', checked: !pasteMode, action: () => setPasteDefault(null) },
     ] },
     { id: 'check-updates', label: 'Check for updates…', disabled: checkingUpdates, action: () => { void checkForUpdates(); } },
@@ -1319,7 +1344,30 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     setCanvasTool('insert');
     canvasRef.current?.focusCanvas();
   }
+  // Status readouts: what is selected and where it sits, then the canvas zoom. A boundary the
+  // user is working inside answers when no layer is selected.
+  const focusedBoundary = project && canvasFocus
+    ? canvasBoundaries.find(item => item.pageId === canvasFocus && (!canvasFocusSize || item.sizeId === canvasFocusSize))
+      ?? canvasBoundaries.find(item => item.pageId === canvasFocus) ?? null
+    : null;
+  const selectedBounds = project ? selectionBounds(project, canvasSelection) ?? (canvasSelection.length ? null : focusedBoundary?.rect ?? null) : null;
+  const zoomPercent = Math.max(10, Math.min(400, Math.round(canvasZoom * 100)));
+  // The palette reaches canvas actions through the canvas's own dispatch, so a row runs exactly
+  // what its key runs. A row stands down only while the action has nothing to change.
+  const paletteCommands: PaletteCommand[] = [
+    ...KEYMAP.filter(binding => binding.action !== 'commandPalette').map(binding => {
+      const canvasAnswer = canvasRef.current?.canRunCanvasAction(binding.action) ?? null;
+      const missingProject = (onStartPage || !project) && !['new', 'open', 'help'].includes(binding.action);
+      return {
+        id: `action:${binding.action}`, label: binding.label, keys: binding.display, group: binding.group,
+        disabled: canvasAnswer === null ? missingProject : !canvasAnswer,
+        run: () => { if (!canvasRef.current?.runCanvasAction(binding.action)) performAction(binding.action); },
+      };
+    }),
+    ...menuPaletteCommands(menuItems),
+  ];
   return <div className="application editor-shell">
+    {showPalette && <CommandPalette commands={paletteCommands} close={() => setShowPalette(false)} />}
     {closeRequest && <ModalDialog title="Close Desegnos?" close={() => { closeRequest.resolve(false); setCloseRequest(null); }}><p>{closeRequest.message}</p><div className="form-actions"><button className="primary" onClick={() => { closeRequest.resolve(false); setCloseRequest(null); }}>Keep editing</button><button className="danger" onClick={() => { closeRequest.resolve(true); setCloseRequest(null); }}>Close Desegnos</button></div></ModalDialog>}
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
       {!onStartPage && project && !!view?.openProjects?.length && <nav className="project-tabs" aria-label="Open projects">
@@ -1352,7 +1400,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={openFailure.message} action={{ label: 'Copy link', onClick: () => { const url = openFailure.url; void native('copy_text', { text: url }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure(null)} />}
     {updateResult && <Notice variant={updateResult.variant} message={updateResult.message} action={updateResult.download ? { label: 'Download', onClick: () => { const url = updateResult.download; if (url) void openRelease(url); } } : undefined} dismiss={() => setUpdateResult(null)} />}
     {updateError && <ProblemBanner message={userError(updateError)} dismiss={() => setUpdateError('')} />}
-    {notices.map(item => <Notice key={item.id} variant="info" message={item.message} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
+    {notices.map(item => <Notice key={item.id} variant="info" message={item.message} undo={item.undo ? { label: 'Undo', onClick: item.undo } : undefined} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
     <CrashReportNotice />
     {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <ProblemBanner message={userError(view.recoveryError)} dismiss={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} />}
     {loading ? <main className="startup"><p role="status">Opening your workspace…</p></main> : !view ? <main className="startup"><h1>Open the Desegnos desktop application</h1><button onClick={() => { void load(); }}>Retry workspace connection</button></main> : onStartPage ? <>
@@ -1377,8 +1425,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <div className="design-pane">
       <SurfaceHost place="canvas" />
       <NoticeHost />
-      <ProjectCanvas ref={canvasRef} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} updateRequest={updateCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} requestShape={requestToolShape} onRequestShape={setRequestToolShape} onZoom={reportCanvasZoom} onLayout={setCanvasBoundaries}
-        selectElement={selectCanvasElement} removeElements={(items, ask) => removeCanvasSelection([], [], [], items, ask)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
+      <ProjectCanvas ref={canvasRef} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} updateRequest={updateCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} requestShape={requestToolShape} onRequestShape={setRequestToolShape} onZoom={reportCanvasZoom} onLayout={setCanvasBoundaries}
+        selectElement={selectCanvasElement} removeElements={items => removeCanvasSelection([], [], [], items)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
         linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
         play={play} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
@@ -1435,7 +1483,9 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                 updateSize={(sizeId, patch) => updateCanvasPageSize(selectedBoundary.id, sizeId, patch)}
                 addSize={(preset, width, height) => addCanvasPageSize(selectedBoundary.id, preset, width, height)}
                 removeSize={size => {
-                  setConfirmation({ title: `Remove the ${size.label} size?`, message: 'Its layers stay in the other sizes; their overrides for this size are removed.', action: async () => { removeCanvasPageSize(selectedBoundary.id, size.id); } });
+                  void mutate({ type: 'remove_page_size', page_id: selectedBoundary.id, size_id: size.id })
+                    .then(() => setNotice(`Removed the ${size.label} size.`, () => { void travel('undo_project').catch(() => {}); }))
+                    .catch(() => {});
                 }}
                 remove={() => deleteBoundary(selectedBoundary.id, canvasFocusSize)} />
             : <ProjectProperties project={project} busy={pending > 0} rename={renameProject} setGrid={showDotGrid} setGridSettings={changeGridFlags}
@@ -1452,7 +1502,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
           removeReference={id => removeCanvasSelection([id])} removePointer={id => removeCanvasSelection([], [id])}
           views={views} addView={addNamedView} jumpToView={view => canvasRef.current?.goToView(view)} renameView={renameNamedView} removeView={removeNamedView} />} />
       </div>
-      <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 ? `${canvasSelection.length} selected` : ''}</span><div className="canvas-status-actions">{playIsActive(play) && <StatusChip tone="info" role="status" className="play-chip" onClick={() => setPlay(idlePlay)} ariaLabel="Stop Play">Playing · Esc to stop</StatusChip>}{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
+      <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 && <span className="status-count">{canvasSelection.length} selected</span>}{selectedBounds && <span className="status-bounds" aria-label="Selection bounds"><span>{Math.round(selectedBounds.width)} × {Math.round(selectedBounds.height)}</span><span className="status-coordinate">X {Math.round(selectedBounds.x)} · Y {Math.round(selectedBounds.y)}</span></span>}</span><div className="canvas-status-actions">{playIsActive(play) && <StatusChip tone="info" role="status" className="play-chip" onClick={() => setPlay(idlePlay)} ariaLabel="Stop Play">Playing · Esc to stop</StatusChip>}{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}<div className="status-zoom" role="group" aria-label="Canvas zoom controls"><button type="button" aria-label="Fit all boundaries" title={withShortcut('Fit all boundaries', 'fitAll')} onClick={() => canvasRef.current?.fit()}>Fit</button><input type="range" min={0} max={1000} step={1} value={sliderFromZoom(canvasZoom)} aria-label="Canvas zoom" title={`${zoomPercent}%`} onChange={event => canvasRef.current?.zoomTo(zoomFromSlider(Number(event.target.value)))} /><button type="button" className="status-zoom-value" aria-label="Zoom to 100%" title={withShortcut('Zoom to 100%', 'zoomReset')} onClick={() => canvasRef.current?.zoomTo(1)}>{zoomPercent}%</button></div>{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
     </>}
     {showShortcuts && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help">{SHORTCUT_GROUPS.map(group => <section key={group.group}><h3>{group.group}</h3><dl>{group.items.map(({ label, keys }) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></section>)}<p className="field-help">Hold Space while dragging to pan. Alt+drag duplicates the selected layers. Escape stops Play, closes a preview, or cancels the current gesture.</p></div></WorkspaceSurface>}
     {recovery && <WorkspaceSurface place="banner" title="Unsaved changes" close={recovery.dismiss}><RecoveryChoice {...recovery} /></WorkspaceSurface>}
@@ -1473,7 +1523,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(() => {}); }}>Save and continue</button>
       <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(() => {}); }}>Discard and continue</button><button onClick={() => setReplacement(null)}>Keep editing</button>
     </div></ModalDialog>}
-    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className={confirmation.confirmLabel ? undefined : 'danger'} disabled={pending > 0} onClick={() => { if (confirmation.skippable && skipNextAsk) setAskBeforeDelete(false); void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>{confirmation.confirmLabel ?? 'Delete'}</button><button onClick={() => setConfirmation(null)}>Cancel</button>{confirmation.skippable && <details><summary>Options</summary><label className="check-label"><input type="checkbox" checked={skipNextAsk} onChange={event => setSkipNextAsk(event.target.checked)} />Don’t ask again</label></details>}</div></WorkspaceSurface>}
+    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className={confirmation.confirmLabel ? undefined : 'danger'} disabled={pending > 0} onClick={() => { void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>{confirmation.confirmLabel ?? 'Delete'}</button><button onClick={() => setConfirmation(null)}>Cancel</button></div></WorkspaceSurface>}
     {showAiSettings && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="AI settings" close={() => setShowAiSettings(false)}><AiSettings current={aiSettings} refresh={refreshAiSettings} update={updateAiSettings} manageUsage={manageChatgptUsage} pollingError={aiPollingError} /></WorkspaceSurface>}
   </div>;
 }

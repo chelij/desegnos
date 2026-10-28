@@ -1,0 +1,68 @@
+import type { CSSProperties } from 'react';
+import { Icon } from '../icons';
+import { withShortcut } from '../shortcuts';
+import type { ScreenRect } from './surface';
+
+export type SelectionAlign = 'left' | 'centre' | 'right' | 'top' | 'middle' | 'bottom';
+
+const ALIGN: { edge: SelectionAlign; label: string; icon: string }[] = [
+  { edge: 'left', label: 'left', icon: 'M3 2.5v11M5 5h7M5 10h4' },
+  { edge: 'centre', label: 'centre', icon: 'M8 2.5v11M4.5 5h7M6 10h4' },
+  { edge: 'right', label: 'right', icon: 'M13 2.5v11M4 5h7M7 10h4' },
+  { edge: 'top', label: 'top', icon: 'M2.5 3h11M5 5v7M10 5v4' },
+  { edge: 'middle', label: 'middle', icon: 'M2.5 8h11M5 4.5v7M10 6v4' },
+  { edge: 'bottom', label: 'bottom', icon: 'M2.5 13h11M5 4v7M10 7v4' },
+];
+
+const hex = (value: string) => {
+  const trimmed = value.trim();
+  const short = /^#([0-9a-f]{3})$/i.exec(trimmed);
+  if (short) return `#${short[1].split('').map(part => part + part).join('')}`;
+  return /^#[0-9a-f]{6}$/i.test(trimmed) ? trimmed : null;
+};
+
+/**
+ * The contextual bar for the current layer selection. It lives in screen pixels above the
+ * selection, so it never scales with the canvas and never lands inside a boundary.
+ */
+export function SelectionBar({ screen, viewWidth, fill, count, linked, onFill, onAlign, onRequest, onLink, onUnlink, onDuplicate, onDelete }: {
+  screen: ScreenRect; viewWidth: number;
+  fill: string; count: number; linked: boolean;
+  onFill: (value: string) => void;
+  onAlign: (edge: SelectionAlign) => void;
+  onRequest: () => void;
+  onLink: () => void;
+  onUnlink: () => void;
+  onDuplicate: () => void;
+  onDelete: () => void;
+}) {
+  // Enough room for the rounded bar above the layer; otherwise it drops underneath.
+  const below = screen.top < 52;
+  const half = Math.min(210, Math.max(0, viewWidth / 2 - 8));
+  const centre = screen.left + screen.width / 2;
+  const left = Math.min(Math.max(centre, half), Math.max(half, viewWidth - half));
+  const position: CSSProperties = below
+    ? { left, top: screen.top + screen.height + 8, transform: 'translateX(-50%)' }
+    : { left, top: screen.top - 8, transform: 'translate(-50%, -100%)' };
+  const colour = hex(fill) ?? '#d9d9d9';
+  return <div className="floating-bar selection-bar" role="toolbar" aria-label="Selection actions" data-selection-bar
+    style={position} onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
+    <label className={`selection-fill${fill.trim() ? '' : ' is-empty'}`} title="Fill colour">
+      <span className="selection-fill-swatch" style={fill.trim() ? { background: fill } : undefined} aria-hidden="true" />
+      <input type="color" aria-label="Fill colour" value={colour} onChange={event => onFill(event.target.value)} />
+    </label>
+    <span className="floating-bar-divider" aria-hidden="true" />
+    <div className="selection-align" role="group" aria-label="Align">
+      {ALIGN.map(({ edge, label, icon }) => <button key={edge} type="button" className="selection-action" aria-label={`Align ${label}`} title={`Align ${label}`}
+        onClick={() => onAlign(edge)}>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d={icon} /></svg>
+      </button>)}
+    </div>
+    <span className="floating-bar-divider" aria-hidden="true" />
+    <button type="button" className="selection-action" aria-label="Request" title={withShortcut('Request', 'requestTool')} onClick={onRequest}><Icon name="note" /></button>
+    <button type="button" className="selection-action" aria-label={linked ? 'Unlink layers' : 'Link layers'} title={withShortcut(linked ? 'Unlink' : 'Link', linked ? 'unlink' : 'link')}
+      disabled={!linked && count < 2} onClick={linked ? onUnlink : onLink}><Icon name="link" /></button>
+    <button type="button" className="selection-action" aria-label="Duplicate" title={withShortcut('Duplicate', 'duplicate')} onClick={onDuplicate}><Icon name="copy" /></button>
+    <button type="button" className="selection-action" aria-label="Delete" title={withShortcut('Delete', 'delete')} onClick={onDelete}><Icon name="trash" /></button>
+  </div>;
+}

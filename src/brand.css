@@ -1,5 +1,6 @@
 /* The supplied Desegnos identity is copied verbatim under branding/identity.
-   Desktop controls deliberately keep system UI fonts. All font/logo assets are local. */
+   Desktop controls use one system UI stack; code and numeric readouts use the mono stack.
+   All font/logo assets are local. */
 @font-face { font-family: Archivo; src: url('./assets/brand/archivo-variable.woff2') format('woff2'); font-weight: 100 900; font-stretch: 62% 125%; font-display: swap; }
 
 /* ------------------------------------------------------------------ */
@@ -7,66 +8,82 @@
 /* Chrome greys keep equal red, green and blue channels.               */
 /* ------------------------------------------------------------------ */
 :root {
-  --font-ui: system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, "Cascadia Code", "DejaVu Sans Mono", monospace;
-  --font-display: Archivo, system-ui, sans-serif;
+  --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Code", "DejaVu Sans Mono", Menlo, Consolas, monospace;
 
-  /* Neutral scale: 4.5:1 text and 3:1 control boundaries on every surface. */
-  --grey-1000: #0d0d0d; --grey-950: #121212; --grey-900: #1a1a1a;
-  --grey-850: #1e1e1e; --grey-800: #262626; --grey-750: #2b2b2b;
-  --grey-700: #333333; --grey-650: #3a3a3a; --grey-600: #4b4b4b;
-  --grey-550: #5c5c5c; --grey-500: #626262; --grey-450: #787878;
-  --grey-400: #808080; --grey-350: #8f8f8f; --grey-300: #9a9a9a;
-  --grey-250: #b1b1b1; --grey-200: #c8c8c8; --grey-150: #d4d4d4;
-  --grey-100: #dcdcdc; --grey-75: #e8e8e8; --grey-50: #f2f2f2;
-  --grey-25: #f5f5f5; --white: #ffffff;
+  /* One neutral scale for chrome: 12 steps from the canvas bed to white.
+     Page content keeps its own colours. */
+  --grey-50: #f5f5f5;
+  --grey-100: #f0f0f0;
+  --grey-200: #e6e6e6;
+  --grey-300: #d4d4d4;
+  --grey-400: #b3b3b3;
+  --grey-500: #8a8a8a;
+  --grey-600: #666666;
+  --grey-700: #4a4a4a;
+  --grey-750: #3f3f3f;
+  --grey-800: #383838;
+  --grey-900: #2c2c2c;
+  --grey-950: #1e1e1e;
+  --white: #ffffff;
 
-  /* Surfaces and text */
-  --background: var(--grey-150);
-  --surface: var(--grey-75);
-  --surface-raised: var(--grey-25);
+  /* Light editor: white panels over a soft bed, like a design canvas. */
+  --background: var(--grey-50);
+  --surface: var(--white);
+  --surface-raised: var(--white);
   --surface-muted: var(--grey-100);
   --surface-sunken: var(--grey-200);
   --surface-header: var(--surface);
-  --canvas-bed: var(--grey-200);
-  --text: #242424;
-  --muted: #4b4b4b;
-  --border: var(--grey-550);
-  --border-soft: #6e6e6e;
+  --canvas-bed: var(--grey-50);
+  --text: var(--grey-950);
+  --muted: var(--grey-600);
+  --faint: var(--grey-500);
+  --border: var(--grey-300);
+  --border-soft: var(--grey-200);
 
-  /* One accent blue for selection, focus and primary actions. */
-  --accent: #005a9e;
-  --accent-hover: #004b84;
-  --accent-text: #ffffff;
-  --accent-soft: #dbe9f5;
-  --selected: #c7dcee;
+  /* One accent blue. #0d99ff draws selection, handles and focus rings; --accent-ink is the
+     same hue darkened until 12px text clears 4.5:1; --accent-strong fills primary buttons. */
+  --accent: #0d99ff;
+  --accent-ink: #0a65b6;
+  --accent-strong: var(--accent-ink);
+  --accent-strong-hover: #095a9f;
+  --accent-strong-press: #084d8a;
+  --accent-on: #ffffff;
+  --accent-tint: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+  --selected: var(--accent-tint);
   --control-track: var(--surface-muted);
-  --focus: #005a9e;
+  --focus: var(--accent);
 
-  /* Semantic state colours */
-  --danger: #a4262c;
-  --success: #196b32;
-  --warning: #7a5200;
-  --error-surface: #f2e4e4;
-  --warning-surface: #efeade;
-  --notice-error-bg: #630f16; --notice-error-fg: #ffffff; --notice-error-border: #ffb4ab;
-  --notice-warning-bg: #fff3d2; --notice-warning-fg: #2c2000; --notice-warning-border: #795600;
-  --notice-success-bg: #e4f4e8; --notice-success-fg: #163d23; --notice-success-border: #367546;
+  /* Requests and pointers keep their own FigJam violet, so they never read as selection. */
+  --annotation: #7a2fd6;
+
+  /* Status: a text value and a tint value each; text on its own tint clears 4.5:1. */
+  --success: #166534;
+  --success-tint: color-mix(in srgb, var(--success) 14%, var(--surface-raised));
+  --warning: #8a5a00;
+  --warning-tint: color-mix(in srgb, var(--warning) 16%, var(--surface-raised));
+  --danger: #b3261e;
+  --danger-tint: color-mix(in srgb, var(--danger) 12%, var(--surface-raised));
+
+  /* Notices reuse the status pairs for background, text and border. */
+  --notice-error-bg: var(--danger-tint); --notice-error-fg: var(--danger); --notice-error-border: color-mix(in srgb, var(--danger) 40%, transparent);
+  --notice-warning-bg: var(--warning-tint); --notice-warning-fg: var(--warning); --notice-warning-border: color-mix(in srgb, var(--warning) 40%, transparent);
+  --notice-success-bg: var(--success-tint); --notice-success-fg: var(--success); --notice-success-border: color-mix(in srgb, var(--success) 40%, transparent);
 
   /* Spacing: 4px base */
   --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 8px;
   --space-5: 12px; --space-6: 16px; --space-7: 24px; --space-8: 32px; --space-9: 48px;
 
-  /* Radii: small and consistent; the screen guide stays square. */
-  --radius-xs: 2px; --radius-sm: 3px; --radius-md: 4px;
-  --radius-lg: 6px; --radius-xl: 8px; --radius-pill: 999px;
+  /* Radii: 4px fields and buttons, 8px compact floating chrome, 10px large floating surfaces. */
+  --radius-xs: 2px; --radius-sm: 4px; --radius-md: 4px;
+  --radius-lg: 8px; --radius-xl: 10px; --radius-pill: 999px;
 
   /* Elevation: control, floating surface, modal-weight surface. */
-  --shadow-1: 0 1px 2px rgb(0 0 0 / 12%);
-  --shadow-2: 0 4px 14px rgb(0 0 0 / 16%);
-  --shadow-3: 0 12px 32px rgb(0 0 0 / 24%);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 10%);
+  --shadow-2: 0 4px 12px rgb(0 0 0 / 14%), 0 1px 2px rgb(0 0 0 / 8%);
+  --shadow-3: 0 12px 32px rgb(0 0 0 / 22%), 0 2px 6px rgb(0 0 0 / 10%);
 
-  /* Type */
+  /* Type: 12px base, 11px labels, 13px panel titles. */
   --text-xs: 11px; --text-sm: 12px;
   --text-md: 13px; --text-lg: 15px;
   --weight-regular: 400; --weight-medium: 500; --weight-semibold: 600; --weight-bold: 700;
@@ -77,8 +94,8 @@
   --control-sm: 24px; --control-md: 28px; --control-lg: 32px;
   --icon-sm: 14px; --icon-md: 16px; --icon-stroke: 1.5;
 
-  /* Motion: short feedback only */
-  --duration-fast: 120ms; --duration-base: 160ms;
+  /* Motion: short feedback only. */
+  --duration-fast: 100ms; --duration-base: 160ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
 
   /* Real page surfaces (the website keeps its own appearance) */
@@ -86,40 +103,49 @@
 }
 
 :root[data-theme='dark'] {
-  --background: var(--grey-900);
-  --surface: var(--grey-800);
-  --surface-raised: var(--grey-700);
-  --surface-muted: var(--grey-650);
-  --surface-sunken: var(--grey-850);
+  --background: var(--grey-950);
+  --surface: var(--grey-900);
+  --surface-raised: var(--grey-800);
+  --surface-muted: var(--grey-750);
+  --surface-sunken: var(--grey-950);
   --surface-header: var(--surface);
   --canvas-bed: var(--grey-950);
-  --text: #f2f2f2;
-  --muted: #b1b1b1;
-  --border: var(--grey-300);
-  --border-soft: #858585;
+  --text: var(--grey-200);
+  --muted: var(--grey-400);
+  --faint: var(--grey-500);
+  --border: var(--grey-700);
+  --border-soft: var(--grey-800);
 
-  --accent: #8ac4f5;
-  --accent-hover: #a8d6fa;
-  --accent-text: #17212b;
-  --accent-soft: #203446;
-  --selected: #263e52;
+  --accent: #0d99ff;
+  --accent-ink: #6cb6ff;
+  --accent-strong: #0d99ff;
+  --accent-strong-hover: #38a9ff;
+  --accent-strong-press: #0a86e0;
+  --accent-on: #0a1017;
+  --accent-tint: color-mix(in srgb, var(--accent) 14%, var(--surface-raised));
+  --selected: var(--accent-tint);
   --control-track: var(--surface-sunken);
-  --focus: #8ac4f5;
+  --focus: var(--accent);
 
-  --danger: #ffb5b5;
-  --success: #89c79b;
+  --annotation: #b58cff;
+
+  --success: #8ed3a5;
+  --success-tint: color-mix(in srgb, var(--success) 16%, var(--surface-raised));
   --warning: #e5c26a;
-  --error-surface: #513737;
-  --warning-surface: var(--grey-700);
-  --notice-warning-bg: #392a06; --notice-warning-fg: #fff3d2; --notice-warning-border: #e5c26a;
-  --notice-success-bg: #173321; --notice-success-fg: #dcf5e3; --notice-success-border: #89c79b;
+  --warning-tint: color-mix(in srgb, var(--warning) 16%, var(--surface-raised));
+  --danger: #ffb0b0;
+  --danger-tint: color-mix(in srgb, var(--danger) 16%, var(--surface-raised));
+
+  --notice-error-bg: var(--danger-tint); --notice-error-fg: var(--danger); --notice-error-border: color-mix(in srgb, var(--danger) 40%, transparent);
+  --notice-warning-bg: var(--warning-tint); --notice-warning-fg: var(--warning); --notice-warning-border: color-mix(in srgb, var(--warning) 40%, transparent);
+  --notice-success-bg: var(--success-tint); --notice-success-fg: var(--success); --notice-success-border: color-mix(in srgb, var(--success) 40%, transparent);
 
   --shadow-1: 0 1px 2px rgb(0 0 0 / 45%);
-  --shadow-2: 0 4px 16px rgb(0 0 0 / 50%);
-  --shadow-3: 0 14px 36px rgb(0 0 0 / 62%);
+  --shadow-2: 0 4px 14px rgb(0 0 0 / 50%), 0 1px 2px rgb(0 0 0 / 35%);
+  --shadow-3: 0 14px 36px rgb(0 0 0 / 60%), 0 2px 8px rgb(0 0 0 / 40%);
 }
 
-h1, h2, h3 { font-family: var(--font-display); font-weight: var(--weight-semibold); letter-spacing: -.015em; }
+h1, h2, h3 { font-family: var(--font-ui); font-weight: var(--weight-semibold); letter-spacing: -.015em; }
 .wordmark { display: flex; align-items: center; padding: var(--space-3); flex-shrink: 0; }
 .wordmark img { display: block; width: auto; height: 22px; }
 .wordmark .brand-dark { display: none; }
@@ -128,7 +154,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: var(--weight-semibol
 
 /* Request text keeps its explicit authoring borders in both themes. */
 .free-workspace .annotation textarea { border: 2px dashed var(--annotation-border); border-radius: 0; }
-.free-workspace .annotation.selected textarea { border-color: var(--annotation-focus); }
+.free-workspace .annotation.selected textarea { border-color: var(--annotation); }
 
 @media (prefers-reduced-motion: reduce) {
   :root { --duration-fast: 0ms; --duration-base: 0ms; }

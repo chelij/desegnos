@@ -150,7 +150,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [RecoveryBanner.tsx](../src/RecoveryBanner.tsx), [SaveConflict.tsx](../src/SaveConflict.tsx) | Recovery choice and checked-save conflict resolution with typed results. |
 | [Notes.tsx](../src/Notes.tsx), [StyleGuide.tsx](../src/StyleGuide.tsx) | Project brief, decisions and exceptions with scope labels; visual brand rules and samples. |
 | [CodeEditor.tsx](../src/CodeEditor.tsx), [codeMirrorMetadata.ts](../src/codeMirrorMetadata.ts), [editorHtml.ts](../src/editorHtml.ts) | CodeMirror for `code` elements, metadata anchor mapping across edits, and reversible projection of inline resources. No page-source editor exists. |
-| [pastePreference.ts](../src/pastePreference.ts), [deletePreference.ts](../src/deletePreference.ts) | Linked/unlinked paste default and ask-before-delete preference. |
+| [pastePreference.ts](../src/pastePreference.ts) | Linked/unlinked paste default. |
 | [updateCheck.ts](../src/updateCheck.ts), [usage.ts](../src/usage.ts) | Update-result copy and batched local usage events. |
 | [CrashReport.tsx](../src/CrashReport.tsx), [crashReportText.ts](../src/crashReportText.ts), [visibleActions.ts](../src/visibleActions.ts) | Editor error boundary/crash notice, crash copy and issue-address fallback, and conditional-control visibility rules. |
 | [styles.css](../src/styles.css), [brand.css](../src/brand.css), [shell.css](../src/shell.css), [canvas.css](../src/canvas.css), [ui.css](../src/ui.css), [dialogs.css](../src/dialogs.css), [notice.css](../src/notice.css), [startPage.css](../src/startPage.css) | Base tokens/reset, brand type/wordmarks, app shell and tabs, canvas layers, shared controls, dialogs/surfaces, notices and Home. |
@@ -207,7 +207,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 1. **Delete/Backspace** removes every selection kind in one gesture: layers, reference items, pointers and requests, or the focused boundary when nothing is selected. [ProjectCanvas.tsx](../src/ProjectCanvas.tsx) collects the selection and calls `removeCanvasSelection` in [App.tsx](../src/App.tsx), which sends one `delete_items` command.
 2. The dock's row trash buttons use the same path: a layer row, reference row, pointer row or request row deletes just that item, and a boundary is removed as a page or as one linked size through `delete_items` page/size ids. [RequestProperties](../src/EditorDock.tsx) has its own Delete request action.
-3. Core removes explicitly selected requests first, then their targets, then `prune_requests` drops dangling targets and requests left with nothing to act on. A confirmation covers the gesture unless the ask-before-delete preference is off; undo restores everything.
+3. Core removes explicitly selected requests first, then their targets, then `prune_requests` drops dangling targets and requests left with nothing to act on. The gesture is one undoable step and its toast offers Undo.
 
 ### Generation: request → element operations → apply
 
