@@ -171,7 +171,7 @@ export function requestTargetLabel(project: Project, target: RequestTarget): str
   if (target.kind === 'reference') {
     const item = project.reference.find(row => row.id === target.id);
     if (!item) return 'Reference';
-    return item.kind.kind === 'note' ? item.kind.text.trim().split('\n')[0] || 'Note' : item.kind.kind === 'link' ? item.kind.title || item.kind.url : item.kind.kind === 'image' ? item.kind.name || 'Picture' : item.kind.color;
+    return item.kind.kind === 'element' ? item.kind.element.name || item.kind.element.kind : item.kind.kind === 'note' ? item.kind.text.trim().split('\n')[0] || 'Note' : item.kind.kind === 'link' ? item.kind.title || item.kind.url : item.kind.kind === 'image' ? item.kind.name || 'Picture' : item.kind.color;
   }
   return 'Pointer';
 }

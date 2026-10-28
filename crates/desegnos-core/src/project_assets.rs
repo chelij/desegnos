@@ -96,6 +96,9 @@ impl Project {
 fn referenced_ids(pages: &[crate::Page], reference: &[crate::ReferenceItem]) -> BTreeSet<Uuid> {
     let mut ids = BTreeSet::new();
     for item in reference {
+        if let crate::ReferenceKind::Element { element, .. } = &item.kind {
+            collect_element_pictures(std::slice::from_ref(element.as_ref()), &mut ids);
+        }
         if let crate::ReferenceKind::Image { picture, .. } = &item.kind {
             ids.insert(*picture);
         }

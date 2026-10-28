@@ -519,8 +519,9 @@ export function pointerBroken(pointer: Pointer, project: Project): boolean {
   return missing(pointer.from) || missing(pointer.to);
 }
 
-const referenceLabel = (item: { kind: { kind: string; text?: string; title?: string; url?: string; name?: string; color?: string } }): string => {
+const referenceLabel = (item: { kind: { kind: string; text?: string; title?: string; url?: string; name?: string; color?: string; element?: { name: string | null; kind: string } } }): string => {
   switch (item.kind.kind) {
+    case 'element': return item.kind.element?.name || item.kind.element?.kind || 'Layer';
     case 'note': return (item.kind.text ?? '').trim().split('\n')[0] || 'Note';
     case 'link': return (item.kind.title ?? '').trim() || item.kind.url || 'Link';
     case 'image': return item.kind.name || 'Picture';

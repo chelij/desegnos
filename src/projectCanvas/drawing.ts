@@ -24,6 +24,7 @@ type Context = {
   busy: import("react").RefObject<boolean>;
   boundaryKind: BoundaryToolKind;
   createBoundary: (bounds: Rect, kind: BoundaryToolKind) => Promise<string | null>;
+  onTool: (tool: import("../EditorTools").EditorTool) => void;
   selectBoundary: (pageId: string | null, sizeId?: string | null, additive?: boolean) => void;
 };
 
@@ -86,12 +87,12 @@ export function createDrawingActions(context: () => Context) {
   }
 
   async function persistDraw(rect: Rect, clicked = false) {
-    const { busy, boundaryKind, createBoundary, selectBoundary } = context();
+    const { busy, boundaryKind, createBoundary, selectBoundary, onTool } = context();
     if (clicked) rect = boundaryDefaults(context().project, boundaryKind);
     busy.current = true;
     try {
       const pageId = await createBoundary(rect, boundaryKind);
-      if (pageId) selectBoundary(pageId);
+      if (pageId) { selectBoundary(pageId); onTool('select'); }
     } catch { /* App surfaces the failed command. */ }
     finally { busy.current = false; }
   }

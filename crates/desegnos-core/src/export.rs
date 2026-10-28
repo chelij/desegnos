@@ -1497,6 +1497,7 @@ fn collect_pointer_reference(
         PointerTarget::Reference { item_id } => {
             if let Some(item) = project.reference.iter().find(|item| item.id == *item_id) {
                 match &item.kind {
+                    crate::ReferenceKind::Element { element, .. } => references.push(serde_json::json!({"kind":"element", "element": crate::requirements::reference_element_value(element)})),
                     crate::ReferenceKind::Note { text } => references.push(serde_json::json!({
                         "kind": "note",
                         "text": text.chars().take(4000).collect::<String>(),

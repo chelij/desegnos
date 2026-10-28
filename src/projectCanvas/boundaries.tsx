@@ -3,7 +3,7 @@ import { memo, useCallback, useMemo, useRef } from 'react';
 import { elementIndex } from './elementGeometry';
 import { ElementTree } from './elements';
 import { idlePlay, playElements, type PlayState } from './play';
-import { resolveForSize } from './sizes';
+import { boundaryName, resolveForSize } from './sizes';
 import type { Boundary, CanvasTarget } from '../projectCanvasGeometry';
 import type { Element, Project, Rect } from '../types';
 
@@ -41,7 +41,7 @@ const BoundaryView = memo(function BoundaryView({ project, boundary, shown, focu
   const ghosts = useMemo(() => visible ? placeholders(resolved, sizeId) : [], [resolved, sizeId, visible]);
   const elements = useMemo(() => visible ? playElements(project, resolved, play) : resolved, [project, resolved, play, visible]);
   return <div className={`page-boundary${highlighted ? ' selected' : ''}${focused ? ' focused' : ''}${kind === 'screen' ? ' screen' : ''}`}
-    data-boundary={pageId} data-size={sizeId}
+    data-boundary={pageId} data-size={sizeId} title={boundaryName(page, page.sizes.find(size => size.id === sizeId)!)}
     style={{ background: page.background, left: shown.x, top: shown.y, width: shown.width, height: shown.height }} onDoubleClick={() => openPage(pageId)}>
     {visible && <>
       <ElementTree project={project} pageId={pageId} sizeId={sizeId} elements={elements} boundary={{ pageId, sizeId, label, kind, rect: shown }} editingId={editingId} movingRects={movingElements} />

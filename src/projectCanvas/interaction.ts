@@ -197,7 +197,7 @@ export function createCanvasInteraction(context: () => Context) {
       setPolygonDraft(null);
       return;
     }
-    if (tool === 'note') {
+    if (tool === 'note' || (tool === 'text' && !boundaryUnder(point))) {
       if (boundaryUnder(point)) return;
       event.preventDefault();
       beginPointerSession(event);

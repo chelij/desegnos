@@ -68,7 +68,7 @@ export type ElementPatch = { id: string; rect?: Rect; rotation?: number; style?:
   size_id?: string | null; all_sizes?: boolean; dismissed?: boolean };
 export type ElementMove = { id: string; to_page_id: string; to_parent_id: string | null; index: number; rect: Rect; size_id?: string | null; all_sizes?: boolean };
 export type Placements = { page_id: string; size_id: string; x: number; y: number; kind: BoundaryKind }[];
-export type ReferenceKind = { kind: 'note'; text: string } | { kind: 'link'; url: string; title: string } | { kind: 'image'; picture: string; name?: string } | { kind: 'swatch'; color: string };
+export type ReferenceKind = { kind: 'element'; element: Element; size?: string } | { kind: 'note'; text: string } | { kind: 'link'; url: string; title: string } | { kind: 'image'; picture: string; name?: string } | { kind: 'swatch'; color: string };
 export type ReferenceItem = { id: string; rect: Rect; kind: ReferenceKind };
 export type ReferencePlacement = { item_id: string; x: number; y: number };
 export type PointerSource = { kind: 'element'; pageId: string; elementId: string; sizeId?: string | null } | { kind: 'boundary'; pageId: string; sizeId?: string | null };
@@ -87,7 +87,7 @@ export type Brief = { purpose: string; audience: string; brandName: string; tone
 export type Scope = { kind: 'project' } | { kind: 'page' | 'element'; id: string };
 export type Decision = { id: string; topic: string; value: string; scope: Scope; protected: boolean; acceptedAtRevision: number };
 export type DesignException = { id: string; rule: string; reason: string; scope: Scope; acceptedAtRevision: number };
-export type Project = { styles?: ProjectStyles; pictures?: Record<string, string>; schemaVersion: number; id: string; name: string; revision: number; viewport: Viewport;
+export type Project = { template?: CanvasTemplate; styles?: ProjectStyles; pictures?: Record<string, string>; schemaVersion: number; id: string; name: string; revision: number; viewport: Viewport;
   importedIdentity?: ImportedIdentity;
   appearance: Appearance; generationMode: GenerationMode; showGrid: boolean; gridSettings: GridSettings; latestGeneration: GenerationDossier | null; homePageId: string; pages: Page[]; reference: ReferenceItem[]; pointers?: Pointer[]; linked?: Record<string, LinkedDefinition>; requests?: PendingRequest[]; views: NamedView[]; brief: Brief;
   lastExport?: ExportRecord | null;
@@ -201,8 +201,8 @@ export type Command =
   | { type: 'remove_pointers'; ids: string[] }
   | { type: 'set_pointer_wiring'; pointer_id: string; wiring: PointerWiring | null; comment?: string }
   | { type: 'resolve_pointer_clash'; keep: string; drop: string[]; merged_comment?: string }
-  | { type: 'element_to_reference'; page_id: string; element_id: string; rect: Rect }
-  | { type: 'reference_to_element'; item_id: string; page_id: string; rect: Rect }
+  | { type: 'element_to_reference'; page_id: string; element_id: string; rect: Rect; size_id?: string | null }
+  | { type: 'reference_to_element'; item_id: string; page_id: string; rect: Rect; size_id?: string | null }
   | { type: 'attach_reference_context'; request_ids: string[]; item_ids: string[] }
   | { type: 'delete_page'; page_id: string }
   | { type: 'insert_elements'; page_id: string; parent_id: string | null; index: number; elements: Element[]; picture_data_uri?: string; size_id?: string | null }

@@ -37,7 +37,7 @@ export function boundaryName(page: Page, size: PageSize): string {
   return page.sizes.length > 1 ? `${page.name} · ${sizeLabel(size.width)}` : page.name;
 }
 
-function applyOverrides(elements: Element[], sizeId: string) {
+export function applyOverrides(elements: Element[], sizeId: string) {
   for (const element of elements) {
     const over = element.overrides?.[sizeId];
     if (over) {

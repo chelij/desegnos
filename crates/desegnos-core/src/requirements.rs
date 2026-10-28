@@ -168,8 +168,20 @@ pub(crate) fn project_notes(
     Ok(md)
 }
 
+/// Reference layers expose visual content, never image attachment bytes or request history.
+pub(crate) fn reference_element_value(element: &crate::Element) -> serde_json::Value {
+    fn strip_context(element: &mut crate::Element) {
+        element.meta = crate::ElementMeta::default();
+        for child in &mut element.children { strip_context(child); }
+    }
+    let mut visual = element.clone();
+    strip_context(&mut visual);
+    serde_json::json!(visual)
+}
+
 fn reference_value(kind: &crate::ReferenceKind) -> serde_json::Value {
     match kind {
+        crate::ReferenceKind::Element { element, .. } => serde_json::json!({"kind":"element","element":reference_element_value(element)}),
         crate::ReferenceKind::Note { text } => serde_json::json!({"kind":"note","text":text}),
         crate::ReferenceKind::Link { url, title } => {
             serde_json::json!({"kind":"link","url":url,"title":title})

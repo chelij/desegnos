@@ -366,12 +366,12 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const comment = [pointer.comment.trim(), other.comment.trim()].filter(Boolean).join('\n\n');
     void mutate({ type: 'resolve_pointer_clash', keep: pointer.id, drop: [other.id], merged_comment: comment }).catch(() => {});
   }, [mutate]);
-  const elementToReference = useCallback(async (pageId: string, elementId: string, rect: Rect) => {
+  const elementToReference = useCallback(async (pageId: string, elementId: string, rect: Rect, sizeId?: string | null) => {
     setCanvasSelection([]);
-    await mutate({ type: 'element_to_reference', page_id: pageId, element_id: elementId, rect });
+    await mutate({ type: 'element_to_reference', page_id: pageId, element_id: elementId, rect, size_id: sizeId });
   }, [mutate]);
   const referenceToElement = useCallback(async (itemId: string, pageId: string, rect: Rect, sizeId?: string | null) => {
-    const next = await mutate({ type: 'reference_to_element', item_id: itemId, page_id: pageId, rect });
+    const next = await mutate({ type: 'reference_to_element', item_id: itemId, page_id: pageId, rect, size_id: sizeId });
     const added = next.project?.pages.find(page => page.id === pageId)?.elements.at(-1);
     setCanvasFocus(pageId);
     setCanvasSelection(added ? [{ kind: 'element', pageId, elementId: added.id, sizeId: sizeId ?? null }] : []);

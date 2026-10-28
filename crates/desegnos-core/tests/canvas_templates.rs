@@ -88,3 +88,29 @@ fn templates_do_not_add_undo_steps() {
     assert!(!session.can_redo());
     assert_eq!(session.project().revision, 0);
 }
+
+#[test]
+fn template_kind_survives_deleting_every_boundary_and_serialization() {
+    for template in [
+        CanvasTemplate::Blank,
+        CanvasTemplate::Website,
+        CanvasTemplate::AppScreen,
+        CanvasTemplate::SlideDeck,
+        CanvasTemplate::SocialImage,
+    ] {
+        let mut project = untitled(template);
+        for id in project.pages.iter().map(|page| page.id).collect::<Vec<_>>() {
+            project = project
+                .apply(
+                    project.revision,
+                    desegnos_core::Command::DeletePage { page_id: id },
+                )
+                .unwrap();
+        }
+        assert!(project.pages.is_empty());
+        let reopened: Project =
+            serde_json::from_slice(&serde_json::to_vec(&project).unwrap()).unwrap();
+        reopened.validate().unwrap();
+        assert_eq!(reopened.template, template);
+    }
+}

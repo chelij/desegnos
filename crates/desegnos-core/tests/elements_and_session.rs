@@ -775,3 +775,215 @@ fn placing_text_and_typing_it_is_one_undo_step() {
     session.undo(|_| Ok(())).unwrap();
     assert!(session.project().page(page).unwrap().elements.is_empty());
 }
+
+#[test]
+fn reference_round_trip_preserves_shapes_text_children_pictures_and_history() {
+    use base64::Engine;
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::new_rgba8(2, 2)
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .unwrap();
+    let uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())
+    );
+    for kind in [
+        ElementKind::Ellipse,
+        ElementKind::Text,
+        ElementKind::Group,
+        ElementKind::Image,
+        ElementKind::Line,
+    ] {
+        let mut project = project();
+        let (picture, uri) = Project::prepare_picture(&uri, 2).unwrap();
+        project.pictures.insert(picture, uri.into());
+        let page = page_id(&project);
+        let mut original = element(
+            Uuid::new_v4(),
+            kind.clone(),
+            rect(
+                10.0,
+                20.0,
+                90.0,
+                if kind == ElementKind::Line { 0.0 } else { 60.0 },
+            ),
+        );
+        original.name = Some("My ellipse is not a prompt".into());
+        original.text = "hello".into();
+        original.style.fill = Some("#123456".into());
+        original.style.opacity = 0.7;
+        original.rotation = 15.0;
+        original.meta.requests.push(desegnos_core::RequestRecord {
+            id: Uuid::new_v4(),
+            prompt: "An earlier explicit request".into(),
+            attachments: vec![],
+            created_at: "test".into(),
+            outcome: None,
+            job_id: None,
+        });
+        if kind == ElementKind::Group {
+            let child = text(Uuid::new_v4(), "Nested text");
+            original.children.push(child);
+        }
+        if kind == ElementKind::Image {
+            original.image = Some(picture);
+        }
+        let mut project = insert(&project, vec![original.clone()]).unwrap();
+        project = apply(
+            &project,
+            Command::ElementToReference {
+                page_id: page,
+                element_id: original.id,
+                rect: rect(-200.0, -100.0, 90.0, original.rect.height),
+                size_id: None,
+            },
+        )
+        .unwrap();
+        assert!(project.page(page).unwrap().elements.is_empty());
+        assert!(project.requests.is_empty());
+        let stored = match &project.reference[0].kind {
+            desegnos_core::ReferenceKind::Element { element, .. } => element,
+            _ => panic!("a design layer must stay a design layer"),
+        };
+        assert_eq!(stored.as_ref(), &original);
+        if kind == ElementKind::Image {
+            assert!(project.pictures.contains_key(&picture));
+        }
+        let reopened: Project =
+            serde_json::from_slice(&serde_json::to_vec(&project).unwrap()).unwrap();
+        let restored = apply(
+            &reopened,
+            Command::ReferenceToElement {
+                item_id: reopened.reference[0].id,
+                page_id: page,
+                rect: original.rect,
+                size_id: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(restored.page(page).unwrap().elements, vec![original]);
+        assert!(restored.reference.is_empty());
+        assert!(
+            restored.requests.is_empty(),
+            "moving a layer does not create an AI request"
+        );
+    }
+}
+
+#[test]
+fn reference_keeps_linked_size_overrides_and_existing_requests() {
+    use desegnos_core::{PendingRequest, ReferenceKind, RequestTarget};
+    let (project, page, _, phone) = project_with_phone();
+    let id = project.page(page).unwrap().elements[0].id;
+    let mut edit = patch(id);
+    edit.size_id = Some(phone);
+    edit.rect = Some(rect(20.0, 30.0, 80.0, 40.0));
+    let project = apply(
+        &project,
+        Command::UpdateElements {
+            page_id: page,
+            patches: vec![edit],
+        },
+    )
+    .unwrap();
+    let original = project.page(page).unwrap().elements[0].clone();
+    let request = PendingRequest {
+        id: Uuid::new_v4(),
+        text: "Make the text larger".into(),
+        attachments: vec![],
+        targets: vec![RequestTarget::Element {
+            page,
+            size: Some(phone),
+            id,
+        }],
+        area: None,
+        requested_at: "test".into(),
+    };
+    let project = apply(
+        &project,
+        Command::AddRequest {
+            request: request.clone(),
+        },
+    )
+    .unwrap();
+    let project = apply(
+        &project,
+        Command::ElementToReference {
+            page_id: page,
+            element_id: id,
+            rect: rect(-200.0, 0.0, 80.0, 40.0),
+            size_id: Some(phone),
+        },
+    )
+    .unwrap();
+    assert!(
+        matches!(&project.reference[0].kind, ReferenceKind::Element { element, size } if element.as_ref() == &original && *size == Some(phone))
+    );
+    let restored = apply(
+        &project,
+        Command::ReferenceToElement {
+            item_id: project.reference[0].id,
+            page_id: page,
+            rect: rect(20.0, 30.0, 80.0, 40.0),
+            size_id: Some(phone),
+        },
+    )
+    .unwrap();
+    assert_eq!(restored.page(page).unwrap().elements[0], original);
+    assert_eq!(restored.requests, vec![request]);
+}
+
+#[test]
+fn reference_notes_create_only_draft_requests_using_note_content() {
+    let project = project();
+    let page = page_id(&project);
+    let item = desegnos_core::ReferenceItem {
+        id: Uuid::new_v4(),
+        rect: rect(-200.0, 0.0, 100.0, 80.0),
+        kind: desegnos_core::ReferenceKind::Note {
+            text: "Use a calm blue background".into(),
+        },
+    };
+    let project = apply(
+        &project,
+        Command::AddReferenceItem {
+            item: item.clone(),
+            picture_data_uri: None,
+        },
+    )
+    .unwrap();
+    let project = apply(
+        &project,
+        Command::ReferenceToElement {
+            item_id: item.id,
+            page_id: page,
+            rect: rect(10.0, 20.0, 100.0, 80.0),
+            size_id: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(project.requests.len(), 1);
+    assert_eq!(project.requests[0].text, "Use a calm blue background");
+    assert!(project.latest_generation.is_none());
+    assert!(project.applied_job_ids.is_empty());
+}
+
+#[test]
+fn stored_reference_trees_still_validate_nested_identifiers() {
+    let mut project = project();
+    let mut group = element(
+        Uuid::new_v4(),
+        ElementKind::Group,
+        rect(0.0, 0.0, 100.0, 80.0),
+    );
+    group.children = vec![text(group.id, "Duplicate id")];
+    project.reference.push(desegnos_core::ReferenceItem {
+        id: Uuid::new_v4(),
+        rect: rect(-200.0, 0.0, 100.0, 80.0),
+        kind: desegnos_core::ReferenceKind::Element {
+            element: Box::new(group),
+            size: None,
+        },
+    });
+    assert!(project.validate().is_err());
+}

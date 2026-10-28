@@ -645,6 +645,12 @@ pub struct ReferencePlacement {
     deny_unknown_fields
 )]
 pub enum ReferenceKind {
+    /// A design layer outside every boundary, retained for a lossless round trip.
+    Element {
+        element: Box<crate::Element>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        size: Option<Uuid>,
+    },
     Note {
         text: String,
     },
@@ -679,6 +685,8 @@ impl ReferenceItem {
             height: 1,
         })?;
         match &self.kind {
+            // Stored trees are validated with the project-wide element ids and limits.
+            ReferenceKind::Element { .. } => {}
             ReferenceKind::Note { text } => {
                 ensure(
                     text.chars().count() <= MAX_PROMPT_CHARS && !text.contains('\0'),
@@ -1055,16 +1063,6 @@ fn normalized_swatch(color: &str) -> String {
     format!("#{hex}")
 }
 
-/// A frame dragged out keeps its size, but never shrinks below a readable note.
-fn converted_reference_note(rect: Rect) -> Rect {
-    Rect {
-        x: rect.x,
-        y: rect.y,
-        width: rect.width.max(200.0),
-        height: rect.height.max(120.0),
-    }
-}
-
 fn attachment_id() -> String {
     Uuid::new_v4().simple().to_string()[..16].into()
 }
@@ -1310,6 +1308,8 @@ pub struct Project {
     #[serde(default)]
     pub styles: ProjectStyles,
     pub schema_version: u32,
+    #[serde(default)]
+    pub template: CanvasTemplate,
     pub id: Uuid,
     pub name: String,
     pub revision: u64,
@@ -1535,17 +1535,21 @@ pub enum Command {
     ForgetExportPointer {
         pointer_id: Uuid,
     },
-    /// A layer dragged out of every boundary becomes a note plus its attachments.
+    /// A layer dragged out of every boundary retains its editable tree in reference.
     ElementToReference {
         page_id: Uuid,
         element_id: Uuid,
         rect: Rect,
+        #[serde(default)]
+        size_id: Option<Uuid>,
     },
     /// A note, link, colour or picture dragged into a boundary becomes a layer there.
     ReferenceToElement {
         item_id: Uuid,
         page_id: Uuid,
         rect: Rect,
+        #[serde(default)]
+        size_id: Option<Uuid>,
     },
     /// Selected reference items travel with these requests as context, through the same
     /// request attachments generation already sends.
@@ -1693,6 +1697,7 @@ impl Command {
             Self::UpdateNamedView { .. } => "Changed a view",
             Self::RemoveNamedView { .. } => "Removed a view",
             Self::AddReferenceItem { item, .. } => match item.kind {
+                ReferenceKind::Element { .. } => "Added a reference layer",
                 ReferenceKind::Note { .. } => "Added a note",
                 ReferenceKind::Link { .. } => "Added a link",
                 ReferenceKind::Image { .. } => "Added a picture",
@@ -1772,6 +1777,11 @@ impl Project {
         for page in &mut self.pages {
             detach(&self.styles, &mut page.elements, id);
         }
+        for item in &mut self.reference {
+            if let ReferenceKind::Element { element, .. } = &mut item.kind {
+                detach(&self.styles, std::slice::from_mut(element.as_mut()), id);
+            }
+        }
         for definition in self.linked.values_mut() {
             detach(
                 &self.styles,
@@ -1785,6 +1795,7 @@ impl Project {
         let home_page_id = Uuid::new_v4();
         let project = Self {
             schema_version: SCHEMA_VERSION,
+            template: CanvasTemplate::Website,
             id: Uuid::new_v4(),
             name: name.trim().into(),
             revision: 0,
@@ -1861,6 +1872,7 @@ impl Project {
             });
         let project = Self {
             schema_version: SCHEMA_VERSION,
+            template,
             id: Uuid::new_v4(),
             name: name.trim().into(),
             revision: 0,
@@ -2032,6 +2044,29 @@ impl Project {
         let has_content = text.is_some() || url.is_some() || title.is_some() || color.is_some();
         let item = self.reference_mut(item_id)?;
         if let Some(rect) = rect {
+            if (rect.width != item.rect.width || rect.height != item.rect.height)
+                && let ReferenceKind::Element { element, size } = &mut item.kind
+            {
+                let resized = Rect {
+                    width: rect.width,
+                    height: rect.height,
+                    ..element.rect
+                };
+                if let Some(size) = size {
+                    let original = element
+                        .overrides
+                        .get(size)
+                        .and_then(|over| over.rect)
+                        .unwrap_or(element.rect);
+                    element.overrides.entry(*size).or_default().rect = Some(Rect {
+                        width: rect.width,
+                        height: rect.height,
+                        ..original
+                    });
+                } else {
+                    element.rect = resized;
+                }
+            }
             item.rect = rect;
         }
         if !has_content {
@@ -2071,103 +2106,60 @@ impl Project {
                     *value = normalized_swatch(&next);
                 }
             }
-            ReferenceKind::Image { .. } => {
+            ReferenceKind::Image { .. } | ReferenceKind::Element { .. } => {
                 return Err(Error(
-                    "A reference picture's content cannot be edited.".into(),
+                    "Move this reference layer into a boundary to edit its content.".into(),
                 ));
             }
         }
         Ok(())
     }
 
-    /// One gesture: the layer disappears and its request text and attachments become
-    /// reference items beside where it was dropped.
-    /// One gesture: the layer disappears and the request text and attachments aimed at it
-    /// become reference items beside where it was dropped.
-    fn element_to_reference(&mut self, page_id: Uuid, element_id: Uuid, rect: Rect) -> Result<()> {
+    /// Moving a layer into reference preserves its complete editable tree. Requests follow
+    /// their targets into reference, rather than turning layer names into prompts.
+    fn element_to_reference(
+        &mut self,
+        page_id: Uuid,
+        element_id: Uuid,
+        rect: Rect,
+        size_id: Option<Uuid>,
+    ) -> Result<()> {
+        ensure(
+            rect.width >= 0.0 && rect.height >= 0.0,
+            "Layer dimensions cannot be negative.",
+        )?;
         let page = self.page_mut(page_id)?;
+        ensure(
+            size_id.is_none_or(|id| page.sizes.iter().any(|size| size.id == id)),
+            "This boundary size no longer exists.",
+        )?;
+        let size_id = size_id.filter(|id| *id != page.base_size_id());
         let element = crate::elements::remove_element(&mut page.elements, element_id)
             .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-        // Requests that named the removed layer lose that target; the first one's text and
-        // attachments become the note and its cards. A request with no targets left is gone.
-        let mut prompt: Option<String> = None;
-        let mut attachments: Vec<crate::RequestAttachment> = vec![];
+        let item_id = Uuid::new_v4();
+        fn contains(element: &crate::Element, id: Uuid) -> bool {
+            element.id == id || element.children.iter().any(|child| contains(child, id))
+        }
         for request in &mut self.requests {
-            let named = request.targets.iter().any(
-                |target| matches!(target, RequestTarget::Element { id, .. } if *id == element_id),
-            );
-            if !named {
-                continue;
-            }
-            if prompt.is_none() && !request.text.trim().is_empty() {
-                prompt = Some(request.text.clone());
-            }
-            if attachments.is_empty() {
-                attachments = request.attachments.clone();
-            }
-            request.targets.retain(
-                |target| !matches!(target, RequestTarget::Element { id, .. } if *id == element_id),
-            );
-        }
-        self.requests.retain(|request| !request.targets.is_empty());
-        let prompt = prompt
-            .filter(|prompt| !prompt.trim().is_empty())
-            .unwrap_or_else(|| element.label());
-        let note = converted_reference_note(rect);
-        let mut items = vec![ReferenceItem {
-            id: Uuid::new_v4(),
-            rect: note,
-            kind: ReferenceKind::Note { text: prompt },
-        }];
-        let mut x = note.x + note.width + 16.0;
-        for attachment in attachments {
-            let item = match attachment.kind {
-                crate::AttachmentKind::Link => attachment.url.map(|url| {
-                    let title = url::Url::parse(&url)
-                        .ok()
-                        .and_then(|parsed| parsed.host_str().map(str::to_owned))
-                        .unwrap_or_else(|| url.clone());
-                    ReferenceItem {
-                        id: Uuid::new_v4(),
-                        rect: Rect {
-                            x,
-                            y: note.y,
-                            width: 200.0,
-                            height: 140.0,
-                        },
-                        kind: ReferenceKind::Link { url, title },
-                    }
-                }),
-                crate::AttachmentKind::Image => {
-                    let uri = attachment.data_uri;
-                    uri.map(|uri| {
-                        let id = crate::project_assets::store_picture_uri(&uri)
-                            .expect("validated attachment pictures have a picture id");
-                        self.pictures.insert(id, uri);
-                        ReferenceItem {
-                            id: Uuid::new_v4(),
-                            rect: Rect {
-                                x,
-                                y: note.y,
-                                width: 200.0,
-                                height: 140.0,
-                            },
-                            kind: ReferenceKind::Image {
-                                picture: id,
-                                name: attachment.name,
-                            },
-                        }
-                    })
+            for target in &mut request.targets {
+                if matches!(target, RequestTarget::Element { id, .. } if contains(&element, *id)) {
+                    *target = RequestTarget::Reference { id: item_id };
                 }
-                // Text files stay with the old request; only pictures and links become cards.
-                crate::AttachmentKind::Text => None,
-            };
-            if let Some(item) = item {
-                x += 200.0 + 16.0;
-                items.push(item);
             }
+            request.targets.dedup();
         }
-        self.reference.extend(items);
+        self.reference.push(ReferenceItem {
+            id: item_id,
+            rect: Rect {
+                width: rect.width.max(1.0),
+                height: rect.height.max(1.0),
+                ..rect
+            },
+            kind: ReferenceKind::Element {
+                element: Box::new(element),
+                size: size_id,
+            },
+        });
         Ok(())
     }
 
@@ -2188,6 +2180,7 @@ impl Project {
                     .find(|item| item.id == *id)
                     .ok_or_else(|| Error("This reference item no longer exists.".into()))?;
                 Ok(match &item.kind {
+                    ReferenceKind::Element { element, .. } => (element.label(), crate::AttachmentKind::Text, Some(crate::requirements::reference_element_value(element).to_string()), None),
                     ReferenceKind::Note { text } => (
                         "Reference note".to_string(),
                         crate::AttachmentKind::Text,
@@ -2313,9 +2306,15 @@ impl Project {
         Ok(())
     }
 
-    /// A note, link, colour or picture dragged into a boundary becomes a layer there, with a
-    /// pending request that carries the note's text or the link as its context.
-    fn reference_to_element(&mut self, item_id: Uuid, page_id: Uuid, rect: Rect) -> Result<()> {
+    /// Restore a stored layer without adding a request. Other reference cards become layers
+    /// with draft requests carrying their content; only an explicit Generate action runs them.
+    fn reference_to_element(
+        &mut self,
+        item_id: Uuid,
+        page_id: Uuid,
+        rect: Rect,
+        size_id: Option<Uuid>,
+    ) -> Result<()> {
         let item = self
             .reference
             .iter()
@@ -2336,7 +2335,41 @@ impl Project {
             url,
         };
         let mut request: Option<(String, Vec<crate::RequestAttachment>)> = None;
+        let restored = matches!(&item.kind, ReferenceKind::Element { .. });
         let mut element = match item.kind {
+            ReferenceKind::Element { element, size } => {
+                let mut element = *element;
+                let page = self.page(page_id)?;
+                // On a different page, carry the visible design into the destination rather
+                // than leaving overrides tied to sizes that page does not own.
+                fn rebase(element: &mut crate::Element, sizes: &[PageSize], source: Option<Uuid>) {
+                    if element
+                        .overrides
+                        .keys()
+                        .any(|id| !sizes.iter().any(|size| size.id == *id))
+                    {
+                        if let Some(over) = source.and_then(|id| element.overrides.get(&id)) {
+                            if let Some(rect) = over.rect {
+                                element.rect = rect;
+                            }
+                            if let Some(style) = &over.style {
+                                element.style = style.clone();
+                            }
+                            if let Some(layout) = &over.layout {
+                                element.layout = layout.clone();
+                            }
+                        }
+                        element
+                            .overrides
+                            .retain(|id, _| sizes.iter().any(|size| size.id == *id));
+                    }
+                    for child in &mut element.children {
+                        rebase(child, sizes, source);
+                    }
+                }
+                rebase(&mut element, &page.sizes, size);
+                element
+            }
             ReferenceKind::Image { picture, .. } => {
                 let mut element = crate::empty_element(crate::ElementKind::Image, rect);
                 element.image = Some(picture);
@@ -2377,9 +2410,44 @@ impl Project {
                 element
             }
         };
-        element.rect = rect;
+        let page = self.page(page_id)?;
+        ensure(
+            size_id.is_none_or(|id| page.sizes.iter().any(|size| size.id == id)),
+            "This boundary size no longer exists.",
+        )?;
+        if restored {
+            if let Some(size) = size_id.filter(|id| *id != page.base_size_id()) {
+                let original = element
+                    .overrides
+                    .get(&size)
+                    .and_then(|over| over.rect)
+                    .unwrap_or(element.rect);
+                element.overrides.entry(size).or_default().rect = Some(Rect {
+                    x: rect.x,
+                    y: rect.y,
+                    ..original
+                });
+            } else {
+                element.rect.x = rect.x;
+                element.rect.y = rect.y;
+            }
+        } else {
+            element.rect = rect;
+        }
         let page = self.page_mut(page_id)?;
         page.elements.push(element.clone());
+        let target_size = size_id.or(Some(page.base_size_id()));
+        for request in &mut self.requests {
+            for target in &mut request.targets {
+                if matches!(target, RequestTarget::Reference { id } if *id == item_id) {
+                    *target = RequestTarget::Element {
+                        page: page_id,
+                        size: target_size,
+                        id: element.id,
+                    };
+                }
+            }
+        }
         if let Some((text, attachments)) = request {
             let request = PendingRequest {
                 id: Uuid::new_v4(),
@@ -2387,7 +2455,7 @@ impl Project {
                 attachments,
                 targets: vec![RequestTarget::Element {
                     page: page_id,
-                    size: Some(page.base_size_id()),
+                    size: target_size,
                     id: element.id,
                 }],
                 area: None,
@@ -2618,6 +2686,17 @@ impl Project {
                 &mut ids,
                 &mut element_count,
             )?;
+        }
+        for item in &self.reference {
+            if let ReferenceKind::Element { element, .. } = &item.kind {
+                fn sizes(element: &crate::Element, ids: &mut BTreeSet<Uuid>) {
+                    ids.extend(element.overrides.keys().copied());
+                    for child in &element.children { sizes(child, ids); }
+                }
+                let mut size_ids = BTreeSet::new();
+                sizes(element, &mut size_ids);
+                crate::elements::validate_elements(std::slice::from_ref(element.as_ref()), self, &size_ids, &mut ids, &mut element_count)?;
+            }
         }
         if !self.pages.is_empty() {
             // The entry points at a real boundary, but any included boundary may be the entry.
@@ -3103,12 +3182,14 @@ impl Project {
                 page_id,
                 element_id,
                 rect,
-            } => next.element_to_reference(page_id, element_id, rect)?,
+                size_id,
+            } => next.element_to_reference(page_id, element_id, rect, size_id)?,
             Command::ReferenceToElement {
                 item_id,
                 page_id,
                 rect,
-            } => next.reference_to_element(item_id, page_id, rect)?,
+                size_id,
+            } => next.reference_to_element(item_id, page_id, rect, size_id)?,
             Command::AttachReferenceContext {
                 request_ids,
                 item_ids,
