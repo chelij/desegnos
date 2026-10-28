@@ -228,6 +228,10 @@ pub struct StyleReferences {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementStyle {
     #[serde(default)]
+    pub flip_x: bool,
+    #[serde(default)]
+    pub flip_y: bool,
+    #[serde(default)]
     pub sizing: ElementSizing,
     #[serde(default)]
     pub references: StyleReferences,
@@ -1750,6 +1754,36 @@ impl Project {
         Ok(())
     }
 
+    pub(crate) fn nudge_elements(&mut self, moves: Vec<ElementMove>, dx: f64, dy: f64) -> Result<()> {
+        ensure(!moves.is_empty(), "Choose a layer to move.")?;
+        ensure(dx.is_finite() && dy.is_finite(), "Invalid nudge distance.")?;
+        let mut pages: BTreeMap<Uuid, Vec<ElementMove>> = BTreeMap::new();
+        for movement in moves {
+            pages.entry(movement.to_page_id).or_default().push(movement);
+        }
+        for (page_id, moves) in pages {
+            let page = self.pages.iter().find(|page| page.id == page_id)
+                .ok_or_else(|| Error("This page no longer exists.".into()))?;
+            let resolved = resolve_elements(self, &page.elements);
+            let mut patches = Vec::with_capacity(moves.len());
+            for movement in moves {
+                let element = find_element(&resolved, movement.id)
+                    .ok_or_else(|| Error("This layer no longer exists.".into()))?;
+                let rect = movement.size_id.and_then(|id| element.overrides.get(&id))
+                    .and_then(|over| over.rect).unwrap_or(element.rect);
+                patches.push(ElementPatch {
+                    id: movement.id,
+                    rect: Some(Rect { x: rect.x + dx, y: rect.y + dy, ..rect }),
+                    size_id: movement.size_id,
+                    all_sizes: movement.all_sizes,
+                    ..Default::default()
+                });
+            }
+            self.update_elements(page_id, patches)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn move_elements(&mut self, moves: Vec<ElementMove>) -> Result<()> {
         ensure(!moves.is_empty(), "Choose a layer to move.")?;
         let mut moving = BTreeSet::new();
@@ -1894,7 +1928,35 @@ impl Project {
     }
 
     pub(crate) fn group_elements(&mut self, page_id: Uuid, ids: Vec<Uuid>) -> Result<()> {
-        ensure(ids.len() >= 2, "Choose at least two layers to group.")?;
+        self.wrap_elements(page_id, ids, false)
+    }
+
+    pub(crate) fn stack_elements(&mut self, page_id: Uuid, ids: Vec<Uuid>) -> Result<()> {
+        if ids.len() == 1 {
+            let page = self.pages.iter().find(|page| page.id == page_id)
+                .ok_or_else(|| Error("This page no longer exists.".into()))?;
+            let resolved = resolve_elements(self, &page.elements);
+            if let Some(element) = find_element(&resolved, ids[0]) {
+                if element.kind == ElementKind::Box {
+                    if matches!(element.layout, ElementLayout::Stack { .. }) {
+                        return Ok(());
+                    }
+                    return self.update_elements(page_id, vec![ElementPatch {
+                        id: ids[0],
+                        layout: Some(default_stack()),
+                        ..Default::default()
+                    }]);
+                }
+            }
+        }
+        self.wrap_elements(page_id, ids, true)
+    }
+
+    fn wrap_elements(&mut self, page_id: Uuid, ids: Vec<Uuid>, stack: bool) -> Result<()> {
+        ensure(
+            ids.len() >= if stack { 1 } else { 2 },
+            if stack { "Choose layers to wrap." } else { "Choose at least two layers to group." },
+        )?;
         let page = self
             .pages
             .iter_mut()
@@ -1944,6 +2006,10 @@ impl Project {
             children.remove(*index);
         }
         let mut group = group_element(union, grouped);
+        if stack {
+            group.kind = ElementKind::Box;
+            group.layout = default_stack();
+        }
         for child in &mut group.children {
             child.rect.x -= union.x;
             child.rect.y -= union.y;
@@ -2000,7 +2066,7 @@ impl Project {
 }
 
 /// A patch changes only the fields it names; every other setting stays as it was.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ElementPatch {
     pub id: Uuid,
@@ -2387,6 +2453,8 @@ pub fn empty_element(kind: ElementKind, rect: Rect) -> Element {
         visible: true,
         locked: false,
         style: ElementStyle {
+            flip_x: false,
+            flip_y: false,
             sizing: ElementSizing::default(),
             references: StyleReferences::default(),
             fill: None,
@@ -2498,6 +2566,17 @@ pub fn element_outline(elements: &[Element]) -> Vec<serde_json::Value> {
         rows
     }
     walk(elements, 0)
+}
+
+fn default_stack() -> ElementLayout {
+    ElementLayout::Stack {
+        direction: StackDirection::Column,
+        gap: 0.0,
+        padding: 0.0,
+        align: StackAlign::Start,
+        justify: StackJustify::Start,
+        wrap: false,
+    }
 }
 
 #[cfg(test)]

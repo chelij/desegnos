@@ -987,3 +987,49 @@ fn stored_reference_trees_still_validate_nested_identifiers() {
     });
     assert!(project.validate().is_err());
 }
+
+#[test]
+fn repeated_nudges_use_current_positions_and_share_one_undo_step() {
+    let project = project();
+    let page = page_id(&project);
+    let layer = text(Uuid::new_v4(), "Nudge");
+    let id = layer.id;
+    let initial = layer.rect;
+    let project = insert(&project, vec![layer]).unwrap();
+    let mut session = Session::new(project).unwrap();
+    for _ in 0..5 {
+        session.execute(session.project().revision, Command::NudgeElements {
+            moves: vec![ElementMove {
+                id, to_page_id: page, to_parent_id: None, index: 0,
+                rect: initial, size_id: None, all_sizes: true,
+            }],
+            dx: 1.0, dy: 0.0,
+        }, |_| Ok(())).unwrap();
+    }
+    assert_eq!(session.project().element(id).unwrap().1.rect.x, initial.x + 5.0);
+    assert_eq!(step(&session), 1);
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().element(id).unwrap().1.rect, initial);
+    session.redo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().element(id).unwrap().1.rect.x, initial.x + 5.0);
+}
+
+#[test]
+fn stack_wraps_a_single_text_layer_and_converts_a_box_in_place() {
+    let project = project();
+    let page = page_id(&project);
+    let layer = text(Uuid::new_v4(), "Stack");
+    let id = layer.id;
+    let project = insert(&project, vec![layer]).unwrap();
+    let wrapped = apply(&project, Command::StackElements { page_id: page, ids: vec![id] }).unwrap();
+    let container = &wrapped.page(page).unwrap().elements[0];
+    assert_eq!(container.kind, ElementKind::Box);
+    assert!(matches!(container.layout, desegnos_core::ElementLayout::Stack { .. }));
+    assert_eq!(container.children[0].id, id);
+    let box_id = Uuid::new_v4();
+    let project = insert(&project, vec![element(box_id, ElementKind::Box, rect(0.0, 0.0, 200.0, 100.0))]).unwrap();
+    let converted = apply(&project, Command::StackElements { page_id: page, ids: vec![box_id] }).unwrap();
+    let container = converted.element(box_id).unwrap().1;
+    assert!(container.children.is_empty());
+    assert!(matches!(container.layout, desegnos_core::ElementLayout::Stack { .. }));
+}

@@ -5,6 +5,7 @@ import type { ElementCorner } from './elementGeometry';
 import { elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
 import { elementOrigin, resolveForSize } from './sizes';
 import { canvasFont, useCanvasFont, useCanvasFontRevision } from './fonts';
+import { shortcutFor, type ShortcutAction } from '../shortcuts';
 import type { ScreenRect } from './surface';
 
 const FALLBACK_TEXT = '#1a1a1a';
@@ -72,7 +73,8 @@ function wrapperStyle(element: Element, flow: boolean, rect: Rect, parentLayout?
     opacity: style.opacity,
     // Turning about the layer's centre is part of the contract; the renderer rotates about the
     // centre of the same rect, so children turn with it.
-    transform: element.rotation ? `rotate(${element.rotation}deg)` : undefined,
+    transform: element.rotation || element.style.flipX || element.style.flipY
+      ? `rotate(${element.rotation}deg) scale(${element.style.flipX ? -1 : 1}, ${element.style.flipY ? -1 : 1})` : undefined,
     transformOrigin: 'center center',
   };
   if (flow) {
@@ -302,8 +304,9 @@ export function ElementSelectionOverlay({ surface, project, selection, camera, v
 }
 
 /** Text is edited in fixed screen pixels, never inside the transformed layer. */
-export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus, onCommit }: {
+export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus, onAction, onCommit }: {
   element: Element; screen: ScreenRect; zoom: number; autoWidth: boolean; autoFocus: boolean;
+  onAction: (action: ShortcutAction) => boolean;
   onCommit: (text: string) => void;
 }) {
   const [draft, setDraft] = useState(element.text);
@@ -349,6 +352,8 @@ export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus,
       onKeyDown={event => {
         event.stopPropagation();
         if (event.nativeEvent.isComposing) return;
+        const action = shortcutFor(event, true);
+        if ((action === 'bold' || action === 'italic') && onAction(action)) { event.preventDefault(); return; }
         if (event.key === 'Escape' || event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
           event.preventDefault(); settle();
         }

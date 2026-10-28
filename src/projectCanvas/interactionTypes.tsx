@@ -4,7 +4,7 @@ import {
   type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point,
   type ReferenceMove, type RequestBox,
 } from '../projectCanvasGeometry';
-import type { Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, NamedView, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem } from '../types';
+import type { Command, WorkspaceView, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, NamedView, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem } from '../types';
 import type { ProjectTool, RequestToolShape } from '../EditorTools';
 import { type ScreenRect } from './surface';
 import { type LinkCopy } from './linkedChoices';
@@ -85,6 +85,7 @@ export type ProjectCanvasHandle = { focusCanvas: () => void; fit: () => void; fi
 export type DuplicateRepeat = { key: string; offset: Point };
 
 export type ProjectCanvasProps = {
+  editProject: (command: Command | ((project: Project) => Command | null)) => Promise<WorkspaceView>;
   project: Project; openPage: (pageId: string) => void;
   createBoundary: (bounds: Rect, kind: BoundaryToolKind, sourceId?: string) => Promise<string | null>;
   savePlacements: (placements: BoundaryMove[], reference: ReferenceMove[]) => Promise<void>;

@@ -9,6 +9,10 @@ export type ShortcutAction =
   | 'copyStyle' | 'pasteStyle' | 'paintFormat'
   | 'undo' | 'redo' | 'link' | 'unlink' | 'group' | 'ungroup' | 'delete' | 'renameLayer'
   | 'forward' | 'backward' | 'front' | 'back'
+  | 'alignLeft' | 'alignCentre' | 'alignRight' | 'alignTop' | 'alignMiddle' | 'alignBottom'
+  | 'distributeHorizontal' | 'distributeVertical' | 'toggleHidden' | 'toggleLocked' | 'stack'
+  | 'flipHorizontal' | 'flipVertical' | 'bold' | 'italic' | 'fontSizeUp' | 'fontSizeDown'
+  | 'opacity10' | 'opacity20' | 'opacity30' | 'opacity40' | 'opacity50' | 'opacity60' | 'opacity70' | 'opacity80' | 'opacity90' | 'opacity100'
   | 'selectAll' | 'selectChild' | 'selectParent' | 'nudge' | 'nudgeFar'
   | 'zoomIn' | 'zoomOut' | 'zoomReset' | 'fitAll' | 'fitSelection' | 'hidePanels'
   | 'minimap' | 'saveView' | 'goToView'
@@ -63,7 +67,35 @@ export const KEYMAP: Binding[] = [
   { action: 'delete', label: 'Delete selection', group: 'Edit', keys: [{ key: 'Delete', shift: false }, { key: 'Backspace', shift: false }], display: 'Delete or Backspace' },
   { action: 'renameLayer', label: 'Rename selected layer', group: 'Edit', keys: [{ key: 'F2', shift: false }], display: 'F2' },
 
+  { action: 'bold', label: 'Toggle bold', group: 'Edit', keys: [mod('b')], display: 'Ctrl/Cmd+B', inText: true },
+  { action: 'italic', label: 'Toggle italic', group: 'Edit', keys: [mod('i')], display: 'Ctrl/Cmd+I', inText: true },
+  { action: 'fontSizeUp', label: 'Increase font size', group: 'Edit', keys: [{ code: 'Period', mod: true, shift: true }, modShift('>')], display: 'Ctrl/Cmd+Shift+>' },
+  { action: 'fontSizeDown', label: 'Decrease font size', group: 'Edit', keys: [{ code: 'Comma', mod: true, shift: true }, modShift('<')], display: 'Ctrl/Cmd+Shift+<' },
+  { action: 'opacity100', label: 'Opacity 100%', group: 'Edit', keys: [plain('0')], display: '0' },
+  { action: 'opacity10', label: 'Opacity 10%', group: 'Edit', keys: [plain('1')], display: '1' },
+  { action: 'opacity20', label: 'Opacity 20%', group: 'Edit', keys: [plain('2')], display: '2' },
+  { action: 'opacity30', label: 'Opacity 30%', group: 'Edit', keys: [plain('3')], display: '3' },
+  { action: 'opacity40', label: 'Opacity 40%', group: 'Edit', keys: [plain('4')], display: '4' },
+  { action: 'opacity50', label: 'Opacity 50%', group: 'Edit', keys: [plain('5')], display: '5' },
+  { action: 'opacity60', label: 'Opacity 60%', group: 'Edit', keys: [plain('6')], display: '6' },
+  { action: 'opacity70', label: 'Opacity 70%', group: 'Edit', keys: [plain('7')], display: '7' },
+  { action: 'opacity80', label: 'Opacity 80%', group: 'Edit', keys: [plain('8')], display: '8' },
+  { action: 'opacity90', label: 'Opacity 90%', group: 'Edit', keys: [plain('9')], display: '9' },
+
   // Arrange
+  { action: 'flipHorizontal', label: 'Flip horizontal', group: 'Arrange', keys: [shift('h')], display: 'Shift+H' },
+  { action: 'flipVertical', label: 'Flip vertical', group: 'Arrange', keys: [shift('v')], display: 'Shift+V' },
+  { action: 'alignLeft', label: 'Align left', group: 'Arrange', keys: [{ key: 'a', code: 'KeyA', alt: true, shift: false }], display: 'Alt+A' },
+  { action: 'alignCentre', label: 'Align horizontal centres', group: 'Arrange', keys: [{ key: 'h', code: 'KeyH', alt: true, shift: false }], display: 'Alt+H' },
+  { action: 'alignRight', label: 'Align right', group: 'Arrange', keys: [{ key: 'd', code: 'KeyD', alt: true, shift: false }], display: 'Alt+D' },
+  { action: 'alignTop', label: 'Align top', group: 'Arrange', keys: [{ key: 'w', code: 'KeyW', alt: true, shift: false }], display: 'Alt+W' },
+  { action: 'alignMiddle', label: 'Align vertical centres', group: 'Arrange', keys: [{ key: 'v', code: 'KeyV', alt: true, shift: false }], display: 'Alt+V' },
+  { action: 'alignBottom', label: 'Align bottom', group: 'Arrange', keys: [{ key: 's', code: 'KeyS', alt: true, shift: false }], display: 'Alt+S' },
+  { action: 'distributeHorizontal', label: 'Distribute horizontally', group: 'Arrange', keys: [{ key: 'h', code: 'KeyH', alt: true, shift: true }], display: 'Alt+Shift+H' },
+  { action: 'distributeVertical', label: 'Distribute vertically', group: 'Arrange', keys: [{ key: 'v', code: 'KeyV', alt: true, shift: true }], display: 'Alt+Shift+V' },
+  { action: 'stack', label: 'Add Stack', group: 'Arrange', keys: [shift('a')], display: 'Shift+A' },
+  { action: 'toggleHidden', label: 'Hide or show selection', group: 'Arrange', keys: [modShift('h')], display: 'Ctrl/Cmd+Shift+H' },
+  { action: 'toggleLocked', label: 'Lock or unlock selection', group: 'Arrange', keys: [modShift('l')], display: 'Ctrl/Cmd+Shift+L' },
   { action: 'forward', label: 'Bring forward', group: 'Arrange', keys: [mod(']'), { code: 'BracketRight', mod: true, shift: false }], display: 'Ctrl/Cmd+]' },
   { action: 'backward', label: 'Send backward', group: 'Arrange', keys: [mod('['), { code: 'BracketLeft', mod: true, shift: false }], display: 'Ctrl/Cmd+[' },
   { action: 'front', label: 'Bring to front', group: 'Arrange', keys: [modShift(']'), { code: 'BracketRight', mod: true, shift: true }], display: 'Shift+Ctrl/Cmd+]' },
@@ -170,6 +202,7 @@ export function shortcutFor(event: ShortcutInput, editingText: boolean): Shortcu
   editingText = editingText || !!event.target && isTextField(event.target);
   for (const binding of KEYMAP) {
     if (editingText && !binding.inText) continue;
+    if ((binding.action === 'bold' || binding.action === 'italic') && !(typeof HTMLElement !== 'undefined' && event.target instanceof HTMLElement && event.target.closest('.element-text-editor'))) continue;
     if (binding.keys.some(combo => comboMatches(combo, event))) return binding.action;
   }
   return null;

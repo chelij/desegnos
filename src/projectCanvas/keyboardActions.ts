@@ -1,7 +1,7 @@
 import { isTextField } from '../WorkspaceSurface';
 import { pageKind } from './boundaryDefaults';
 import type { ProjectCanvasProps } from './interactionTypes';
-import { arrangeSiblingOrder, type ArrangeOperation } from './arrange';
+import { alignSelectionMoves, distributeSelectionMoves, arrangeSiblingOrder, type SelectionDistribution, type ArrangeOperation } from './arrange';
 import { type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   BOUNDARY_GAP, selectedPointers, type Boundary, type CanvasCamera, type CanvasTarget, type ElementTarget, type Point,
@@ -14,10 +14,11 @@ import { type LinkCopy } from './linkedChoices';
 import { copySummary, linkNeedsChoice, nestedLayerIds, sameStructure } from './links';
 import { viewNameForSlot, type ShortcutAction } from '../shortcuts';
 import { playIsActive, type PlayState } from './play';
-import { unionRects, elementChildrenOf, elementParents, findPageElement } from './elementGeometry';
+import { elementChildrenOf, elementParents, findPageElement } from './elementGeometry';
 import { ElementEntry, ClipboardEntry, PasteTarget, LinkDecision, Drag, CanvasActionOptions, isElementTarget } from './interactionTypes';
 
 type Context = {
+  editProject: ProjectCanvasProps['editProject'];
   createBoundary: ProjectCanvasProps['createBoundary'];
   drag: { current: Drag | null; };
   cancelDrag: () => void;
@@ -37,7 +38,7 @@ type Context = {
   project: Project;
   selectTargets: (targets: { pageId: string; elementId: string; sizeId?: string | null; }[]) => void;
   pageFor: (pageId: string, sizeId?: string | null) => Page | null;
-  elementEntries: (targets: CanvasTarget[]) => ElementEntry[];
+  elementEntries: (targets: CanvasTarget[], project?: Project) => ElementEntry[];
   moveElements: (moves: ElementMove[]) => Promise<unknown> | void;
   copiedStyle: import("react").RefObject<import("../types").ElementStyle | null>;
   updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void;
@@ -100,30 +101,32 @@ export function createKeyboardActions(context: () => Context) {
   }
 
   function arrangeElements(operation: ArrangeOperation) {
-    const { elementEntries, selection, project, moveElements } = context();
-    const entries = elementEntries(selection);
-    if (!entries.length) return;
-    const moves: ElementMove[] = [];
-    const groups = new Map<string, ElementEntry[]>();
-    for (const entry of entries) {
-      const key = `${entry.pageId}:${entry.parentId}`;
-      groups.set(key, [...(groups.get(key) ?? []), entry]);
-    }
-    for (const group of groups.values()) {
-      const first = group[0];
-      const siblings = elementChildrenOf(project, first.pageId, first.parentId);
-      const order = arrangeSiblingOrder(siblings.map(element => element.id), group.map(entry => entry.id), operation);
-      // Native removes all moved layers before inserting them. Insert the selected
-      // layers at their final indices in ascending order; other siblings stay untouched.
-      if (order.every((id, index) => id === siblings[index].id)) continue;
-      for (const [index, id] of order.entries()) {
-        const entry = group.find(entry => entry.id === id);
-        if (!entry) continue;
-        moves.push({ id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index, rect: entry.rect,
-          size_id: entry.allSizes ? null : entry.sizeId, all_sizes: entry.allSizes });
+    const { elementEntries, selection, editProject } = context();
+    void editProject(project => {
+      const entries = elementEntries(selection, project);
+      if (!entries.length) return null;
+      const moves: ElementMove[] = [];
+      const groups = new Map<string, ElementEntry[]>();
+      for (const entry of entries) {
+        const key = `${entry.pageId}:${entry.parentId}`;
+        groups.set(key, [...(groups.get(key) ?? []), entry]);
       }
-    }
-    if (moves.length) void Promise.resolve(moveElements(moves)).catch(() => {});
+      for (const group of groups.values()) {
+        const first = group[0];
+        const siblings = elementChildrenOf(project, first.pageId, first.parentId);
+        const order = arrangeSiblingOrder(siblings.map(element => element.id), group.map(entry => entry.id), operation);
+        // Native removes all moved layers before inserting them. Insert the selected
+        // layers at their final indices in ascending order; other siblings stay untouched.
+        if (order.every((id, index) => id === siblings[index].id)) continue;
+        for (const [index, id] of order.entries()) {
+          const entry = group.find(entry => entry.id === id);
+          if (!entry) continue;
+          moves.push({ id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index, rect: entry.rect,
+            size_id: entry.allSizes ? null : entry.sizeId, all_sizes: entry.allSizes });
+        }
+      }
+      return moves.length ? { type: 'move_elements', moves } : null;
+    }).catch(() => {});
   }
 
   function copyStyle() {
@@ -163,43 +166,72 @@ export function createKeyboardActions(context: () => Context) {
   }
 
   function alignSelection(edge: SelectionAlign) {
-    const { elementEntries, selection, boundaryRect, moveElements } = context();
-    const entries = elementEntries(selection);
-    if (!entries.length) return;
-    const groups = new Map<string, ElementEntry[]>();
-    for (const entry of entries) {
-      const key = `${entry.pageId}\u0000${entry.allSizes ? '*' : entry.sizeId}`;
-      const group = groups.get(key);
-      if (group) group.push(entry); else groups.set(key, [entry]);
+    const { elementEntries, selection, boundaryRect, editProject } = context();
+    void editProject(project => {
+      const entries = elementEntries(selection, project);
+      const moves = alignSelectionMoves(entries, edge, entry => {
+        const parent = entry.parentId ? elementEntries([{ kind: 'element', pageId: entry.pageId,
+          elementId: entry.parentId, sizeId: entry.allSizes ? null : entry.sizeId }], project)[0] : null;
+        return parent?.world ?? boundaryRect(entry.sizeId) ?? entry.world;
+      });
+      return moves.length ? { type: 'move_elements', moves } : null;
+    }).catch(() => {});
+  }
+
+  function distributeSelection(direction: SelectionDistribution) {
+    const { elementEntries, selection, editProject } = context();
+    void editProject(project => {
+      const moves = distributeSelectionMoves(elementEntries(selection, project), direction);
+      return moves.length ? { type: 'move_elements', moves } : null;
+    }).catch(() => {});
+  }
+
+  function selectionStyleAction(action: ShortcutAction) {
+    const { selection, editing, editProject } = context();
+    const targets = editing ? [{ kind: 'element' as const, ...editing, sizeId: editing.sizeId }] : selection.filter(isElementTarget);
+    for (const pageId of new Set(targets.map(target => target.pageId))) {
+      void editProject(project => {
+        const patches: ElementPatch[] = [];
+        for (const target of targets.filter(target => target.pageId === pageId)) {
+          const element = findPageElement(project, pageId, target.elementId, target.sizeId);
+          if (!element) continue;
+          const scope = target.sizeId === null ? { all_sizes: true } : { size_id: target.sizeId };
+          if (action === 'toggleHidden') patches.push({ id: element.id, visible: !element.visible, ...scope });
+          else if (action === 'toggleLocked') patches.push({ id: element.id, locked: !element.locked, ...scope });
+          else {
+            const style = structuredClone(element.style);
+            if (action === 'flipHorizontal') style.flipX = !style.flipX;
+            else if (action === 'flipVertical') style.flipY = !style.flipY;
+            else if (action.startsWith('opacity')) style.opacity = Number(action.slice(7)) / 100;
+            else {
+              if (element.kind !== 'text') continue;
+              if (action === 'bold') style.textStyle.weight = style.textStyle.weight >= 700 ? 400 : 700;
+              else if (action === 'italic') style.textStyle.italic = !style.textStyle.italic;
+              else style.textStyle.size = Math.min(512, Math.max(1, style.textStyle.size + (action === 'fontSizeUp' ? 1 : -1)));
+              style.references = { ...style.references, text: null };
+            }
+            patches.push({ id: element.id, style, ...scope });
+          }
+        }
+        return patches.length ? { type: 'update_elements', page_id: pageId, patches } : null;
+      }).catch(() => {});
     }
-    const moves: ElementMove[] = [];
-    for (const group of groups.values()) {
-      let box = unionRects(group.map(entry => entry.world));
-      if (group.length === 1) {
-        const only = group[0];
-        const parent = only.parentId
-          ? elementEntries([{ kind: 'element', pageId: only.pageId, elementId: only.parentId, sizeId: only.allSizes ? null : only.sizeId }])[0]
-          : undefined;
-        const boundary = boundaryRect(only.sizeId);
-        box = parent?.world ?? boundary ?? only.world;
-      }
-      for (const entry of group) {
-        let dx = 0; let dy = 0;
-        if (edge === 'left') dx = box.x - entry.world.x;
-        else if (edge === 'centre') dx = box.x + (box.width - entry.world.width) / 2 - entry.world.x;
-        else if (edge === 'right') dx = box.x + box.width - entry.world.width - entry.world.x;
-        else if (edge === 'top') dy = box.y - entry.world.y;
-        else if (edge === 'middle') dy = box.y + (box.height - entry.world.height) / 2 - entry.world.y;
-        else if (edge === 'bottom') dy = box.y + box.height - entry.world.height - entry.world.y;
-        if (!dx && !dy) continue;
-        moves.push({
-          id: entry.id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index: entry.index,
-          rect: { ...entry.rect, x: Math.round(entry.rect.x + dx), y: Math.round(entry.rect.y + dy) },
-          size_id: entry.allSizes ? null : entry.sizeId, all_sizes: entry.allSizes,
-        });
-      }
-    }
-    if (moves.length) void Promise.resolve(moveElements(moves)).catch(() => {});
+  }
+
+  function stackSelection() {
+    const { selection, editProject, selectTargets } = context();
+    const targets = selection.filter(isElementTarget);
+    if (!targets.length || targets.some(target => target.pageId !== targets[0].pageId)) return;
+    const pageId = targets[0].pageId;
+    let before = new Set<string>();
+    void editProject(project => {
+      before = new Set(elementChildrenOf(project, pageId, elementParents(project, pageId, targets[0].elementId).at(-1) ?? null).map(element => element.id));
+      return { type: 'stack_elements', page_id: pageId, ids: targets.map(target => target.elementId) };
+    }).then(workspace => {
+      const parentId = elementParents(workspace.project!, pageId, targets[0].elementId).at(-1);
+      const parent = parentId ? findPageElement(workspace.project!, pageId, parentId) : null;
+      if (parent && !before.has(parent.id)) selectTargets([{ pageId, elementId: parent.id, sizeId: targets[0].sizeId }]);
+    }).catch(() => {});
   }
 
   function setSelectionFill(value: string) {
@@ -283,15 +315,14 @@ export function createKeyboardActions(context: () => Context) {
   }
 
   function nudgeElements(dx: number, dy: number) {
-    const { elementEntries, selection, rememberRepeatMove, moveElements } = context();
+    const { elementEntries, selection, rememberRepeatMove, editProject } = context();
     const entries = elementEntries(selection);
     if (!entries.length) return;
     rememberRepeatMove(entries, { x: dx, y: dy });
-    void Promise.resolve(moveElements(entries.map(entry => ({
-      id: entry.id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index: entry.index,
-      rect: { ...entry.rect, x: entry.rect.x + dx, y: entry.rect.y + dy },
+    void editProject({ type: 'nudge_elements', dx, dy, moves: entries.map(entry => ({
+      id: entry.id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index: entry.index, rect: entry.rect,
       size_id: entry.allSizes ? null : entry.sizeId, all_sizes: entry.allSizes,
-    })))).catch(() => {});
+    })) }).catch(() => {});
   }
 
   function focusElement(direction: 'child' | 'parent') {
@@ -300,11 +331,11 @@ export function createKeyboardActions(context: () => Context) {
     if (!target) return;
     if (direction === 'child') {
       const children = elementChildrenOf(project, target.pageId, target.elementId);
-      if (children.length) selectTargets([{ pageId: target.pageId, elementId: children[0].id }]);
+      if (children.length) selectTargets([{ pageId: target.pageId, elementId: children[children.length - 1].id, sizeId: target.sizeId }]);
       return;
     }
     const parents = elementParents(project, target.pageId, target.elementId);
-    if (parents.length) selectTargets([{ pageId: target.pageId, elementId: parents.at(-1)! }]);
+    if (parents.length) selectTargets([{ pageId: target.pageId, elementId: parents.at(-1)!, sizeId: target.sizeId }]);
     else selectBoundary(target.pageId, target.sizeId);
   }
 
@@ -312,6 +343,10 @@ export function createKeyboardActions(context: () => Context) {
     const { selection, project, focused, clipboard, pasteTarget, copiedStyle } = context();
     const elements = selection.filter(isElementTarget);
     const views = project.views ?? [];
+    if (action.startsWith('opacity') || action.startsWith('flip') || action.startsWith('align') || action === 'toggleHidden' || action === 'toggleLocked' || action === 'stack') return elements.length > 0;
+    if (action === 'distributeHorizontal' || action === 'distributeVertical') return elements.length >= 3;
+    if (action === 'bold' || action === 'italic') return !!context().editing;
+    if (action === 'fontSizeUp' || action === 'fontSizeDown') return !context().editing && elements.some(target => findPageElement(project, target.pageId, target.elementId)?.kind === 'text');
     switch (action) {
       case 'requestTool': case 'selectAll': case 'minimap': case 'saveView': return true;
       case 'goToView': return views.length > 0;
@@ -342,6 +377,23 @@ export function createKeyboardActions(context: () => Context) {
   function runCanvasAction(action: ShortcutAction, options: CanvasActionOptions = {}): boolean {
     const { selection, focused, deleteBoundary, focusedSize, removeSelection, startRequestOnSelection, onTool, startRequestFromShape, copyElements, clipboard, pasteElements, duplicateElements, copiedStyle, setMinimapPreference, minimapVisible, saveView, currentCamera, project, goToView } = context();
     const elements = selection.filter(isElementTarget);
+    if (action.startsWith('align')) {
+      if (!elements.length) return false;
+      const edges: Record<string, SelectionAlign> = { alignLeft: 'left', alignCentre: 'centre', alignRight: 'right', alignTop: 'top', alignMiddle: 'middle', alignBottom: 'bottom' };
+      alignSelection(edges[action]); return true;
+    }
+    if (action === 'distributeHorizontal' || action === 'distributeVertical') {
+      if (elements.length < 3) return false;
+      distributeSelection(action === 'distributeHorizontal' ? 'horizontal' : 'vertical'); return true;
+    }
+    if (action.startsWith('opacity') || action.startsWith('flip') || ['toggleHidden', 'toggleLocked', 'bold', 'italic', 'fontSizeUp', 'fontSizeDown'].includes(action)) {
+      if (!canRunCanvasAction(action)) return false;
+      selectionStyleAction(action); return true;
+    }
+    if (action === 'stack') {
+      if (!elements.length) return false;
+      stackSelection(); return true;
+    }
     switch (action) {
       case 'delete': {
         if (!selection.length) { if (focused) deleteBoundary(focused, focusedSize); return true; }
@@ -467,7 +519,7 @@ export function createKeyboardActions(context: () => Context) {
 
   return {
     escapeCanvas, selectAllSiblings, arrangeElements, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
-    alignSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
+    alignSelection, distributeSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
     groupSelection, ungroupSelection, nudgeElements, focusElement, canRunCanvasAction, runCanvasAction,
     keyDown,
   };
