@@ -415,6 +415,15 @@
 .props-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--props-row); }
 .props-row { display: flex; align-items: center; gap: var(--props-row); min-width: 0; }
 .props-input { width: 100%; height: var(--props-field); min-height: var(--props-field); padding: 0 var(--space-3); }
+/* Font family: a searchable list of bundled and installed faces, with free text. */
+.font-field { position: relative; display: flex; align-items: center; }
+.font-field .props-input { padding-right: 26px; }
+.font-field-toggle { position: absolute; right: 1px; top: 1px; bottom: 1px; display: grid; place-items: center; width: 24px; padding: 0; border: 0; border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: transparent; color: var(--muted); }
+.font-field-toggle:hover:not(:disabled) { background: var(--surface-muted); color: var(--text); }
+.font-field-list { position: absolute; z-index: 40; top: calc(100% + 4px); left: 0; right: 0; max-height: 220px; overflow-y: auto; margin: 0; padding: var(--space-1); list-style: none; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); box-shadow: var(--shadow-2); }
+.font-field-option { overflow: hidden; padding: 5px var(--space-3); border-radius: var(--radius-xs); color: var(--text); font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.font-field-option.is-active, .font-field-option:hover { background: var(--surface-muted); }
+.font-field-empty { padding: 6px var(--space-3); color: var(--muted); font-size: var(--text-xs); }
 .props-num { display: flex; flex-direction: row; align-items: center; gap: var(--space-2); min-width: 0; height: var(--props-field); min-height: var(--props-field); padding: 0 var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); cursor: text; }
 .props-num:hover { border-color: var(--text); }
 .props-num:focus-within { border-color: var(--focus); outline: 2px solid var(--focus); outline-offset: 1px; }
@@ -540,6 +549,8 @@
 .export-panel-note { margin: 0; font-size: var(--text-xs); }
 .dock-warning { margin: 0; color: var(--warning); font-size: var(--text-xs); }
 .export-panel-files { margin: var(--space-1) 0 0; padding-inline-start: var(--space-5); color: var(--muted); font-size: var(--text-xs); }
+/* The export decision stays visible while the rest of the panel scrolls. */
+.export-panel-actions { position: sticky; bottom: 0; z-index: 2; margin: 0 calc(-1 * var(--space-5)); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--border-soft); background: var(--panel-chrome); }
 
 /* Project tabs: one compact tab per open project, with a colour dot and close control. */
 .editor-shell .project-tabs { display: flex; flex: 1 1 auto; align-items: center; gap: 2px; min-width: 0; max-width: none; overflow-x: auto; scrollbar-width: none; }

@@ -58,6 +58,19 @@ fn safe_url(value: Option<&str>) -> String {
     }
 }
 
+/// The address a hyperlink renders: a project boundary becomes its exported file, and an
+/// external address stays as it was typed.
+fn link_href(element: &Element, plan: &ExportPlan) -> String {
+    let target = element.url.as_deref().and_then(|url| {
+        plan.pages
+            .iter()
+            .find(|page| page.path == url && !page.file.is_empty())
+    });
+    target
+        .map(|page| escape(&page.file))
+        .unwrap_or_else(|| safe_url(element.url.as_deref()))
+}
+
 fn markup(
     element: &Element,
     plan: &ExportPlan,
@@ -74,7 +87,13 @@ fn markup(
         out.push_str(&format!("<label class=\"{}\"{}><input type=\"{input_type}\" data-desegnos-id=\"{}\" aria-label=\"{}\">{}</label>\n", class(element.id), pointer_attribute(element.id, markers), element.id, escape(element.name.as_deref().unwrap_or(&element.text)), escape(&element.text)));
         return;
     }
+    // A link target on a text, box or button turns that element into a real anchor.
+    let hyperlink = element.url.is_some()
+        && matches!(element.kind, Box | Text | Button | Link);
     let tag = match &element.kind {
+        Box if hyperlink => "a",
+        Text if hyperlink => "a",
+        Button if hyperlink => "a",
         Box | Group | Ellipse | Line => "div",
         Text => "div",
         Image => "img",
@@ -94,6 +113,9 @@ fn markup(
         element.id
     ));
     out.push_str(&pointer_attribute(element.id, markers));
+    if tag == "a" {
+        out.push_str(&format!(" href=\"{}\"", link_href(element, plan)));
+    }
     let label = escape(
         element
             .name
@@ -111,18 +133,8 @@ fn markup(
                 path.map(|asset| escape(&asset.path)).unwrap_or_default()
             ));
         }
-        Button => out.push_str(" type=\"button\""),
-        Link => {
-            let target = element.url.as_deref().and_then(|url| {
-                plan.pages
-                    .iter()
-                    .find(|page| page.path == url && !page.file.is_empty())
-            });
-            let href = target
-                .map(|page| escape(&page.file))
-                .unwrap_or_else(|| safe_url(element.url.as_deref()));
-            out.push_str(&format!(" href=\"{href}\""));
-        }
+        Button if tag != "a" => out.push_str(" type=\"button\""),
+        Link => {}
         Input { input_type } => {
             let input = serde_json::to_value(input_type).unwrap_or_default();
             out.push_str(&format!(
@@ -259,6 +271,9 @@ fn rules(elements: &[Element], parent: &ElementLayout, rules: &mut BTreeMap<Uuid
             length(text.letter_spacing), match text.align { TextAlign::Left => "left", TextAlign::Center => "center", TextAlign::Right => "right" }));
         if line || matches!(element.kind, ElementKind::Group) {
             css.push_str("background:transparent;border:0;box-shadow:none;");
+        }
+        if matches!(element.kind, ElementKind::Link) || element.url.is_some() {
+            css.push_str("text-decoration:none;cursor:pointer;");
         }
         if control {
             css.push_str("align-items:center;gap:0.4em;");

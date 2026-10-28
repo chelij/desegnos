@@ -681,6 +681,12 @@ export function useProjectCanvas({
   const selectionFill = selectionFills.length === 1 ? selectionFills[0] : '';
   const selectionLinked = selectionEntries.length > 0 && selectionEntries.every(entry => !!entry.element.link);
   const selectionLinkable = selectionEntries.length > 0 && selectionEntries.every(entry => !entry.element.link);
+  // Text, boxes and buttons can carry a hyperlink; the field lives in Properties.
+  const selectionHyperlink = selectionEntries.length === 1
+    && ['text', 'box', 'button'].includes(selectionEntries[0].element.kind);
+  function focusElementLink() {
+    document.querySelector<HTMLInputElement>('[data-field="element-link"]')?.focus({ preventScroll: true });
+  }
   // This size / All sizes appears only for a pure layer selection on one boundary with
   // more than one linked size; the selection itself shows which scope edits use.
   const scopePage = selectedElementTargets.length > 0 && selection.every(target => target.kind === 'element')
@@ -746,7 +752,7 @@ export function useProjectCanvas({
     boundaries, requestDraft, draftArea, selectRequest, movingItems, draftNote, draft, boundaryKind,
     draftElement, marquee, zoomRect, entries, autoLinks, pointerDraft, selectedPointerIds, pointerStates,
     choosePointer, updatePointer, createdPointer, widthPreview, setWidthPreview, selectionScreen, viewSize,
-    selectionFill, selectionLinked, selectionLinkable, selectionScope, setSelectionFill, alignSelection,
+    selectionFill, selectionLinked, selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection,
     setSelectionScope, startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements,
     deleteSelectedLayers, minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer,
     startReattach, selectedElementTargets, startElementResize, editingElement, editingScreen,

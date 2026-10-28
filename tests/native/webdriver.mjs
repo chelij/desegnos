@@ -189,7 +189,7 @@ export class WebDriver {
   }
 
   async toggleGrid() {
-    await this.button('Grid and rulers');
+    await this.button('Grid settings');
     await this.click('//label[normalize-space(.)="Show grid"]/input', 'xpath');
     await this.button('Save grid settings');
   }

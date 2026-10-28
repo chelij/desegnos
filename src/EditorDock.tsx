@@ -357,7 +357,7 @@ export function ReferenceProperties({ item, update, remove, busy }: {
 
 export function ProjectProperties({ project, rename, setGrid, setGridSettings, busy, save }: {
   project: Project; rename: (name: string) => void;
-  setGrid: (enabled: boolean) => void; setGridSettings: (patch: { snap?: boolean; rulers?: boolean }) => void;
+  setGrid: (enabled: boolean) => void; setGridSettings: (patch: { snap?: boolean }) => void;
   busy: boolean; save?: () => void;
 }) {
   return <div className="dock-form">
@@ -366,7 +366,6 @@ export function ProjectProperties({ project, rename, setGrid, setGridSettings, b
     <div className="dock-checks">
       <label className="check-label"><input type="checkbox" checked={project.showGrid} disabled={busy} onChange={event => setGrid(event.target.checked)} />Dot grid</label>
       <label className="check-label"><input type="checkbox" checked={project.gridSettings.snap} disabled={busy} onChange={event => setGridSettings({ snap: event.target.checked })} />Snap</label>
-      <label className="check-label"><input type="checkbox" checked={project.gridSettings.rulers} disabled={busy} onChange={event => setGridSettings({ rulers: event.target.checked })} />Rulers</label>
     </div>
   </div>;
 }
@@ -644,7 +643,7 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
     </LayerGroup>}
     {linked.length > 0 && <LayerGroup section="linked" title="Linked">
       {linked.map(definition => <li key={definition.id} className="dock-linked-row">
-        <span className="dock-tree-select dock-tree-item" title={`Linked element ${definition.name}`}><Icon name="link" size={12} /><span>{definition.name}</span></span>
+        <span className="dock-tree-select dock-tree-item" title={`Linked element ${definition.name}`}><Icon name="linked-copies" size={12} /><span>{definition.name}</span></span>
         <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete linked element ${definition.name}`} title="Delete linked element"
           onClick={() => removeLinked(definition.id)}><Icon name="trash" size={13} /></button>
       </li>)}

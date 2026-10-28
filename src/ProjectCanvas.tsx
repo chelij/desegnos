@@ -32,7 +32,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     openPlaceholder, viewport, inverse, boundaries, requestDraft, draftArea, movingItems, draftNote, draft,
     draftElement, marquee, zoomRect, entries, autoLinks, pointerDraft, selectedPointerIds, choosePointer,
     createdPointer, widthPreview, setWidthPreview, selectionScreen, viewSize, selectionFill, selectionLinked,
-    selectionLinkable, selectionScope, setSelectionFill, alignSelection, setSelectionScope,
+    selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection, setSelectionScope,
     startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements, deleteSelectedLayers,
     minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer, startReattach,
     selectedElementTargets, startElementResize, editingElement, editingScreen, commitEditingText,
@@ -79,9 +79,9 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         onKeyUp={() => setWidthPreview(null)} />;
     })}
     <BoundaryLabels project={project} boundaries={boundaries} moving={moving} draft={draft} draftKind={boundaryKind} focused={focused} selection={selection} camera={camera} openPage={openPage} />
-    {selectionScreen && <SelectionBar screen={selectionScreen} viewWidth={viewSize.width} fill={selectionFill} linked={selectionLinked} linkable={selectionLinkable} scope={selectionScope}
+    {selectionScreen && <SelectionBar screen={selectionScreen} viewWidth={viewSize.width} fill={selectionFill} linked={selectionLinked} linkable={selectionLinkable} hyperlink={selectionHyperlink} scope={selectionScope}
       onFill={setSelectionFill} onAlign={alignSelection} onScope={setSelectionScope} onRequest={() => { startRequestOnSelection(); }}
-      onLink={linkSelection} onUnlink={unlinkSelection} onDuplicate={duplicateElements} onDelete={deleteSelectedLayers} />}
+      onLinkTo={focusElementLink} onLink={linkSelection} onUnlink={unlinkSelection} onDuplicate={duplicateElements} onDelete={deleteSelectedLayers} />}
     {minimapVisible && <Minimap boundaries={boundaries} reference={project.reference} camera={camera} viewSize={viewSize}
       move={next => { stopTransition(); touched.current = true; setCamera(next); }} />}
     <PointerHandles entries={entries} camera={camera} selectedId={selectedPointerId} armed={armedPointer} onStart={startReattach} />

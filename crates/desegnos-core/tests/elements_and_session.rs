@@ -353,7 +353,7 @@ fn linked_copies_resolve_one_definition_and_edit_together() {
     let (project, left, right) = linked_boxes(&project());
     let definition = project.linked.values().next().cloned().unwrap();
     assert_eq!(project.linked.len(), 1);
-    assert_eq!(definition.name, "Linked 1");
+    assert_eq!(definition.name, "Box");
 
     let resolved_left = resolve_element(&project, project.element(left).unwrap().1);
     let resolved_right = resolve_element(&project, project.element(right).unwrap().1);
@@ -485,9 +485,9 @@ fn linking_creates_a_named_definition_when_unnamed() {
     )
     .unwrap();
     let definition = project.linked.values().next().unwrap();
-    assert_eq!(definition.name, "Linked 1");
-    assert_eq!(project.element(left).unwrap().1.name.as_deref(), Some("Linked 1"));
-    assert_eq!(project.element(right).unwrap().1.name.as_deref(), Some("Linked 1"));
+    assert_eq!(definition.name, "Box");
+    assert_eq!(project.element(left).unwrap().1.name, None);
+    assert_eq!(project.element(right).unwrap().1.name, None);
 }
 
 // ---------------------------------------------------------------------------

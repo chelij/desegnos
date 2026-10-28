@@ -118,6 +118,7 @@ impl ElementUpdate {
             visible: self.visible,
             locked: self.locked,
             name: self.name.map(Some),
+            linked_name: None,
             input_type: self.input_type,
             options: self.options,
             language: self.language,

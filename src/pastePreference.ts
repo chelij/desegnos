@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-// How Ctrl/Cmd+V and Ctrl/Cmd+D paste. Unset means the inline choice is always shown.
+// How Ctrl/Cmd+V and Ctrl/Cmd+D paste. Unset means Unlinked; the explicit choice
+// shortcut (Ctrl/Cmd+Shift+V) always asks.
 export type PasteMode = 'linked' | 'unlinked';
 const KEY = 'desegnos.paste-mode';
 const EVENT = 'desegnos-paste-mode';

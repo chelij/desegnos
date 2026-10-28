@@ -91,6 +91,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             fonts::resolve_canvas_font,
+            fonts::list_canvas_fonts,
             fonts::load_canvas_font,
             request_zip::unpack_request_zip,
             export::prepare_export,

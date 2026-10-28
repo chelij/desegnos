@@ -1319,6 +1319,34 @@ pub struct ResolvedFont {
     pub italic: bool,
 }
 
+/// Family names the editor can offer: the bundled face first, then installed families.
+/// Generic CSS families resolve through `resolve_font` and are not repeated here.
+pub fn font_families() -> Vec<String> {
+    use std::sync::{Mutex, OnceLock};
+    static FAMILIES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    let families = FAMILIES.get_or_init(|| {
+        let mut database = Database::new();
+        database.load_system_fonts();
+        let mut names: Vec<String> = database
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
+            .filter(|name| {
+                let name = name.trim();
+                !name.is_empty() && !name.eq_ignore_ascii_case("Archivo")
+            })
+            .collect();
+        names.sort_by_key(|name| name.to_lowercase());
+        names.dedup_by(|first, second| first.eq_ignore_ascii_case(second));
+        let mut result = vec!["Archivo".to_string()];
+        result.extend(names);
+        Mutex::new(result)
+    });
+    families
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
 /// Resolve a CSS family list with the same database and fallback policy as the renderer.
 pub fn resolve_font(family: &str, weight: u16, italic: bool) -> ResolvedFont {
     use std::sync::{Mutex, OnceLock};

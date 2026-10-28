@@ -535,11 +535,7 @@ impl Element {
                     .as_deref()
                     .ok_or_else(|| Error("This link needs an address.".into()))?;
                 // A link may point at another boundary in this project, stored as its page path.
-                if url.starts_with('/') {
-                    crate::model::validate_path(url)?;
-                } else {
-                    validate_http_url(url)?;
-                }
+                validate_element_url(url)?;
             }
             ElementKind::Video | ElementKind::Audio | ElementKind::Embed => {
                 let url = self
@@ -574,7 +570,7 @@ impl Element {
             ensure(self.layout.is_free(), "Only a box lays out its children.")?;
         }
         if let Some(url) = &self.url {
-            validate_http_url(url)?;
+            validate_element_url(url)?;
         }
         if let ElementKind::Select { options } = &self.kind {
             ensure(
@@ -693,6 +689,15 @@ fn validate_element_rect(rect: &Rect) -> Result<()> {
         (rect.x + rect.width).is_finite() && (rect.y + rect.height).is_finite(),
         "Element endpoints must be finite.",
     )
+}
+
+/// A hyperlink target: an external web address, or a path to a boundary in this project.
+fn validate_element_url(url: &str) -> Result<()> {
+    if url.starts_with('/') {
+        crate::model::validate_path(url)
+    } else {
+        validate_http_url(url)
+    }
 }
 
 fn validate_http_url(url: &str) -> Result<()> {
@@ -940,7 +945,8 @@ fn resolved_instance(instance: &Element, definition: &LinkedDefinition) -> Eleme
     // The copy's own size overrides apply after resolution, exactly like a plain layer's.
     concrete.overrides = instance.overrides.clone();
     concrete.link = None;
-    concrete.name = Some(definition.name.clone());
+    // The copy keeps its own name; the shared definition names the linked group elsewhere.
+    concrete.name = instance.name.clone();
     let mut path = Vec::new();
     assign_nested_ids(instance.id, &mut concrete, &mut path);
     concrete
@@ -1399,18 +1405,20 @@ impl Project {
             patch.image = Some(Some(picture));
         }
         if location.path.is_empty() {
-            // A copy's name is the linked name every copy shares; clearing it keeps the link.
-            let renamed = patch
-                .name
-                .take()
-                .flatten()
-                .map(|name| name.trim().to_string())
-                .filter(|name| !name.is_empty());
-            if let Some(name) = renamed {
-                self.rename_definition(location.definition, &name)?;
-                if let Some(element) = self.element_mut(location.instance) {
-                    element.name = Some(name);
+            // A copy's own name stays on the layer; the linked name renames the shared group.
+            if let Some(name) = patch.name.take() {
+                let name = name
+                    .map(|name| name.trim().to_string())
+                    .filter(|name| !name.is_empty());
+                if let Some(name) = &name {
+                    validate_text(name, "Layer name", MAX_ELEMENT_NAME_CHARS, false)?;
                 }
+                if let Some(element) = self.element_mut(location.instance) {
+                    element.name = name;
+                }
+            }
+            if let Some(name) = patch.linked_name.take().flatten() {
+                self.rename_definition(location.definition, &name)?;
             }
             if let Some(rect) = patch.rect.take() {
                 validate_element_rect(&rect)?;
@@ -1491,7 +1499,8 @@ impl Project {
         Ok(node)
     }
 
-    /// Making a layer linked: its tree becomes the shared definition under the linked name.
+    /// Making a layer linked: its tree becomes the shared definition, while the layer keeps
+    /// its own name.
     fn promote_to_linked(&mut self, element_id: Uuid, name: String) -> Result<()> {
         let content = self
             .element(element_id)
@@ -1510,7 +1519,6 @@ impl Project {
             .element_mut(element_id)
             .ok_or_else(|| Error("This layer no longer exists.".into()))?;
         element.link = Some(definition);
-        element.name = Some(name);
         element.children.clear();
         Ok(())
     }
@@ -1559,7 +1567,6 @@ impl Project {
             .element(instance)
             .map(|(_, element)| resolve_element(self, element))
             .ok_or_else(|| Error("This linked layer no longer exists.".into()))?;
-        concrete.name = None;
         concrete.link = None;
         let element = self
             .element_mut(instance)
@@ -1568,8 +1575,8 @@ impl Project {
         Ok(())
     }
 
-    /// Make one layer linked, or join two or more under one definition. A single layer's own
-    /// name labels the definition; otherwise the first unused name is taken.
+    /// Make one layer linked, or join two or more under one definition. The definition takes
+    /// the layer's label as its name when it is free; every layer keeps its own name.
     pub(crate) fn link_elements(&mut self, ids: Vec<Uuid>, source_id: Option<Uuid>) -> Result<()> {
         ensure(!ids.is_empty(), "Choose a layer to link.")?;
         let mut unique = BTreeSet::new();
@@ -1586,7 +1593,7 @@ impl Project {
             contents.push((*id, resolve_element(self, element)));
         }
         if contents.len() == 1 {
-            let name = self.unique_link_name(contents[0].1.name.as_deref());
+            let name = self.unique_link_name(Some(&contents[0].1.label()));
             return self.promote_to_linked(contents[0].0, name);
         }
         let winner = source_id
@@ -1600,7 +1607,7 @@ impl Project {
                 "Different structure, can't link",
             )?;
         }
-        let name = self.unique_link_name(winner.name.as_deref());
+        let name = self.unique_link_name(Some(&winner.label()));
         let definition = Uuid::new_v4();
         self.linked.insert(
             definition,
@@ -1613,7 +1620,6 @@ impl Project {
         for (id, _) in &contents {
             if let Some(element) = self.element_mut(*id) {
                 element.link = Some(definition);
-                element.name = Some(name.clone());
                 element.children.clear();
             }
         }
@@ -1686,7 +1692,7 @@ impl Project {
                         .element(item.source_id)
                         .map(|(_, element)| resolve_element(self, element))
                         .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                    let name = self.unique_link_name(content.name.as_deref());
+                    let name = self.unique_link_name(Some(&content.label()));
                     let definition = Uuid::new_v4();
                     self.linked.insert(
                         definition,
@@ -1698,7 +1704,6 @@ impl Project {
                     );
                     if let Some(element) = self.element_mut(item.source_id) {
                         element.link = Some(definition);
-                        element.name = Some(name);
                         element.children.clear();
                     }
                     definition
@@ -2013,6 +2018,13 @@ pub struct ElementPatch {
         skip_serializing_if = "Option::is_none"
     )]
     pub name: Option<Option<String>>,
+    /// Renames the shared linked element a copy belongs to, without renaming the copy itself.
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub linked_name: Option<Option<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_type: Option<InputType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2069,7 +2081,7 @@ impl ElementPatch {
         }
         if let Some(url) = self.url {
             if let Some(url) = &url {
-                validate_http_url(url)?;
+                validate_element_url(url)?;
             }
             element.url = url;
         }
@@ -2093,6 +2105,10 @@ impl ElementPatch {
             }
             element.name = name;
         }
+        ensure(
+            self.linked_name.is_none(),
+            "Only a linked layer names its linked element.",
+        )?;
         if let Some(input_type) = self.input_type {
             match &mut element.kind {
                 ElementKind::Input { input_type: value } => *value = input_type,

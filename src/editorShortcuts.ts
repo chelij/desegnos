@@ -1,6 +1,6 @@
 import { type EditorTool } from './EditorTools';
 import { type ProjectCanvasHandle } from './ProjectCanvas';
-import { type ShortcutAction } from './shortcuts';
+import { viewSlot, type ShortcutAction } from './shortcuts';
 import type { CanvasTemplate, ElementKind, WorkspaceView } from './types';
 import { ActionEvent, NO_ACTION_EVENT } from './editorShared';
 
@@ -19,9 +19,7 @@ type Context = {
   togglePlay: (pageId?: string | null) => void;
   previewSelectedBoundary: () => void;
   openExportPanel: (restore?: boolean) => void;
-  exportDestination: string | null;
   runExport: (previewPageId?: string | null) => Promise<void>;
-  chooseExportDestination: () => Promise<void>;
   travel: (command: 'undo_project' | 'redo_project') => Promise<void>;
   save: (saveAs?: boolean) => Promise<WorkspaceView | null>;
   closeProject: () => Promise<void>;
@@ -29,17 +27,23 @@ type Context = {
 
 export function createEditorShortcuts(context: () => Context) {
   function performAction(action: ShortcutAction, event: ActionEvent = NO_ACTION_EVENT) {
-    const { showStartPage, current, setShowShortcuts, setShowPalette, newUntitled, open, setInsertKind, setInsertSignal, setCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary, openExportPanel, exportDestination, runExport, chooseExportDestination, travel, save, closeProject } = context();
+    const { showStartPage, current, setShowShortcuts, setShowPalette, newUntitled, open, setInsertKind, setInsertSignal, setCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary, openExportPanel, runExport, travel, save, closeProject } = context();
     // The start page has no canvas: project commands wait until a canvas is open again.
     if ((showStartPage || !current.current?.project) && !['new', 'open', 'help', 'commandPalette'].includes(action)) return;
     const project = current.current?.project;
     if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels'].includes(action)) return;
     switch (action) {
-      // The canvas owns these; its listener runs first and prevents the default.
-      case 'copy': case 'cut': case 'paste': case 'pasteChoice': case 'duplicate':
+      // These always act on the canvas selection, wherever focus sits in the editor.
+      // The canvas' own listener may have run first; its preventDefault keeps this a single run.
+      case 'copy': case 'cut': case 'pasteChoice': case 'duplicate':
       case 'link': case 'unlink': case 'group': case 'ungroup': case 'forward': case 'backward': case 'front': case 'back':
       case 'selectAll': case 'selectChild': case 'selectParent': case 'nudge': case 'nudgeFar': case 'delete':
-      case 'copyStyle': case 'pasteStyle': case 'paintFormat': case 'minimap': case 'saveView': case 'goToView':
+      case 'copyStyle': case 'pasteStyle': case 'paintFormat': case 'minimap': case 'saveView': case 'goToView': {
+        if (canvasRef.current?.runCanvasAction(action, { key: event.key, slot: viewSlot(event) ?? undefined, repeat: event.repeat })) event.preventDefault();
+        return;
+      }
+      // Plain paste stays with the paste event, which also carries content from other apps.
+      case 'paste':
         return;
       case 'help': event.preventDefault(); setShowShortcuts(true); return;
       case 'commandPalette': event.preventDefault(); setShowPalette(true); return;
@@ -78,7 +82,8 @@ export function createEditorShortcuts(context: () => Context) {
       case 'export':
         if (!project) return;
         event.preventDefault(); openExportPanel();
-        if (exportDestination) void runExport(); else void chooseExportDestination();
+        // runExport resolves the remembered or default folder, so this is one click.
+        void runExport();
         return;
       case 'undo': case 'redo':
         if (!project) return;

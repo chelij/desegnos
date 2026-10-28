@@ -46,7 +46,14 @@ pub struct GridSettings {
     pub spacing: f64,
     pub unit: GridUnit,
     pub snap: bool,
+    /// Legacy ruler switch. The editor has no ruler UI; the field stays on the wire so
+    /// projects written by earlier versions keep loading.
+    #[serde(default = "default_rulers")]
     pub rulers: bool,
+}
+
+fn default_rulers() -> bool {
+    true
 }
 
 impl Default for GridSettings {

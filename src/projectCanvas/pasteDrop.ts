@@ -131,13 +131,13 @@ export function createPasteDrop(context: () => Context) {
     setLinkChoice(null);
     const target = pasteTarget();
     if (!target) return;
-    const mode = alwaysAsk ? null : pasteMode ?? pasteDefault();
-    if (mode) {
+    const preferred = pasteMode ?? pasteDefault() ?? 'unlinked';
+    if (!alwaysAsk) {
       pasteCount.current += 1;
-      pasteEntries(clipboard.current, mode, target, { x: 16 * pasteCount.current, y: 16 * pasteCount.current });
+      pasteEntries(clipboard.current, preferred, target, { x: 16 * pasteCount.current, y: 16 * pasteCount.current });
       return;
     }
-    setPasteChoice({ target, offset: 16 * (pasteCount.current + 1), value: 'linked', useDefault: false, screen: pasteScreen() });
+    setPasteChoice({ target, offset: 16 * (pasteCount.current + 1), value: preferred, useDefault: false, screen: pasteScreen() });
   }
 
   function confirmPaste() {

@@ -5,7 +5,7 @@ import { useExportJobs } from '../exportJobs/useExportJobs';
 import { createEditorShortcuts } from '../editorShortcuts';
 import {
   Theme, Replacement, UntitledSaveRequest, Confirmation, errorMessage, sizeName, sizeBoundaries, initialZoom,
-  readRulerUnit, readTheme, ownerPageId, selectionBounds, menuPaletteCommands, canvasPageName,
+  readTheme, ownerPageId, selectionBounds, menuPaletteCommands, canvasPageName,
   suggestedPagePath,
 } from '../editorShared';
 import { readRequestAttachments } from '../requestAttachments';
@@ -30,7 +30,6 @@ import {
   type CanvasCamera, type CanvasTarget, type ReferenceMove,
 } from '../projectCanvasGeometry';
 import { findPageElement } from '../projectCanvas/elementGeometry';
-import { setPasteDefault, usePasteDefault } from '../pastePreference';
 import { elementPath, findElementIn } from '../projectCanvas/elementGeometry';
 import { usePanelState } from '../EditorDock';
 import { announcedDraftCount, announcesStatus } from '../generationSession.js';
@@ -57,7 +56,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   } = createEditorShortcuts(() => ({
     showStartPage, current, setShowShortcuts, setShowPalette, newUntitled, open, setInsertKind,
     setInsertSignal, setCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary,
-    openExportPanel, exportDestination, runExport, chooseExportDestination, travel, save, closeProject,
+    openExportPanel, runExport, travel, save, closeProject,
   }));
 
   const [closeRequest, setCloseRequest] = useState<{ message: string; resolve: (answer: boolean) => void } | null>(null);
@@ -91,7 +90,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [canvasZoom, setCanvasZoom] = useState(1);
   const canvasRef = useRef<ProjectCanvasHandle>(null);
   const [panels, panelActions] = usePanelState();
-  const [rulerUnit, setRulerUnit] = useState<'pixels' | 'percent'>(readRulerUnit);
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>([]);
   const [appSettings, setAppSettings] = useState<AppSettingsView>({ showStartPage: true });
   const [showStartPage, setShowStartPage] = useState(!initialView);
@@ -112,7 +110,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [showLog, setShowLog] = useState(false);
   const [logFocus, setLogFocus] = useState(0);
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
-  const pasteMode = usePasteDefault();
   const [showHistory, setShowHistory] = useState(false);
   const [historyEpoch, setHistoryEpoch] = useState(0);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -176,12 +173,13 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }, []);
   useEffect(() => { void refreshRecent().catch(error => setError(errorMessage(error))); }, [refreshRecent]);
   useEffect(() => { void native<ProjectLocationView>('get_project_location').then(setProjectLocation).catch(error => setError(errorMessage(error))); }, []);
+  // The export panel belongs to an open canvas; Home and project switches close it.
+  useEffect(() => { if (showStartPage) setShowExport(false); }, [showStartPage]);
   async function changeProjectLocation(reset: boolean) {
     const path = reset ? null : await native<string | null>('pick_project_location');
     if (!reset && !path) return;
     setProjectLocation(await native<ProjectLocationView>('set_project_location', { path }));
   }
-  useEffect(() => { try { localStorage.setItem('desegnos.ruler-unit', rulerUnit); } catch {} }, [rulerUnit]);
 
   const createCanvasBoundary = useCallback(async (bounds: Rect, kind: BoundaryKind, moves: BoundaryMove[], reference: ReferenceMove[]) => {
     const added = await mutate(project => {
@@ -400,7 +398,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }, [mutate]);
   const renameProject = useCallback((name: string) => { void mutate({ type: 'rename_project', name }).catch(() => {}); }, [mutate]);
   const showDotGrid = useCallback((enabled: boolean) => { void mutate({ type: 'set_grid', enabled }).catch(() => {}); }, [mutate]);
-  const changeGridFlags = useCallback((patch: Partial<Pick<GridSettings, 'snap' | 'rulers'>>) => {
+  const changeGridFlags = useCallback((patch: Partial<Pick<GridSettings, 'snap'>>) => {
     void mutate(project => ({ type: 'set_grid_settings', settings: { ...project.gridSettings, ...patch } })).catch(() => {});
   }, [mutate]);
   const load = useCallback(async () => {
@@ -765,7 +763,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       { id: 'preferences-divider', label: '', separator: true },
       { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
       { id: 'project-location', label: 'Default project location', action: () => setShowProjectLocation(true) },
-      { id: 'paste-default', label: 'Ask on paste', checked: !pasteMode, action: () => setPasteDefault(null) },
     ] },
     { id: 'check-updates', label: 'Check for updates…', disabled: checkingUpdates, action: () => { void checkForUpdates(); } },
     { id: 'help', label: 'Keyboard shortcuts', shortcut: shortcutLabel('help'), action: () => setShowShortcuts(true) },
@@ -894,7 +891,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     showShortcuts, setShowShortcuts, recovery, showProjectLocation, setShowProjectLocation,
     changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext, startWebsiteImport,
     showWebsiteImport, setShowWebsiteImport, setCanvasSelection, setCanvasFocus, showStyleGuide,
-    setShowStyleGuide, showNotes, changeBrief, rulerUnit, setRulerUnit, showRename, setShowRename,
+    setShowStyleGuide, showNotes, changeBrief, showRename, setShowRename,
     saveConflict, chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
     refreshAiSettings, updateAiSettings, aiPollingError,
   };

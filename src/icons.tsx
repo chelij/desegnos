@@ -9,7 +9,7 @@ export type IconName =
   | 'align-left' | 'align-center' | 'align-right' | 'text-color' | 'fill-color'
   | 'link' | 'text' | 'info' | 'properties' | 'arrange-front' | 'arrange-forward'
   | 'arrange-backward' | 'arrange-back' | 'monitor' | 'tablet' | 'phone' | 'canvas'
-  | 'rectangle' | 'ellipse' | 'line' | 'image' | 'video' | 'audio' | 'code' | 'note' | 'group'
+  | 'rectangle' | 'ellipse' | 'line' | 'image' | 'video' | 'audio' | 'code' | 'note' | 'group' | 'linked-copies'
   | 'line-weight' | 'corner-radius'
   | 'eye' | 'eye-off' | 'lock' | 'unlock' | 'insert' | 'history' | 'pin' | 'home' | 'folder'
   | 'redo' | 'play' | 'download';
@@ -72,6 +72,7 @@ const paths: Record<IconName, ReactNode> = {
   code: <><path d="M6 4.2 2.4 8 6 11.8M10 4.2 13.6 8 10 11.8" /></>,
   note: <><path d="M2.6 2.8h10.8v7.6l-3 3H2.6Z" /><path d="M13.4 10.4h-3v3" /></>,
   group: <><rect x="2" y="3.2" width="8.2" height="8.2" rx="1" /><path d="M5.8 12.8h8.2V4.6" /></>,
+  'linked-copies': <><rect x="1.8" y="1.8" width="8" height="8" rx="1" /><rect x="6.2" y="6.2" width="8" height="8" rx="1" /></>,
   eye: <><path d="M1.8 8S4.1 4.2 8 4.2 14.2 8 14.2 8 11.9 11.8 8 11.8 1.8 8 1.8 8Z" /><circle cx="8" cy="8" r="1.8" /></>,
   'eye-off': <><path d="M2.4 2.4 13.6 13.6" /><path d="M6.1 4.6A7 7 0 0 1 8 4.2c3.9 0 6.2 3.8 6.2 3.8a12 12 0 0 1-2.1 2.6M4.2 5.7A12.8 12.8 0 0 0 1.8 8S4.1 11.8 8 11.8a6.9 6.9 0 0 0 2.2-.4" /></>,
   lock: <><rect x="3.4" y="7" width="9.2" height="6.2" rx="1" /><path d="M5.6 7V5.4a2.4 2.4 0 0 1 4.8 0V7" /></>,
