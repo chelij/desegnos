@@ -1,4 +1,4 @@
-import type { Element, ElementKind, ElementLayout, ElementStyle, InputType, Page, Project, Rect } from '../types';
+import type { Appearance, Element, ElementKind, ElementLayout, ElementStyle, InputType, Page, Project, Rect } from '../types';
 import type { Point } from '../projectCanvasGeometry';
 import { resolveElements } from './links';
 import { resolveForSize } from './sizes';
@@ -21,6 +21,15 @@ export type ElementPathEntry = {
 export type ElementLocation = { pageId: string; parentId: string | null; index: number; element: Element };
 
 const TEXT_COLOUR = '#1a1a1a';
+const DARK_TEXT_COLOUR = '#f2f2f2';
+
+/** New layers on a dark boundary start with light text and lines so they stay readable. */
+export function forAppearance(element: Element, appearance: Appearance): Element {
+  if (appearance !== 'dark') return element;
+  const swap = (colour: string | null) => colour === TEXT_COLOUR ? DARK_TEXT_COLOUR : colour;
+  const style = element.style;
+  return { ...element, style: { ...style, stroke: { ...style.stroke, color: swap(style.stroke.color) }, textStyle: { ...style.textStyle, color: swap(style.textStyle.color)! } } };
+}
 const MUTED_COLOUR = '#6b6b6b';
 const BORDER_COLOUR = '#d2d2d2';
 const SURFACE_COLOUR = '#ffffff';

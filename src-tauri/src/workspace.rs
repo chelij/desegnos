@@ -1363,7 +1363,7 @@ impl Workspace {
         let file_name = Path::new(&path)
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "website.desegnos".into());
+            .unwrap_or_else(|| "project.desegnos".into());
         let different = failure
             .actual
             .as_ref()
@@ -1682,7 +1682,7 @@ pub async fn pick_project_save_path(
             .dialog()
             .file()
             .add_filter(
-                "Desegnos website",
+                "Desegnos project",
                 &desegnos_storage::PROJECT_FILE_EXTENSIONS,
             )
             .set_file_name(suggested);
@@ -1958,7 +1958,7 @@ pub async fn open_project(
             } else {
                 dialog
                     .add_filter(
-                        "Desegnos website",
+                        "Desegnos project",
                         &desegnos_storage::PROJECT_FILE_EXTENSIONS,
                     )
                     .blocking_pick_file()
@@ -2004,10 +2004,10 @@ pub async fn save_project(
                 app.dialog()
                     .file()
                     .add_filter(
-                        "Desegnos website",
+                        "Desegnos project",
                         &desegnos_storage::PROJECT_FILE_EXTENSIONS,
                     )
-                    .set_file_name("website.desegnos")
+                    .set_file_name("project.desegnos")
                     .blocking_save_file(),
             )
         })
@@ -2036,7 +2036,7 @@ async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Opt
             app.dialog()
                 .file()
                 .add_filter(
-                    "Desegnos website",
+                    "Desegnos project",
                     &desegnos_storage::PROJECT_FILE_EXTENSIONS,
                 )
                 .set_file_name(suggested)
@@ -2163,7 +2163,7 @@ pub async fn resolve_save_conflict(
                     .destination_path(&pending.destination)?
                     .file_stem()
                     .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "website".into());
+                    .unwrap_or_else(|| "project".into());
                 (
                     state.project()?.clone(),
                     format!("{stem}-copy.desegnos"),

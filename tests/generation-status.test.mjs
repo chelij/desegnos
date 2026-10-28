@@ -14,7 +14,7 @@ try {
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const source = (await readFile(join(temporary, 'Generation.js'), 'utf8'))
     .replace(/^import \{ MenuButton \} from '\.\/Menus';$/m, 'const MenuButton = () => null;')
-    .replace(/^import \{ scopeLabel \} from '\.\/Notes';$/m, "const scopeLabel = () => 'Whole site';")
+    .replace(/^import \{ scopeLabel \} from '\.\/Notes';$/m, "const scopeLabel = () => 'Whole project';")
     .replace(/^import \{ documentKey \} from '\.\/elementTargets';$/m, "const documentKey = () => 'page';")
     .replace(/^import \{ SourceView \} from '\.\/Preview';$/m, 'const SourceView = () => null;')
     .replace(/^import .* from '\.\/Disclosure';$/m, "import { Disclosure } from './Disclosure.js';");

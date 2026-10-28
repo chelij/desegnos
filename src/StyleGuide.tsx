@@ -4,8 +4,8 @@ import { useMemo, useState } from 'react';
 import type { Command, Project } from './types';
 import { Icon } from './icons';
 
-// A visual view of the brand: the colour and font rules the AI follows, values found in the pages,
-// and real samples rendered with the site's own CSS. Choosing a value saves it as a project brief rule.
+// A visual view of the brand: the colour and font rules the AI follows, values found on the canvas,
+// and real samples rendered with the project's own styles. Choosing a value saves it as a project brief rule.
 const COLOUR_ROLES = ['Primary colour', 'Accent colour', 'Text colour', 'Background colour'] as const;
 const FONT_ROLES = ['Heading font', 'Body font'] as const;
 const FONT_CHOICES = [
@@ -82,7 +82,7 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
         <div><strong>{topic}</strong><span>{value ?? 'Not set'}</span>{value && <button type="button" className="link-button" disabled={busy} onClick={() => { void clear(topic); }}>Clear</button>}</div>
       </div>; })}
     </div>
-      {found.colours.length > 0 && <><h4>Used on your pages</h4><div className="sg-found">{found.colours.map(colour => {
+      {found.colours.length > 0 && <><h4>Used in boundaries</h4><div className="sg-found">{found.colours.map(colour => {
         const unset = COLOUR_ROLES.filter(topic => normal(rule(topic)?.value ?? '') !== colour);
         const applied = COLOUR_ROLES.filter(topic => normal(rule(topic)?.value ?? '') === colour).map(topic => topic.toLowerCase());
         // A colour that every role already uses has no change left to apply.
@@ -97,12 +97,12 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
       {FONT_ROLES.map(topic => { const value = rule(topic)?.value ?? ''; const choices = [...new Set([...(value ? [value] : []), ...found.fonts, ...FONT_CHOICES])]; return <label key={topic} className="sg-font">
         <strong>{topic}</strong>
         <select value={value} disabled={busy} onChange={event => { if (event.target.value) void save(topic, event.target.value); else void clear(topic); }}>
-          <option value="">Not set: let the AI choose</option>{choices.map(choice => <option key={choice} value={choice}>{choice.split(',')[0].replace(/"/g, '')}{found.fonts.includes(choice) ? ' · used on your pages' : ''}</option>)}
+          <option value="">Not set: let the AI choose</option>{choices.map(choice => <option key={choice} value={choice}>{choice.split(',')[0].replace(/"/g, '')}{found.fonts.includes(choice) ? ' · used in boundaries' : ''}</option>)}
         </select>
         <span className="sg-font-sample" style={{ fontFamily: value || undefined }}>{topic === 'Heading font' ? 'Heading text' : 'Body text'}</span>
       </label>; })}
     </div></section>
-    <section aria-label="How your site looks now"><h3>How your site looks now</h3>
+    <section aria-label="How your canvas looks now"><h3>How your canvas looks now</h3>
       {found.colours.length || found.fonts.length ? <iframe className="sg-samples" title="Text and button samples using your canvas styles" sandbox="" srcDoc={preview} /> : <p className="field-help">Add elements with colour or text styles to see samples.</p>}
     </section>
     <div className="form-actions"><button type="button" onClick={openBrief}>Open project brief</button></div>

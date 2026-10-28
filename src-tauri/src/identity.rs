@@ -1368,7 +1368,7 @@ impl IdentityService {
             .collect();
         if !photos.is_empty() {
             summary.push(format!(
-                "Imported {} photo(s) for use on the website.",
+                "Imported {} photo(s) for use in this project.",
                 photos.len()
             ));
         }

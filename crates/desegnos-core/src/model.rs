@@ -514,7 +514,7 @@ impl CanvasTemplate {
                     tablet.x as u32 + tablet.width + TEMPLATE_GAP,
                 );
                 vec![self.page(
-                    "Home",
+                    "Page 1",
                     "/",
                     OutputType::Webpage,
                     vec![desktop, tablet, phone],
@@ -522,7 +522,7 @@ impl CanvasTemplate {
                 )]
             }
             Self::AppScreen => vec![self.page(
-                "Home",
+                "Page 1",
                 "/",
                 OutputType::AppScreen,
                 vec![Self::size(390, 844, BoundaryKind::Screen, 0)],
@@ -541,7 +541,7 @@ impl CanvasTemplate {
                 })
                 .collect(),
             Self::SocialImage => vec![self.page(
-                "Home",
+                "Page 1",
                 "/",
                 OutputType::Image,
                 vec![Self::size(1080, 1080, BoundaryKind::Screen, 0)],
@@ -1520,7 +1520,7 @@ impl Project {
             home_page_id,
             pages: vec![Page {
                 id: home_page_id,
-                name: "Home".into(),
+                name: "Page 1".into(),
                 path: "/".into(),
                 included: true,
                 output: OutputType::default(),
@@ -1554,7 +1554,7 @@ impl Project {
         Ok(project)
     }
 
-    /// A new untitled canvas: no boundaries yet, so the first one becomes the home page.
+    /// A new untitled canvas: no boundaries yet, so the first one becomes the entry boundary.
     pub fn blank(name: String, appearance: Appearance) -> Result<Self> {
         Self::untitled(name, appearance, CanvasTemplate::Blank)
     }
@@ -2115,6 +2115,19 @@ impl Project {
     }
 
     /// Drop request targets that no longer exist, and requests left with nothing to act on.
+    /// Any boundary can be deleted; the first remaining included one becomes the entry boundary.
+    pub(crate) fn rehome(&mut self) {
+        if self.pages.iter().any(|page| page.id == self.home_page_id) {
+            return;
+        }
+        if let Some(page) = self.pages.iter().find(|page| page.included) {
+            self.home_page_id = page.id;
+        } else if let Some(page) = self.pages.first_mut() {
+            page.included = true;
+            self.home_page_id = page.id;
+        }
+    }
+
     pub(crate) fn prune_requests(&mut self) {
         let pages: BTreeMap<Uuid, &Page> = self.pages.iter().map(|page| (page.id, page)).collect();
         let references: BTreeSet<Uuid> = self.reference.iter().map(|item| item.id).collect();
@@ -2309,9 +2322,11 @@ impl Project {
             )?;
         }
         if !self.pages.is_empty() {
+            // The entry points at a real boundary, but any included boundary may be the entry.
+            self.page(self.home_page_id)?;
             ensure(
-                self.page(self.home_page_id)?.included,
-                "The home page must be included.",
+                self.pages.iter().any(|page| page.included),
+                "At least one boundary must be included.",
             )?;
         }
         for text in [
@@ -2682,11 +2697,8 @@ impl Project {
             } => next.attach_reference_context(&request_ids, &item_ids)?,
             Command::DeletePage { page_id } => {
                 next.page(page_id)?;
-                ensure(
-                    page_id != next.home_page_id,
-                    "The home page cannot be deleted.",
-                )?;
                 next.pages.retain(|p| p.id != page_id);
+                next.rehome();
                 next.prune_requests();
             }
             Command::AddRequest { request } => next.add_request(request)?,
@@ -2821,12 +2833,9 @@ impl Project {
                         next.pages.iter().any(|page| page.id == page_id),
                         "This boundary no longer exists.",
                     )?;
-                    ensure(
-                        page_id != next.home_page_id,
-                        "The home page cannot be deleted.",
-                    )?;
                     next.pages.retain(|page| page.id != page_id);
                 }
+                next.rehome();
                 next.prune_requests();
             }
             Command::GroupElements { page_id, ids } => next.group_elements(page_id, ids)?,

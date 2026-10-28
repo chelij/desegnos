@@ -25,8 +25,8 @@ export const fixLabel = (fix: OutcomeFix) => fix === 'aiSettings' ? 'AI settings
 
 const terminal = ['failed', 'unknown', 'cancelled', 'blocked', 'applied'];
 
-/// A finished result the page changed out from under; both app messages contain "is stale".
-export const staleResultMessage = "The page changed while the AI was working, so this result wasn't applied.";
+/// A finished result the boundary changed out from under; both app messages contain "is stale".
+export const staleResultMessage = "The boundary changed while the AI was working, so this result wasn't applied.";
 export function staleResult(job: GenerationJobView | null): boolean {
   return job?.status === 'blocked' && /\bis stale\b/i.test(job.message ?? '');
 }

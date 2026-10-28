@@ -84,6 +84,8 @@
 .project-canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -3px; }
 .project-canvas-layer { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 .project-canvas .page-boundary { position: absolute; background: var(--site-light); box-shadow: 0 0 0 1px var(--border), var(--shadow-1); }
+/* A boundary shows its own Light/Dark appearance, matching what it exports as. */
+.project-canvas .page-boundary.dark { background: #121212; }
 .project-canvas .page-boundary.selected { outline: 2px solid var(--annotation-focus); outline-offset: 2px; }
 .project-canvas .page-boundary iframe { display: block; border: 0; pointer-events: none; background: var(--site-light); }
 /* Boundary names live in screen pixels above each corner, so small type stays crisp at any zoom. */

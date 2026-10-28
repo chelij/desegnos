@@ -4,8 +4,8 @@ import type { Brief, Command, Decision, Project, Scope } from './types';
 import { Icon } from './icons';
 
 export function scopeLabel(project: Project, scope: Scope) {
-  if (scope.kind === 'project') return 'Whole site';
-  if (scope.kind === 'page') return project.pages.find(page => page.id === scope.id)?.name ?? 'Missing page';
+  if (scope.kind === 'project') return 'Whole project';
+  if (scope.kind === 'page') return project.pages.find(page => page.id === scope.id)?.name ?? 'Missing boundary';
   const page = project.pages.find(page => findElement(page.elements, scope.id));
   const element = page ? findElement(page.elements, scope.id) : null;
   return page && element ? `${page.name} · ${element.name || element.text.trim().split('\n')[0] || element.kind}` : 'Missing layer';
@@ -29,8 +29,8 @@ function decodeScope(value: string): Scope {
 
 function ScopeSelect({ project, value, change, disabled = false }: { project: Project; value: Scope; change: (scope: Scope) => void; disabled?: boolean }) {
   return <label>Applies to<select value={encodeScope(value)} onChange={event => change(decodeScope(event.target.value))} disabled={disabled}>
-    <option value="project">Whole site</option>
-    {project.pages.map(page => <optgroup key={page.id} label={page.name}><option value={`page:${page.id}`}>Page: {page.name}</option>
+    <option value="project">Whole project</option>
+    {project.pages.map(page => <optgroup key={page.id} label={page.name}><option value={`page:${page.id}`}>Boundary: {page.name}</option>
       {page.elements.map(element => <option key={element.id} value={`element:${element.id}`}>{page.name} · {element.name || element.text.trim().split('\n')[0] || element.kind}</option>)}
     </optgroup>)}
   </select></label>;

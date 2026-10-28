@@ -21,7 +21,7 @@ import { elementLocalRect } from './projectCanvas/elementGeometry';
 import { shortcutFor } from './shortcuts';
 import { playIsActive, type PlayState } from './projectCanvas/play';
 import {
-  cloneElement, createElement, createTextElement, elementBoundsHeight, elementChildrenOf, elementPath, elementParents, findElementIn, findPageElement, ratioResizedRect, rectFromPoints, resizedElementRect, snapPoint, snapValue,
+  cloneElement, createElement, createTextElement, forAppearance, elementBoundsHeight, elementChildrenOf, elementPath, elementParents, findElementIn, findPageElement, ratioResizedRect, rectFromPoints, resizedElementRect, snapPoint, snapValue,
   type ElementCorner,
 } from './projectCanvas/elementGeometry';
 
@@ -889,13 +889,13 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   }
 
   async function placeElement(kind: ElementKind, pageId: string, sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect, picture?: string, rotation?: number) {
-    const element = kind === 'text' ? createTextElement(rect)
-      : createElement(kind, rect, kind === 'image' ? { image: null } : {});
+    const page = project.pages.find(item => item.id === pageId);
+    const element = forAppearance(kind === 'text' ? createTextElement(rect)
+      : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.appearance ?? 'light');
     const local = elementRectAt(sizeId, parentId, parentOrigin, boundary, rect);
     element.rect = { ...local, width: rect.width, height: rect.height };
     if (kind === 'line' && rotation !== undefined) element.rotation = rotation;
     createdElement.current = element.id;
-    const page = project.pages.find(item => item.id === pageId);
     const singleSize = !!page && hasManySizes(page) && !editingAllSizes(pageId);
     await insertElements(pageId, parentId, insertionPoint(pageId, parentId), [element], picture, singleSize ? sizeId : null);
     selectElement(pageId, element.id, singleSize ? sizeId : null);

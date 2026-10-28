@@ -6,9 +6,9 @@ import { resolveElements } from './links';
 // `crates/desegnos-core/src/elements.rs`; both sides must agree.
 
 export const SIZE_PRESETS: { preset: SizePreset; label: string; width: number; height: number }[] = [
-  { preset: 'phone', label: 'Add Phone', width: 390, height: 844 },
-  { preset: 'tablet', label: 'Add Tablet', width: 820, height: 1180 },
-  { preset: 'desktop', label: 'Add Desktop', width: 1440, height: 900 },
+  { preset: 'phone', label: 'Phone', width: 390, height: 844 },
+  { preset: 'tablet', label: 'Tablet', width: 820, height: 1180 },
+  { preset: 'desktop', label: 'Desktop', width: 1440, height: 900 },
 ];
 
 export const baseSize = (page: Page): PageSize => page.sizes[0];

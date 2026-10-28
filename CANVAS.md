@@ -83,6 +83,7 @@ For websites and apps, export sends the visual design (element tree with positio
 - When an element is added to one size only, the other linked sizes show a faint dashed placeholder where it would go. Click it to include the element in that size, or dismiss it to hide it there.
 - Two kinds of boundary. **Screen** has a fixed size, like an app screen or one-screen page; content beyond it scrolls inside. **Page** has a fixed width and grows taller as elements are added.
 - Boundaries never overlap. Moving or growing one pushes its neighbours aside, so every element belongs to exactly one boundary.
+- Any boundary can be deleted, including the first one drawn. The first remaining included boundary becomes the entry that export opens first and the editor focuses.
 
 ## Rendering, Play and Preview export
 

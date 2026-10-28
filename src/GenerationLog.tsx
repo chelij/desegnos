@@ -60,7 +60,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
     const outcome = job?.candidate?.requests.find(item => item.elementId === area.elementId);
     const done = outcome?.status === 'implemented';
     const current = project.requests?.find(request => request.targets.some(target => target.kind === 'element' && target.id === area.elementId))?.text;
-    return { done, key: area.elementId, pageId: page?.id ?? '', exists: !!element, page: sent?.pageName || page?.name || 'Removed page',
+    return { done, key: area.elementId, pageId: page?.id ?? '', exists: !!element, page: sent?.pageName || page?.name || 'Removed boundary',
       label: element ? elementName(element) : 'Removed layer', prompt: sent?.request || current || '', current,
       outcome: job ? areaOutcome(job, area.elementId, current) : null,
       attachments: sent?.attachments ?? (past ? [] : project.requests?.find(request => request.targets.some(target => target.kind === 'element' && target.id === area.elementId))?.attachments ?? []) };

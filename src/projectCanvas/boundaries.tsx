@@ -46,7 +46,7 @@ export function BoundaryLayer({ project, boundaries, focused, selection, moving,
       const resolved = resolveForSize(project, page, sizeId);
       const ghosts = placeholders(resolved, sizeId);
       const elements = playElements(project, resolved, play.boundary === pageId ? play : idlePlay);
-      return <div key={sizeId} className={`page-boundary${highlighted ? ' selected' : ''}${focusedHere ? ' focused' : ''}${kind === 'screen' ? ' screen' : ''}`}
+      return <div key={sizeId} className={`page-boundary${highlighted ? ' selected' : ''}${focusedHere ? ' focused' : ''}${kind === 'screen' ? ' screen' : ''}${page.appearance === 'dark' ? ' dark' : ''}`}
         data-boundary={pageId} data-size={sizeId}
         style={{ left: shown.x, top: shown.y, width: shown.width, height: shown.height }} onDoubleClick={() => openPage(pageId)}>
         <ElementTree project={project} pageId={pageId} sizeId={sizeId} elements={elements} boundary={{ pageId, sizeId, label, kind, rect: shown }} editingId={editingId} movingRects={movingElements} />

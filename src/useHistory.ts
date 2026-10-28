@@ -6,8 +6,8 @@ export type HistoryEntry = { label: string; at: number; position: number };
 function describe(before: Project, after: Project): string {
   if (after.appliedJobIds.some(id => !before.appliedJobIds.includes(id))) return 'AI updated layers';
   if (after.name !== before.name) return 'Renamed project';
-  if (after.pages.length > before.pages.length) return `Added page “${after.pages.at(-1)!.name}”`;
-  if (after.pages.length < before.pages.length) return 'Removed a page';
+  if (after.pages.length > before.pages.length) return `Added boundary “${after.pages.at(-1)!.name}”`;
+  if (after.pages.length < before.pages.length) return 'Removed a boundary';
   for (const page of after.pages) {
     const old = before.pages.find(item => item.id === page.id);
     if (!old) continue;

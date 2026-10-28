@@ -589,7 +589,7 @@ async function runIsolated() {
       await mouse.click({ x: box.left + box.width - 24, y: box.top + box.height - 24 });
       await driver.ready('//div[@role="group" and @aria-label="Sizes"]', 'xpath');
       const before = await driver.execute(() => document.querySelectorAll('[data-size-row]').length);
-      await driver.click(`//div[@role="group" and @aria-label="Sizes"]//button[normalize-space(.)=${xpathString('Add Phone')}]`, 'xpath');
+      await driver.click(`//div[@role="group" and @aria-label="Sizes"]//button[@aria-label=${xpathString('Add Phone')}]`, 'xpath');
       await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-size-row]').length > previous, before), 'The Phone size was not added');
     });
 
@@ -608,11 +608,15 @@ async function runIsolated() {
     await step('Delete removes a selected boundary from Layers', async () => {
       const before = (await boundaries()).length;
       const rows = await driver.execute(() => [...document.querySelectorAll('[data-boundary-row]')].map(node => node.getAttribute('data-boundary-row')));
+      // The first boundary is no longer a protected home page.
       const screenRow = await driver.execute(() => {
-        const row = [...document.querySelectorAll('[data-boundary-row]')].at(-1);
+        const row = [...document.querySelectorAll('[data-boundary-row]')].at(0);
         return row?.getAttribute('data-boundary-row') ?? null;
       });
       assert.ok(screenRow, 'Layers lists no boundary rows');
+      await driver.click(`//button[@data-boundary-row=${xpathString(screenRow)}]`, 'xpath');
+      await driver.click('//*[@aria-label="Appearance"]//button[normalize-space(.)="Dark"]', 'xpath');
+      await waitFor(() => driver.execute(id => !!document.querySelector(`.page-boundary.dark[data-size="${id}"]`), screenRow), 'The Dark appearance did not darken the boundary');
       await driver.click(`//button[@data-boundary-row=${xpathString(screenRow)}]`, 'xpath');
       await pointer.combo('Delete');
       await driver.ready('//section[contains(@class,"workspace-surface")]//button[normalize-space(.)="Delete"]', 'xpath');

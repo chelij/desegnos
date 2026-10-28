@@ -258,7 +258,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const createCanvasBoundary = useCallback(async (bounds: Rect, kind: BoundaryKind, moves: BoundaryMove[], reference: ReferenceMove[]) => {
     const added = await mutate(project => {
       const first = project.pages.length === 0;
-      const name = first ? 'Home' : canvasPageName(project.pages);
+      const name = canvasPageName(project.pages);
       const width = Math.round(bounds.width), height = Math.round(bounds.height);
       const size: PageSize = { id: crypto.randomUUID(), label: sizeName(width), width, height, kind, x: bounds.x, y: bounds.y };
       return {
@@ -423,7 +423,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       const page = project.pages.find(item => item.id === pageId);
       if (!page) return null;
       const name = patch.name ?? page.name, path = patch.path ?? page.path, appearance = patch.appearance ?? page.appearance;
-      const included = page.id === project.homePageId ? true : patch.included ?? page.included;
+      const included = patch.included ?? page.included;
       if (name === page.name && path === page.path && appearance === page.appearance && included === page.included) return null;
       return { type: 'update_page', page_id: pageId, name, path, appearance, included };
     }).catch(() => {});
@@ -479,7 +479,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      // The start-page choice decides whether launch opens a canvas or waits on Home.
+      // The start-page choice decides whether launch opens a canvas or waits on the start page.
       const settings = await native<AppSettingsView>('get_app_settings').catch(() => ({ showStartPage: true }));
       setAppSettings(settings);
       let loaded = await native<WorkspaceView>('get_workspace');
@@ -918,7 +918,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       }
       const action = shortcutFor(event, editingText);
       if (!action) return;
-      // Home is a page: project commands wait until its canvas is open again.
+      // The start page has no canvas: project commands wait until a canvas is open again.
       if ((showStartPage || !current.current?.project) && !['new', 'open', 'help'].includes(action)) return;
       const project = current.current?.project;
       if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels'].includes(action)) return;
@@ -1287,7 +1287,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       </nav>}
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       <div className="shell-primary-actions">
-        <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={!onStartPage && project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and this site' : 'Dark mode for the editor and this site') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => onStartPage || !project ? setTheme(resolvedTheme === 'dark' ? 'light' : 'dark') : run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
+        <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={!onStartPage && project ? (resolvedTheme === 'dark' ? 'Light mode for the editor and canvas' : 'Dark mode for the editor and canvas') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => onStartPage || !project ? setTheme(resolvedTheme === 'dark' ? 'light' : 'dark') : run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
         {project && showsOpener({ available: true, open: showImport }) && <button type="button" className="icon-button" aria-label="Import context" title="Import context" onClick={() => { setImportSource(null); setShowImport(true); }}><Icon name="folder" /></button>}
         {!onStartPage && project && <>{view?.canUndo && <button aria-label="Undo last change" type="button" className="icon-button" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}><Icon name="undo" /></button>}{view?.canRedo && <button aria-label="Redo last change" type="button" className="icon-button" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}><Icon name="redo" /></button>}
           <button type="button" className={showHistory ? 'icon-button active' : 'icon-button'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
@@ -1467,7 +1467,7 @@ function RenameProject({ name, submit }: { name: string; submit: (value: string)
 
 function canvasPageName(pages: Page[]) {
   const names = new Set(pages.map(page => page.name.trim().toLowerCase()));
-  let number = 2;
+  let number = 1;
   while (names.has(`page ${number}`)) number++;
   return `Page ${number}`;
 }

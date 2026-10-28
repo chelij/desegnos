@@ -16,13 +16,13 @@ export function runtimeError(error: string): string {
 export function generationError(reason: string, request = 'this request', affected?: string): string {
   reason = reason.split(/\bExcerpt:/i)[0];
   const subject = request.trim().replace(/[\n\r]+/g, ' ').slice(0, 100).replace(/[.!?]+$/, '') || 'this request';
-  if (/cannot be located|original source is unavailable|same styles or behavior|cannot be reconstructed|could not be decoded/i.test(reason)) return `The saved result for “${subject}” cannot be merged into this page.`;
-  if (/\b(?:page|project|file|source) (?:was |has |had )?(?:been )?(?:changed|edited) (?:after|while|since|before)|\brevision\b|\bstale\b|edited after/i.test(reason)) return 'The page was edited after the AI made this draft.';
+  if (/cannot be located|original source is unavailable|same styles or behavior|cannot be reconstructed|could not be decoded/i.test(reason)) return `The saved result for “${subject}” cannot be merged into this boundary.`;
+  if (/\b(?:page|project|file|source) (?:was |has |had )?(?:been )?(?:changed|edited) (?:after|while|since|before)|\brevision\b|\bstale\b|edited after/i.test(reason)) return 'The boundary was edited after the AI made this draft.';
   if (/\barea ids?\b/i.test(reason)) return "The AI's reply was incomplete. Try again.";
   if (/duplicate|(?:ids?|names?).*unique|unique.*(?:ids?|names?)|same.*(?:id|name)/i.test(reason)) return 'Two items ended up with the same name, so editing one could change the other.';
-  if (/JSON|schema|parse|reply|response|format|writing mistake/i.test(reason)) return `The AI did not produce a usable page for “${subject}”.`;
+  if (/JSON|schema|parse|reply|response|format|writing mistake/i.test(reason)) return `The AI did not produce a usable boundary for “${subject}”.`;
   if (/dynamic|executable|script|JavaScript|shared behavior|CSS outside|CSS selector|stylesheet|sharedCss|outside|scope|another layer|overlap/i.test(reason)) return `“${subject}” would also change ${affected ?? 'content outside this area'}.`;
-  if (/target|selector|missing.*(?:element|layer)|not found/i.test(reason)) return `The page item needed for “${subject}” could not be found.`;
+  if (/target|selector|missing.*(?:element|layer)|not found/i.test(reason)) return `The item needed for “${subject}” could not be found.`;
   return `The AI could not complete “${subject}” as requested.`;
 }
 
@@ -108,7 +108,7 @@ export function userError(error: unknown): string {
     [/build.*(?:failed|error|unavailable)|unknown build action/i, "The website couldn't be prepared for editing. Try again."],
     [/preview.*(?:invalid|location|document|limit)|invalid preview|source.*preview/i, "This page couldn't be previewed. Try opening it again."],
     [/candidate|layer|element|selector|data-desegnos-|schema|salvaged|validation|excerpt|<\/?[a-z][^>]*>/i, generationError(value)],
-    [/stale|revision|project changed|page changed/i, 'The page has changed. Try again.'],
+    [/stale|revision|project changed|page changed/i, 'The boundary has changed. Try again.'],
     [/save|persist|journal|checkpoint/i, "Your changes couldn't be saved. Check that you can save files and try again."],
     [/parse|deserialize|UTF-8|JSON|corrupt|invalid.*(?:data|format)/i, "Desegnos couldn't read this file. Choose another file."],
     [/poison|mutex|panic/i, 'Desegnos ran into a problem. Restart the app.'],

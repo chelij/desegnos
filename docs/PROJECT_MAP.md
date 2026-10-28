@@ -254,7 +254,7 @@ Brand import is separate: `pick_identity_source`/`fetch_identity_source` → [id
 
 | Spec term | In code | Note |
 | --- | --- | --- |
-| **Boundary** | `Page`, `PageSize`, `Page.sizes`, `BoundaryKind::{Page, Screen}` | One `Page` draws one boundary per linked size. "Page" here is a canvas output, not an HTML page or the Home page. |
+| **Boundary** | `Page`, `PageSize`, `Page.sizes`, `BoundaryKind::{Page, Screen}` | One `Page` draws one boundary per linked size. "Page" here is a canvas output, not an HTML page or a website home page. |
 | **Layer** | `Element`, `ElementKind::Group` | A layer is one element or a group; `ElementMeta` carries its request history and context. |
 | **Request** | `PendingRequest`, `Project.requests`, `RequestLayer`, `RequestBoxEditor`, [RequestProperties](../src/EditorDock.tsx), `request_history.rs` | Requests belong to the project, not to one layer, so one request can target a mix of layers, boundaries, reference items and pointers. The old **Frame** word survives in geometry helpers (`FrameCorner`, `FRAME_SNAP`, `MIN_FRAME_SIZE`, `snapToFrameGrid`, `frameBox`, `drawnFrameRect`, `referenceFrameRect` in [projectCanvasGeometry.ts](../src/projectCanvasGeometry.ts)) and in unused `.request-frame`/`.frame-overlay` CSS rules; read all of them as Request. The session label `"AI filled frames"` is historical wording for a generation step. |
 | **Reference** | `Project.reference`, `ReferenceItem`, `ReferenceKind`, [reference.tsx](../src/projectCanvas/reference.tsx) | The spec renamed **Moodboard** to Reference. No `moodboard` identifier remains in `src/`, `crates/` or `src-tauri/`; only the glossary's Gone table still records the old word. |
