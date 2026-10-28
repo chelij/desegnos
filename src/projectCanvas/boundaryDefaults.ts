@@ -9,9 +9,7 @@ export const layoutKind = (kind: BoundaryToolKind): BoundaryKind => kind === 'pa
 export const outputKind = (kind: BoundaryToolKind): OutputType => ({ page: 'webpage', screen: 'appScreen', slide: 'slide', image: 'image' } as const)[kind];
 export const pageKind = (page: Page): BoundaryToolKind => page.output === 'slide' || page.output === 'image' ? page.output : page.output === 'appScreen' || page.sizes[0].kind === 'screen' ? 'screen' : 'page';
 export function projectKind(project: Project): BoundaryToolKind {
-  const counts = new Map<BoundaryToolKind, number>();
-  for (const page of project.pages) { const kind = pageKind(page); counts.set(kind, (counts.get(kind) ?? 0) + page.sizes.length); }
-  return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'page';
+  return ({ blank: 'page', website: 'page', appScreen: 'screen', slideDeck: 'slide', socialImage: 'image' } as const)[project.template ?? 'blank'];
 }
 export function boundaryDefaults(project: Project, kind: BoundaryToolKind) {
   const pages = project.pages.filter(page => pageKind(page) === kind);

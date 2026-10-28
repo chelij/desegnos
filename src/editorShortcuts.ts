@@ -88,9 +88,7 @@ export function createEditorShortcuts(context: () => Context) {
       case 'undo': case 'redo':
         if (!project) return;
         event.preventDefault();
-        if (action === 'undo' ? current.current?.canUndo : current.current?.canRedo) {
-          void travel(action === 'undo' ? 'undo_project' : 'redo_project').catch(() => {});
-        }
+        void travel(action === 'undo' ? 'undo_project' : 'redo_project').catch(() => {});
         return;
       case 'save': if (!project) return; event.preventDefault(); void save().catch(() => {}); return;
       case 'saveAs': if (!project) return; event.preventDefault(); void save(true).catch(() => {}); return;

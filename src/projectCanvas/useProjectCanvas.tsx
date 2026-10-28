@@ -69,7 +69,7 @@ export function useProjectCanvas({
     chooseImage, insertionPoint, elementRectAt, placeElement, drawElementDrag, persistDraw,
   } = createDrawingActions(() => ({
     setPendingImage, project, boundaryRect, createdElement, editingAllSizes, insertElements, selectElement, pendingText,
-    boundaryUnder, beginPointerSession, drag, busy, boundaryKind, createBoundary,
+    boundaryUnder, beginPointerSession, drag, busy, boundaryKind, createBoundary, onTool,
     selectBoundary,
   }));
   const {

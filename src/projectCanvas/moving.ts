@@ -33,7 +33,7 @@ type Context = {
   insertElements: (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => Promise<void>;
   selectTargets: (targets: { pageId: string; elementId: string; sizeId?: string | null; }[]) => void;
   boundaryUnder: (point: Point) => Boundary | null;
-  elementToReference: (pageId: string, elementId: string, rect: Rect) => Promise<void>;
+  elementToReference: (pageId: string, elementId: string, rect: Rect, sizeId?: string | null) => Promise<void>;
   moveElements: (moves: ElementMove[]) => Promise<unknown> | void;
   clearSelection: () => void;
   selection: CanvasTarget[];
@@ -190,7 +190,7 @@ export function createMovingActions(context: () => Context) {
     for (const entry of active.entries) {
       const world = { ...entry.world, x: entry.world.x + delta.x, y: entry.world.y + delta.y };
       if (!targetBoundary && entry.parentId === null) {
-        await elementToReference(entry.pageId, entry.id, world);
+        await elementToReference(entry.pageId, entry.id, world, entry.sizeId);
         converted = true;
         continue;
       }
@@ -288,7 +288,7 @@ export function createMovingActions(context: () => Context) {
         const boundary = boundaryAt(boundaryList, centre(rect));
         const item = project.reference.find(entry => entry.id === target.itemId);
         if (boundary && item) {
-          await referenceToElement(target.itemId, boundary.pageId, pageRectFromCanvas(referenceFrameRect(rect, boundary.rect), boundary.rect), boundary.sizeId);
+          await referenceToElement(target.itemId, boundary.pageId, pageRectFromCanvas(item.kind.kind === 'element' ? rect : referenceFrameRect(rect, boundary.rect), boundary.rect), boundary.sizeId);
         } else updateReference(target.itemId, { rect });
       }
     } catch { /* App surfaces the failed command. */ }

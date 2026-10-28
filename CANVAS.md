@@ -23,7 +23,7 @@ One infinite canvas per project. Everything on it is visual: you place elements 
 - Outside every boundary: reference (images, pasted URLs, notes, swatches).
 - Pasting from another app follows the same rule: text or an image pasted inside a boundary becomes a layer, and outside every boundary it becomes reference.
 - Dropping files from the file manager follows the same rule: pictures and text become layers inside a boundary or reference outside it, and other accepted files attach to a request under the pointer.
-- Dragging between the two converts. A reference image dragged into a boundary becomes an image element; an element dragged out becomes reference.
+- Dragging between the two converts. A reference image dragged into a boundary becomes an image element; an element dragged out becomes reference while keeping its appearance and complete element tree. Dragging it back restores that element. Drops never run generation; reference content may create a draft request for an explicit Generate action.
 - Selecting elements or a boundary plus reference items and writing a request sends those items as context. No attach step.
 
 ## Elements and layers

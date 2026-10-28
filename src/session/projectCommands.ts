@@ -223,9 +223,13 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function travel(command: 'undo_project' | 'redo_project') {
-    const { settle, queue, accept, setNotice } = context();
-    await settle();
-    await queue(async () => { accept(await native<WorkspaceView>(command)); setNotice(command === 'undo_project' ? 'Change undone.' : 'Change redone.'); });
+    const { queue, accept, setNotice, current } = context();
+    const projectId = current.current?.project?.id;
+    await queue(async workspace => {
+      if (workspace?.project?.id !== projectId || !(command === 'undo_project' ? workspace?.canUndo : workspace?.canRedo)) return;
+      accept(await native<WorkspaceView>(command));
+      setNotice(command === 'undo_project' ? 'Change undone.' : 'Change redone.');
+    });
   }
 
   async function saveCopy() {

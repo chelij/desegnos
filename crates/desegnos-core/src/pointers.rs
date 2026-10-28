@@ -180,6 +180,7 @@ pub fn pointer_target_value(
 
 pub fn reference_text(kind: &crate::ReferenceKind) -> String {
     match kind {
+        crate::ReferenceKind::Element { element, .. } => format!("reference layer \"{}\"", element.label()),
         crate::ReferenceKind::Note { text } => format!("note \"{}\"", short(text, 400)),
         crate::ReferenceKind::Link { url, title } => {
             if title.trim().is_empty() {

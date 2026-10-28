@@ -191,6 +191,8 @@
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised);
   box-shadow: var(--shadow-1); color: var(--text); font-size: var(--text-md); line-height: 1.4;
 }
+.project-canvas .reference-element { border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
+.project-canvas .reference-element .canvas-element { pointer-events: none; }
 .project-canvas .reference-item.selected { outline: 1px solid var(--accent); outline-offset: 1px; }
 .project-canvas .reference-note { padding: 12px; }
 .project-canvas .reference-note-text { overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }

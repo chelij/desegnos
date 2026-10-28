@@ -11,7 +11,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | **Page boundary** | Fixed width, grows taller as elements are added. | `BoundaryKind::Page` |
 | **Screen boundary** | Fixed size; content beyond it scrolls inside. | `BoundaryKind::Screen` |
 | **Reference** | Everything outside every boundary. Material the AI can read; never shipped. | `Project.reference` |
-| **Reference item** | One piece of reference: note, link card, image or swatch. | `ReferenceItem`, `ReferenceKind` |
+| **Reference item** | One piece of reference: note, link card, image, swatch or a preserved element tree. | `ReferenceItem`, `ReferenceKind` |
 | **Note** | Reference text. | `ReferenceKind::Note` |
 | **Link card** | A pasted web address in reference. | `ReferenceKind::Link` |
 | **Swatch** | A pasted colour in reference. | `ReferenceKind::Swatch` |

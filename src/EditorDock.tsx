@@ -592,6 +592,7 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   const selectedElements = selection.flatMap(target => target.kind === 'element' ? [target.elementId] : []);
   const referenceLabel = (item: ReferenceItem) => {
     switch (item.kind.kind) {
+      case 'element': return item.kind.element.name || item.kind.element.kind;
       case 'note': return item.kind.text.trim().split('\n')[0] || 'Note';
       case 'link': return item.kind.title.trim() || item.kind.url;
       case 'image': return item.kind.name || 'Picture';
