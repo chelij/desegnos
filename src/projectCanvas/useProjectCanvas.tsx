@@ -69,7 +69,7 @@ export function useProjectCanvas({
     chooseImage, insertionPoint, elementRectAt, placeElement, drawElementDrag, persistDraw,
   } = createDrawingActions(() => ({
     setPendingImage, project, boundaryRect, createdElement, editingAllSizes, insertElements, selectElement,
-    boundaryUnder, beginPointerSession, drag, busy, boundaries, boundaryKind, referenceBoxes, createBoundary,
+    boundaryUnder, beginPointerSession, drag, busy, boundaryKind, createBoundary,
     selectBoundary,
   }));
   const {
@@ -96,7 +96,7 @@ export function useProjectCanvas({
     groupSelection, ungroupSelection, nudgeElements, focusElement, canRunCanvasAction, runCanvasAction,
     keyDown,
   } = createKeyboardActions(() => ({
-    drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
+    createBoundary, drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
     cancelRequestDraft, editing, cancelEditingText, selection, selectBoundary, focused, project, selectTargets,
     pageFor, elementEntries, moveElements, copiedStyle, updateElements, surface, boundaryRect, removeSelection,
     elementScreenRect, setLinkChoice, linkElements, unlinkElements, groupElements, ungroupElements,
@@ -372,17 +372,17 @@ export function useProjectCanvas({
           try {
             if (images.length <= 1) {
               // One command keeps the drop to one undo step; it carries one picture for the batch.
-              await state.insertElements(boundary.pageId, null, index, elements.map(item => item.element), images[0]?.picture, sizeId);
+              await state.insertElements(boundary.pageId, null, index, elements.map(item => item.element), images[0]?.picture, boundary.sizeId);
               dropped.push(...elements.map(item => ({ pageId: boundary.pageId, elementId: item.element.id, sizeId })));
             } else {
               const text = elements.filter(item => !item.picture);
               if (text.length) {
-                await state.insertElements(boundary.pageId, null, index, text.map(item => item.element), undefined, sizeId);
+                await state.insertElements(boundary.pageId, null, index, text.map(item => item.element), undefined, boundary.sizeId);
                 index += text.length;
                 dropped.push(...text.map(item => ({ pageId: boundary.pageId, elementId: item.element.id, sizeId })));
               }
               for (const item of images) {
-                await state.insertElements(boundary.pageId, null, index, [item.element], item.picture, sizeId);
+                await state.insertElements(boundary.pageId, null, index, [item.element], item.picture, boundary.sizeId);
                 index += 1;
                 dropped.push({ pageId: boundary.pageId, elementId: item.element.id, sizeId });
               }

@@ -120,8 +120,8 @@ export function createPasteDrop(context: () => Context) {
       inserted.push({ pageId: target.pageId, elementId: element.id, sizeId: target.allSizes ? null : target.sizeId });
       return element;
     });
-    // A layer pasted in one size is hidden in the others, exactly like a newly drawn layer.
-    void insertElements(target.pageId, target.parentId, index, elements, undefined, target.allSizes ? null : target.sizeId)
+    // Keep the insertion size as the source for shared responsive placement.
+    void insertElements(target.pageId, target.parentId, index, elements, undefined, target.sizeId)
       .then(() => { onInserted?.(inserted); if (selectAfter) selectTargets(inserted); }).catch(() => {});
   }
 
@@ -229,7 +229,7 @@ export function createPasteDrop(context: () => Context) {
     const singleSize = !!page && hasManySizes(page) && !editingAllSizes(boundary.pageId);
     busy.current = true;
     try {
-      await insertElements(boundary.pageId, null, insertionPoint(boundary.pageId, null), [element], undefined, singleSize ? boundary.sizeId : null);
+      await insertElements(boundary.pageId, null, insertionPoint(boundary.pageId, null), [element], undefined, boundary.sizeId);
       selectElement(boundary.pageId, element.id, singleSize ? boundary.sizeId : null);
     } catch { /* App surfaces the failed command. */ }
     finally { busy.current = false; }

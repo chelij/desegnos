@@ -522,7 +522,7 @@ impl CanvasTemplate {
                 )]
             }
             Self::AppScreen => vec![self.page(
-                "Page 1",
+                "Screen 1",
                 "/",
                 OutputType::AppScreen,
                 vec![Self::size(390, 844, BoundaryKind::Screen, 0)],
@@ -539,7 +539,7 @@ impl CanvasTemplate {
                 })
                 .collect(),
             Self::SocialImage => vec![self.page(
-                "Page 1",
+                "Image 1",
                 "/",
                 OutputType::Image,
                 vec![Self::size(1080, 1080, BoundaryKind::Screen, 0)],
@@ -1401,6 +1401,15 @@ pub enum Command {
     },
     /// Add a page and place it on the project canvas in one step. `moves` carries the
     /// boundaries the new one pushes aside, so drawing is a single undoable gesture.
+    CreateBoundary {
+        page: Page,
+        #[serde(default)]
+        after_page_id: Option<Uuid>,
+        #[serde(default)]
+        moves: Vec<CanvasPlacement>,
+        #[serde(default)]
+        reference: Vec<ReferencePlacement>,
+    },
     AddCanvasPage {
         name: String,
         path: String,
@@ -1548,8 +1557,8 @@ pub enum Command {
         /// Picture bytes for a placed image; the command stores them and sets the reference.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         picture_data_uri: Option<String>,
-        /// The linked size the layer was added in; every other size hides it and draws a
-        /// placeholder. Omitted means it was added for all sizes.
+        /// The size the geometry was drawn in; new layers are visible in every linked size.
+        /// Narrower sizes receive fitting geometry overrides. Omitted uses the base size.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size_id: Option<Uuid>,
     },
@@ -1669,7 +1678,7 @@ impl Command {
             Self::UpdatePage { .. } => "Changed a boundary",
             Self::SetPageOutput { .. } => "Changed a boundary's output",
             Self::UpdatePageSize { .. } => "Changed a size",
-            Self::AddCanvasPage { .. } => "Added a boundary",
+            Self::CreateBoundary { .. } | Self::AddCanvasPage { .. } => "Added a boundary",
             Self::AddPageSize { .. } => "Added a size",
             Self::RemovePageSize { .. } => "Removed a size",
             Self::SetCanvasLayout { .. } => "Moved boundaries",
@@ -2808,6 +2817,31 @@ impl Project {
                     p.viewport().validate().is_ok(),
                     "The base size must stay a valid viewport.",
                 )?;
+                for placement in moves {
+                    placement.place(&mut next.pages)?;
+                }
+                next.place_reference(reference)?;
+            }
+            Command::CreateBoundary {
+                page,
+                after_page_id,
+                moves,
+                reference,
+            } => {
+                ensure(
+                    !next.pages.iter().any(|existing| existing.id == page.id),
+                    "This boundary already exists.",
+                )?;
+                let index = if let Some(id) = after_page_id {
+                    next.pages.iter().position(|existing| existing.id == id)
+                        .ok_or_else(|| Error("This boundary no longer exists.".into()))? + 1
+                } else {
+                    next.pages.len()
+                };
+                if next.pages.is_empty() {
+                    next.home_page_id = page.id;
+                }
+                next.pages.insert(index, page);
                 for placement in moves {
                     placement.place(&mut next.pages)?;
                 }

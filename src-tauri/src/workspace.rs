@@ -66,26 +66,15 @@ fn message(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
-/// The number in an untitled project's `Canvas N` name.
-fn canvas_number(name: &str) -> Option<u32> {
-    name.trim()
-        .strip_prefix("Canvas ")?
-        .parse::<u32>()
-        .ok()
-        .filter(|number| *number > 0)
-}
-
-/// The lowest free `Canvas N`; other names and renamed untitled projects keep their number free.
-fn lowest_unused_canvas(names: impl IntoIterator<Item = String>) -> String {
-    let used: BTreeSet<u32> = names
-        .into_iter()
-        .filter_map(|name| canvas_number(&name))
-        .collect();
-    let mut number = 1;
-    while used.contains(&number) {
+fn lowest_unused_name(base: &str, names: impl IntoIterator<Item = String>) -> String {
+    let used: BTreeSet<String> = names.into_iter().collect();
+    let mut name = base.to_string();
+    let mut number = 2;
+    while used.contains(&name) {
+        name = format!("{base} {number}");
         number += 1;
     }
-    format!("Canvas {number}")
+    name
 }
 
 /// Remembers which project file a session had open, so its autosave can be offered after a
@@ -1187,20 +1176,20 @@ impl Workspace {
             .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error))
     }
 
-    /// The lowest unused `Canvas N` among the open untitled projects.
-    fn next_untitled_name(&self) -> String {
-        let mut names = Vec::new();
-        if self.is_untitled()
-            && let Some(session) = self.session()
-        {
-            names.push(session.project().name.clone());
-        }
-        for project in &self.parked {
-            if project.untitled {
-                names.push(project.session.project().name.clone());
-            }
-        }
-        lowest_unused_canvas(names)
+    fn next_untitled_name(&self, template: CanvasTemplate) -> String {
+        let base = match template {
+            CanvasTemplate::Blank => "Untitled canvas",
+            CanvasTemplate::Website => "Untitled website",
+            CanvasTemplate::AppScreen => "Untitled app",
+            CanvasTemplate::SlideDeck => "Untitled deck",
+            CanvasTemplate::SocialImage => "Untitled image",
+        };
+        let names = self
+            .session()
+            .map(|session| session.project().name.clone())
+            .into_iter()
+            .chain(self.parked.iter().map(|project| project.session.project().name.clone()));
+        lowest_unused_name(base, names)
     }
 
     /// Open an untitled canvas whose recovery database lives in the app data folder until the
@@ -1210,8 +1199,8 @@ impl Workspace {
         appearance: Appearance,
         template: CanvasTemplate,
     ) -> NativeResult<()> {
-        let project =
-            Project::untitled(self.next_untitled_name(), appearance, template).map_err(message)?;
+        let project = Project::untitled(self.next_untitled_name(template), appearance, template)
+            .map_err(message)?;
         let path = self.untitled_path(project.id);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(message)?;
@@ -2436,22 +2425,21 @@ pub fn compact_history(state: WorkspaceState<'_>) -> NativeResult<desegnos_stora
 
 #[cfg(test)]
 mod tests {
-    use super::lowest_unused_canvas;
+    use super::lowest_unused_name;
 
     #[test]
-    fn untitled_names_take_the_lowest_free_canvas_number() {
-        assert_eq!(lowest_unused_canvas(Vec::new()), "Canvas 1");
+    fn untitled_names_use_template_and_lowest_free_suffix() {
         assert_eq!(
-            lowest_unused_canvas(["Canvas 1".into(), "Canvas 3".into()]),
-            "Canvas 2"
+            lowest_unused_name("Untitled deck", Vec::new()),
+            "Untitled deck"
         );
         assert_eq!(
-            lowest_unused_canvas(["Canvas 2".into(), "Canvas 1".into()]),
-            "Canvas 3"
+            lowest_unused_name("Untitled deck", ["Untitled deck".into(), "Untitled deck 3".into()]),
+            "Untitled deck 2"
         );
         assert_eq!(
-            lowest_unused_canvas(["Sketch".into(), "Canvas x".into()]),
-            "Canvas 1"
+            lowest_unused_name("Untitled image", ["Untitled deck".into()]),
+            "Untitled image"
         );
     }
 }

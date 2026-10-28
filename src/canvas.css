@@ -395,3 +395,6 @@
 .project-canvas .preview-overlay-bar .dock-action + .dock-action { margin-inline-start: 0; }
 .project-canvas .preview-outdated { color: var(--warning); font-size: var(--text-xs); }
 .project-canvas .preview-overlay-frame { flex: 1; width: 100%; border: 0; background: #fff; }
+
+.project-canvas.presenting { background: #181818; background-image: none; }
+.presentation-controls { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 12px; padding: 4px 8px; background: #242424; color: #fff; border-radius: 4px; }

@@ -58,7 +58,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     loading, load, pending, newUntitled, open, appSettings, changeShowStartPage, recentProjects, openRecent,
     forgetRecent, pinRecent, recover, dismissRecoveries, canvasTool, chooseTool, canvasZoom, canvasRef,
     boundaryKind, setBoundaryKind, requestToolShape, setRequestToolShape, armInsert, insertSignal,
-    selectCanvasBoundary, createCanvasBoundary, saveCanvasPlacements, addNamedViewAt, saveCurrentView,
+    selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, saveCanvasPlacements, addNamedViewAt, saveCurrentView,
     canvasSelection, canvasFocus, canvasFocusSize, selectCanvasReference, selectCanvasPointer,
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, addCanvasReference,
     updateCanvasReference, elementToReference, referenceToElement, attachToRequest, addCanvasRequest,
@@ -148,7 +148,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         selectElement={selectCanvasElement} removeElements={items => removeCanvasSelection([], [], [], items)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
         linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
-        play={play} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
+        play={play} onPlayBoundary={id => setPlay(current => ({ ...current, boundary: id }))} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
         preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} />
       {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} requestEditorOpen={requestEditorIsOpen} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : draftCount > 0 && showsOpener({ available: true, open: showLog }) ? <Notice priority="result" message={`${draftCount} ${draftCount === 1 ? 'draft' : 'drafts'}`} action={{ label: 'Details', onClick: openGeneration }} /> : null}
       </div>
@@ -219,7 +219,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
           }}
           deleteBoundary={deleteBoundary} removeRequest={id => removeCanvasSelection([], [], [id])}
           removeReference={id => removeCanvasSelection([id])} removePointer={id => removeCanvasSelection([], [id])}
-          views={views} addView={addNamedView} jumpToView={view => canvasRef.current?.goToView(view)} renameView={renameNamedView} removeView={removeNamedView} />} />
+          addBoundary={() => run(addProjectBoundary)} views={views} addView={addNamedView} jumpToView={view => canvasRef.current?.goToView(view)} renameView={renameNamedView} removeView={removeNamedView} />} />
       </div>
       <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 && <span className="status-count">{canvasSelection.length} selected</span>}{selectedBounds && <span className="status-bounds" aria-label="Selection bounds"><span>{Math.round(selectedBounds.width)} × {Math.round(selectedBounds.height)}</span><span className="status-coordinate">X {Math.round(selectedBounds.x)} · Y {Math.round(selectedBounds.y)}</span></span>}</span><div className="canvas-status-actions">{playIsActive(play) && <StatusChip tone="info" role="status" className="play-chip" onClick={() => setPlay(idlePlay)} ariaLabel="Stop Play">Playing · Esc to stop</StatusChip>}{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}<div className="status-zoom" role="group" aria-label="Canvas zoom controls"><button type="button" aria-label="Fit all boundaries" title={withShortcut('Fit all boundaries', 'fitAll')} onClick={() => canvasRef.current?.fit()}>Fit</button><input type="range" min={0} max={1000} step={1} value={sliderFromZoom(canvasZoom)} aria-label="Canvas zoom" title={`${zoomPercent}%`} onChange={event => canvasRef.current?.zoomTo(zoomFromSlider(Number(event.target.value)))} /><button type="button" className="status-zoom-value" aria-label="Zoom to 100%" title={withShortcut('Zoom to 100%', 'zoomReset')} onClick={() => canvasRef.current?.zoomTo(1)}>{zoomPercent}%</button></div>{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid and rulers">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
     </>}

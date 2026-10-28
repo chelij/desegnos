@@ -1,9 +1,7 @@
+import { type BoundaryToolKind, boundaryDefaults, layoutKind } from './boundaryDefaults';
 import { type PointerEvent as ReactPointerEvent } from 'react';
-import {
-  boundaryMoves, referenceMoves, pushApartBoundaries, pushApartReference, type Boundary, type BoundaryMove,
-  type Point, type ReferenceBox, type ReferenceMove,
-} from '../projectCanvasGeometry';
-import type { BoundaryKind, Element, ElementKind, Project, Rect } from '../types';
+import type { Boundary, Point } from '../projectCanvasGeometry';
+import type { Element, ElementKind, Project, Rect } from '../types';
 import { hasManySizes } from './sizes';
 import { elementLocalRect } from './elementGeometry';
 import { createElement, createTextElement, forBackground, withPickedColours, elementChildrenOf } from './elementGeometry';
@@ -21,10 +19,8 @@ type Context = {
   beginPointerSession: (event: { pointerId: number; }) => void;
   drag: { current: Drag | null; };
   busy: import("react").RefObject<boolean>;
-  boundaries: Boundary[];
-  boundaryKind: BoundaryKind;
-  referenceBoxes: () => ReferenceBox[];
-  createBoundary: (bounds: Rect, kind: BoundaryKind, moves: BoundaryMove[], reference: ReferenceMove[]) => Promise<string | null>;
+  boundaryKind: BoundaryToolKind;
+  createBoundary: (bounds: Rect, kind: BoundaryToolKind) => Promise<string | null>;
   selectBoundary: (pageId: string | null, sizeId?: string | null, additive?: boolean) => void;
 };
 
@@ -63,7 +59,7 @@ export function createDrawingActions(context: () => Context) {
     if (kind === 'line' && rotation !== undefined) element.rotation = rotation;
     createdElement.current = element.id;
     const singleSize = !!page && hasManySizes(page) && !editingAllSizes(pageId);
-    await insertElements(pageId, parentId, insertionPoint(pageId, parentId), [element], picture, singleSize ? sizeId : null);
+    await insertElements(pageId, parentId, insertionPoint(pageId, parentId), [element], picture, sizeId);
     selectElement(pageId, element.id, singleSize ? sizeId : null);
     return element;
   }
@@ -80,15 +76,12 @@ export function createDrawingActions(context: () => Context) {
     return drag.current;
   }
 
-  async function persistDraw(rect: Rect) {
-    const { busy, boundaries, boundaryKind, referenceBoxes, createBoundary, selectBoundary } = context();
+  async function persistDraw(rect: Rect, clicked = false) {
+    const { busy, boundaryKind, createBoundary, selectBoundary } = context();
+    if (clicked) rect = boundaryDefaults(context().project, boundaryKind);
     busy.current = true;
     try {
-      const anchor = '\u0000new';
-      const pushed = pushApartBoundaries([...boundaries, { pageId: anchor, sizeId: anchor, label: 'Size', rect, kind: boundaryKind }], anchor);
-      const boxes = referenceBoxes();
-      const pushedItems = pushApartReference(boxes, pushed);
-      const pageId = await createBoundary(rect, boundaryKind, boundaryMoves(pushed.filter(item => item.sizeId !== anchor), boundaries), referenceMoves(pushedItems, boxes));
+      const pageId = await createBoundary(rect, boundaryKind);
       if (pageId) selectBoundary(pageId);
     } catch { /* App surfaces the failed command. */ }
     finally { busy.current = false; }
