@@ -19,7 +19,7 @@ import {
   automaticLinks, boundaryAt, canvasTargetKey, dotGrid, fitCamera, nearestEdgeAnchors, selectedPointers,
   viewportWorldRect, type Boundary, type CanvasTarget, type Point, type ReferenceBox, type RequestBox,
 } from '../projectCanvasGeometry';
-import type { Element, ElementPatch, NamedView, Page, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
+import type { Element, ElementPatch, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
 import { onEditScope, type EditScope } from './selectionBar';
 import { elementBoxes, elementBoxesNow, pendingRequests, requestAreaContains } from './requests';
 import { shownReference } from './reference';
@@ -44,7 +44,7 @@ import type { ForwardedRef } from 'react';
 const EMPTY_RECTS: Record<string, Rect> = {};
 
 export function useProjectCanvas({
-  project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
+  editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
   addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
@@ -88,16 +88,16 @@ export function useProjectCanvas({
   } = createPasteDrop(() => ({
     elementEntries, selection, clipboard, pasteCount, setPasteChoice, clipboardMark, project, boundaryRect,
     lastPointer, viewSize, camera, boundaryUnder, editingAllSizes, pasteLinked, selectTargets, insertElements,
-    setLinkChoice, pasteMode, pasteChoice, duplicateRepeat, addReference, selectReference, elementRectAt, busy,
+    setLinkChoice, pasteMode, pasteChoice, duplicateRepeat, duplicateBurst, addReference, selectReference, elementRectAt, busy,
     insertionPoint, selectElement, placeElement, createdElement, worldPoint, latest, attachToRequest,
   }));
   const {
     escapeCanvas, selectAllSiblings, arrangeElements, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
-    alignSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
+    alignSelection, distributeSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
     groupSelection, ungroupSelection, nudgeElements, focusElement, canRunCanvasAction, runCanvasAction,
     keyDown,
   } = createKeyboardActions(() => ({
-    createBoundary, drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
+    editProject, createBoundary, drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
     cancelRequestDraft, editing, finishEditingText, selection, selectBoundary, focused, project, selectTargets,
     pageFor, elementEntries, moveElements, copiedStyle, updateElements, surface, boundaryRect, removeSelection,
     elementScreenRect, setLinkChoice, linkElements, unlinkElements, groupElements, ungroupElements,
@@ -148,6 +148,7 @@ export function useProjectCanvas({
   const [painterArmed, setPainterArmed] = useState(false);
   // Smart duplicate: what the last duplicate was, so Ctrl/Cmd+D can repeat its offset.
   const duplicateRepeat = useRef<DuplicateRepeat | null>(null);
+  const duplicateBurst = useRef<{ key: string; at: number; count: number; offset: Point } | null>(null);
   const [pasteChoice, setPasteChoice] = useState<PasteChoice | null>(null);
   const [placeholderChoice, setPlaceholderChoice] = useState<{ pageId: string; sizeId: string; elementId: string; screen: ScreenRect } | null>(null);
   const [linkChoice, setLinkChoice] = useState<LinkDecision | null>(null);
@@ -535,8 +536,8 @@ export function useProjectCanvas({
     return selection.some(item => canvasTargetKey(item) === key) ? selection.filter(item => canvasTargetKey(item) !== key) : [...selection, target];
   }
 
-  function elementEntries(targets: CanvasTarget[]): ElementEntry[] {
-    return resolveSelectionEntries(project, targets, boundaryRect);
+  function elementEntries(targets: CanvasTarget[], source: Project = project): ElementEntry[] {
+    return resolveSelectionEntries(source, targets, boundaryRect);
   }
 
   function selectTargets(targets: { pageId: string; elementId: string; sizeId?: string | null }[]) {
@@ -581,6 +582,7 @@ export function useProjectCanvas({
       const action = shortcutFor(event, false);
       // Plain paste is left to the paste event, which can also carry content from other apps.
       if (!action || action === 'paste') return;
+      if (action.startsWith('opacity') && !(event.target instanceof Node && surface.current?.contains(event.target))) return;
       if (runCanvasAction(action, { key: event.key, slot: viewSlot(event) ?? undefined, repeat: event.repeat })) event.preventDefault();
     };
     window.addEventListener('keydown', handle);
@@ -739,13 +741,13 @@ export function useProjectCanvas({
   const previewScreen = previewBoundary ? screenRect(previewBoundary.rect, camera) : null;
 
   return {
-    surface, tool, requestShape, panning, spaceHeld, zoomHeld, painterArmed, play, dropHover, dotStyle,
+    runCanvasAction, surface, tool, requestShape, panning, spaceHeld, zoomHeld, painterArmed, play, dropHover, dotStyle,
     pointerDown, keyDown, doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, focused,
     selection, moving, openPage, editing, movingElements, openPlaceholder, viewport, inverse, project,
     boundaries, requestDraft, draftArea, selectRequest, movingItems, draftNote, draft, boundaryKind,
     draftElement, marquee, zoomRect, entries, autoLinks, pointerDraft, selectedPointerIds, pointerStates,
     choosePointer, updatePointer, createdPointer, widthPreview, setWidthPreview, selectionScreen, viewSize,
-    selectionFill, selectionLinked, selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection,
+    selectionFill, selectionLinked, selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection, distributeSelection,
     setSelectionScope, startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements,
     deleteSelectedLayers, minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer,
     startReattach, selectedElementTargets, startElementResize, editingElement, editingScreen,

@@ -365,6 +365,8 @@ fn text_style(styles: &WebStyles) -> ElementTextStyle {
 fn element_style(styles: &WebStyles, text: bool) -> ElementStyle {
     let radius = styles.radius.clamp(0.0, 4096.0);
     ElementStyle {
+        flip_x: false,
+        flip_y: false,
         sizing: Default::default(),
         padding: None,
         references: Default::default(),

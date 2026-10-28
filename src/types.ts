@@ -38,7 +38,7 @@ export type StyleReferences = { fill?: string | null; stroke?: string | null; te
 export type ColourStyle = { id: string; name: string; value: string };
 export type TextStyle = { id: string; name: string; fontFamily: string; size: number; weight: number; lineHeight: number; letterSpacing: number; italic: boolean };
 export type ProjectStyles = { colours: ColourStyle[]; text: TextStyle[] };
-export type ElementStyle = { sizing?: ElementSizing; padding?: ElementPadding | null; references?: StyleReferences; fill: string | null; stroke: ElementStroke; radius: number; opacity: number; shadow: ElementShadow; textStyle: ElementTextStyle };
+export type ElementStyle = { flipX?: boolean; flipY?: boolean; sizing?: ElementSizing; padding?: ElementPadding | null; references?: StyleReferences; fill: string | null; stroke: ElementStroke; radius: number; opacity: number; shadow: ElementShadow; textStyle: ElementTextStyle };
 export type ElementLayout =
   | { kind: 'free' }
   | { kind: 'stack'; direction: StackDirection; gap: number; padding: number; align: StackAlign; justify: StackJustify; wrap: boolean }
@@ -214,6 +214,8 @@ export type Command =
   | { type: 'remove_linked_definition'; id: string }
   | { type: 'paste_linked_instances'; items: LinkedPasteInstance[] }
   | { type: 'move_elements'; moves: ElementMove[] }
+  | { type: 'nudge_elements'; moves: ElementMove[]; dx: number; dy: number }
+  | { type: 'stack_elements'; page_id: string; ids: string[] }
   | { type: 'remove_elements'; page_id: string; ids: string[] }
   | { type: 'delete_items'; elements?: [string, string][]; reference_ids?: string[]; pointer_ids?: string[]; request_ids?: string[]; page_ids?: string[]; size_ids?: [string, string][]; linked_ids?: string[] }
   | { type: 'group_elements'; page_id: string; ids: string[] }

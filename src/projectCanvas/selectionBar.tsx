@@ -1,6 +1,7 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../icons';
 import { withShortcut } from '../shortcuts';
+import type { SelectionDistribution } from './arrange';
 import type { ScreenRect } from './surface';
 
 export type SelectionAlign = 'left' | 'centre' | 'right' | 'top' | 'middle' | 'bottom';
@@ -49,12 +50,14 @@ const hex = (value: string) => {
  * The contextual bar for the current layer selection. It lives in screen pixels above the
  * selection, so it never scales with the canvas and never lands inside a boundary.
  */
-export function SelectionBar({ screen, viewWidth, fill, linked, linkable, hyperlink, scope, onFill, onAlign, onScope, onRequest, onLinkTo, onLink, onUnlink, onDuplicate, onDelete }: {
+export function SelectionBar({ screen, viewWidth, fill, linked, linkable, hyperlink, scope, onFill, onAlign, onDistribute, count, onScope, onRequest, onLinkTo, onLink, onUnlink, onDuplicate, onDelete }: {
   screen: ScreenRect; viewWidth: number;
   fill: string; linked: boolean; linkable: boolean; hyperlink: boolean;
   scope: EditScope | null;
   onFill: (value: string) => void;
   onAlign: (edge: SelectionAlign) => void;
+  onDistribute: (direction: SelectionDistribution) => void;
+  count: number;
   onScope: (scope: EditScope) => void;
   onRequest: () => void;
   onLinkTo: () => void;
@@ -80,11 +83,19 @@ export function SelectionBar({ screen, viewWidth, fill, linked, linkable, hyperl
     </label>
     <span className="floating-bar-divider" aria-hidden="true" />
     <div className="selection-align" role="group" aria-label="Align">
-      {ALIGN.map(({ edge, label, icon }) => <button key={edge} type="button" className="selection-action" aria-label={`Align ${label}`} title={`Align ${label}`}
+      {ALIGN.map(({ edge, label, icon }) => <button key={edge} type="button" className="selection-action" aria-label={`Align ${label}`} title={withShortcut(`Align ${label}`, ({ left: 'alignLeft', centre: 'alignCentre', right: 'alignRight', top: 'alignTop', middle: 'alignMiddle', bottom: 'alignBottom' } as const)[edge])}
         onClick={() => onAlign(edge)}>
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d={icon} /></svg>
       </button>)}
     </div>
+    {count >= 3 && <div className="selection-align" role="group" aria-label="Distribute">
+      <button type="button" className="selection-action" aria-label="Distribute horizontally" title={withShortcut('Distribute horizontally', 'distributeHorizontal')} onClick={() => onDistribute('horizontal')}>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2v12M14 2v12M6 5v6M10 5v6M2 8h12" /></svg>
+      </button>
+      <button type="button" className="selection-action" aria-label="Distribute vertically" title={withShortcut('Distribute vertically', 'distributeVertical')} onClick={() => onDistribute('vertical')}>
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 2h12M2 14h12M5 6h6M5 10h6M8 2v12" /></svg>
+      </button>
+    </div>}
     {scope && <><span className="floating-bar-divider" aria-hidden="true" />
       <EditScopeChoice scope={scope} choose={onScope} /></>}
     <span className="floating-bar-divider" aria-hidden="true" />

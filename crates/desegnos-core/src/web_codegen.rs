@@ -282,9 +282,9 @@ fn rules(elements: &[Element], parent: &ElementLayout, rules: &mut BTreeMap<Uuid
             if let Some(value) = max { css.push_str(&format!("max-{axis}:{};", length(value))); }
         }
         css.push_str(if main_fill { "flex:1 1 0;" } else { "flex:0 0 auto;" });
-        css.push_str(&format!("background:{};border:{} solid {};border-radius:{};opacity:{};transform:rotate({}deg);transform-origin:center;box-shadow:{} {} {} {};color:{};font-family:{};font-size:{};font-weight:{};font-style:{};line-height:{};letter-spacing:{};text-align:{};object-fit:cover;",
+        css.push_str(&format!("background:{};border:{} solid {};border-radius:{};opacity:{};transform:rotate({}deg) scale({},{});transform-origin:center;box-shadow:{} {} {} {};color:{};font-family:{};font-size:{};font-weight:{};font-style:{};line-height:{};letter-spacing:{};text-align:{};object-fit:cover;",
             style.fill.as_deref().unwrap_or("transparent"), length(style.stroke.width), style.stroke.color.as_deref().unwrap_or("transparent"),
-            if matches!(element.kind, ElementKind::Ellipse) { "50%".into() } else { length(style.radius) }, style.opacity, element.rotation,
+            if matches!(element.kind, ElementKind::Ellipse) { "50%".into() } else { length(style.radius) }, style.opacity, element.rotation, if style.flip_x { -1 } else { 1 }, if style.flip_y { -1 } else { 1 },
             length(style.shadow.x), length(style.shadow.y), length(style.shadow.blur), style.shadow.color.as_deref().unwrap_or("transparent"),
             text.color, font_family(&text.font_family), length(text.size), text.weight, if text.italic { "italic" } else { "normal" }, text.line_height,
             length(text.letter_spacing), match text.align { TextAlign::Left => "left", TextAlign::Center => "center", TextAlign::Right => "right" }));

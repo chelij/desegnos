@@ -21,7 +21,7 @@ import { playIsActive } from './projectCanvas/play';
 // A click with the Boundary tool places its default boundary instead of doing nothing.
 
 export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>(function ProjectCanvas({
-  project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
+  editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
   addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
@@ -29,12 +29,12 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
 }, ref) {
   const {
-    surface, panning, spaceHeld, zoomHeld, painterArmed, dropHover, dotStyle, pointerDown, keyDown,
+    runCanvasAction, surface, panning, spaceHeld, zoomHeld, painterArmed, dropHover, dotStyle, pointerDown, keyDown,
     doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, moving, editing, movingElements,
     openPlaceholder, viewport, inverse, boundaries, requestDraft, draftArea, movingItems, draftNote, draft,
     draftElement, marquee, zoomRect, entries, autoLinks, pointerDraft, selectedPointerIds, choosePointer,
     createdPointer, widthPreview, setWidthPreview, selectionScreen, viewSize, selectionFill, selectionLinked,
-    selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection, setSelectionScope,
+    selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection, distributeSelection, setSelectionScope,
     startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements, deleteSelectedLayers,
     minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer, startReattach,
     selectedElementTargets, startElementResize, editingElement, editingScreen, commitEditingText,
@@ -42,7 +42,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, previewScreen, dropNotice,
     setDropNotice,
-  } = useProjectCanvas({ project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
+  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
   const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
   const slides = project.pages;
   const slideIndex = Math.max(0, slides.findIndex(page => page.id === play.boundary));
@@ -116,7 +116,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     })}
     <BoundaryLabels project={project} boundaries={boundaries} moving={moving} draft={draft} draftKind={boundaryKind} focused={focused} selection={selection} camera={camera} openPage={openPage} />
     {selectionScreen && <SelectionBar screen={selectionScreen} viewWidth={viewSize.width} fill={selectionFill} linked={selectionLinked} linkable={selectionLinkable} hyperlink={selectionHyperlink} scope={selectionScope}
-      onFill={setSelectionFill} onAlign={alignSelection} onScope={setSelectionScope} onRequest={() => { startRequestOnSelection(); }}
+      onFill={setSelectionFill} onAlign={alignSelection} onDistribute={distributeSelection} count={selectedElementTargets.length} onScope={setSelectionScope} onRequest={() => { startRequestOnSelection(); }}
       onLinkTo={focusElementLink} onLink={linkSelection} onUnlink={unlinkSelection} onDuplicate={duplicateElements} onDelete={deleteSelectedLayers} />}
     {minimapVisible && <Minimap boundaries={boundaries} reference={project.reference} camera={camera} viewSize={viewSize}
       move={next => { stopTransition(); touched.current = true; setCamera(next); }} />}
@@ -125,7 +125,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       version={scrubbed.boundaries.filter(boundary => boundaryVisible(moving?.sizeId === boundary.sizeId ? moving.rect : boundary.rect, viewport, 200 / camera.zoom)).map(boundary => boundary.sizeId).join(',') + '|'
         + Object.entries(movingElements).map(([id, rect]) => `${id}:${rect.x},${rect.y},${rect.width},${rect.height}`).join('|')} onResizeStart={startElementResize} />}
     {editing && editingElement && editingScreen && <ElementTextEditor key={`${editing.elementId}:${editing.created}`} element={editingElement} screen={editingScreen} zoom={camera.zoom}
-      autoWidth={editing.autoWidth} autoFocus onCommit={commitEditingText} />}
+      autoWidth={editing.autoWidth} autoFocus onAction={runCanvasAction} onCommit={commitEditingText} />}
     {placeholderChoice && <PlaceholderChoiceRow screen={placeholderChoice.screen}
       include={() => resolvePlaceholder(placeholderChoice, true)} dismiss={() => resolvePlaceholder(placeholderChoice, false)}
       close={() => { setPlaceholderChoice(null); surface.current?.focus({ preventScroll: true }); }} />}

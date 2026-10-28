@@ -10,7 +10,7 @@
 //! Masks use two pixels per PDF point unless the four-megapixel limit requires downsampling.
 //! Identical shadows share an XObject across pages; sharp shadows remain vector paths.
 use super::{
-    Clip, Group, Item, Path, Picture, Point, Rgba, Rotate, Scene, Segment, Shadow, ShadowShape,
+    Clip, Group, Item, LayerTransform, Path, Picture, Point, Rgba, Scene, Segment, Shadow, ShadowShape,
     Shape,
 };
 use flate2::{Compression, write::ZlibEncoder};
@@ -270,8 +270,8 @@ impl Page<'_> {
         let scene = self.scene;
         let (parent_opacity, parent_current) = (self.opacity, self.current);
         self.stream.push_str("q\n");
-        if let Some(rotate) = group.rotate {
-            write_rotation(&mut self.stream, scene, &rotate);
+        if let Some(transform) = group.transform {
+            write_transform(&mut self.stream, scene, &transform);
         }
         if let Some(clip) = group.clip {
             let path = clip_path(clip);
@@ -444,18 +444,18 @@ fn set_stroke(stream: &mut String, colour: Rgba) {
     let _ = write!(stream, "{r:.3} {g:.3} {b:.3} RG ");
 }
 
-/// A clockwise canvas rotation about its centre, as PDF's counter-clockwise `cm` matrix.
-fn write_rotation(stream: &mut String, scene: &Scene, rotate: &Rotate) {
-    let (sin, cos) = rotate.degrees.to_radians().sin_cos();
-    let cx = rotate.cx * SCALE;
-    let cy = pdf_y(scene, rotate.cy);
-    let e = cx - cos * cx - sin * cy;
-    let f = cy + sin * cx - cos * cy;
-    let _ = writeln!(
-        stream,
-        "{cos:.6} {:.6} {sin:.6} {cos:.6} {e:.6} {f:.6} cm",
-        -sin
-    );
+/// The canvas transform about its centre, with PDF's upward Y axis.
+fn write_transform(stream: &mut String, scene: &Scene, transform: &LayerTransform) {
+    let (sin, cos) = transform.degrees.to_radians().sin_cos();
+    let cx = transform.cx * SCALE;
+    let cy = pdf_y(scene, transform.cy);
+    let a = cos * transform.sx;
+    let b = -sin * transform.sx;
+    let c = sin * transform.sy;
+    let d = cos * transform.sy;
+    let e = cx - a * cx - c * cy;
+    let f = cy - b * cx - d * cy;
+    let _ = writeln!(stream, "{a:.6} {b:.6} {c:.6} {d:.6} {e:.6} {f:.6} cm");
 }
 
 fn write_path(stream: &mut String, scene: &Scene, path: &Path) {
@@ -681,6 +681,18 @@ mod tests {
     }
 
     #[test]
+    fn a_horizontal_reflection_keeps_the_layer_centre_fixed_in_pdf() {
+        let page = scene(vec![]);
+        let mut stream = String::new();
+        write_transform(&mut stream, &page, &LayerTransform {
+            sx: -1.0, sy: 1.0, degrees: 0.0, cx: 100.0, cy: 100.0,
+        });
+        let matrix: Vec<f64> = stream.split_whitespace().take(6)
+            .map(|value| value.parse().unwrap()).collect();
+        assert_eq!(matrix, vec![-1.0, 0.0, 0.0, 1.0, 200.0 * SCALE, 0.0]);
+    }
+
+    #[test]
     fn blurred_shadows_embed_a_soft_mask_and_reuse_it_under_rotation() {
         let first = shadow(20.0);
         let mut moved = first.clone();
@@ -696,7 +708,9 @@ mod tests {
             Item::Shadow(first),
             Item::Group(Group {
                 clip: None,
-                rotate: Some(Rotate {
+                transform: Some(LayerTransform {
+                    sx: 1.0,
+                    sy: 1.0,
                     degrees: 30.0,
                     cx: 100.0,
                     cy: 100.0,

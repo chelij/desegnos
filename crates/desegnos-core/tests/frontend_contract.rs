@@ -399,6 +399,8 @@ fn populated(mut project: Project) -> Project {
                 ElementOverride {
                     rect: Some(rect(12.0, 22.0, 100.0, 30.0)),
                     style: Some(ElementStyle {
+                        flip_x: false,
+                        flip_y: false,
                         sizing: Default::default(),
                         padding: None,
                         references: Default::default(),

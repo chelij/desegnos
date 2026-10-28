@@ -399,7 +399,7 @@ export function createCanvasInteraction(context: () => Context) {
       active.current = point;
     } else if (active.kind === 'move-elements') {
       active.axisLocked = event.shiftKey;
-      const delta = elementMoveDelta(active.entries, active.start, point, !event.altKey, active.axisLocked);
+      const delta = elementMoveDelta(active.entries, active.start, point, project.gridSettings.snap, active.axisLocked);
       const rects: Record<string, Rect> = {};
       for (const entry of active.entries) {
         const world = { ...entry.world, x: entry.world.x + delta.x, y: entry.world.y + delta.y };
@@ -436,7 +436,7 @@ export function createCanvasInteraction(context: () => Context) {
   }
 
   function pointerUp(event: DragInput) {
-    const { drag, setPanning, selectBoundary, surface, touched, camera, setCamera, worldToScreen, persistMove, persistDraw, closeRequestArea, busy, addReference, createdItem, selectReference, boundaryRect, pendingImage, placeElement, createdElement, setEditing, setPendingImage, onTool, duplicateElementMove, lastPointer, commitElementMove, updateElements, moveElements, marqueeTargets, selection, selectElement, selectTargets, endpointAt, addPointer, createdPointer, setArmedPointer, selectPointer, updatePointer, commitMove, updateReference } = context();
+    const { project, drag, setPanning, selectBoundary, surface, touched, camera, setCamera, worldToScreen, persistMove, persistDraw, closeRequestArea, busy, addReference, createdItem, selectReference, boundaryRect, pendingImage, placeElement, createdElement, setEditing, setPendingImage, onTool, duplicateElementMove, lastPointer, commitElementMove, updateElements, moveElements, marqueeTargets, selection, selectElement, selectTargets, endpointAt, addPointer, createdPointer, setArmedPointer, selectPointer, updatePointer, commitMove, updateReference } = context();
     const active = drag.current;
     if (!active || active.pointerId !== event.pointerId) return;
     drag.current = null;
@@ -510,8 +510,8 @@ export function createCanvasInteraction(context: () => Context) {
     }
     if (active.kind === 'move-elements') {
       if (active.moved) {
-        if (active.duplicate) void duplicateElementMove(active, lastPointer.current ?? active.start, !event.altKey).catch(() => {});
-        else void commitElementMove(active, lastPointer.current ?? active.start, !event.altKey).catch(() => {});
+        if (active.duplicate) void duplicateElementMove(active, lastPointer.current ?? active.start, project.gridSettings.snap).catch(() => {});
+        else void commitElementMove(active, lastPointer.current ?? active.start, project.gridSettings.snap).catch(() => {});
       }
       return;
     }

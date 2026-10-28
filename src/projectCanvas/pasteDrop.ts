@@ -38,6 +38,7 @@ type Context = {
   pasteMode: PasteMode | null;
   pasteChoice: PasteChoice | null;
   duplicateRepeat: import("react").RefObject<DuplicateRepeat | null>;
+  duplicateBurst: import("react").RefObject<{ key: string; at: number; count: number; offset: Point } | null>;
   addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>;
   selectReference: (itemId: string, additive?: boolean) => void;
   elementRectAt: (sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect) => Rect;
@@ -155,12 +156,20 @@ export function createPasteDrop(context: () => Context) {
   }
 
   function duplicateElements() {
-    const { elementEntries, selection, duplicateRepeat, pasteMode, project, boundaryRect, selectTargets } = context();
+    const { elementEntries, selection, duplicateRepeat, duplicateBurst, pasteMode, project, boundaryRect, selectTargets } = context();
     const entries = elementEntries(selection);
     if (!entries.length) return;
     const repeat = duplicateRepeat.current;
     const key = entryTargetKey(entries);
-    const offset = repeat?.key === key ? repeat.offset : { x: 16, y: 16 };
+    // Native edits can finish after the next keydown. Copies queued from the same
+    // source still advance, rather than piling up at one stale absolute position.
+    const previous = duplicateBurst.current;
+    const at = performance.now();
+    const continues = previous?.key === key && at - previous.at < 500;
+    const step = continues ? previous.offset : repeat?.key === key ? repeat.offset : { x: 16, y: 16 };
+    const count = continues ? previous.count + 1 : 1;
+    duplicateBurst.current = { key, at, count, offset: step };
+    const offset = { x: step.x * count, y: step.y * count };
     const mode = pasteMode ?? pasteDefault() ?? 'unlinked';
     const shared = nestedLayerIds(project);
     const groups = new Map<string, { target: PasteTarget; entries: ClipboardEntry[] }>();
@@ -183,7 +192,7 @@ export function createPasteDrop(context: () => Context) {
         inserted.push(...targets);
         pending -= 1;
         if (pending > 0) return;
-        duplicateRepeat.current = { key: targetKey(inserted), offset };
+        duplicateRepeat.current = { key: targetKey(inserted), offset: step };
         selectTargets(inserted);
       }, false);
     }

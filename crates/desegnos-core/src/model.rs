@@ -1604,6 +1604,15 @@ pub enum Command {
     PasteLinkedInstances {
         items: Vec<LinkedPasteInstance>,
     },
+    NudgeElements {
+        moves: Vec<ElementMove>,
+        dx: f64,
+        dy: f64,
+    },
+    StackElements {
+        page_id: Uuid,
+        ids: Vec<Uuid>,
+    },
     MoveElements {
         moves: Vec<ElementMove>,
     },
@@ -1723,6 +1732,8 @@ impl Command {
             Self::UnlinkElements { .. } => "Unlinked elements",
             Self::RemoveLinkedDefinition { .. } => "Removed a linked element",
             Self::PasteLinkedInstances { .. } => "Pasted linked elements",
+            Self::NudgeElements { .. } => "Nudged elements",
+            Self::StackElements { .. } => "Added Stack",
             Self::MoveElements { .. } => "Moved elements",
             Self::RemoveElements { .. } => "Removed elements",
             Self::DeleteItems { .. } => "Removed items",
@@ -3264,6 +3275,8 @@ impl Project {
             Command::UnlinkElements { ids } => next.unlink_elements(ids)?,
             Command::RemoveLinkedDefinition { id } => next.remove_linked_definition(id)?,
             Command::PasteLinkedInstances { items } => next.paste_linked_instances(items)?,
+            Command::NudgeElements { moves, dx, dy } => next.nudge_elements(moves, dx, dy)?,
+            Command::StackElements { page_id, ids } => next.stack_elements(page_id, ids)?,
             Command::MoveElements { moves } => next.move_elements(moves)?,
             Command::RemoveElements { page_id, ids } => next.remove_elements(page_id, ids)?,
             Command::DeleteItems {

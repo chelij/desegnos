@@ -117,6 +117,12 @@ impl Session {
     /// Edits that land on the same thing in quick succession become one history step.
     fn burst_key(&self, command: &Command) -> Option<String> {
         match command {
+            Command::NudgeElements { moves, .. } => {
+                let mut targets: Vec<_> = moves.iter().map(|movement|
+                    format!("{}:{:?}:{}", movement.id, movement.size_id, movement.all_sizes)).collect();
+                targets.sort();
+                Some(format!("nudge:{}", targets.join(",")))
+            }
             // Only the text of a request changed (its targets and attachments stayed put).
             Command::UpdateRequest { request } => self
                 .project
@@ -253,7 +259,11 @@ impl Session {
             && !self.undo.is_empty()
             && self.burst.as_ref().is_some_and(|(current, at)| {
                 Some(current) == key.as_ref()
-                    && (first_text || now.duration_since(*at) < STEP_PAUSE)
+                    && (first_text || now.duration_since(*at) < if current.starts_with("nudge:") {
+                        std::time::Duration::from_millis(500)
+                    } else {
+                        STEP_PAUSE
+                    })
             });
         if continues {
             self.user_revision_floor = candidate.revision;

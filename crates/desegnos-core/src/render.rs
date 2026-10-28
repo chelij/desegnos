@@ -361,9 +361,11 @@ pub(crate) struct Clip {
     pub radius: f64,
 }
 
-/// A rotation in canvas degrees about a point, which is the centre of a layer's rect.
+/// Rotation and reflection about the centre of a layer's rect.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Rotate {
+pub(crate) struct LayerTransform {
+    pub sx: f64,
+    pub sy: f64,
     pub degrees: f64,
     pub cx: f64,
     pub cy: f64,
@@ -395,7 +397,7 @@ pub(crate) struct Shadow {
 #[derive(Debug, Clone)]
 pub(crate) struct Group {
     pub clip: Option<Clip>,
-    pub rotate: Option<Rotate>,
+    pub transform: Option<LayerTransform>,
     pub alpha: f64,
     pub items: Vec<Item>,
 }
@@ -570,7 +572,7 @@ fn build_scene(project: &Project, page: &RenderPage<'_>) -> Scene {
             },
             radius: 0.0,
         }),
-        rotate: None,
+        transform: None,
         alpha: 1.0,
         items,
     }));
@@ -621,7 +623,7 @@ fn paint_element(
             .then_some(Clip { rect: at, radius });
         items.push(Item::Group(Group {
             clip,
-            rotate: None,
+            transform: None,
             alpha: 1.0,
             items: own,
         }));
@@ -634,7 +636,7 @@ fn paint_element(
         let clip = clips_content(&element.kind).then_some(Clip { rect: at, radius });
         items.push(Item::Group(Group {
             clip,
-            rotate: None,
+            transform: None,
             alpha: 1.0,
             items: content_items,
         }));
@@ -643,14 +645,16 @@ fn paint_element(
         return;
     }
     let degrees = element.rotation % 360.0;
-    let rotate = (degrees.is_finite() && degrees.abs() > 0.000_001).then_some(Rotate {
+    let transform = (degrees.abs() > 0.000_001 || element.style.flip_x || element.style.flip_y).then_some(LayerTransform {
+        sx: if element.style.flip_x { -1.0 } else { 1.0 },
+        sy: if element.style.flip_y { -1.0 } else { 1.0 },
         degrees,
         cx: at.x + at.width / 2.0,
         cy: at.y + at.height / 2.0,
     });
     out.push(Item::Group(Group {
         clip: None,
-        rotate,
+        transform,
         alpha: opacity,
         items,
     }));
@@ -1982,10 +1986,16 @@ fn write_items(svg: &mut String, scene: &Scene, items: &[Item], ids: &mut SvgIds
                 if group.alpha < 0.999 {
                     attributes.push_str(&format!(" opacity=\"{:.3}\"", group.alpha));
                 }
-                if let Some(rotate) = group.rotate {
+                if let Some(transform) = group.transform {
+                    let reflection = if transform.sx == 1.0 && transform.sy == 1.0 {
+                        String::new()
+                    } else {
+                        format!(" translate({:.3} {:.3}) scale({} {}) translate({:.3} {:.3})",
+                            transform.cx, transform.cy, transform.sx, transform.sy, -transform.cx, -transform.cy)
+                    };
                     attributes.push_str(&format!(
-                        " transform=\"rotate({:.4} {:.3} {:.3})\"",
-                        rotate.degrees, rotate.cx, rotate.cy
+                        " transform=\"rotate({:.4} {:.3} {:.3}){}\"",
+                        transform.degrees, transform.cx, transform.cy, reflection
                     ));
                 }
                 if group.clip.is_some() {
@@ -2061,10 +2071,10 @@ mod tests {
         })
     }
 
-    fn group(rotate: Option<Rotate>, alpha: f64, items: Vec<Item>) -> Item {
+    fn group(transform: Option<LayerTransform>, alpha: f64, items: Vec<Item>) -> Item {
         Item::Group(Group {
             clip: None,
-            rotate,
+            transform,
             alpha,
             items,
         })
@@ -2078,7 +2088,9 @@ mod tests {
         let mut turned = scene();
         let child = boxed(&mut turned, rect(10.0, 10.0, 20.0, 20.0));
         turned.items.push(group(
-            Some(Rotate {
+            Some(LayerTransform {
+                sx: 1.0,
+                sy: 1.0,
                 degrees: 45.0,
                 cx: 50.0,
                 cy: 25.0,
@@ -2092,6 +2104,22 @@ mod tests {
             "{turned_svg}"
         );
         assert_ne!(scene_svg(&upright), turned_svg);
+    }
+
+    #[test]
+    fn reflection_moves_a_child_about_the_layer_centre_in_svg_and_png() {
+        let mut reflected = scene();
+        let child = boxed(&mut reflected, rect(10.0, 10.0, 20.0, 20.0));
+        reflected.items.push(group(Some(LayerTransform {
+            sx: -1.0, sy: 1.0, degrees: 0.0, cx: 50.0, cy: 25.0,
+        }), 1.0, vec![child]));
+        let mut expected = scene();
+        let child = boxed(&mut expected, rect(70.0, 10.0, 20.0, 20.0));
+        expected.items.push(child);
+        let svg = scene_svg(&reflected);
+        assert!(svg.contains("scale(-1 1)"), "{svg}");
+        assert_eq!(rasterize(&svg, reflected.width, reflected.height).unwrap(),
+            rasterize(&scene_svg(&expected), expected.width, expected.height).unwrap());
     }
 
     #[test]
@@ -2141,7 +2169,9 @@ mod tests {
                 rect: rect(20.0, 20.0, 60.0, 40.0),
                 radius: 8.0,
             }),
-            rotate: Some(Rotate {
+            transform: Some(LayerTransform {
+                sx: 1.0,
+                sy: 1.0,
                 degrees: 30.0,
                 cx: 50.0,
                 cy: 40.0,
