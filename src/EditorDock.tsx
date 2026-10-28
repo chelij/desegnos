@@ -644,8 +644,8 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
       </li>)}
     </LayerGroup>}
     {project.reference.length > 0 && <LayerGroup section="reference" title="Reference">
-      {[...project.reference].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x).map(item => <li key={item.id}>
-        <button type="button" className="dock-tree-select dock-tree-item" aria-pressed={selected.has(canvasTargetKey({ kind: 'reference', itemId: item.id }))} onClick={() => selectReference(item.id)}>
+      {[...project.reference].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x).map(item => <li key={item.id} className="dock-linked-row">
+        <button type="button" className="dock-tree-select" aria-pressed={selected.has(canvasTargetKey({ kind: 'reference', itemId: item.id }))} onClick={() => selectReference(item.id)}>
           <Icon name={referenceIcon(item)} size={12} /><span>{referenceLabel(item)}</span>
         </button>
         <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${referenceLabel(item)}`} title="Delete reference item" onClick={() => removeReference(item.id)}><Icon name="trash" size={13} /></button>

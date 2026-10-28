@@ -87,6 +87,9 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
   }, [scheduleExportCheck]);
   useEffect(() => { if (showHistory) scheduleExportCheck(); }, [showHistory, scheduleExportCheck]);
   useEffect(() => { setShowExport(false); setExportJob(null); setExportError(''); setPreview(null); setPlay(idlePlay); }, [view?.project?.id]);
+  // An error about a boundary that was added or removed no longer describes the current export.
+  const pageIds = view?.project?.pages.map(page => page.id).join() ?? '';
+  useEffect(() => { setExportError(''); }, [pageIds]);
   useEffect(() => { try { localStorage.setItem(EXPORT_FOLDERS_KEY, JSON.stringify(exportFolders)); } catch { /* Preferences can be unavailable. */ } }, [exportFolders]);
   // A new project starts in Documents/Desegnos/<project name>, so Export is one click.
   useEffect(() => {

@@ -40,7 +40,8 @@ export function canvasView(project: Project): CanvasView {
     return view;
   }
   const boundaries = layoutBoundaries(project.pages.map(page => ({ id: page.id, sizes: page.sizes.map(size => ({
-    ...size, height: Math.max(size.height, elementBoundsHeight(resolveForSize(project, page, size.id), size.height)),
+    // Only pages grow with their content; screens, slides and images keep their exact height.
+    ...size, height: size.kind === 'page' ? Math.max(size.height, elementBoundsHeight(resolveForSize(project, page, size.id), size.height)) : size.height,
   })) })), project.homePageId);
   const view = { boundaries, boxes: canvasBoxes(project, boundaries) };
   views.set(project, { revision: project.revision, view });

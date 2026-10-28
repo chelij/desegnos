@@ -480,7 +480,7 @@ export function createCanvasInteraction(context: () => Context) {
       const id = crypto.randomUUID();
       const rect = active.moved ? active.rect : { x: active.rect.x, y: active.rect.y, ...CLICK_NOTE_SIZE };
       busy.current = true;
-      void addReference({ id, rect, kind: { kind: 'note', text: '' } }).then(() => { createdItem.current = id; selectReference(id); }).catch(() => {}).finally(() => { busy.current = false; });
+      void addReference({ id, rect, kind: { kind: 'note', text: '' } }).then(() => { createdItem.current = id; selectReference(id); onTool('select'); }).catch(() => {}).finally(() => { busy.current = false; });
       return;
     }
     if (active.kind === 'draw-element') {
