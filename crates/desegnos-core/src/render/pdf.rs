@@ -4,12 +4,11 @@
 //! embeds no font program and needs no font installed. Pictures are decoded to raw RGB and
 //! deflated, so reading the PDF needs no image codec.
 //!
-//! Two things PDF cannot draw natively are approximated. Opacity is a graphics state constant,
-//! so the writer multiplies opacity down the tree itself and switches state only where the
-//! product changes; the same mechanism carries a fill's own alpha, which PDF colours do not
-//! have. A Gaussian-blurred shadow becomes [`SHADOW_LAYERS`] silhouettes growing outwards with
-//! one fixed alpha each, chosen so the overlap in the middle adds up to the shadow's own alpha:
-//! a soft ramp in place of the blur that PNG and SVG get.
+//! Opacity is multiplied down the tree and carried by graphics states, including a fill's
+//! own alpha. Blurred shadows use tiny-skia silhouettes and Gaussian alpha masks (sigma =
+//! blur / 2), padded by three sigma and embedded as RGB image XObjects with soft masks.
+//! Masks use two pixels per PDF point unless the four-megapixel limit requires downsampling.
+//! Identical shadows share an XObject across pages; sharp shadows remain vector paths.
 use super::{
     Clip, Group, Item, Path, Picture, Point, Rgba, Rotate, Scene, Segment, Shadow, ShadowShape,
     Shape,
@@ -20,14 +19,15 @@ use std::io::{Cursor, Write as _};
 
 /// PDF points per canvas pixel (96 dpi pixels to 72 dpi points).
 const SCALE: f64 = 0.75;
-/// Silhouettes that stand in for one Gaussian-blurred shadow.
-const SHADOW_LAYERS: usize = 6;
+/// Maximum raster area per shadow, bounding allocation and embedded image size.
+const MAX_SHADOW_PIXELS: u32 = 4_000_000;
 
 pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
     // Content comes first: it is what discovers the pictures and the opacity states the
     // resources dictionary has to hold.
     let mut alphas = Alphas::default();
     let mut pictures: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut shadows = Vec::new();
     let mut streams: Vec<String> = Vec::new();
     for scene in scenes {
         let mut page = Page {
@@ -37,6 +37,7 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
             current: 1.0,
             alphas: &mut alphas,
             pictures: &mut pictures,
+            shadows: &mut shadows,
         };
         page.items(&scene.items);
         streams.push(page.stream);
@@ -45,7 +46,8 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
     // 1 catalog, 2 pages, 3 resources, then one page and one content object per scene.
     let first_page = 4;
     let first_picture = first_page + scenes.len() * 2;
-    let first_state = first_picture + pictures.len();
+    let first_shadow = first_picture + pictures.len();
+    let first_state = first_shadow + shadows.len() * 2;
 
     let mut writer = Writer::default();
     writer.dict(1, "<< /Type /Catalog /Pages 2 0 R >>".into());
@@ -60,9 +62,12 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
             scenes.len()
         ),
     );
-    let xobjects: Vec<String> = (0..pictures.len())
+    let mut xobjects: Vec<String> = (0..pictures.len())
         .map(|index| format!("/Im{index} {} 0 R", first_picture + index))
         .collect();
+    xobjects.extend(
+        (0..shadows.len()).map(|index| format!("/Sh{index} {} 0 R", first_shadow + index * 2)),
+    );
     let states: Vec<String> = (0..alphas.values.len())
         .map(|index| format!("/GS{index} {} 0 R", first_state + index))
         .collect();
@@ -90,6 +95,27 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
     for (index, (mime, bytes)) in pictures.iter().enumerate() {
         let image = image_stream(mime, bytes);
         writer.stream(first_picture + index, image, true);
+    }
+    for (index, shadow) in shadows.iter().enumerate() {
+        let id = first_shadow + index * 2;
+        let rgb = [shadow.fill.r, shadow.fill.g, shadow.fill.b]
+            .repeat(shadow.width as usize * shadow.height as usize);
+        writer.stream(
+            id,
+            raster_stream(
+                shadow.width,
+                shadow.height,
+                "DeviceRGB",
+                &rgb,
+                &format!(" /SMask {} 0 R", id + 1),
+            ),
+            true,
+        );
+        writer.stream(
+            id + 1,
+            raster_stream(shadow.width, shadow.height, "DeviceGray", &shadow.mask, ""),
+            true,
+        );
     }
     for (index, alpha) in alphas.values.iter().enumerate() {
         writer.dict(
@@ -135,6 +161,7 @@ struct Page<'a> {
     current: f64,
     alphas: &'a mut Alphas,
     pictures: &'a mut Vec<(String, Vec<u8>)>,
+    shadows: &'a mut Vec<ShadowImage>,
 }
 
 impl Page<'_> {
@@ -198,29 +225,38 @@ impl Page<'_> {
     fn shadow(&mut self, shadow: &Shadow) {
         let scene = self.scene;
         let (parent_opacity, parent_current) = (self.opacity, self.current);
-        // The silhouette is its own state scope: its layers each want a different opacity, and
-        // `Q` puts the page's opacity back for whatever is painted over it.
+        // Keep the inherited transform (including rotation), clipping and group opacity.
         self.stream.push_str("q\n");
-        set_fill(&mut self.stream, shadow.fill);
-        let sigma = shadow.blur / 2.0;
-        if sigma <= 0.01 {
-            self.paint_alpha(shadow.fill.a);
-            let path = shadow_path(shadow.shape, 0.0);
-            write_path(&mut self.stream, scene, &path);
+        self.paint_alpha(shadow.fill.a);
+        if shadow.blur <= 0.0 {
+            set_fill(&mut self.stream, shadow.fill);
+            write_path(&mut self.stream, scene, &shadow_path(shadow.shape));
             self.stream.push_str("f\n");
         } else {
-            // A Gaussian fades out about two standard deviations from the silhouette, so the
-            // outermost stand-in grows by that much and the innermost is the silhouette itself.
-            let layers = SHADOW_LAYERS;
-            let spread = sigma * 2.0;
-            let step = spread / (layers - 1) as f64;
-            // Overlapping the layers evenly gets the middle back to the shadow's own alpha.
-            let layer_alpha = 1.0 - (1.0 - shadow.fill.a.clamp(0.0, 1.0)).powf(1.0 / layers as f64);
-            for layer in (0..layers).rev() {
-                self.paint_alpha(layer_alpha);
-                let path = shadow_path(shadow.shape, layer as f64 * step);
-                write_path(&mut self.stream, scene, &path);
-                self.stream.push_str("f\n");
+            let key = ShadowImage::key(shadow);
+            let index = self
+                .shadows
+                .iter()
+                .position(|image| image.key == key)
+                .or_else(|| {
+                    let image = ShadowImage::new(shadow)?;
+                    self.shadows.push(image);
+                    Some(self.shadows.len() - 1)
+                });
+            if let Some(index) = index {
+                let image = &self.shadows[index];
+                let bounds = shadow.shape.bounds();
+                let padding = shadow.blur * 1.5;
+                let width = f64::from(image.width) / image.scale;
+                let height = f64::from(image.height) / image.scale;
+                let _ = writeln!(
+                    self.stream,
+                    "{:.6} 0 0 {:.6} {:.6} {:.6} cm\n/Sh{index} Do",
+                    width * SCALE,
+                    height * SCALE,
+                    (bounds.x - padding) * SCALE,
+                    pdf_y(scene, bounds.y - padding + height)
+                );
             }
         }
         self.stream.push_str("Q\n");
@@ -264,12 +300,135 @@ fn clip_path(clip: Clip) -> Path {
     Path::rect(clip.rect, clip.radius)
 }
 
-/// The silhouette a shadow layer draws, grown by `spread` on every side.
-fn shadow_path(shape: ShadowShape, spread: f64) -> Path {
-    let rect = super::inflate(shape.bounds(), spread);
+/// The same silhouette used by the SVG/PNG renderer, in canvas coordinates.
+fn shadow_path(shape: ShadowShape) -> Path {
     match shape {
-        ShadowShape::Rect { radius, .. } => Path::rect(rect, radius + spread),
-        ShadowShape::Ellipse(_) => Path::ellipse(rect),
+        ShadowShape::Rect { rect, radius } => Path::rect(rect, radius),
+        ShadowShape::Ellipse(rect) => Path::ellipse(rect),
+    }
+}
+
+struct ShadowImage {
+    key: [u64; 9],
+    fill: Rgba,
+    width: u32,
+    height: u32,
+    scale: f64,
+    mask: Vec<u8>,
+}
+
+impl ShadowImage {
+    // Position and the current transform do not change the raster silhouette.
+    fn key(shadow: &Shadow) -> [u64; 9] {
+        let bounds = shadow.shape.bounds();
+        let (kind, radius) = match shadow.shape {
+            ShadowShape::Rect { radius, .. } => (0, radius),
+            ShadowShape::Ellipse(_) => (1, 0.0),
+        };
+        [
+            kind,
+            bounds.width.to_bits(),
+            bounds.height.to_bits(),
+            radius.to_bits(),
+            u64::from(shadow.fill.r),
+            u64::from(shadow.fill.g),
+            u64::from(shadow.fill.b),
+            shadow.fill.a.to_bits(),
+            shadow.blur.to_bits(),
+        ]
+    }
+
+    fn new(shadow: &Shadow) -> Option<Self> {
+        let bounds = shadow.shape.bounds();
+        let sigma = shadow.blur / 2.0;
+        let padding = sigma * 3.0;
+        let width = bounds.width + padding * 2.0;
+        let height = bounds.height + padding * 2.0;
+        if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+            return None;
+        }
+        // Work in canvas units: one canvas pixel is SCALE PDF points. Reserve room for
+        // rounding so even extremely thin masks stay within the pixel budget.
+        let limit = f64::from(MAX_SHADOW_PIXELS);
+        let mut scale = (2.0 * SCALE)
+            .min((limit / (width * height)).sqrt())
+            .min(limit / width)
+            .min(limit / height);
+        let dimensions = |scale: f64| {
+            (
+                (width * scale).ceil().max(1.0) as u32,
+                (height * scale).ceil().max(1.0) as u32,
+            )
+        };
+        let (mut pixel_width, mut pixel_height) = dimensions(scale);
+        while u64::from(pixel_width) * u64::from(pixel_height) > u64::from(MAX_SHADOW_PIXELS) {
+            scale *= 0.99 * (limit / (f64::from(pixel_width) * f64::from(pixel_height))).sqrt();
+            (pixel_width, pixel_height) = dimensions(scale);
+        }
+        let mut pixmap = tiny_skia::Pixmap::new(pixel_width, pixel_height)?;
+        // Build at the origin so translation never changes the cache or f32 precision.
+        let local = super::Rect {
+            x: padding,
+            y: padding,
+            ..bounds
+        };
+        let shape = match shadow.shape {
+            ShadowShape::Rect { radius, .. } => ShadowShape::Rect {
+                rect: local,
+                radius,
+            },
+            ShadowShape::Ellipse(_) => ShadowShape::Ellipse(local),
+        };
+        let mut builder = tiny_skia::PathBuilder::new();
+        let point = |p: Point| ((p.x * scale) as f32, (p.y * scale) as f32);
+        for segment in shadow_path(shape).segments {
+            match segment {
+                Segment::Move(p) => {
+                    let (x, y) = point(p);
+                    builder.move_to(x, y);
+                }
+                Segment::Line(p) => {
+                    let (x, y) = point(p);
+                    builder.line_to(x, y);
+                }
+                Segment::Quad(c, p) => {
+                    let (cx, cy) = point(c);
+                    let (x, y) = point(p);
+                    builder.quad_to(cx, cy, x, y);
+                }
+                Segment::Cubic(a, b, p) => {
+                    let (ax, ay) = point(a);
+                    let (bx, by) = point(b);
+                    let (x, y) = point(p);
+                    builder.cubic_to(ax, ay, bx, by, x, y);
+                }
+                Segment::Close => builder.close(),
+            }
+        }
+        let path = builder.finish()?;
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color_rgba8(255, 255, 255, 255);
+        pixmap.fill_path(
+            &path,
+            &paint,
+            tiny_skia::FillRule::Winding,
+            tiny_skia::Transform::identity(),
+            None,
+        );
+        let mask = image::GrayImage::from_raw(
+            pixel_width,
+            pixel_height,
+            pixmap.pixels().iter().map(|pixel| pixel.alpha()).collect(),
+        )?;
+        let mask = image::imageops::blur(&mask, (sigma * scale) as f32).into_raw();
+        Some(Self {
+            key: Self::key(shadow),
+            fill: shadow.fill,
+            width: pixel_width,
+            height: pixel_height,
+            scale,
+            mask,
+        })
     }
 }
 
@@ -396,17 +555,26 @@ fn image_stream(mime: &str, bytes: &[u8]) -> Vec<u8> {
         None => (1, 1, vec![0_u8, 0, 0]),
     };
     let _ = mime;
-    let mut compressed = Vec::new();
-    {
-        let mut encoder = ZlibEncoder::new(&mut compressed, Compression::default());
-        let _ = encoder.write_all(&rgb);
-        let _ = encoder.finish();
-    }
+    raster_stream(width, height, "DeviceRGB", &rgb, "")
+}
+
+/// A deflated image stream; a shadow's RGB image references its grayscale soft mask.
+fn raster_stream(
+    width: u32,
+    height: u32,
+    colour_space: &str,
+    bytes: &[u8],
+    extra: &str,
+) -> Vec<u8> {
+    let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+    encoder
+        .write_all(bytes)
+        .expect("compress image into memory");
+    let compressed = encoder.finish().expect("finish image compression");
     let mut stream = format!(
-        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
+        "<< /Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{colour_space} /BitsPerComponent 8 /Filter /FlateDecode{extra} /Length {} >>\nstream\n",
         compressed.len()
-    )
-    .into_bytes();
+    ).into_bytes();
     stream.extend_from_slice(&compressed);
     stream.extend_from_slice(b"\nendstream");
     stream
@@ -468,5 +636,174 @@ impl Writer {
                 .as_bytes(),
         );
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Rect;
+    use super::*;
+
+    fn shadow(blur: f64) -> Shadow {
+        Shadow {
+            shape: ShadowShape::Rect {
+                rect: Rect {
+                    x: 60.0,
+                    y: 60.0,
+                    width: 80.0,
+                    height: 80.0,
+                },
+                radius: 0.0,
+            },
+            fill: Rgba {
+                r: 30,
+                g: 60,
+                b: 90,
+                a: 0.4,
+            },
+            blur,
+        }
+    }
+
+    fn scene(items: Vec<Item>) -> Scene {
+        Scene {
+            width: 240.0,
+            height: 240.0,
+            background: Rgba {
+                a: 0.0,
+                ..Rgba::BLACK
+            },
+            paths: Vec::new(),
+            items,
+        }
+    }
+
+    #[test]
+    fn blurred_shadows_embed_a_soft_mask_and_reuse_it_under_rotation() {
+        let first = shadow(20.0);
+        let mut moved = first.clone();
+        moved.shape = ShadowShape::Rect {
+            rect: Rect {
+                x: 90.0,
+                y: 30.0,
+                ..first.shape.bounds()
+            },
+            radius: 0.0,
+        };
+        let page = scene(vec![
+            Item::Shadow(first),
+            Item::Group(Group {
+                clip: None,
+                rotate: Some(Rotate {
+                    degrees: 30.0,
+                    cx: 100.0,
+                    cy: 100.0,
+                }),
+                alpha: 0.5,
+                items: vec![Item::Shadow(moved)],
+            }),
+        ]);
+        let pdf = deck(&[page.clone(), page]);
+        let content = String::from_utf8_lossy(&pdf);
+        assert_eq!(content.matches("/SMask ").count(), 1);
+        assert_eq!(content.matches("/Subtype /Image").count(), 2);
+        assert_eq!(content.matches("/Sh0 Do").count(), 4);
+        assert!(content.contains("/ColorSpace /DeviceGray"));
+        assert!(content.contains("/ColorSpace /DeviceRGB"));
+        assert!(content.contains("/Filter /FlateDecode"));
+        assert!(content.contains("0.866025 -0.500000 0.500000 0.866025"));
+        assert!(content.contains("105.000000 0 0 105.000000 22.500000 52.500000 cm\n/Sh0 Do"));
+        assert!(
+            content.contains("/ca 0.200"),
+            "group and shadow alpha multiply"
+        );
+    }
+
+    #[test]
+    fn zero_blur_stays_vector() {
+        let pdf = deck(&[scene(vec![Item::Shadow(shadow(0.0))])]);
+        let content = String::from_utf8_lossy(&pdf);
+        assert!(!content.contains("/SMask"));
+        assert!(!content.contains("/Subtype /Image"));
+        assert!(content.contains("f\n"));
+    }
+
+    #[test]
+    fn gaussian_mask_matches_png_alpha() {
+        let mut shadow = shadow(20.0);
+        shadow.fill.a = 1.0;
+        let mask = ShadowImage::new(&shadow).unwrap();
+        assert_eq!(mask.scale, 2.0 * SCALE);
+        assert_eq!((mask.width, mask.height), (210, 210));
+        // Supply the three-sigma filter region explicitly: this isolates the PDF blur
+        // from scene_svg's region calculation while using the production PNG rasteriser.
+        let svg = format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"240\" height=\"240\">\
+             <defs><filter id=\"blur0\" filterUnits=\"userSpaceOnUse\" \
+             x=\"30\" y=\"30\" width=\"140\" height=\"140\">\
+             <feGaussianBlur stdDeviation=\"10\"/></filter></defs>{}</svg>",
+            super::super::shadow_svg(&shadow, Some(0))
+        );
+        let png = super::super::rasterize(&svg, 240.0, 240.0).unwrap();
+        let png = image::load_from_memory(&png).unwrap().to_rgba8();
+        // At, one sigma outside, and two sigma outside the left edge. These samples
+        // distinguish a Gaussian's tails from the old concentric silhouettes.
+        for x in [40, 50, 60, 70, 80] {
+            let local_x = ((f64::from(x) + 0.5 - 30.0) * mask.scale) as usize;
+            let local_y = ((100.5 - 30.0) * mask.scale) as usize;
+            let actual = mask.mask[local_y * mask.width as usize + local_x];
+            let expected = png.get_pixel(x, 100)[3];
+            assert!(
+                actual.abs_diff(expected) <= 5,
+                "x={x}: mask {actual}, PNG {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn raster_area_is_capped() {
+        let mut shadow = shadow(2.0);
+        shadow.shape = ShadowShape::Ellipse(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 4000.0,
+            height: 2000.0,
+        });
+        let mask = ShadowImage::new(&shadow).unwrap();
+        assert!(u64::from(mask.width) * u64::from(mask.height) <= u64::from(MAX_SHADOW_PIXELS));
+        assert!(mask.scale < 2.0 * SCALE);
+    }
+
+    #[test]
+    fn qpdf_accepts_shadow_images() {
+        let path =
+            std::env::temp_dir().join(format!("desegnos-shadow-{}.pdf", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &path,
+            deck(&[scene(vec![
+                Item::Shadow(shadow(20.0)),
+                Item::Shadow(shadow(0.0)),
+            ])]),
+        )
+        .unwrap();
+        let result = std::process::Command::new("qpdf")
+            .arg("--check")
+            .arg(&path)
+            .output();
+        std::fs::remove_file(&path).unwrap();
+        let output = match result {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("qpdf is unavailable; skipping PDF validation");
+                return;
+            }
+            Err(error) => panic!("could not run qpdf: {error}"),
+        };
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }

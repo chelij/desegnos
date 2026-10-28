@@ -10,6 +10,7 @@ mod data_location;
 mod export;
 mod file_dialogs;
 mod generation;
+mod fonts;
 mod identity;
 mod image_drop;
 mod local_site;
@@ -89,6 +90,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            fonts::resolve_canvas_font,
+            fonts::load_canvas_font,
             request_zip::unpack_request_zip,
             export::prepare_export,
             export::start_export,

@@ -43,7 +43,8 @@
 //! `Archivo` always resolves to the file that ships with the app, and an unresolvable family
 //! falls back to Archivo instead of to an arbitrary installed font. Size, weight, italic, line
 //! height, letter spacing and alignment are applied as the canvas applies them: weight selects
-//! the closest face and sets the `wght` variation axis, italic is a shear of the upright face,
+//! the closest face and sets the `wght` variation axis; italic selects an italic face or shears
+//! an upright fallback,
 //! letter spacing follows every character including the last, and alignment positions each line
 //! inside the text box. Text wraps at the content box width, except for the single-line controls
 //! the canvas gives `white-space: nowrap` (button, link, select, checkbox, radio). Buttons and
@@ -1015,7 +1016,13 @@ fn inset(rect: Rect, amount: f64) -> Rect {
 
 /// A rect grown by the same amount on every side.
 fn inflate(rect: Rect, amount: f64) -> Rect {
-    inset(rect, -amount)
+    let amount = amount.max(0.0);
+    Rect {
+        x: rect.x - amount,
+        y: rect.y - amount,
+        width: rect.width + amount * 2.0,
+        height: rect.height + amount * 2.0,
+    }
 }
 
 fn clamp_radius(rect: Rect, radius: f64) -> f64 {
@@ -1313,6 +1320,97 @@ fn wrap_text(
 // Fonts
 // ---------------------------------------------------------------------------
 
+/// The exact primary face used by exports and the canvas. The ID identifies file contents
+/// and collection index, so aliases and styles selecting one face share a browser load.
+#[derive(Clone)]
+pub struct ResolvedFont {
+    pub id: String,
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    pub index: u32,
+    pub bundled: bool,
+    pub fell_back: bool,
+    pub italic: bool,
+}
+
+/// Resolve a CSS family list with the same database and fallback policy as the renderer.
+pub fn resolve_font(family: &str, weight: u16, italic: bool) -> ResolvedFont {
+    use std::sync::{Mutex, OnceLock};
+    type Requests = BTreeMap<(String, u16, bool), ResolvedFont>;
+    static REQUESTS: OnceLock<Mutex<Requests>> = OnceLock::new();
+    let mut requests = REQUESTS
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    requests
+        .entry((family.to_owned(), weight, italic))
+        .or_insert_with(|| resolve_font_uncached(family, weight, italic))
+        .clone()
+}
+
+fn resolve_font_uncached(family: &str, weight: u16, italic: bool) -> ResolvedFont {
+    use sha2::{Digest, Sha256};
+    use std::sync::{Mutex, OnceLock};
+    static DATABASE: OnceLock<Mutex<(Database, BTreeMap<fontdb::ID, ResolvedFont>)>> =
+        OnceLock::new();
+    let mut database = DATABASE
+        .get_or_init(|| {
+            let mut database = Database::new();
+            database.load_system_fonts();
+            Mutex::new((database, BTreeMap::new()))
+        })
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for requested in family.split(',') {
+        let name = requested.trim().trim_matches(['"', '\'']).trim();
+        if name.eq_ignore_ascii_case("Archivo") {
+            return bundled_font(false);
+        }
+        if name.is_empty() {
+            continue;
+        }
+        let query = Query {
+            families: &[generic_family(name)],
+            weight: Weight(weight),
+            stretch: Stretch::Normal,
+            style: if italic { Style::Italic } else { Style::Normal },
+        };
+        let Some(id) = database.0.query(&query) else {
+            continue;
+        };
+        if let Some(face) = database.1.get(&id) {
+            return face.clone();
+        }
+        if let Some(face) = database.0.with_face_data(id, |bytes, index| {
+            let mut hash = Sha256::new();
+            hash.update(bytes);
+            hash.update(index.to_be_bytes());
+            ResolvedFont {
+                id: format!("{:x}", hash.finalize()),
+                bytes: std::sync::Arc::new(bytes.to_vec()),
+                index,
+                bundled: false,
+                fell_back: false,
+                italic: Face::parse(bytes, index).is_ok_and(|face| face.is_italic()),
+            }
+        }) {
+            database.1.insert(id, face.clone());
+            return face;
+        }
+    }
+    bundled_font(true)
+}
+
+fn bundled_font(fell_back: bool) -> ResolvedFont {
+    ResolvedFont {
+        id: "archivo".into(),
+        bytes: std::sync::Arc::new(ARCHIVO.to_vec()),
+        index: 0,
+        bundled: true,
+        fell_back,
+        italic: false,
+    }
+}
+
 struct FaceData {
     bytes: Vec<u8>,
     index: u32,
@@ -1356,7 +1454,8 @@ struct FontSet {
     faces: Vec<FaceData>,
     database: Option<Database>,
     /// The face each `font-family` value resolves to, in request order.
-    families: BTreeMap<String, usize>,
+    families: BTreeMap<(String, u16, bool), usize>,
+    resolved: BTreeMap<String, usize>,
     /// The face that covers a character the primary face does not.
     fallbacks: BTreeMap<(usize, char), usize>,
 }
@@ -1370,6 +1469,7 @@ impl FontSet {
             }],
             database: None,
             families: BTreeMap::new(),
+            resolved: BTreeMap::from([("archivo".into(), 0)]),
             fallbacks: BTreeMap::new(),
         }
     }
@@ -1384,48 +1484,25 @@ impl FontSet {
 
     /// The face a `font-family` value asks for: each comma-separated family in turn, generic
     /// keywords through fontdb, and the bundled Archivo when nothing else is available.
-    fn primary(&mut self, family: &str) -> usize {
-        let key = family.trim().to_ascii_lowercase();
+    fn primary(&mut self, family: &str, weight: u16, italic: bool) -> usize {
+        let key = (family.trim().to_ascii_lowercase(), weight, italic);
         if let Some(index) = self.families.get(&key) {
             return *index;
         }
-        let index = self.resolve(family);
+        let resolved = resolve_font(family, weight, italic);
+        let index = if let Some(index) = self.resolved.get(&resolved.id) {
+            *index
+        } else {
+            self.faces.push(FaceData {
+                bytes: resolved.bytes.as_ref().clone(),
+                index: resolved.index,
+            });
+            let index = self.faces.len() - 1;
+            self.resolved.insert(resolved.id, index);
+            index
+        };
         self.families.insert(key, index);
         index
-    }
-
-    fn resolve(&mut self, family: &str) -> usize {
-        for requested in family.split(',') {
-            let name = requested.trim().trim_matches(['"', '\'']).trim();
-            if name.is_empty() {
-                continue;
-            }
-            if name.eq_ignore_ascii_case("Archivo") {
-                return 0;
-            }
-            let query = Query {
-                families: &[generic_family(name)],
-                weight: Weight::NORMAL,
-                stretch: Stretch::Normal,
-                style: Style::Normal,
-            };
-            let Some(id) = self.database().query(&query) else {
-                continue;
-            };
-            let database = self.database.as_ref().expect("the database is loaded");
-            let mut found = None;
-            let _ = database.with_face_data(id, |bytes, index| {
-                found = Some(FaceData {
-                    bytes: bytes.to_vec(),
-                    index,
-                });
-            });
-            if let Some(face) = found {
-                self.faces.push(face);
-                return self.faces.len() - 1;
-            }
-        }
-        0
     }
 
     /// The face that draws one character: the family's own face, else a system face with the
@@ -1477,7 +1554,7 @@ impl FontSet {
 
     /// The family's ascent and its ascent plus descent in pixels: how a CSS line box measures it.
     fn line_metrics(&mut self, run: Run<'_>) -> (f64, f64) {
-        let primary = self.primary(run.family);
+        let primary = self.primary(run.family, run.weight, run.italic);
         let data = &self.faces[primary];
         let Ok(face) = Face::parse(&data.bytes, data.index) else {
             return (run.size * 0.8, run.size);
@@ -1489,7 +1566,7 @@ impl FontSet {
     }
 
     fn advance(&mut self, run: Run<'_>, character: char) -> f64 {
-        let primary = self.primary(run.family);
+        let primary = self.primary(run.family, run.weight, run.italic);
         let face_index = self.face_for(character, primary);
         let data = &self.faces[face_index];
         let Ok(mut face) = Face::parse(&data.bytes, data.index) else {
@@ -1511,7 +1588,7 @@ impl FontSet {
         pen: f64,
         baseline: f64,
     ) -> (f64, Option<Path>) {
-        let primary = self.primary(run.family);
+        let primary = self.primary(run.family, run.weight, run.italic);
         let face_index = self.face_for(character, primary);
         let data = &self.faces[face_index];
         let Ok(mut face) = Face::parse(&data.bytes, data.index) else {
@@ -1529,7 +1606,7 @@ impl FontSet {
             pen,
             baseline,
             scale: run.size / units,
-            italic: run.italic,
+            italic: run.italic && !face.is_italic(),
         };
         let outline = face.outline_glyph(glyph, &mut builder).is_some();
         (advance, if outline { Some(builder.path) } else { None })
@@ -1891,7 +1968,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pdf_layers_a_blurred_shadow_and_carries_rotation() {
+    fn a_pdf_embeds_a_blurred_shadow_and_carries_rotation() {
         let mut page = scene();
         let child = boxed(&mut page, rect(20.0, 20.0, 60.0, 40.0));
         page.items.push(Item::Shadow(Shadow {
@@ -1923,11 +2000,8 @@ mod tests {
         let content = String::from_utf8_lossy(&pdf);
         assert!(content.contains("/ExtGState"), "opacity states are listed");
         assert!(content.contains(" cm\n"), "the rotation is a matrix");
-        let fills = content.matches(" f\n").count();
-        assert!(
-            fills >= 6,
-            "a blurred shadow draws one layer per step: {fills}"
-        );
+        assert!(content.contains("/Subtype /Image"), "the blurred shadow is embedded");
+        assert!(content.contains("/SMask"), "the blur has a soft alpha mask");
     }
 
     #[test]
@@ -1942,6 +2016,45 @@ mod tests {
     }
 
     #[test]
+    fn resolver_uses_archivo_only_when_requested_or_missing() {
+        let explicit = resolve_font(" 'Archivo' ", 700, true);
+        let missing = resolve_font("Desegnos nonexistent font 987654", 700, true);
+        assert!(explicit.bundled && !explicit.fell_back);
+        assert!(missing.bundled && missing.fell_back);
+        assert_eq!(explicit.id, missing.id);
+        assert_eq!(explicit.bytes.as_slice(), ARCHIVO);
+        let list = resolve_font("Desegnos nonexistent font 987654, Archivo", 400, false);
+        assert!(!list.fell_back);
+        assert_eq!(list.id, explicit.id);
+    }
+
+    #[test]
+    fn resolver_matches_fontdb_style_selection() {
+        // Compare against fontdb directly when this host has a generic sans-serif.
+        let mut database = Database::new();
+        database.load_system_fonts();
+        let query = Query {
+            families: &[Family::SansSerif],
+            weight: Weight(700),
+            stretch: Stretch::Normal,
+            style: Style::Italic,
+        };
+        if let Some(id) = database.query(&query) {
+            let resolved = resolve_font("system-ui", 700, true);
+            assert!(!resolved.fell_back);
+            database
+                .with_face_data(id, |bytes, index| {
+                    assert_eq!(resolved.bytes.as_slice(), bytes);
+                    assert_eq!(resolved.index, index);
+                })
+                .unwrap();
+            let alias = resolve_font("sans-serif", 700, true);
+            assert_eq!(resolved.id, alias.id);
+            assert!(std::sync::Arc::ptr_eq(&resolved.bytes, &alias.bytes));
+        }
+    }
+
+    #[test]
     fn a_generic_family_maps_to_its_system_face() {
         assert!(matches!(generic_family("Sans-Serif"), Family::SansSerif));
         assert!(matches!(generic_family("system-ui"), Family::SansSerif));
@@ -1950,21 +2063,21 @@ mod tests {
         assert!(matches!(generic_family("'Archivo'"), Family::Name(name) if name == "'Archivo'"));
 
         let mut fonts = FontSet::new();
-        assert_eq!(fonts.primary("Archivo"), 0, "the bundled face");
+        assert_eq!(fonts.primary("Archivo", 400, false), 0, "the bundled face");
         assert_eq!(
-            fonts.primary("No Such Family, Anywhere"),
+            fonts.primary("No Such Family, Anywhere", 400, false),
             0,
             "the last resort"
         );
-        assert!(fonts.primary("system-ui, sans-serif") != 0);
+        assert!(fonts.primary("system-ui, sans-serif", 400, false) != 0);
     }
 
     /// Whether this machine has a monospace and a serif face that differ, which the font test
     /// below needs; a bare container without fonts falls back to the bundled Archivo.
     fn distinct_monospace_and_serif() -> bool {
         let mut fonts = FontSet::new();
-        let monospace = fonts.primary("monospace");
-        let serif = fonts.primary("serif");
+        let monospace = fonts.primary("monospace", 400, false);
+        let serif = fonts.primary("serif", 400, false);
         monospace != 0 && serif != 0 && monospace != serif
     }
 

@@ -1,3 +1,4 @@
+import { useCanvasFont } from './fonts';
 import { ATTACHMENT_ACCEPT, readRequestAttachments } from '../requestAttachments';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
@@ -207,6 +208,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
   const opacity = commonValue(elements.map(element => element.style.opacity));
   const shadow = commonValue(elements.map(element => element.style.shadow));
   const textStyle = commonValue(elements.map(element => element.style.textStyle));
+  const font = useCanvasFont(textStyle);
   const text = commonValue(elements.map(element => element.text));
   const url = commonValue(elements.map(element => element.url));
   const layout = commonValue(elements.map(element => element.layout));
@@ -360,6 +362,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
     {textKind && <PropsSection id="props-text" title="Text">
       {picker('text')}
       <CompactTextField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
+      {font?.fellBack && <span className="field-help">Not installed — using Archivo</span>}
       <div className="props-grid">
         <CompactNumberField prefix="S" label="Size" min={1} unit="px" value={textStyle?.size ?? ''} disabled={busy} valid={value => Number(value) >= 1}
           commit={value => commitStyle(style => { style.textStyle.size = Number(value); })} />

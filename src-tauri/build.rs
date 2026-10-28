@@ -1,6 +1,8 @@
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "resolve_canvas_font",
+            "load_canvas_font",
             "prepare_export",
             "start_export",
             "cancel_export",

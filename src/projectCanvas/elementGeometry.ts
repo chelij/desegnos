@@ -1,3 +1,4 @@
+import { canvasFont } from './fonts';
 import type { Appearance, Element, ElementKind, ElementLayout, ElementStyle, InputType, Page, Project, Rect } from '../types';
 import type { Point } from '../projectCanvasGeometry';
 import { resolveElements } from './links';
@@ -423,10 +424,13 @@ export function commonValue<T>(values: T[]): T | undefined {
 }
 
 export function measureText(text: string, style: Element['style']['textStyle']): { width: number; height: number } {
+  const font = canvasFont(style);
+  // Keep pending text unmeasured; callers redraw after the exact face loads.
+  if (!font) return { width: 0, height: 0 };
   const lines = text.split('\n');
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
-  context!.font = `${style.italic ? 'italic ' : ''}${style.weight} ${style.size}px ${style.fontFamily}`;
+  context!.font = `${style.italic && !font.italic ? 'italic ' : ''}${style.weight} ${style.size}px "${font.family}"`;
   const width = Math.max(...lines.map(line => context!.measureText(line).width + style.letterSpacing * Math.max(0, line.length - 1)), style.size);
   return { width: Math.ceil(width) + 1, height: Math.ceil(Math.max(1, lines.length) * style.size * style.lineHeight) + 1 };
 }

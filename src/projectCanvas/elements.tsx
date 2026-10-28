@@ -4,17 +4,20 @@ import type { Boundary, CanvasCamera, ElementTarget } from '../projectCanvasGeom
 import type { ElementCorner } from './elementGeometry';
 import { elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
 import { elementOrigin, resolveForSize } from './sizes';
+import { canvasFont, loadCanvasFont, useCanvasFont, useCanvasFontRevision } from './fonts';
 import type { ScreenRect } from './surface';
 
 const FALLBACK_TEXT = '#1a1a1a';
 
 function textStyle(element: Element): CSSProperties {
   const style = element.style.textStyle;
+  const font = canvasFont(style);
   return {
-    fontFamily: style.fontFamily,
+    fontFamily: font?.family,
+    visibility: font ? undefined : 'hidden',
     fontSize: style.size,
     fontWeight: style.weight,
-    fontStyle: style.italic ? 'italic' : 'normal',
+    fontStyle: style.italic && !font?.italic ? 'italic' : 'normal',
     lineHeight: style.lineHeight,
     letterSpacing: style.letterSpacing,
     color: style.color || FALLBACK_TEXT,
@@ -224,6 +227,7 @@ function ElementChildren({ project, pageId, element, editingId, movingRects }: {
 export function ElementView({ project, pageId, element, flow, editingId, root, movingRects, parentLayout }: {
   project: Project; pageId: string; element: Element; flow: boolean; editingId: string | null; root?: boolean; movingRects?: Record<string, Rect>; parentLayout?: Element['layout'];
 }) {
+  useCanvasFont(isTextKind(element.kind) ? element.style.textStyle : undefined);
   if (!element.visible) return null;
   const data = { 'data-element': element.id, 'data-element-kind': element.kind, 'data-element-group': element.kind === 'group' ? 'true' : undefined, 'data-element-root': root ? 'true' : undefined };
   return <div {...data} style={wrapperStyle(element, flow, movingRects?.[element.id] ?? element.rect, parentLayout)} className={`canvas-element canvas-element-${element.kind}${element.locked ? ' locked' : ''}`}>
@@ -268,7 +272,8 @@ export function ElementSelectionOverlay({ surface, project, selection, camera, v
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>, elementId: string, corner: ElementCorner, sizeId: string | null) => void;
 }) {
   const [rects, setRects] = useState<MeasuredSelection[]>([]);
-  const key = `${project.revision}:${camera.x}:${camera.y}:${camera.zoom}:${selection.map(target => `${target.elementId}:${target.sizeId ?? 'all'}`).join(',')}:${version}`;
+  const fontRevision = useCanvasFontRevision();
+  const key = `${project.revision}:${fontRevision}:${camera.x}:${camera.y}:${camera.zoom}:${selection.map(target => `${target.elementId}:${target.sizeId ?? 'all'}`).join(',')}:${version}`;
   useLayoutEffect(() => {
     const node = surface.current;
     if (!node || !selection.length) { setRects(current => current.length ? [] : current); return; }
@@ -307,17 +312,20 @@ export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus,
   const done = useRef(false);
   const area = useRef<HTMLTextAreaElement>(null);
   const style = element.style.textStyle;
-  useEffect(() => { if (autoFocus) { area.current?.focus({ preventScroll: true }); area.current?.select(); } }, [autoFocus, element.id]);
-  function settle() {
+  const font = useCanvasFont(style);
+  useEffect(() => { if (autoFocus && font) { area.current?.focus({ preventScroll: true }); area.current?.select(); } }, [autoFocus, element.id, font?.family]);
+  async function settle() {
     if (cancelled.current || done.current) return;
     done.current = true;
+    if (autoWidth) await loadCanvasFont(style);
+    if (cancelled.current) return;
     onCommit(draft, autoWidth ? measureText(draft, style) : undefined);
   }
   const lines = Math.max(1, draft.split('\n').length);
   const width = autoWidth ? Math.max(120, measureText(draft || 'Text', style).width * zoom + 24) : Math.max(40, screen.width);
   const height = autoWidth ? Math.max(28, lines * style.size * style.lineHeight * zoom + 12) : Math.max(28, screen.height);
   return <textarea ref={area} className="element-text-editor" aria-label="Edit text" spellCheck value={draft}
-    style={{ left: screen.left, top: screen.top, width, height, fontSize: style.size * zoom, lineHeight: style.lineHeight, fontFamily: style.fontFamily, fontWeight: style.weight, fontStyle: style.italic ? 'italic' : 'normal', letterSpacing: style.letterSpacing * zoom, color: style.color, textAlign: style.align }}
+    style={{ left: screen.left, top: screen.top, width, height, fontSize: style.size * zoom, lineHeight: style.lineHeight, visibility: font ? undefined : 'hidden', fontFamily: font?.family, fontWeight: style.weight, fontStyle: style.italic && !font?.italic ? 'italic' : 'normal', letterSpacing: style.letterSpacing * zoom, color: style.color, textAlign: style.align }}
     onChange={event => setDraft(event.target.value)}
     onPointerDown={event => event.stopPropagation()}
     onBlur={settle}
