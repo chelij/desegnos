@@ -316,6 +316,24 @@ fn a_second_writer_is_refused_while_the_file_is_open() {
 }
 
 #[test]
+fn an_open_saved_project_leaves_only_its_file_in_the_folder() {
+    let directory = TempDir::new("one-file");
+    let path = directory.path("Bakery site.desegnos");
+    let project = project_with_element();
+    let database = ProjectDatabase::create(&path, &project, now_millis()).unwrap();
+    database
+        .save(&project, &[], Some("Saved"))
+        .unwrap();
+
+    let visible: Vec<String> = fs::read_dir(&directory.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    assert_eq!(visible, vec!["Bakery site.desegnos"]);
+}
+
+#[test]
 fn autosave_reads_without_the_writing_lock() {
     let directory = TempDir::new("recovery");
     let path = directory.path("project.desegnos");
