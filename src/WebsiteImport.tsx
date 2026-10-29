@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { native } from './api';
-import { Notice, ProblemBanner } from './ProblemBanner.js';
+import { Notice } from './ProblemBanner.js';
 import { EXTRACTOR_SCRIPT } from './websiteImportExtract';
 import type { WebCapture, WebsiteImportPageView, WebsiteImportResultView, WebsiteImportSourceView } from './types';
 import './shell.css';
@@ -166,13 +166,14 @@ export function WebsiteImport({ busy, onImported, close }: Props) {
     {source && <section className="website-import-pages" aria-label="Pages to import">
       <div className="website-import-heading"><div><strong>{source.name}</strong><p className="field-help">{source.pages.length} {source.pages.length === 1 ? 'page' : 'pages'} found. Each becomes a webpage boundary.</p></div>
         <button type="button" disabled={locked} onClick={() => { void cancel(); }}>Choose another</button></div>
-      <ul className="website-import-list">{source.pages.slice(0, 30).map(page => <li key={page.route}><span>{page.title || page.route}</span><span className="muted">{page.route}</span></li>)}</ul>
+      <ul className="website-import-list">{source.pages.slice(0, 30).map(page => <li key={page.route}>{page.title ? <><span>{page.title}</span> <span className="muted">{page.route}</span></> : <span>{page.route}</span>}</li>)}</ul>
       {source.pages.length > 30 && <p className="field-help">Only the first 30 pages are imported.</p>}
       <div className="form-actions"><button className="primary" disabled={locked} onClick={() => { void runImport(); }}>Import {Math.min(source.pages.length, 30) > 1 ? `${Math.min(source.pages.length, 30)} pages` : 'page'}</button>
         {working && phase !== 'applying' && <button type="button" disabled={busy} onClick={() => { void cancel(); }}>Stop</button>}</div>
     </section>}
     {working && <div className="identity-progress" role="status"><span>{progress.label}{progress.total > 0 ? ` ${Math.min(progress.done, progress.total)} of ${progress.total}` : ''}</span></div>}
-    {error && <ProblemBanner message={error} dismiss={() => setError('')} />}
+    {/* A failed import stays in the panel, beside the button that retries it. */}
+    {error && <p className="field-help field-error" role="alert">{error}</p>}
     {warnings.map((warning, index) => <Notice key={`${index}:${warning}`} variant="warning" message={warning} dismiss={() => setWarnings(items => items.filter((_, position) => position !== index))} />)}
   </div>;
 }

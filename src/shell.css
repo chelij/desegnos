@@ -545,7 +545,7 @@
 
 /* Export panel: boundaries, destination and the paid-send decision, inline in the dock. */
 /* The export panel owns the dock body height: the page list scrolls, the actions stay below it. */
-.dock-panel-body:has(> .export-panel) { display: flex; flex-direction: column; overflow: hidden; }
+.dock-panel-body:has(> .export-panel) { display: flex; flex-direction: column; overflow-y: auto; }
 .export-panel { display: flex; flex: 1 1 auto; flex-direction: column; gap: var(--space-2); min-height: 0; }
 .export-panel > :not(.export-panel-list) { flex: none; }
 .export-panel-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
@@ -558,7 +558,7 @@
 .dock-warning { margin: 0; color: var(--warning); font-size: var(--text-xs); }
 .export-panel-files { margin: var(--space-1) 0 0; padding-inline-start: var(--space-5); color: var(--muted); font-size: var(--text-xs); }
 /* The page list scrolls above the actions, so the Export button never covers a row. */
-.export-panel-actions { position: static; flex: none; margin: 0 calc(-1 * var(--space-5)); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--border-soft); background: var(--panel-chrome); }
+.export-panel-actions { position: sticky; bottom: 0; z-index: 1; flex: none; margin: 0 calc(-1 * var(--space-5)); padding: var(--space-3) var(--space-5); border-top: 1px solid var(--border-soft); background: var(--panel-chrome); }
 
 /* Project tabs: one compact tab per open project, with a colour dot and close control. */
 .editor-shell .project-tabs { display: flex; flex: 1 1 auto; align-items: center; gap: 2px; min-width: 0; max-width: none; overflow-x: auto; scrollbar-width: none; }
