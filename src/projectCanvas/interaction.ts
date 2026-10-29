@@ -54,6 +54,7 @@ type Context = {
   camera: CanvasCamera;
   closeRequestArea: (input: Rect | Point[], kind: 'rect' | 'ellipse' | 'polygon' | 'freehand') => void;
   boundaryUnder: (point: Point) => Boundary | null;
+  boundaryNear: (point: Point) => Boundary | null;
   pointerSourceAt: (point: Point) => { endpoint: PointerSource; rect: Rect; } | null;
   pageFor: (pageId: string, sizeId?: string | null) => Page | null;
   startEditingElement: (pageId: string, elementId: string, sizeId: string, created: boolean) => void;
@@ -105,7 +106,7 @@ type Context = {
 
 export function createCanvasInteraction(context: () => Context) {
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    const { busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, zoom, space, drag, painterArmed, project, selection, applyPainterStyle, surface, setPainterArmed, selectRequest, latest, tool, requestShape, requestTargetAt, requestDraft, setRequestDraft, requestEditorScreen, setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, pointerSourceAt, pageFor, startEditingElement, editingSizeId, drawElementDrag, insertKind, pendingImage, imagePicker, selectElement, selectBoundary, elementEntries, nextSelectionFor, selectReference, beginMove, boundaries, movingItems } = context();
+    const { busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, zoom, space, drag, painterArmed, project, selection, applyPainterStyle, surface, setPainterArmed, selectRequest, latest, tool, requestShape, requestTargetAt, requestDraft, setRequestDraft, requestEditorScreen, setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, boundaryNear, pointerSourceAt, pageFor, startEditingElement, editingSizeId, drawElementDrag, insertKind, pendingImage, imagePicker, selectElement, selectBoundary, elementEntries, nextSelectionFor, selectReference, beginMove, boundaries, movingItems } = context();
     if (busy.current) return;
     // Middle-button drag pans from any tool and never touches the selection.
     if (event.button === 1) { startPan(event, null); return; }
@@ -191,8 +192,15 @@ export function createCanvasInteraction(context: () => Context) {
       setPolygonDraft(null);
       return;
     }
-    if (tool === 'note' || (tool === 'text' && !boundaryUnder(point))) {
-      if (boundaryUnder(point)) return;
+    // Text just outside a boundary still belongs to it; a note pressed inside one becomes text,
+    // the mirror of text outside every boundary becoming a note.
+    if (tool === 'note' && boundaryUnder(point)) {
+      if (drawElementDrag(event, point, 'text', false)) {
+        drag.current = { ...(drag.current as DrawElementDrag), rect: { x: point.x, y: point.y, width: 0, height: 0 } };
+      }
+      return;
+    }
+    if (tool === 'note' || (tool === 'text' && !boundaryUnder(point) && !boundaryNear(point))) {
       event.preventDefault();
       beginPointerSession(event);
       drag.current = { kind: 'draw-note', pointerId: event.pointerId, start: point, rect: referenceNoteRect(point, point), moved: false };
@@ -207,7 +215,10 @@ export function createCanvasInteraction(context: () => Context) {
       return;
     }
     if (tool === 'pointer') {
-      const source = pointerSourceAt(point);
+      // A press that just misses a boundary starts from its edge instead of panning.
+      const near = boundaryUnder(point) ? null : boundaryNear(point);
+      const from = near ? { x: Math.min(Math.max(point.x, near.rect.x), near.rect.x + near.rect.width), y: Math.min(Math.max(point.y, near.rect.y), near.rect.y + near.rect.height) } : point;
+      const source = pointerSourceAt(from);
       if (!source) { startPan(event, null); return; }
       event.preventDefault();
       beginPointerSession(event);
@@ -360,7 +371,8 @@ export function createCanvasInteraction(context: () => Context) {
     const point = worldPoint(event);
     lastPointer.current = point;
     const pointerStart = active.kind === 'draw-element' ? active.pointerStart : active.start;
-    if (!active.moved && Math.hypot(point.x - pointerStart.x, point.y - pointerStart.y) * camera.zoom < 2) return;
+    // A click that wobbles a few pixels is still a click, not a drag.
+    if (!active.moved && Math.hypot(point.x - pointerStart.x, point.y - pointerStart.y) * camera.zoom < 4) return;
     active.moved = true;
     if (active.kind === 'move-boundary') {
       active.rect = { ...active.origin, x: Math.round(active.origin.x + point.x - active.start.x), y: Math.round(active.origin.y + point.y - active.start.y) };
@@ -481,7 +493,8 @@ export function createCanvasInteraction(context: () => Context) {
       const boundary = boundaryRect(active.sizeId);
       if (!boundary) return;
       let rect = active.rect;
-      if (!active.moved) {
+      // A drag too small to see places the default size, as a click does.
+      if (!active.moved || Math.max(rect.width, rect.height) * camera.zoom < 6) {
         const size = active.elementKind === 'text' ? { width: 0, height: 0 } : active.elementKind === 'line' ? { width: 160, height: 0 } : defaultSize(active.elementKind);
         rect = { x: active.start.x, y: active.start.y, ...size };
       }

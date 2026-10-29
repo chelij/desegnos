@@ -3,7 +3,7 @@ import { fitCamera } from './projectCanvasGeometry';
 import { useProjectCanvas } from './projectCanvas/useProjectCanvas';
 export type { ProjectCanvasHandle, ProjectCanvasProps, PreviewState } from './projectCanvas/interactionTypes';
 import { CORNERS, ProjectCanvasHandle, ProjectCanvasProps } from './projectCanvas/interactionTypes';
-import { forwardRef, useEffect } from 'react';
+import { forwardRef, useEffect, type CSSProperties } from 'react';
 import { isTextField } from './WorkspaceSurface';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { SelectionBar } from './projectCanvas/selectionBar';
@@ -81,7 +81,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     onPointerDown={pointerDown} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { chooseImage(event.target.files?.[0]); event.target.value = ''; }} />
-    <div className="project-canvas-layer" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})` }}>
+    <div className="project-canvas-layer" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`, '--canvas-zoom': camera.zoom } as CSSProperties}>
       <BoundaryLayer project={scrubbed.project} boundaries={scrubbed.boundaries} focused={focused} selection={selection}
         moving={moving} tool={tool} spaceHeld={spaceHeld} openPage={openPage} editingId={editing?.elementId ?? null}
         movingElements={movingElements} onPlaceholder={openPlaceholder} play={play} viewport={viewport} margin={200 / camera.zoom} />

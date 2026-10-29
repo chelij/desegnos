@@ -111,7 +111,7 @@ export function useProjectCanvas({
     busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, zoom,
     space, drag, painterArmed, project, selection, applyPainterStyle, surface, setPainterArmed, selectRequest,
     latest, tool, requestShape, requestTargetAt, requestDraft, setRequestDraft, requestEditorScreen,
-    setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, pointerSourceAt, pageFor,
+    setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, boundaryNear: boundaryNearPress, pointerSourceAt, pageFor,
     startEditingElement, editingSizeId, drawElementDrag, insertKind, pendingImage, imagePicker, selectElement,
     selectBoundary, elementEntries, nextSelectionFor, selectReference, beginMove, boundaries, movingItems,
     dragSession, dragHandlers, setPanning, touched, setCamera, renderDrag, worldToScreen, persistMove,
