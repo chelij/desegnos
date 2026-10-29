@@ -360,8 +360,8 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
       {sameKind && kind === 'box' && <>
         <div className="props-choice"><ChoiceRow label="Flow" value={layout?.kind ?? 'free'} choices={[['free', 'Free'], ['stack', 'Stack'], ['grid', 'Grid']]} disabled={busy}
           choose={flow => update(elements.map(element => {
-            // Switching from Free to Stack hugs the box to its children; Fixed stays available.
-            const hug = flow === 'stack' && element.layout.kind === 'free';
+            // Switching from Free to Stack hugs a box to its children; an empty box keeps its size.
+            const hug = flow === 'stack' && element.layout.kind === 'free' && element.children.length > 0;
             const next = flow === 'free' ? { kind: 'free' as const } : flow === 'stack'
               ? { kind: 'stack' as const, direction: 'row' as const, gap: 8, padding: 0, align: 'start' as const, justify: 'start' as const, wrap: false }
               : { kind: 'grid' as const, columns: 2, gap: 8, padding: 0 };
