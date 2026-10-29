@@ -2,8 +2,9 @@ import { needsAiSettings, ProblemBanner, Notice } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { native } from './api';
-import type { AiSettingsView, IdentityAnalysis, IdentitySelection, IdentitySource } from './types';
+import type { AiSettingsView, IdentityAnalysis, IdentitySelection, IdentitySource, WebsiteImportResultView, WebsiteImportSourceView } from './types';
 import { groupIdentityPages, selectedPageContent, findingSection, parseColours, parseFonts, parseTone, type IdentityFinding } from './identityReview';
+import { useWebsiteImport, WebsiteImportStatus } from './WebsiteImport';
 import { Icon } from './icons';
 
 // One source supplies the page import and the optional brand review.
@@ -31,7 +32,7 @@ function skippedFile(value: string) {
     : reason;
   return `${name}: ${explanation}`;
 }
-type Props = { initialSource?: IdentitySource | null; busy: boolean; settings: AiSettingsView | null; openSettings: () => void; importInto: (analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) => Promise<void>; importWebsite?: () => void; close: () => void };
+type Props = { initialSource?: IdentitySource | null; busy: boolean; settings: AiSettingsView | null; openSettings: () => void; importInto: (analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) => Promise<void>; onPagesImported: (result: WebsiteImportResultView) => void; close: () => void };
 
 function ReviewCard({ name, checked, disabled, toggle, children, className = '', finding, source, linked }: {
   name: string; checked: boolean; disabled: boolean; toggle: () => void; children: ReactNode; className?: string;
@@ -59,7 +60,7 @@ function ReviewGroup({ name, className = '', disabled, choose, children }: { nam
   </section>;
 }
 
-export function ImportContext({ busy, settings, openSettings, importInto, importWebsite, close, initialSource }: Props) {
+export function ImportContext({ busy, settings, openSettings, importInto, onPagesImported, close, initialSource }: Props) {
   const [source, setSource] = useState<IdentitySource | null>(initialSource ?? null);
   const [previousBrand, setPreviousBrand] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
@@ -81,14 +82,17 @@ export function ImportContext({ busy, settings, openSettings, importInto, import
   const mounted = useRef(false);
   const previousRead = useRef(0);
   const active = useRef<string | null>(null);
-  const picker = useRef(0);
+  const pages = useWebsiteImport(busy, onPagesImported);
+  const [readBrand, setReadBrand] = useState<boolean | null>(null);
   const analyzing = analysis?.status === 'analyzing';
-  const locked = busy || working || analyzing;
+  const locked = busy || working || analyzing || pages.working;
   const analysisMethod = analysis?.authentication ?? settings?.authentication;
   const analysisAccount = settings?.chatgpt.accounts.find(item => item.id === analysis?.chatgptAccountId);
   const candidate = analysis?.status === 'complete' ? analysis.candidate : null;
   const account = settings?.chatgpt.accounts.find(item => item.id === settings.chatgpt.activeAccountId);
   const connected = !settings?.configurationError && (settings?.authentication === 'chatgpt' ? account?.connected && account.planEnabled && !account.storageRepairRequired : settings?.credential.configured);
+  const alsoBrand = connected && (readBrand ?? true);
+  const hasPages = !!pages.source?.pages.length && !pages.imported;
   const requestedFiles = automatic ? null : files;
   const review = useMemo(() => candidate?.findings.map((finding, index) => ({ finding, index, section: findingSection(finding), colours: parseColours(finding.value, finding.topic), fonts: parseFonts(finding.value, finding.topic) })) ?? [], [candidate]);
   const fontFamilies = useMemo(() => review.filter(item => item.section === 'Fonts').flatMap(item => item.fonts.map(font => font.family)), [review]);
@@ -165,29 +169,31 @@ export function ImportContext({ busy, settings, openSettings, importInto, import
     try { await operation(); } catch (error) { if (mounted.current) setError(message(error)); }
     finally { if (mounted.current) setWorking(false); }
   }
-  async function pick(kind: 'file' | 'folder') {
-    const serial = ++picker.current;
-    await run(async () => {
-      const value = await native<IdentitySource | null>('pick_identity_source', { kind });
-      if (!mounted.current || serial !== picker.current || !value) return;
-      acceptSource(value);
-    });
+  function acceptRead(value: WebsiteImportSourceView | null) {
+    if (!value || !mounted.current) return;
+    setError('');
+    setSource(null); setAnalysis(null); setPreviousBrand(false); setReadBrand(null);
+    if (value.identitySource) acceptSource(value.identitySource);
+    if (value.identityError) setError(value.identityError);
+  }
+  async function pick(kind: 'file' | 'folder' | 'zip') {
+    acceptRead(await pages.pick(kind));
   }
   const [address, setAddress] = useState('');
   async function fetchSite(event?: FormEvent) {
     event?.preventDefault();
-    const serial = ++picker.current;
-    await run(async () => {
-      const value = await native<IdentitySource>('fetch_identity_source', { url: address.trim() });
-      if (!mounted.current || serial !== picker.current) return;
-      acceptSource(value);
-    });
+    acceptRead(await pages.readUrl(address.trim()));
+  }
+  async function importSource() {
+    if (locked) return;
+    if (hasPages && !await pages.runImport()) return;
+    if (alsoBrand) await analyze();
   }
   function acceptSource(value: IdentitySource) {
     setSource(value); setPreviousBrand(false); setKept(false); setFiles([]); setAutomatic(true); setSelection(null); setAnalysis(null); setFindings([]); setAssets([]); setPhotoIds([]); setItemIndices([]);
   }
   async function analyze() {
-    if (!source || !selection?.fits || !connected || locked) return;
+    if (!mounted.current || !source || !selection?.fits || !connected || locked) return;
     await run(async () => {
       const value = await native<IdentityAnalysis>('analyze_identity', { sourceId: source.id, fileIds: files });
       if (!mounted.current) { if (value.status === 'analyzing') await native('cancel_identity_analysis', { jobId: value.jobId }); return; }
@@ -229,29 +235,37 @@ export function ImportContext({ busy, settings, openSettings, importInto, import
         <>
         <h2>Source</h2>
         <div className="identity-address"><label>Website address<input type="text" inputMode="url" placeholder="example.com" value={address} disabled={locked} onChange={event => setAddress(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (address.trim()) void fetchSite(); } }} /></label>
-          <button type="button" disabled={locked || !address.trim()} onClick={() => { void fetchSite(); }}>{working && address.trim() ? 'Opening…' : 'Open website'}</button></div>
-        <div className="identity-source-actions"><span className="identity-or">or</span><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose folder…</button><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose ZIP or HTML files…</button></div>
-        {importWebsite && <div className="identity-source-actions"><button type="button" disabled={locked} onClick={importWebsite}>Import a website as pages…</button></div>}
+          <button type="button" disabled={locked || !address.trim()} onClick={() => { void fetchSite(); }}>{pages.phase === 'reading' ? 'Reading…' : 'Read'}</button></div>
+        <div className="identity-source-actions"><span className="identity-or">or</span><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose folder…</button><button type="button" disabled={locked} onClick={() => { void pick('zip'); }}>Choose ZIP…</button><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose HTML files…</button></div>
+
         {source && <h3 className="identity-source-name">{source.name}</h3>}
         {!source && recoveryError && <ProblemBanner message={userError(recoveryError)} action={{ label: 'Try loading again', disabled: !!locked || readingPrevious, onClick: () => { void readPrevious(); } }} />}
         {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setPreviousBrand(true); setFiles(previous.fileIds); setAutomatic(false); setSelection(null); acceptAnalysis(previous); setPrevious(null); }}>Continue with my previous brand</button>}
         </>
-        {source && <h2>Brand and content</h2>}
-        {source && !connected && <button type="button" onClick={openSettings}>Connect AI</button>}
-        {source && connected && !kept && <>
+        {source && source.skipped.length > 0 && <details><summary>See all skipped files · {skippedSummary(source.skipped)}</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details>}
+        <WebsiteImportStatus flow={pages} busy={busy} />
+        {pages.source && pages.source.pages.length > 0 && <section className="website-import-pages" aria-label="Pages to import">
+          <p>{pages.source.totalPages} {pages.source.totalPages === 1 ? 'page' : 'pages'} found.{pages.source.totalPages > 30 ? ' The 30 closest to the home page are imported.' : ''}</p>
+          <ul className="website-import-list">{pages.source.pages.map(page => <li key={page.route}><span>{page.title || page.route}</span>{page.title && <span className="muted">{page.route}</span>}</li>)}</ul>
+          {pages.imported && <Notice message="Pages imported." />}
+        </section>}
+        {hasPages && source && connected && !candidate && <label className="identity-choice"><input type="checkbox" checked={!!alsoBrand} disabled={!!locked} onChange={event => setReadBrand(event.target.checked)} />Also read brand and content</label>}
+        {hasPages && <button type="button" className="primary" disabled={locked || (!!alsoBrand && !!source && !selection?.fits)} onClick={() => { void importSource(); }}>Import {pages.source!.pages.length > 1 ? `${pages.source!.pages.length} pages` : 'page'}</button>}
+        {source && (!hasPages || alsoBrand) && <h2>Brand and content</h2>}
+        {(source || pages.source) && !connected && <button type="button" onClick={openSettings}>Connect AI</button>}
+        {source && connected && (!hasPages || alsoBrand) && !kept && <>
           {!candidate && <>
           <details className="identity-file-review" key={source.id}><summary>Choose files yourself</summary>
             <p className="field-help">{files.length} file{files.length === 1 ? '' : 's'} picked.</p>
             {!automatic && <button type="button" disabled={locked || !!candidate} onClick={() => { setAutomatic(true); setSelection(null); setPickVersion(current => current + 1); }}>Pick for me</button>}
             <div className="identity-files">{source.files.map(file => <label className="identity-choice" key={file.id}><input type="checkbox" disabled={locked || !!candidate} checked={files.includes(file.id)} onChange={event => { setAutomatic(false); setSelection(null); setFiles(current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id)); setAnalysis(null); }} /><span>{file.name}<small>{file.asset ? 'Logo' : `${Math.ceil(file.textBytes / 1024)} KB`}</small></span></label>)}</div>
-            {source.skipped.length > 0 && <><p className="field-help">Left out: {skippedSummary(source.skipped)}.</p><details><summary>See all skipped files</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details></>}
           </details>
           {!candidate && <p className="field-help">Sent to {analysisMethod === 'chatgpt' ? `ChatGPT (${(analysisAccount ?? account)?.label ?? 'current account'})` : `${settings?.providers.find(provider => provider.id === settings.provider)?.name ?? 'OpenAI'} (API key)`}</p>}
           {!candidate && selection?.message && <ProblemBanner message={userError(selection.message)} />}
           </>}
           {analyzing ? <div className="identity-progress" role="status"><span>Reading your brand…</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Stop reading</button></div> : !candidate ? <>
             {analysis && (analysis.status === 'cancelled' ? <Notice message="Reading stopped." /> : <ProblemBanner message={userError(analysis.error || 'The AI could not read your brand. Try again.')} action={needsAiSettings(analysis.error || '') ? { label: 'AI settings', onClick: openSettings } : undefined} />)}
-            <div className="identity-source-actions"><button type="button" className="primary" disabled={locked || !selection?.fits || !connected} onClick={() => { void analyze(); }}>Read my brand</button>{aiNeedsFixing && <button type="button" disabled={locked} onClick={openSettings}>{connected ? 'Check AI settings' : 'Connect AI'}</button>}</div>
+            <div className="identity-source-actions">{!hasPages && <button type="button" className="primary" disabled={locked || !selection?.fits || !connected} onClick={() => { void analyze(); }}>Read my brand</button>}{aiNeedsFixing && <button type="button" disabled={locked} onClick={openSettings}>{connected ? 'Check AI settings' : 'Connect AI'}</button>}</div>
           </> : <div className="identity-result" aria-label="Brand review">
             <div className="identity-review-intro"><h3>Choose what to keep</h3></div>
             {(['Colours', 'Fonts', 'Logos', 'Style & tone', 'Pages', 'Other'] as const).map(section => {

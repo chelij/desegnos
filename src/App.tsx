@@ -32,7 +32,6 @@ import { GenerationFeedback } from './Generation';
 import { showsOpener } from './visibleActions';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
-import { WebsiteImport } from './WebsiteImport';
 import { GenerationLog } from './GenerationLog';
 import { HistoryPanel } from './HistoryPanel';
 import { CommandPalette } from './CommandPalette';
@@ -79,8 +78,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     moveCanvasElementTo, removeLinkedDefinition, views, addNamedView, renameNamedView, removeNamedView,
     selectedBounds, clashPointers, selectNextPointerClash, zoomPercent, showGridSettings, setShowGridSettings,
     showShortcuts, setShowShortcuts, recovery, showProjectLocation, setShowProjectLocation,
-    changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext, startWebsiteImport,
-    showWebsiteImport, setShowWebsiteImport, setCanvasSelection, setCanvasFocus, showStyleGuide,
+    changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext,
+    setCanvasSelection, setCanvasFocus, showStyleGuide,
     setShowStyleGuide, showNotes, changeBrief, showRename, setShowRename,
     saveConflict, chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
     refreshAiSettings, updateAiSettings, aiPollingError,
@@ -102,7 +101,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       <div className="shell-primary-actions">
         <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={!onStartPage && project ? (resolvedTheme === 'dark' ? 'Light mode for the editor' : 'Dark mode for the editor') : (resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode')} onClick={() => onStartPage || !project ? setTheme(resolvedTheme === 'dark' ? 'light' : 'dark') : run(() => switchAppearance(resolvedTheme === 'dark' ? 'light' : 'dark'))}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>
-        {project && showsOpener({ available: true, open: showImport }) && <button type="button" className="icon-button" aria-label="Import context" title="Import context" onClick={() => { setImportSource(null); setShowImport(true); }}><Icon name="folder" /></button>}
+        {project && showsOpener({ available: true, open: showImport }) && <button type="button" className="icon-button" aria-label="Import" title="Import" onClick={() => { setImportSource(null); setShowImport(true); }}><Icon name="folder" /></button>}
         {!onStartPage && project && <>{view?.canUndo && <button aria-label="Undo last change" type="button" className="icon-button" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}><Icon name="undo" /></button>}{view?.canRedo && <button aria-label="Redo last change" type="button" className="icon-button" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}><Icon name="redo" /></button>}
           <button type="button" className={showHistory ? 'icon-button active' : 'icon-button'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
         {!onStartPage && project && <button type="button" className={playIsActive(play) ? 'icon-button active' : 'icon-button'} aria-pressed={playIsActive(play)} aria-label="Play" title={withShortcut('Play', 'play')} onClick={() => togglePlay()}><Icon name="play" /></button>}
@@ -229,8 +228,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     {showProjectLocation && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
     {showRecovery && view && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
-    {showImport && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importSource?.id ?? ''}`} initialSource={importSource} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} importWebsite={startWebsiteImport} close={() => setShowImport(false)} /></WorkspaceSurface>}
-    {showWebsiteImport && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import website" close={() => setShowWebsiteImport(false)}><WebsiteImport busy={pending > 0} onImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setShowWebsiteImport(false); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => setShowWebsiteImport(false)} /></WorkspaceSurface>}
+    {showImport && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importSource?.id ?? ''}`} initialSource={importSource} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} onPagesImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => setShowImport(false)} /></WorkspaceSurface>}
     {showStyleGuide && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Style guide" close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></WorkspaceSurface>}
     {showNotes && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project brief" close={() => setShowNotes(null)}><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
     {showGridSettings && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Grid settings" close={() => setShowGridSettings(false)}><GridForm settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {

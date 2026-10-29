@@ -10,7 +10,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_ai::WebUrl as Url;
 use desegnos_core::WebCapture;
 use desegnos_storage::{
-    WebsiteSnapshot, collect_website_snapshot, new_import_folder, write_website_snapshot,
+    WebsiteSnapshot, new_import_folder, write_website_snapshot,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -59,6 +59,7 @@ struct ImportPage {
 /// The one website snapshot currently served for rendering.
 #[derive(Default)]
 pub struct WebsiteImportState {
+    revision: u64,
     site: ImportSite,
     source: Option<ImportSource>,
 }
@@ -71,6 +72,7 @@ impl Drop for WebsiteImportState {
 
 impl WebsiteImportState {
     fn clear(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
         self.site.stop();
         if let Some(source) = self.source.take() {
             let _ = fs::remove_dir_all(source.folder);
@@ -95,6 +97,8 @@ pub struct WebsiteImportView {
     extractor_url: String,
     pages: Vec<WebsiteImportPageView>,
     total_pages: usize,
+    identity_source: Option<crate::identity::IdentitySourceManifest>,
+    identity_error: Option<String>,
     skipped: Vec<String>,
 }
 
@@ -113,6 +117,7 @@ pub struct WebsiteImportResultView {
 pub enum WebsiteSourceKind {
     Folder,
     Zip,
+    File,
 }
 
 fn extractor_html(script: &str) -> String {
@@ -132,11 +137,32 @@ fn page_url(base_url: &str, file: &str) -> String {
     url.to_string()
 }
 
+fn begin_read(state: &Mutex<WebsiteImportState>) -> NativeResult<u64> {
+    let mut state = state.lock().map_err(message)?;
+    state.revision = state.revision.wrapping_add(1);
+    Ok(state.revision)
+}
+
 fn install(
     state: &Mutex<WebsiteImportState>,
+    revision: u64,
     snapshot: WebsiteSnapshot,
+    identity: &Mutex<crate::identity::IdentityService>,
+    project: Option<desegnos_storage::IdentitySource>,
     extractor: &str,
 ) -> NativeResult<WebsiteImportView> {
+    let mut state = state.lock().map_err(message)?;
+    if state.revision != revision {
+        return Err("The import was stopped.".into());
+    }
+    let (identity_source, identity_error) = match identity
+        .lock()
+        .map_err(message)?
+        .retain_import_snapshot(&snapshot, project)
+    {
+        Ok(source) => (Some(source), None),
+        Err(reason) => (None, Some(reason)),
+    };
     let folder = new_import_folder().map_err(message)?;
     write_website_snapshot(&folder, &snapshot).map_err(message)?;
     fs::write(
@@ -161,7 +187,6 @@ fn install(
         .collect::<Vec<_>>();
     let total_pages = pages.len();
     pages.truncate(30);
-    let mut state = state.lock().map_err(message)?;
     state.clear();
     let base_url = state
         .site
@@ -172,6 +197,8 @@ fn install(
         id,
         name: name.clone(),
         total_pages,
+        identity_source,
+        identity_error,
         skipped: snapshot.skipped.clone(),
         base_url: base_url.clone(),
         extractor_url: format!("{base_url}__desegnos_extract.html"),
@@ -197,10 +224,12 @@ fn install(
 pub async fn prepare_website_import_url(
     window: WebviewWindow,
     state: ImportState<'_>,
+    identity: State<'_, Mutex<crate::identity::IdentityService>>,
     url: String,
     extractor: String,
 ) -> NativeResult<WebsiteImportView> {
     trusted(&window)?;
+    let revision = begin_read(&state)?;
     #[cfg(feature = "native-tests")]
     let fixture = std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN")
         .ok()
@@ -210,6 +239,7 @@ pub async fn prepare_website_import_url(
     let snapshot = desegnos_ai::fetch_website_snapshot(&url, fixture.as_ref()).await?;
     install(
         &state,
+        revision,
         WebsiteSnapshot {
             name: snapshot.name,
             files: snapshot.files,
@@ -233,6 +263,8 @@ pub async fn prepare_website_import_url(
                 .collect(),
             skipped: snapshot.skipped,
         },
+        &identity,
+        None,
         &extractor,
     )
 }
@@ -243,14 +275,20 @@ pub async fn pick_website_import_source(
     app: AppHandle,
     window: WebviewWindow,
     state: ImportState<'_>,
+    identity: State<'_, Mutex<crate::identity::IdentityService>>,
     kind: WebsiteSourceKind,
     extractor: String,
 ) -> NativeResult<Option<WebsiteImportView>> {
     trusted(&window)?;
+    let revision = begin_read(&state)?;
     let picked = tauri::async_runtime::spawn_blocking(move || {
         let dialog = app.dialog().file();
         let picked = crate::file_dialogs::picked(match kind {
             WebsiteSourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
+            WebsiteSourceKind::File => dialog
+                .add_filter("HTML files", &["html", "htm"])
+                .add_filter("Desegnos project", &["desegnos"])
+                .blocking_pick_files(),
             WebsiteSourceKind::Zip => dialog
                 .add_filter("Website ZIP", &["zip"])
                 .blocking_pick_file()
@@ -259,19 +297,39 @@ pub async fn pick_website_import_source(
         let Some(picked) = picked else {
             return Ok(None);
         };
-        let path = picked
+        let paths = picked
             .into_iter()
-            .next()
-            .ok_or("Choose a website folder or ZIP.")?
-            .into_path()
-            .map_err(message)?;
-        let snapshot = collect_website_snapshot(&path).map_err(message)?;
-        Ok::<_, String>(Some(snapshot))
+            .map(|path| path.into_path().map_err(message))
+            .collect::<NativeResult<Vec<_>>>()?;
+        if matches!(kind, WebsiteSourceKind::File)
+            && paths.len() == 1
+            && paths[0]
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("desegnos"))
+        {
+            let source = desegnos_storage::collect_identity_source(&paths[0]).map_err(message)?;
+            let snapshot = WebsiteSnapshot {
+                name: source.name.clone(),
+                ..Default::default()
+            };
+            return Ok(Some((snapshot, Some(source))));
+        }
+        let snapshot = if matches!(kind, WebsiteSourceKind::File) {
+            desegnos_storage::website_snapshot::collect_import_html(&paths)
+        } else {
+            desegnos_storage::website_snapshot::collect_import_snapshot(
+                paths.first().ok_or("Choose a website folder or ZIP.")?,
+            )
+        }
+        .map_err(message)?;
+        Ok::<_, String>(Some((snapshot, None)))
     })
     .await
     .map_err(message)??;
     picked
-        .map(|snapshot| install(&state, snapshot, &extractor))
+        .map(|(snapshot, project)| {
+            install(&state, revision, snapshot, &identity, project, &extractor)
+        })
         .transpose()
 }
 

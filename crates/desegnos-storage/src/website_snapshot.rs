@@ -47,6 +47,9 @@ fn priority(name: &str) -> Option<u8> {
         "svg" | "png" | "jpg" | "jpeg" | "webp" | "gif" | "avif" | "ico" | "bmp" => 2,
         "woff" | "woff2" | "ttf" | "otf" | "eot" => 3,
         "js" | "mjs" | "cjs" => 4,
+        "md" | "mdx" | "txt" | "json" | "scss" | "sass" | "less" | "ts" | "tsx" | "jsx"
+        | "astro" | "vue" | "svelte" | "njk" | "hbs" | "liquid" | "php" | "toml" | "yaml"
+        | "yml" => 5,
         _ => return None,
     })
 }
@@ -451,7 +454,7 @@ fn select_files(
 ) -> Result<Vec<(String, Vec<u8>)>> {
     let downloads = candidates
         .iter()
-        .filter(|file| download(&file.name))
+        .filter(|file| download(&file.name) && priority(&file.name).is_none())
         .count();
     if downloads > 0 {
         skipped.push(format!(
@@ -607,6 +610,15 @@ fn inventory_folder(
 
 /// Inventory a folder or ZIP, then read bounded HTML/CSS and the selected rendering assets.
 pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
+    collect_snapshot(path, false)
+}
+
+/// A shared page and brand snapshot may contain only brand evidence.
+pub fn collect_import_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
+    collect_snapshot(path, true)
+}
+
+fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
     let metadata = fs::symlink_metadata(path).map_err(io)?;
     if metadata.file_type().is_symlink() {
         return Err(Error(
@@ -701,7 +713,7 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
         ));
     }
     let pages = snapshot_pages(&files);
-    if pages.is_empty() {
+    if pages.is_empty() && !allow_empty {
         return Err(Error(
             "That folder or archive has no HTML page to render.".into(),
         ));
@@ -711,6 +723,63 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
         name,
         files,
         pages,
+        skipped,
+    })
+}
+
+/// Read only native-dialog-selected HTML files, with the normal snapshot limits.
+pub fn collect_import_html(paths: &[PathBuf]) -> Result<WebsiteSnapshot> {
+    if paths.is_empty() || paths.len() > MAX_FILES {
+        return Err(Error("Choose between 1 and 1,500 HTML files.".into()));
+    }
+    let mut candidates = Vec::new();
+    let mut selected = BTreeMap::new();
+    for path in paths {
+        let metadata = fs::symlink_metadata(path).map_err(io)?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(safe_name)
+            .ok_or_else(|| Error("An HTML file has an unsafe name.".into()))?;
+        if !metadata.is_file()
+            || metadata.file_type().is_symlink()
+            || !matches!(extension(&name).as_str(), "html" | "htm")
+        {
+            return Err(Error(
+                "Choose regular HTML files, without symbolic links.".into(),
+            ));
+        }
+        if metadata.len() > 4 * 1024 * 1024 {
+            return Err(Error("Each chosen file must be at most 4 MiB.".into()));
+        }
+        if selected.insert(name.clone(), path).is_some() {
+            return Err(Error("Choose HTML files with different names.".into()));
+        }
+        candidates.push(Candidate {
+            name,
+            size: metadata.len(),
+            index: 0,
+        });
+    }
+    let mut skipped = Vec::new();
+    let files = select_files(candidates, &mut skipped, |file| {
+        let mut bytes = Vec::new();
+        fs::File::open(selected[&file.name])
+            .map_err(io)?
+            .take(file.size + 1)
+            .read_to_end(&mut bytes)
+            .map_err(io)?;
+        if bytes.len() as u64 != file.size {
+            return Err(Error(
+                "An imported file changed size. Try importing again.".into(),
+            ));
+        }
+        Ok(bytes)
+    })?;
+    Ok(WebsiteSnapshot {
+        name: "Selected HTML files".into(),
+        pages: snapshot_pages(&files),
+        files,
         skipped,
     })
 }

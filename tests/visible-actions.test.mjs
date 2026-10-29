@@ -52,7 +52,7 @@ try {
     assert.match(app, /\{view\?\.canUndo && <button aria-label="Undo last change"/);
     assert.match(app, /\{view\?\.canRedo && <button aria-label="Redo last change"/);
     assert.doesNotMatch(app, /disabled=\{!view\?\.can/);
-    assert.match(app, /action === 'undo' \? current\.current\?\.canUndo : current\.current\?\.canRedo/);
+    assert.match(app, /command === 'undo_project' \? workspace\?\.canUndo : workspace\?\.canRedo/);
   });
 
   await test('the AI log and status bar leave out Change request for the open request', async () => {
@@ -83,7 +83,7 @@ try {
     assert.match(await read('AiSettings.tsx'), /\{dirty && <button className="primary" disabled=\{busy \|\| pending \|\| \(!model && !view\.configurationError\)\}>Save AI settings<\/button>\}/);
     const importing = await read('ImportContext.tsx');
     assert.match(importing, /\{!automatic && <button type="button" disabled=\{locked \|\| !!candidate\}/);
-    assert.match(importing, /\{source && !connected && <button type="button" onClick=\{openSettings\}>Connect AI<\/button>\}/);
+    assert.match(importing, /\{\(source \|\| pages\.source\) && !connected && <button type="button" onClick=\{openSettings\}>Connect AI<\/button>\}/);
     assert.match(importing, /disabled=\{locked \|\| !selection\?\.fits \|\| !connected\}/);
   });
 
@@ -97,9 +97,8 @@ try {
   await test('no first-run tip tour covers the canvas and the website import keeps its single entry', async () => {
     const app = await read('App.tsx');
     assert.doesNotMatch(app, /FirstRunTips|Onboarding/);
-    assert.equal((app.match(/label: 'Import context…'/g) ?? []).length, 1);
-    assert.equal((app.match(/label: 'Import website…'/g) ?? []).length, 1);
-    assert.doesNotMatch(app, /label: 'Import…'/);
+    assert.equal((app.match(/label: 'Import…'/g) ?? []).length, 1);
+    assert.doesNotMatch(app, /label: 'Import website…'/);
   });
 
   await test('the editor opens untitled and New opens another tab', async () => {
@@ -108,7 +107,7 @@ try {
     assert.match(app, /case 'new': event\.preventDefault\(\); void newUntitled\(\)/);
     assert.match(app, /id: 'open-recent', label: 'Open recent'/);
     assert.match(app, /save_untitled_project/);
-    assert.match(app, /id: 'import-website', label: 'Import website…'/);
+    assert.match(app, /id: 'import', label: 'Import…'/);
   });
 
   await test('Home is a page and project controls leave the bar while it is shown', async () => {
@@ -125,8 +124,8 @@ try {
   await test('hidden controls keep their menu entries and keyboard shortcuts', async () => {
     const app = await read('App.tsx');
     assert.match(app, /\{ id: 'settings', label: 'AI settings'/);
-    assert.match(app, /\{ id: 'import', label: 'Import context…'/);
-    assert.match(app, /\{ id: 'import-website', label: 'Import website…'/);
+    assert.match(app, /\{ id: 'import', label: 'Import…'/);
+    assert.doesNotMatch(app, /id: 'import-website'/);
     assert.match(app, /\{ id: 'dossier', label: 'Project brief'/);
     const shortcuts = await read('shortcuts.ts');
     for (const action of ['insert', 'play', 'preview', 'export', 'link', 'unlink', 'group', 'ungroup']) {

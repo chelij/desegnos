@@ -109,9 +109,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [showGridSettings, setShowGridSettings] = useState(false);
   const [showStyleGuide, setShowStyleGuide] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [showWebsiteImport, setShowWebsiteImport] = useState(false);
   const [importSource, setImportSource] = useState<import('../types').IdentitySource | null>(null);
-  function startWebsiteImport() { setShowImport(false); setShowWebsiteImport(true); }
   const [showLog, setShowLog] = useState(false);
   const [logFocus, setLogFocus] = useState(0);
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
@@ -796,8 +794,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
     { id: 'mode', label: 'AI style', disabled: !canEditProject || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
     { id: 'style-guide', label: 'Style guide', disabled: !canEditProject, action: () => setShowStyleGuide(true) },
-    { id: 'import', label: 'Import context…', disabled: !canEditProject, action: () => { setImportSource(null); setShowImport(true); } },
-    { id: 'import-website', label: 'Import website…', disabled: !canEditProject, action: () => startWebsiteImport() },
+    { id: 'import', label: 'Import…', disabled: !canEditProject, action: () => { setImportSource(null); setShowImport(true); } },
     { id: 'dossier', label: 'Project brief', disabled: !canEditProject, action: () => setShowNotes('overview') },
     { id: 'help-divider', label: '', separator: true },
     { id: 'preferences', label: 'Preferences', children: [
@@ -931,8 +928,8 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     moveCanvasElementTo, removeLinkedDefinition, views, addNamedView, renameNamedView, removeNamedView,
     selectedBounds, clashPointers, selectNextPointerClash, zoomPercent, showGridSettings, setShowGridSettings,
     showShortcuts, setShowShortcuts, recovery, showProjectLocation, setShowProjectLocation,
-    changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext, startWebsiteImport,
-    showWebsiteImport, setShowWebsiteImport, setCanvasSelection, setCanvasFocus, showStyleGuide,
+    changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext,
+    setCanvasSelection, setCanvasFocus, showStyleGuide,
     setShowStyleGuide, showNotes, changeBrief, showRename, setShowRename,
     saveConflict, chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
     refreshAiSettings, updateAiSettings, aiPollingError,
