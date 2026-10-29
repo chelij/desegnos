@@ -1,6 +1,9 @@
 //! Pure, deterministic website rendering. Tree order is paint order; CSS order is ID order.
 use super::*;
-use crate::{ElementKind, ElementLayout, StackAlign, StackDirection, StackJustify, TextAlign};
+use crate::{
+    ElementKind, ElementLayout, StackAlign, StackDirection, StackJustify, TextAlign, resolve_font,
+    standalone_face,
+};
 
 fn escape(value: &str) -> String {
     value
@@ -36,6 +39,128 @@ fn font_family(value: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// The CSS family list for a face the browser already has: the requested names, ending in a
+/// generic family so a host without them still picks a sensible face.
+fn fallback_family_list(family: &str) -> String {
+    let list = font_family(family);
+    if ends_with_generic(&list) {
+        list
+    } else {
+        format!("{list},{}", generic_fallback(family))
+    }
+}
+
+/// The generic family a font list falls back to when nothing in it is installed. Serif and
+/// monospace names keep their look; everything else ends as the browser's sans-serif.
+fn generic_fallback(family: &str) -> &'static str {
+    let lower = family.to_ascii_lowercase();
+    let without_sans = lower
+        .replace("sans-serif", "")
+        .replace("sans serif", "")
+        .replace("sansserif", "");
+    let hints = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
+    if hints(&["mono", "courier", "consolas", "menlo"]) {
+        "monospace"
+    } else if hints(&["times", "georgia", "garamond", "baskerville", "roman"])
+        || without_sans.contains("serif")
+    {
+        "serif"
+    } else {
+        "sans-serif"
+    }
+}
+
+/// Whether a formatted font list already ends in a concrete generic family.
+fn ends_with_generic(list: &str) -> bool {
+    list.split(',')
+        .next_back()
+        .map(|last| {
+            matches!(
+                last.trim().trim_matches(['\'', '"']).to_ascii_lowercase().as_str(),
+                "serif"
+                    | "sans-serif"
+                    | "monospace"
+                    | "cursive"
+                    | "fantasy"
+                    | "emoji"
+                    | "math"
+                    | "fangsong"
+            )
+        })
+        .unwrap_or(false)
+}
+
+/// The CSS family name an embedded face publishes. It never matches an installed family, so the
+/// browser shows the same bytes the canvas and PNG renderer draw.
+fn embedded_family(id: &str) -> String {
+    if id == "archivo" {
+        "Desegnos Archivo".into()
+    } else {
+        let short: String = id.chars().take(16).collect();
+        format!("Desegnos Face {short}")
+    }
+}
+
+/// One face shipped beside the export, with every weight and style the stylesheet declares for it.
+struct EmbeddedFace {
+    family: String,
+    asset: String,
+    bytes: Vec<u8>,
+    styles: BTreeSet<(u16, bool)>,
+}
+
+/// The font lists exported CSS uses, resolved exactly as the canvas resolves them. A bundled or
+/// missing family travels as an asset; an installed family keeps its name.
+#[derive(Default)]
+struct Fonts {
+    families: BTreeMap<(String, u16, bool), String>,
+    faces: BTreeMap<String, EmbeddedFace>,
+}
+
+impl Fonts {
+    fn family(&mut self, family: &str, weight: u16, italic: bool) -> String {
+        let key = (family.to_owned(), weight, italic);
+        if let Some(value) = self.families.get(&key) {
+            return value.clone();
+        }
+        let resolved = resolve_font(family, weight, italic);
+        let value = if resolved.bundled || resolved.fell_back {
+            let face = self
+                .faces
+                .entry(resolved.id.clone())
+                .or_insert_with(|| EmbeddedFace {
+                    family: embedded_family(&resolved.id),
+                    asset: format!("assets/fonts/{}.ttf", resolved.id),
+                    bytes: standalone_face(&resolved.bytes, resolved.index)
+                        .unwrap_or_else(|| resolved.bytes.as_ref().clone()),
+                    styles: BTreeSet::new(),
+                });
+            face.styles.insert((weight, italic));
+            format!("{},{}", css_string(&face.family), generic_fallback(family))
+        } else {
+            fallback_family_list(family)
+        };
+        self.families.insert(key, value.clone());
+        value
+    }
+
+    /// `@font-face` rules for every embedded face, in face then weight and style order.
+    fn css(&self) -> String {
+        let mut css = String::new();
+        for face in self.faces.values() {
+            for (weight, italic) in &face.styles {
+                css.push_str(&format!(
+                    "@font-face{{font-family:{};src:url({});font-weight:{weight};font-style:{};font-display:swap;}}\n",
+                    css_string(&face.family),
+                    css_string(&face.asset),
+                    if *italic { "italic" } else { "normal" }
+                ));
+            }
+        }
+        css
+    }
 }
 
 fn length(value: f64) -> String {
@@ -226,7 +351,12 @@ fn markup(
     out.push_str(&format!("</{tag}>\n"));
 }
 
-fn rules(elements: &[Element], parent: &ElementLayout, rules: &mut BTreeMap<Uuid, String>) {
+fn rules(
+    elements: &[Element],
+    parent: &ElementLayout,
+    fonts: &mut Fonts,
+    rules: &mut BTreeMap<Uuid, String>,
+) {
     let free = parent.is_free();
     for element in elements {
         let rect = element.rect;
@@ -234,8 +364,10 @@ fn rules(elements: &[Element], parent: &ElementLayout, rules: &mut BTreeMap<Uuid
         let text = &style.text_style;
         let line = matches!(element.kind, ElementKind::Line);
         let control = matches!(element.kind, ElementKind::Checkbox | ElementKind::Radio);
+        // A button or link is a text control on the canvas: a centred row rather than a block.
+        let text_control = matches!(element.kind, ElementKind::Button | ElementKind::Link);
         let display = match &element.layout {
-            ElementLayout::Free if control => "flex",
+            ElementLayout::Free if control || text_control => "flex",
             ElementLayout::Free => "block",
             ElementLayout::Stack { .. } => "flex",
             ElementLayout::Grid { .. } => "grid",
@@ -286,7 +418,7 @@ fn rules(elements: &[Element], parent: &ElementLayout, rules: &mut BTreeMap<Uuid
             style.fill.as_deref().unwrap_or("transparent"), length(style.stroke.width), style.stroke.color.as_deref().unwrap_or("transparent"),
             if matches!(element.kind, ElementKind::Ellipse) { "50%".into() } else { length(style.radius) }, style.opacity, element.rotation, if style.flip_x { -1 } else { 1 }, if style.flip_y { -1 } else { 1 },
             length(style.shadow.x), length(style.shadow.y), length(style.shadow.blur), style.shadow.color.as_deref().unwrap_or("transparent"),
-            text.color, font_family(&text.font_family), length(text.size), text.weight, if text.italic { "italic" } else { "normal" }, text.line_height,
+            text.color, fonts.family(&text.font_family, text.weight, text.italic), length(text.size), text.weight, if text.italic { "italic" } else { "normal" }, text.line_height,
             length(text.letter_spacing), match text.align { TextAlign::Left => "left", TextAlign::Center => "center", TextAlign::Right => "right" }));
         if line || matches!(element.kind, ElementKind::Group) {
             css.push_str("background:transparent;border:0;box-shadow:none;");
@@ -311,8 +443,22 @@ fn rules(elements: &[Element], parent: &ElementLayout, rules: &mut BTreeMap<Uuid
                 match justify { StackJustify::Start => "flex-start", StackJustify::Center => "center", StackJustify::End => "flex-end", StackJustify::SpaceBetween => "space-between" }, if *wrap { "wrap" } else { "nowrap" })),
             ElementLayout::Grid { columns, gap, .. } => css.push_str(&format!("grid-template-columns:repeat({columns},minmax(0,1fr));grid-auto-rows:auto;gap:{};padding:{};", length(*gap), padding_css(element))),
         }
+        // The canvas centres a button's label on both axes and a link's label vertically, with
+        // its horizontal position from text-align; the PNG renderer paints the same boxes.
+        if matches!(element.kind, ElementKind::Button) {
+            css.push_str("align-items:center;justify-content:center;");
+        } else if matches!(element.kind, ElementKind::Link) {
+            css.push_str(&format!(
+                "align-items:center;justify-content:{};",
+                match text.align {
+                    TextAlign::Left => "flex-start",
+                    TextAlign::Center => "center",
+                    TextAlign::Right => "flex-end",
+                }
+            ));
+        }
         rules.insert(element.id, css);
-        self::rules(&element.children, &element.layout, rules);
+        self::rules(&element.children, &element.layout, fonts, rules);
     }
 }
 
@@ -335,6 +481,15 @@ fn color_scheme<'a>(page: &crate::Page, ai: Option<&'a str>) -> &'a str {
     match ai {
         Some(scheme @ ("light" | "dark")) => scheme,
         _ => page.color_scheme(),
+    }
+}
+
+/// Request every family a subtree paints text with.
+fn collect_fonts(element: &Element, fonts: &mut Fonts) {
+    let text = &element.style.text_style;
+    fonts.family(&text.font_family, text.weight, text.italic);
+    for child in &element.children {
+        collect_fonts(child, fonts);
     }
 }
 
@@ -374,6 +529,15 @@ pub(super) fn render(
         let scheme = color_scheme(page, schemes.iter().find(|entry| entry.page_id == page.id).map(|entry| entry.color_scheme.as_str()));
         let mut sizes: Vec<_> = page.sizes.iter().collect();
         sizes.sort_by_key(|size| (size.width, size.id));
+        let mut fonts = Fonts::default();
+        for size in &sizes {
+            for element in crate::resolve_for_size(project, page, size.id) {
+                collect_fonts(&element, &mut fonts);
+            }
+        }
+        for text in &project.styles.text {
+            fonts.family(&text.font_family, text.weight, text.italic);
+        }
         let mut html = String::new();
         for element in crate::resolve_for_size(project, page, page.base_size_id()) {
             markup(&element, plan, &markers, &mut html);
@@ -382,10 +546,12 @@ pub(super) fn render(
             "html,body{{margin:0;padding:0;}}\n.desegnos-viewport{{container-type:inline-size;width:100%;max-width:{}px;margin:0 auto;}}\n.desegnos-page{{position:relative;width:100%;isolation:isolate;}}\n",
             sizes.last().map_or(1, |size| size.width)
         );
+        css.push_str(&fonts.css());
         css.push_str(&format!(":root{{color-scheme:{scheme};"));
         for colour in &project.styles.colours { css.push_str(&format!("--colour-{}:{};", colour.id, colour.value)); }
         for text in &project.styles.text {
-            css.push_str(&format!("--text-{}-font-family:{};--text-{}-font-size:{}px;--text-{}-font-weight:{};--text-{}-line-height:{};--text-{}-letter-spacing:{}px;--text-{}-font-style:{};", text.id, font_family(&text.font_family), text.id, text.size, text.id, text.weight, text.id, text.line_height, text.id, text.letter_spacing, text.id, if text.italic { "italic" } else { "normal" }));
+            let family = fonts.family(&text.font_family, text.weight, text.italic);
+            css.push_str(&format!("--text-{}-font-family:{};--text-{}-font-size:{}px;--text-{}-font-weight:{};--text-{}-line-height:{};--text-{}-letter-spacing:{}px;--text-{}-font-style:{};", text.id, family, text.id, text.size, text.id, text.weight, text.id, text.line_height, text.id, text.letter_spacing, text.id, if text.italic { "italic" } else { "normal" }));
         }
         css.push_str("}\n");
         for (index, size) in sizes.iter().enumerate() {
@@ -407,7 +573,7 @@ pub(super) fn render(
                 size.id, size.width, length(height), if matches!(size.kind, crate::BoundaryKind::Screen) { "auto" } else { "visible" },
                 page.background, if page.color_scheme() == "dark" { "#ffffff" } else { "#111111" }));
             let mut sorted = BTreeMap::new();
-            rules(&elements, &ElementLayout::Free, &mut sorted);
+            rules(&elements, &ElementLayout::Free, &mut fonts, &mut sorted);
             for (id, rule) in sorted {
                 css.push_str(&format!(".{}{{{rule}}}\n", class(id)));
             }
@@ -416,14 +582,23 @@ pub(super) fn render(
             }
         }
         let stem = planned.file.trim_end_matches(".html");
+        // An empty behaviour file would be a request to nothing, so neither it nor its tag ships.
+        let behaviour_script = if behaviours.is_empty() {
+            ""
+        } else {
+            "<script src=\"behaviours.js\" defer></script>"
+        };
         let document = format!(
-            "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"{scheme}\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"{stem}.css\"><script src=\"behaviours.js\" defer></script></head><body><div class=\"desegnos-viewport\"><main class=\"desegnos-page\" data-desegnos-id=\"{}\"{}>\n{html}</main></div></body></html>\n",
+            "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"{scheme}\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"{stem}.css\">{behaviour_script}</head><body><div class=\"desegnos-viewport\"><main class=\"desegnos-page\" data-desegnos-id=\"{}\"{}>\n{html}</main></div></body></html>\n",
             escape(&page.name),
             page.id,
             pointer_attribute(page.id, &markers)
         );
         files.insert(planned.file.clone(), document.into_bytes());
         files.insert(format!("{stem}.css"), css.into_bytes());
+        for face in fonts.faces.values() {
+            files.insert(face.asset.clone(), face.bytes.clone());
+        }
     }
 }
 
@@ -457,6 +632,206 @@ mod tests {
                 height: 40.0,
             },
         )
+    }
+
+    /// One element's declaration block from the exported stylesheet.
+    fn rule_of(css: &str, id: Uuid) -> String {
+        let start = css
+            .find(&format!(".{}{{", class(id)))
+            .unwrap_or_else(|| panic!("no rule for {id}"));
+        let rest = &css[start..];
+        rest[..rest.find('}').unwrap() + 1].to_owned()
+    }
+
+    /// Every font list that styles the page ends in a concrete generic family.
+    fn assert_generic_font_fallbacks(css: &str) {
+        let mut checked = 0;
+        for line in css
+            .lines()
+            .filter(|line| line.starts_with('.') || line.contains("--text-"))
+        {
+            let Some((_, rest)) = line.split_once("font-family:") else {
+                continue;
+            };
+            let value = rest.split(';').next().unwrap_or_default();
+            checked += 1;
+            assert!(
+                ["sans-serif", "serif", "monospace", "cursive", "fantasy"]
+                    .iter()
+                    .any(|generic| value.ends_with(generic)),
+                "no generic fallback in {value}"
+            );
+        }
+        assert!(checked > 0, "no font lists were checked");
+    }
+
+    #[test]
+    fn missing_and_bundled_families_ship_one_embedded_face_with_a_generic_fallback() {
+        let mut project = project();
+        let missing = resolve_font("Desegnos nonexistent font 987654", 400, false);
+        assert!(missing.fell_back);
+        let mut regular = element(ElementKind::Text);
+        regular.text = "Hello".into();
+        regular.style.text_style.font_family = "Desegnos nonexistent font 987654".into();
+        let mut bold = regular.clone();
+        bold.id = Uuid::new_v4();
+        bold.style.text_style.weight = 700;
+        let mut italic = regular.clone();
+        italic.id = Uuid::new_v4();
+        italic.style.text_style.italic = true;
+        let mut bundled = regular.clone();
+        bundled.id = Uuid::new_v4();
+        bundled.style.text_style.font_family = "Archivo".into();
+        project.pages[0].elements = vec![regular.clone(), bold.clone(), italic.clone(), bundled.clone()];
+        let bundle = direct_export_bundle(&project, &[]).unwrap();
+        let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+        let font_assets: Vec<_> = bundle
+            .files
+            .keys()
+            .filter(|path| path.starts_with("assets/fonts/"))
+            .collect();
+        assert_eq!(font_assets, ["assets/fonts/archivo.ttf"]);
+        assert_eq!(
+            bundle.files["assets/fonts/archivo.ttf"].as_slice(),
+            missing.bytes.as_slice()
+        );
+        assert!(css.contains("@font-face{font-family:\"Desegnos Archivo\";src:url(\"assets/fonts/archivo.ttf\");font-weight:400;font-style:normal;font-display:swap;}"));
+        assert!(css.contains("@font-face{font-family:\"Desegnos Archivo\";src:url(\"assets/fonts/archivo.ttf\");font-weight:400;font-style:italic;font-display:swap;}"));
+        assert!(css.contains("@font-face{font-family:\"Desegnos Archivo\";src:url(\"assets/fonts/archivo.ttf\");font-weight:700;font-style:normal;font-display:swap;}"));
+        assert_eq!(css.matches("@font-face{").count(), 3);
+        for element in [&regular, &bold, &italic, &bundled] {
+            assert!(
+                rule_of(css, element.id).contains("font-family:\"Desegnos Archivo\",sans-serif;"),
+                "{} did not use the embedded face",
+                element.id
+            );
+        }
+        assert_generic_font_fallbacks(css);
+        lightningcss::stylesheet::StyleSheet::parse(css, Default::default()).unwrap();
+    }
+
+    #[test]
+    fn installed_families_keep_their_name_and_ship_no_face() {
+        let family = "system-ui";
+        let resolved = resolve_font(family, 400, false);
+        if resolved.bundled || resolved.fell_back {
+            // No installed face on this host; the missing-face test covers that path.
+            return;
+        }
+        let mut project = project();
+        let mut text = element(ElementKind::Text);
+        text.text = "Hello".into();
+        text.style.text_style.font_family = family.into();
+        project.pages[0].elements = vec![text.clone()];
+        let bundle = direct_export_bundle(&project, &[]).unwrap();
+        let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+        assert!(!bundle.files.keys().any(|path| path.starts_with("assets/fonts/")));
+        assert!(!css.contains("@font-face"));
+        assert!(rule_of(css, text.id).contains("font-family:system-ui,sans-serif;"));
+    }
+
+    #[test]
+    fn font_lists_end_with_the_generic_that_suits_the_family() {
+        assert_eq!(generic_fallback("Inter"), "sans-serif");
+        assert_eq!(generic_fallback("Source Sans 3"), "sans-serif");
+        assert_eq!(generic_fallback("Georgia, Times New Roman"), "serif");
+        assert_eq!(generic_fallback("JetBrains Mono"), "monospace");
+        assert_eq!(fallback_family_list("Inter"), "\"Inter\",sans-serif");
+        assert_eq!(
+            fallback_family_list("Georgia, Times New Roman"),
+            "\"Georgia\",\"Times New Roman\",serif"
+        );
+        assert_eq!(fallback_family_list("monospace"), "monospace");
+        assert_eq!(fallback_family_list("system-ui"), "system-ui,sans-serif");
+    }
+
+    #[test]
+    fn project_text_styles_publish_the_embedded_face_too() {
+        let mut project = project();
+        let style = crate::TextStyle {
+            id: Uuid::new_v4(),
+            name: "Display".into(),
+            font_family: "Desegnos nonexistent font 987654".into(),
+            size: 32.0,
+            weight: 700,
+            line_height: 1.2,
+            letter_spacing: 0.0,
+            italic: true,
+        };
+        project.styles.text.push(style.clone());
+        let bundle = direct_export_bundle(&project, &[]).unwrap();
+        let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+        assert!(css.contains(&format!(
+            "--text-{}-font-family:\"Desegnos Archivo\",sans-serif;",
+            style.id
+        )));
+        assert!(bundle.files.contains_key("assets/fonts/archivo.ttf"));
+        assert_generic_font_fallbacks(css);
+    }
+
+    #[test]
+    fn buttons_and_links_centre_their_labels_like_the_canvas() {
+        let mut project = project();
+        let mut button = element(ElementKind::Button);
+        button.text = "Go".into();
+        let mut link = element(ElementKind::Link);
+        link.text = "Read".into();
+        link.style.text_style.align = TextAlign::Right;
+        let mut left_link = element(ElementKind::Link);
+        left_link.text = "Home".into();
+        project.pages[0].elements = vec![button.clone(), link.clone(), left_link.clone()];
+        let bundle = direct_export_bundle(&project, &[]).unwrap();
+        let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+        for id in [button.id, link.id, left_link.id] {
+            let rule = rule_of(css, id);
+            assert!(rule.contains("display:flex;"), "{rule}");
+            assert!(!rule.contains("display:block;"), "{rule}");
+            assert!(rule.contains("align-items:center;"), "{rule}");
+        }
+        assert!(rule_of(css, button.id).contains("justify-content:center;"));
+        assert!(rule_of(css, link.id).contains("justify-content:flex-end;"));
+        assert!(rule_of(css, left_link.id).contains("justify-content:flex-start;"));
+    }
+
+    #[test]
+    fn an_export_without_behaviours_writes_no_script_and_no_behaviour_file() {
+        let mut project = project();
+        let mut text = element(ElementKind::Text);
+        text.text = "Hello".into();
+        project.pages[0].elements = vec![text];
+        let bundle = direct_export_bundle(&project, &[]).unwrap();
+        assert!(!bundle.files.contains_key("behaviours.js"));
+        let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
+        assert!(!html.contains("behaviours.js"), "{html}");
+        assert!(!html.contains("<script"), "{html}");
+    }
+
+    #[test]
+    fn standalone_face_passes_plain_fonts_through_and_rewrites_a_collection() {
+        let font = resolve_font("Archivo", 400, false);
+        assert_eq!(
+            crate::standalone_face(&font.bytes, font.index).unwrap(),
+            font.bytes.as_slice()
+        );
+        let mut collection = Vec::new();
+        collection.extend_from_slice(b"ttcf");
+        collection.extend_from_slice(&1u32.to_be_bytes());
+        collection.extend_from_slice(&1u32.to_be_bytes());
+        collection.extend_from_slice(&16u32.to_be_bytes());
+        collection.extend_from_slice(&0x0001_0000u32.to_be_bytes());
+        collection.extend_from_slice(&1u16.to_be_bytes());
+        collection.extend_from_slice(&[0u8; 6]);
+        collection.extend_from_slice(b"cmap");
+        collection.extend_from_slice(&0u32.to_be_bytes());
+        collection.extend_from_slice(&28u32.to_be_bytes());
+        collection.extend_from_slice(&4u32.to_be_bytes());
+        collection.extend_from_slice(b"data");
+        let face = crate::standalone_face(&collection, 0).unwrap();
+        assert_eq!(&face[..4], &0x0001_0000u32.to_be_bytes());
+        // The one table now starts after the rewritten directory it was copied into.
+        assert_eq!(&face[20..24], &56u32.to_be_bytes());
+        assert_eq!(&face[face.len() - collection.len()..], collection.as_slice());
+        assert!(crate::standalone_face(&collection[..12], 0).is_none());
     }
 
     #[test]
@@ -504,13 +879,14 @@ mod tests {
         child.style.sizing.min_width = Some(20.0);
         let colour = Uuid::new_v4(); child.style.references.fill = Some(colour);
         let layout = ElementLayout::Stack { direction: StackDirection::Row, gap: 8.0, padding: 0.0, align: StackAlign::Start, justify: StackJustify::Start, wrap: false };
-        let mut output = BTreeMap::new(); rules(&[child.clone()], &layout, &mut output);
+        let mut fonts = Fonts::default();
+        let mut output = BTreeMap::new(); rules(&[child.clone()], &layout, &mut fonts, &mut output);
         let css = &output[&child.id];
         assert!(css.contains("flex:1 1 0;"));
         assert!(css.contains("height:auto;"));
         assert!(css.contains("min-width:calc(20 * var(--desegnos-unit));"));
         assert!(css.contains(&format!("background:var(--colour-{colour});")));
-        output.clear(); rules(&[child.clone()], &ElementLayout::Free, &mut output);
+        output.clear(); rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
         assert!(output[&child.id].contains("width:calc(100% -"));
     }
 
@@ -531,8 +907,9 @@ mod tests {
             bottom: 12.0,
             left: 16.0,
         });
+        let mut fonts = Fonts::default();
         let mut output = BTreeMap::new();
-        rules(&[child.clone()], &ElementLayout::Free, &mut output);
+        rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
         let css = &output[&child.id];
         assert!(css.contains(&format!(
             "padding:{} {} {} {};",
@@ -549,7 +926,7 @@ mod tests {
             padding: 6.0,
         };
         output.clear();
-        rules(&[child.clone()], &ElementLayout::Free, &mut output);
+        rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
         assert!(output[&child.id].contains(&format!("padding:{};", length(6.0))));
     }
 
@@ -650,7 +1027,14 @@ mod tests {
         let css = std::str::from_utf8(&one.files["index.css"]).unwrap();
         assert!(html.contains("&lt;Hello &amp; world&gt;"));
         assert!(html.contains("type=\"email\""));
-        assert!(css.contains("font-family:system-ui;"));
+        let resolved = resolve_font("system-ui", 400, false);
+        let expected = if resolved.bundled {
+            "font-family:\"Desegnos Archivo\",sans-serif;"
+        } else {
+            "font-family:system-ui,sans-serif;"
+        };
+        assert!(css.contains(expected), "missing {expected}");
+        assert_generic_font_fallbacks(css);
         assert!(css.contains("width:max-content;height:auto;"));
         assert!(html.contains("href=\"index.html\""));
         assert!(html.contains("<line x1=\"0\" y1=\"20\""));
@@ -709,6 +1093,12 @@ mod tests {
             pointers: plan.pointers.iter().map(|p| ExportReplyPointer { pointer_id: p.id, implemented: true }).collect() };
         let initial = ai_export_bundle(&project, &plan, &reply).unwrap();
         assert_eq!(initial.pointers.len(), 2);
+        assert!(
+            std::str::from_utf8(&initial.files["index.html"])
+                .unwrap()
+                .contains("<script src=\"behaviours.js\" defer></script>")
+        );
+        assert!(initial.files.contains_key("behaviours.js"));
         let mut html_edit = initial.files.clone();
         let html = std::str::from_utf8(&html_edit["index.html"])
             .unwrap()

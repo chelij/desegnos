@@ -1584,6 +1584,27 @@ fn bundled_font(fell_back: bool) -> ResolvedFont {
     }
 }
 
+/// A standalone SFNT copy of one face from a TrueType/OpenType collection. A file that is not a
+/// collection is already standalone. Browsers load only a collection's first face, so an export
+/// needs the selected member's table directory rewritten to point at its own tables.
+pub fn standalone_face(bytes: &[u8], index: u32) -> Option<Vec<u8>> {
+    if bytes.get(..4)? != b"ttcf" {
+        return Some(bytes.to_vec());
+    }
+    let read_u32 = |at| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+    let offset = read_u32(12 + index as usize * 4)? as usize;
+    let count = u16::from_be_bytes(bytes.get(offset + 4..offset + 6)?.try_into().ok()?) as usize;
+    let header_len = 12 + count * 16;
+    let mut result = bytes.get(offset..offset + header_len)?.to_vec();
+    for table in 0..count {
+        let at = 12 + table * 16 + 8;
+        let original = read_u32(offset + at)?;
+        result[at..at + 4].copy_from_slice(&original.checked_add(header_len as u32)?.to_be_bytes());
+    }
+    result.extend_from_slice(bytes);
+    Some(result)
+}
+
 struct FaceData {
     bytes: Vec<u8>,
     index: u32,

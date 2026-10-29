@@ -1085,7 +1085,9 @@ fn deterministic_bundle(
             };
             js.push_str(&format!("/* desegnos-pointer:{id} */\n(() => {{\nif (!document.querySelector('[data-desegnos-id=\"{source}\"]')) return;\n{}\n}})();\n/* /desegnos-pointer:{id} */\n", code.js));
         }
-        files.insert("behaviours.js".into(), js.into_bytes());
+        if !js.is_empty() {
+            files.insert("behaviours.js".into(), js.into_bytes());
+        }
     }
     add_direct_outputs(project, plan, &mut files)?;
     let fingerprints = pointer_fingerprints(&files);
