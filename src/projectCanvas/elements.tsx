@@ -28,9 +28,9 @@ function textStyle(element: Element): CSSProperties {
 
 /**
  * The rendering contract, canvas half: a layer clips its own content to its box unless it is a
- * box or group, which let children overflow. The renderer in desegnos-core does the same.
+ * box, group or line, which let content overflow. The renderer in desegnos-core does the same.
  */
-const clipsContent = (kind: ElementKind) => kind !== 'box' && kind !== 'group';
+const clipsContent = (kind: ElementKind) => kind !== 'box' && kind !== 'group' && kind !== 'line';
 
 /**
  * Blur is a CSS blur radius, so the shadow's Gaussian standard deviation is half of it, which is

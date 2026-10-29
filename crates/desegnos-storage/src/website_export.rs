@@ -174,7 +174,7 @@ pub(crate) fn parent_directory(parent: &Path) -> Result<PathBuf> {
     }
     parent.canonicalize().map_err(io)
 }
-/// A new export folder name for this project, unique and safe on every platform.
+/// The readable base folder name for this project.
 pub fn export_folder_name(name: &str) -> String {
     let clean: String = name
         .chars()
@@ -188,11 +188,7 @@ pub fn export_folder_name(name: &str) -> String {
         .take(64)
         .collect();
     let clean = clean.trim_matches('-');
-    format!(
-        "{}-website-{}",
-        if clean.is_empty() { "desegnos" } else { clean },
-        Uuid::new_v4()
-    )
+    if clean.is_empty() { "desegnos" } else { clean }.to_owned()
 }
 
 /// A new folder is published only when every file is closed and synced. Existing
@@ -202,7 +198,38 @@ pub fn write_website_export(
     name: &str,
     export: &WebsiteExport,
 ) -> Result<WrittenWebsiteExport> {
-    write_export_at(parent, &export_folder_name(name), export)
+    write_export_named(parent, name, |_| Ok(export.clone()))
+}
+
+const DESTINATION_EXISTS: &str = "The export destination already exists.";
+
+/// Choose the first free readable name and rebuild destination-dependent files on a race.
+pub fn write_export_named(
+    parent: &Path,
+    name: &str,
+    mut build: impl FnMut(&Path) -> Result<WebsiteExport>,
+) -> Result<WrittenWebsiteExport> {
+    let parent = parent_directory(parent)?;
+    let base = export_folder_name(name);
+    for index in 1_u64.. {
+        let name = if index == 1 {
+            base.clone()
+        } else {
+            format!("{base}-{index}")
+        };
+        let path = parent.join(&name);
+        match fs::symlink_metadata(&path) {
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io(error)),
+        }
+        let export = build(&path)?;
+        match write_export_at(&parent, &name, &export) {
+            Err(error) if error.0 == DESTINATION_EXISTS => continue,
+            result => return result,
+        }
+    }
+    unreachable!()
 }
 
 /// Write an export into a specific new folder name. The exporter derives the final folder before
@@ -336,7 +363,14 @@ fn write_at(
                 "The destination folder changed while exporting. Choose it again.".into(),
             ));
         }
-        renameat_with(&parent, stage_name, &parent, name, RenameFlags::NOREPLACE).map_err(io)?;
+        renameat_with(&parent, stage_name, &parent, name, RenameFlags::NOREPLACE)
+            .map_err(|error| {
+                if error == rustix::io::Errno::EXIST || error == rustix::io::Errno::NOTEMPTY {
+                    Error(DESTINATION_EXISTS.into())
+                } else {
+                    io(error)
+                }
+            })?;
         published = true;
         parent.try_clone().map(File::from).and_then(|file| file.sync_all())
             .map_err(|error| Error(format!("The complete website was written to {}, but its destination could not confirm durable storage: {error}", parent_path.join(name).display())))?;
@@ -377,7 +411,13 @@ fn write_at(parent: &Path, stage_name: &str, name: &str, export: &WebsiteExport)
             file.write_all(bytes).map_err(io)?;
             file.sync_all().map_err(io)?;
         }
-        fs::rename(&stage, parent.join(name)).map_err(io)
+        fs::rename(&stage, parent.join(name)).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                Error(DESTINATION_EXISTS.into())
+            } else {
+                io(error)
+            }
+        })
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(stage);
@@ -410,7 +450,10 @@ mod tests {
         fs::write(root.join("keep.txt"), b"original").unwrap();
         let first = write_website_export(&root, "My site", &website()).unwrap();
         let second = write_website_export(&root, "My site", &website()).unwrap();
-        assert_ne!(first.path, second.path);
+        assert_eq!(first.path, root.join("my-site"));
+        assert_eq!(second.path, root.join("my-site-2"));
+        let third = write_website_export(&root, "My site", &website()).unwrap();
+        assert_eq!(third.path, root.join("my-site-3"));
         assert_eq!(fs::read(root.join("keep.txt")).unwrap(), b"original");
         assert_eq!(first.page_count, 2);
         assert_eq!(first.file_count, 3);
@@ -427,6 +470,37 @@ mod tests {
         }));
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn website_export_readable_name_retries_publication_race_and_uses_first_gap() {
+        let root = directory();
+        fs::create_dir(root.join("my-site-3")).unwrap();
+        let mut attempts = 0;
+        let written = write_export_named(&root, "My site", |path| {
+            attempts += 1;
+            if attempts == 1 {
+                fs::create_dir(path).unwrap();
+            }
+            let mut export = website();
+            export.files.insert(
+                "destination.txt".into(),
+                path.to_string_lossy().as_bytes().to_vec(),
+            );
+            Ok(export)
+        })
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert_eq!(written.path, root.join("my-site-2"));
+        assert_eq!(
+            fs::read(written.path.join("destination.txt")).unwrap(),
+            written.path.to_string_lossy().as_bytes()
+        );
+        fs::remove_dir_all(&written.path).unwrap();
+        let next = write_website_export(&root, "My site", &website()).unwrap();
+        assert_eq!(next.path, root.join("my-site-2"));
+        assert_eq!(export_folder_name("???"), "desegnos");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn website_export_writer_rejects_unsafe_empty_and_duplicate_paths_before_creating_anything() {
         let root = directory();

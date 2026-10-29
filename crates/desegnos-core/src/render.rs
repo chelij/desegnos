@@ -619,7 +619,8 @@ fn paint_element(
     if !own.is_empty() {
         // A border is drawn inside the border box, so the outer half of a stroke is cut away;
         // a picture is cut to the rounded box as `object-fit: cover` plus a radius does.
-        let clip = (stroke.is_some() || element.kind == ElementKind::Image)
+        let clip = ((stroke.is_some() && element.kind != ElementKind::Line)
+            || element.kind == ElementKind::Image)
             .then_some(Clip { rect: at, radius });
         items.push(Item::Group(Group {
             clip,
@@ -632,7 +633,7 @@ fn paint_element(
     paint_text(scene, fonts, element, content, &mut content_items);
     paint_children(project, scene, fonts, element, content, &mut content_items);
     if !content_items.is_empty() {
-        // Boxes and groups let children overflow; every other layer clips its content.
+        // Boxes, groups and lines let content overflow, matching the canvas.
         let clip = clips_content(&element.kind).then_some(Clip { rect: at, radius });
         items.push(Item::Group(Group {
             clip,
@@ -671,7 +672,7 @@ fn layer_radius(element: &Element) -> f64 {
 
 /// Whether an element's own content is cut to its box, matching the canvas's `overflow` rule.
 fn clips_content(kind: &ElementKind) -> bool {
-    !matches!(kind, ElementKind::Box | ElementKind::Group)
+    !matches!(kind, ElementKind::Box | ElementKind::Group | ElementKind::Line)
 }
 
 fn shadow_of(style: &ElementStyle, kind: &ElementKind, at: Rect, radius: f64) -> Option<Item> {
@@ -2060,6 +2061,34 @@ mod tests {
         let pdf = slide_pdf(&project, &[rendered]).unwrap();
         let pdf = String::from_utf8_lossy(&pdf);
         assert!(pdf.contains("0.071 0.204 0.337 rg 0 0 12.000 12.000 re f"));
+    }
+
+    #[test]
+    fn boundary_png_zero_height_line_preserves_six_pixel_stroke() {
+        let mut project = Project::new(
+            "Line".into(),
+            crate::Viewport {
+                width: 40,
+                height: 40,
+            },
+            crate::Appearance::Light,
+        )
+        .unwrap();
+        let mut line = crate::empty_element(ElementKind::Line, rect(5.0, 20.0, 30.0, 0.0));
+        line.style.stroke.width = 6.0;
+        line.style.stroke.color = Some("#000000".into());
+        project.pages[0].elements.push(line);
+        let page = &project.pages[0];
+        let png = boundary_png(&project, page, page.base_size_id()).unwrap();
+        let pixels = image::load_from_memory(&png).unwrap().to_rgba8();
+        let painted: Vec<_> = (0..pixels.height())
+            .filter(|y| pixels.get_pixel(20, *y)[0] < 200)
+            .collect();
+        assert!(
+            (6..=7).contains(&painted.len()),
+            "painted rows: {painted:?}"
+        );
+        assert!(painted.first().unwrap() < &20 && painted.last().unwrap() > &20);
     }
 
     const INK: Rgba = Rgba {
