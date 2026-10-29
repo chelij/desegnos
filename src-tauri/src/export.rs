@@ -545,11 +545,19 @@ fn commit(
     preview_folder: Option<&Path>,
     preview: bool,
 ) -> NativeResult<ExportResultView> {
+    // A preview opens its one page's own file: a page away from the root is not index.html.
+    let mut preview_page = String::new();
     let (path, file_count) = if preview {
         let folder = preview_folder.ok_or("A preview needs its temporary folder.")?;
         let mut export = export_website(bundle);
         export.files.remove(desegnos_core::EXPORT_MANIFEST_FILE);
         write_export_into(folder, &export).map_err(message)?;
+        preview_page = export
+            .files
+            .keys()
+            .find(|file| file.ends_with(".html") && !file.contains('/'))
+            .cloned()
+            .unwrap_or_default();
         (folder.to_path_buf(), export.files.len())
     } else {
         let version = {
@@ -587,7 +595,8 @@ fn commit(
             site.lock()
                 .map_err(message)?
                 .serve(&path, 64 * 1024 * 1024)
-                .map_err(message)?,
+                .map_err(message)?
+                + &preview_page,
         )
     } else {
         None
