@@ -1188,7 +1188,11 @@ impl Workspace {
             .session()
             .map(|session| session.project().name.clone())
             .into_iter()
-            .chain(self.parked.iter().map(|project| project.session.project().name.clone()));
+            .chain(
+                self.parked
+                    .iter()
+                    .map(|project| project.session.project().name.clone()),
+            );
         lowest_unused_name(base, names)
     }
 
@@ -1575,7 +1579,7 @@ pub fn new_untitled_project(
 pub fn save_untitled_project(
     state: WorkspaceState<'_>,
     name: String,
-    path: PathBuf,
+    path: Option<PathBuf>,
     label: Option<String>,
 ) -> NativeResult<SaveProjectOutcome> {
     let mut state = state.lock().map_err(message)?;
@@ -1604,8 +1608,30 @@ pub fn save_untitled_project(
     if let Some(session) = state.session_mut() {
         session.end_history_step();
     }
+    let path = match path {
+        Some(path) => path,
+        None => free_project_path(&state.project_location()?, name)?,
+    };
     let project = state.project()?.clone();
     state.save_untitled_checked(&project, path, label)
+}
+
+/// Without a picked file, the first save goes to the default project folder under the
+/// project's name, numbered so it never replaces another project's file.
+fn free_project_path(directory: &Path, name: &str) -> NativeResult<PathBuf> {
+    std::fs::create_dir_all(directory)
+        .map_err(|error| format!("The project folder could not be created: {error}"))?;
+    let stem = desegnos_storage::sanitize_project_name(name);
+    (1..1000)
+        .map(|n| {
+            directory.join(if n == 1 {
+                format!("{stem}.desegnos")
+            } else {
+                format!("{stem} {n}.desegnos")
+            })
+        })
+        .find(|path| !path.exists())
+        .ok_or_else(|| "Choose a location for this project.".into())
 }
 
 /// Pick the project file for an untitled project's first save.
@@ -2434,7 +2460,10 @@ mod tests {
             "Untitled deck"
         );
         assert_eq!(
-            lowest_unused_name("Untitled deck", ["Untitled deck".into(), "Untitled deck 3".into()]),
+            lowest_unused_name(
+                "Untitled deck",
+                ["Untitled deck".into(), "Untitled deck 3".into()]
+            ),
             "Untitled deck 2"
         );
         assert_eq!(

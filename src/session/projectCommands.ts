@@ -71,7 +71,7 @@ export function createProjectCommands(context: () => Context) {
     return untitledSaveFlight.current;
   }
 
-  async function saveUntitledProject(name: string, path: string) {
+  async function saveUntitledProject(name: string, path: string | null) {
     const { settle, queue, saveChoice, setSaveConflict, accept, setNotice, refreshRecent } = context();
     await settle();
     let outcome = await queue(() => native<SaveOutcome>('save_untitled_project', { name, path, label: null }));

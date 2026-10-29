@@ -383,7 +383,7 @@ export function ProjectProperties({ project, rename, setGrid, setGridSettings, b
 export function UntitledSaveForm({ project, location, busy, chooseLocation, save, cancel }: {
   project: Project; location: ProjectLocationView | null; busy: boolean;
   chooseLocation: (name: string) => Promise<string | null>;
-  save: (name: string, path: string) => Promise<void>;
+  save: (name: string, path: string | null) => Promise<void>;
   cancel: () => void;
 }) {
   const [name, setName] = useState(project.name === 'Untitled project' ? '' : project.name);
@@ -405,13 +405,8 @@ export function UntitledSaveForm({ project, location, busy, chooseLocation, save
     if (locked || !name.trim()) return;
     setWorking(true); setError('');
     try {
-      let target = path;
-      if (!target) {
-        target = await chooseLocation(name.trim());
-        if (!target) return;
-        setPath(target);
-      }
-      await save(name.trim(), target);
+      // Without a chosen file, the project goes to the default location shown above.
+      await save(name.trim(), path);
     } catch (reason) { fail(reason); }
     finally { setWorking(false); }
   }
