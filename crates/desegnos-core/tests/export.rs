@@ -542,3 +542,62 @@ fn importing_a_website_command_is_one_undo_step() {
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().pages.len(), 1);
 }
+
+#[test]
+fn phone_captures_never_give_text_a_layout_override() {
+    let project = project();
+    let capture = |width: f64| {
+        let mut text = node(
+            "p",
+            rect(20.0, 20.0, width - 40.0, 40.0),
+            styles(""),
+            vec![],
+        );
+        text.text = Some("Plain paragraph".into());
+        WebCapture {
+            url: "https://example.test/".into(),
+            site: "Example".into(),
+            route: "/".into(),
+            title: "Example site".into(),
+            width,
+            height: 900.0,
+            nodes: vec![node(
+                "body",
+                rect(0.0, 0.0, width, 900.0),
+                styles("#ffffff"),
+                vec![text],
+            )],
+            scripts: vec![],
+        }
+    };
+    let imported = import_website(
+        &[capture(1440.0), capture(390.0)],
+        &BTreeMap::new(),
+        &project,
+    )
+    .unwrap();
+    let page = &imported.pages[0];
+    assert_eq!(page.sizes.len(), 2, "the phone capture adds a phone size");
+    fn check(elements: &[desegnos_core::Element]) -> usize {
+        elements
+            .iter()
+            .map(|element| {
+                if !element.kind.holds_children() {
+                    assert!(
+                        element
+                            .overrides
+                            .values()
+                            .all(|value| value.layout.is_none()),
+                        "{:?} carries a layout override",
+                        element.kind
+                    );
+                }
+                usize::from(!element.overrides.is_empty()) + check(&element.children)
+            })
+            .sum()
+    }
+    assert!(
+        check(&page.elements) > 0,
+        "the phone size is stored as overrides"
+    );
+}

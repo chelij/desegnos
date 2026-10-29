@@ -774,6 +774,8 @@ impl Converter<'_> {
         url: Option<String>,
         children: Vec<Element>,
     ) -> Element {
+        // A flex or grid link or button keeps its place; only boxes lay out children.
+        let layout = if kind.holds_children() { layout_for(&node.styles) } else { ElementLayout::Free };
         Element {
             id: self.element_id(path, tag),
             kind,
@@ -787,7 +789,7 @@ impl Converter<'_> {
             text: clip_text(text.as_deref().unwrap_or_default()),
             image: None,
             url,
-            layout: layout_for(&node.styles),
+            layout,
             overrides: BTreeMap::new(),
             children,
             meta: ElementMeta::default(),
@@ -1202,7 +1204,7 @@ fn collect_overrides(elements: &[Element], overrides: &mut BTreeMap<Uuid, Elemen
             ElementOverride {
                 rect: Some(element.rect),
                 style: Some(element.style.clone()),
-                layout: Some(element.layout.clone()),
+                layout: element.kind.holds_children().then(|| element.layout.clone()),
                 hidden: false,
                 dismissed: false,
             },
