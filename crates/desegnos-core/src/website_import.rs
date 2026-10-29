@@ -288,7 +288,38 @@ fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, Strin
     if target.is_empty() || target == page {
         return None;
     }
-    page_paths.get(&target).cloned()
+    if let Some(path) = page_paths.get(&target) {
+        return Some(path.clone());
+    }
+    // A page served by the loopback server of a folder or ZIP import keeps its imported path
+    // after the random first segment. Old sites link to their own pages with absolute URLs on
+    // their original domain and with different letter case, so match those paths without case.
+    let page_path = served_path(&page)?;
+    let linked = url::Url::parse(&page_url).ok()?.join(href).ok()?;
+    let linked_path = served_path(linked.as_str()).or_else(|| {
+        matches!(linked.scheme(), "http" | "https").then(|| normalize_url(linked.path()))
+    })?;
+    if linked_path.eq_ignore_ascii_case(&page_path) {
+        return None;
+    }
+    page_paths
+        .iter()
+        .find(|(url, _)| {
+            served_path(url).is_some_and(|path| path.eq_ignore_ascii_case(&linked_path))
+        })
+        .map(|(_, path)| path.clone())
+}
+
+/// The path a loopback URL serves, without the first segment that is a serving token.
+fn served_path(url: &str) -> Option<String> {
+    let parsed = url::Url::parse(url).ok()?;
+    let host = parsed.host_str()?;
+    if !(host.eq_ignore_ascii_case("127.0.0.1") || host.eq_ignore_ascii_case("localhost")) {
+        return None;
+    }
+    let path = parsed.path().strip_prefix('/')?;
+    let suffix = path.find('/').map_or("/", |slash| &path[slash..]);
+    Some(normalize_url(suffix))
 }
 
 fn remote_href(href: &str) -> Option<String> {
@@ -1284,5 +1315,82 @@ fn walk_behaviours(nodes: &[WebNode], path: &mut Vec<usize>, plan: &PagePlan<'_>
         }
         walk_behaviours(&node.children, path, plan, pointers);
         path.pop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{internal_href, normalize_url};
+    use std::collections::BTreeMap;
+
+    fn page_paths() -> BTreeMap<String, String> {
+        [
+            ("http://127.0.0.1:9/token/", "/site"),
+            ("http://127.0.0.1:9/token/pages/p002", "/site/pages/p002"),
+            ("http://127.0.0.1:9/token/main.htm", "/site/main"),
+        ]
+        .into_iter()
+        .map(|(url, path)| (normalize_url(url), path.to_owned()))
+        .collect()
+    }
+
+    #[test]
+    fn absolute_links_on_the_original_domain_find_the_imported_page() {
+        let pages = page_paths();
+        let page = "http://127.0.0.1:9/token/pages/p001";
+        assert_eq!(
+            internal_href("http://www.oldsite.example/pages/P002.HTM", page, &pages).as_deref(),
+            Some("/site/pages/p002")
+        );
+        assert_eq!(
+            internal_href("https://www.oldsite.example/pages/p002.html", page, &pages).as_deref(),
+            Some("/site/pages/p002")
+        );
+        assert_eq!(
+            internal_href("http://www.oldsite.example/pages/p999.htm", page, &pages),
+            None
+        );
+    }
+
+    #[test]
+    fn page_files_match_with_a_different_letter_case() {
+        let pages = page_paths();
+        let page = "http://127.0.0.1:9/token/pages/p002";
+        assert_eq!(
+            internal_href("../MAIN.HTM", page, &pages).as_deref(),
+            Some("/site/main")
+        );
+        assert_eq!(
+            internal_href("http://127.0.0.1:9/token/MAIN.htm", page, &pages).as_deref(),
+            Some("/site/main")
+        );
+        assert_eq!(
+            internal_href(
+                "http://www.oldsite.example/MAIN.htm",
+                "http://127.0.0.1:9/token/main.htm",
+                &pages
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn public_url_imports_keep_their_links_external() {
+        let pages: BTreeMap<String, String> = [
+            ("https://oldsite.example/pages/p001", "/site/pages/p001"),
+            ("https://oldsite.example/pages/p002", "/site/pages/p002"),
+        ]
+        .into_iter()
+        .map(|(url, path)| (normalize_url(url), path.to_owned()))
+        .collect();
+        let page = "https://oldsite.example/pages/p001";
+        assert_eq!(
+            internal_href("https://www.oldsite.example/pages/P002.HTM", page, &pages),
+            None
+        );
+        assert_eq!(
+            internal_href("https://www.oldsite.example/pages/p002.html", page, &pages),
+            None
+        );
     }
 }
