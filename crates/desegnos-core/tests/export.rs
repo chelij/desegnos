@@ -3,8 +3,8 @@ use desegnos_core::{
     Appearance, BoundaryKind, Command, Element, ElementKind, ExportRecord, ExportReply,
     ExportedPage, ExportedPointer, InputType, OutputType, PageSize, Pointer, PointerSource,
     PointerTarget, Project, Rect, ReferenceKind, Session, Viewport, WebCapture, WebNode, WebScript,
-    WebStyles, direct_export_bundle, empty_element, import_website, parse_export_reply, plan_export,
-    validate_export_reply,
+    WebStyles, direct_export_bundle, empty_element, import_website, parse_export_reply,
+    plan_export, preview_page_ids, validate_export_reply,
 };
 use std::collections::BTreeMap;
 use uuid::Uuid;
@@ -115,6 +115,63 @@ fn excluded_boundaries_can_be_previewed_without_joining_the_full_export() {
     let preview = plan_export(&project, &[excluded], Uuid::new_v4()).unwrap();
     assert_eq!(preview.pages[0].page_id, excluded);
     assert!(!project.pages[0].included);
+}
+
+#[test]
+fn preview_exports_every_included_boundary_and_keeps_the_chosen_page() {
+    let project = project();
+    let home = project.home_page_id;
+    let add = |project: &Project, name: &str, path: &str, y: f64| {
+        apply(
+            project,
+            Command::AddCanvasPage {
+                name: name.into(),
+                path: path.into(),
+                size: PageSize {
+                    id: Uuid::new_v4(),
+                    label: "Desktop".into(),
+                    width: 800,
+                    height: 600,
+                    kind: BoundaryKind::Page,
+                    x: 0.0,
+                    y,
+                },
+                moves: vec![],
+                reference: vec![],
+            },
+        )
+    };
+    let mut project = add(&project, "About", "/about", 1000.0);
+    project = add(&project, "Hidden", "/hidden", 2000.0);
+    let about = project
+        .pages
+        .iter()
+        .find(|page| page.path == "/about")
+        .unwrap()
+        .id;
+    let hidden = project
+        .pages
+        .iter()
+        .find(|page| page.path == "/hidden")
+        .unwrap()
+        .id;
+    project
+        .pages
+        .iter_mut()
+        .find(|page| page.id == hidden)
+        .unwrap()
+        .included = false;
+    // An included page is written once; an excluded chosen page still comes along for its preview.
+    assert_eq!(preview_page_ids(&project, about), vec![home, about]);
+    assert_eq!(
+        preview_page_ids(&project, hidden),
+        vec![home, about, hidden]
+    );
+    let bundle = direct_export_bundle(&project, &preview_page_ids(&project, hidden)).unwrap();
+    assert_eq!(bundle.page_count(), 3);
+    for file in ["index.html", "about.html", "hidden.html"] {
+        assert!(bundle.files.contains_key(file), "{file} is written");
+    }
 }
 
 #[test]

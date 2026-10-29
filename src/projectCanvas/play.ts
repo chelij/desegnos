@@ -1,4 +1,4 @@
-import type { Element, Pointer, Project } from '../types';
+import type { Element, ElementKind, Pointer, Project } from '../types';
 import { resolveForSize } from './sizes';
 
 /** The transient state Play keeps for one session: nothing here is saved. */
@@ -26,12 +26,47 @@ export function playPointerAt(project: Project, pageId: string, elementId: strin
 
 export const playElementIdAt = (project: Project, pageId: string, elementId: string) => playPointerAt(project, pageId, elementId)?.id ?? null;
 
+/** The layer kinds a page URL turns into a hyperlink, matching the web export. */
+const LINK_KINDS: ElementKind[] = ['box', 'text', 'button', 'link'];
+
+/** The page a linked layer opens, when its url exactly names a boundary path. */
+function linkTargetPage(project: Project, element: Element): string | null {
+  if (!element.url || !LINK_KINDS.includes(element.kind)) return null;
+  return project.pages.find(page => page.path === element.url)?.id ?? null;
+}
+
+/** The clicked layer and its ancestors as Play draws them, innermost first. */
+function playChain(project: Project, pageId: string, elementId: string): Element[] {
+  const page = project.pages.find(page => page.id === pageId);
+  if (!page) return [];
+  const elements = page.sizes[0] ? resolveForSize(project, page, page.sizes[0].id) : page.elements;
+  const chain: Element[] = [];
+  const walk = (list: Element[]): boolean => {
+    for (const element of list) {
+      chain.push(element);
+      if (element.id === elementId) return true;
+      if (walk(element.children)) return true;
+      chain.pop();
+    }
+    return false;
+  };
+  return walk(elements) ? chain.reverse() : [];
+}
+
 /** One click's outcome: the next transient state and a boundary to move the camera to. */
 export type PlayStep = { play: PlayState; goTo: string | null };
 
 export function playClick(project: Project, play: PlayState, pageId: string, elementId: string): PlayStep {
-  const pointer = playPointerAt(project, pageId, elementId);
-  if (!pointer?.play) return { play, goTo: null };
+  const chain = playChain(project, pageId, elementId);
+  // The innermost layer carrying a Play pointer runs it, whichever layer was clicked.
+  const pointer = chain.length
+    ? chain.map(element => playPointerAt(project, pageId, element.id)).find((found): found is Pointer => !!found)
+    : playPointerAt(project, pageId, elementId);
+  if (!pointer?.play) {
+    // With no Play pointer in the chain, the nearest page link opens its boundary.
+    const target = chain.map(element => linkTargetPage(project, element)).find(id => id !== null) ?? null;
+    return target ? { play: { ...play, boundary: target }, goTo: target } : { play, goTo: null };
+  }
   const action = pointer.play;
   switch (action.kind) {
     case 'goTo':
