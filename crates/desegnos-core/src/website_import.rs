@@ -263,6 +263,19 @@ fn normalize_url(value: &str) -> String {
     if let Some(index) = value.find(['#', '?']) {
         value.truncate(index);
     }
+    // A page is the same whether a link names its file or its route: `about.html`, `about`
+    // and `about/index.html` all lead to the captured `about`.
+    for suffix in ["/index.html", "/index.htm"] {
+        if value.to_ascii_lowercase().ends_with(suffix) {
+            value.truncate(value.len() - suffix.len() + 1);
+        }
+    }
+    let file = value.rfind('/').map_or(0, |slash| slash + 1);
+    for extension in [".html", ".htm"] {
+        if value.len() > file + extension.len() && value.to_ascii_lowercase().ends_with(extension) {
+            value.truncate(value.len() - extension.len());
+        }
+    }
     while value.len() > 1 && value.ends_with('/') {
         value.pop();
     }

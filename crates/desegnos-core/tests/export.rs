@@ -601,3 +601,33 @@ fn phone_captures_never_give_text_a_layout_override() {
         "the phone size is stored as overrides"
     );
 }
+
+#[test]
+fn links_to_page_files_point_at_the_imported_pages() {
+    let project = project();
+    let page = |url: &str, route: &str, href: &str| {
+        let mut link = node("a", rect(20.0, 20.0, 120.0, 30.0), styles(""), vec![]);
+        link.text = Some("Go".into());
+        link.href = Some(href.into());
+        WebCapture {
+            url: url.into(),
+            site: "Site".into(),
+            route: route.into(),
+            title: route.into(),
+            width: 1440.0,
+            height: 900.0,
+            nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles("#ffffff"), vec![link])],
+            scripts: vec![],
+        }
+    };
+    let home = page("http://127.0.0.1:9/t/", "/", "http://127.0.0.1:9/t/about.html");
+    let about = page("http://127.0.0.1:9/t/about", "/about", "http://127.0.0.1:9/t/index.html");
+    let imported = import_website(&[home, about], &BTreeMap::new(), &project).unwrap();
+    fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
+        elements.iter().find_map(|element| (element.kind == ElementKind::Link).then_some(element).or_else(|| link(&element.children)))
+    }
+    let to_about = link(&imported.pages[0].elements).expect("the home page keeps its link");
+    let to_home = link(&imported.pages[1].elements).expect("the about page keeps its link");
+    assert_eq!(to_about.url.as_deref(), Some(imported.pages[1].path.as_str()));
+    assert_eq!(to_home.url.as_deref(), Some(imported.pages[0].path.as_str()));
+}
