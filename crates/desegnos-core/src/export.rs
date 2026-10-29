@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 #[path = "web_codegen.rs"]
 mod web_codegen;
+pub(crate) use web_codegen::generic_fallback;
 
 /// Largest single exported file.
 pub const MAX_EXPORT_FILE_BYTES: usize = 4 * 1024 * 1024;

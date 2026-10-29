@@ -313,8 +313,8 @@ fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, Strin
         .map(|(_, path)| path.clone())
 }
 
-/// Hosts the site uses for its own pages: absolute links there reach at least two different
-/// imported pages other than the home page.
+/// Hosts the site uses for its own pages: absolute links there reach an imported page by its
+/// .htm or .html file name, or at least two different imported pages other than the home page.
 fn own_hosts(captures: &[WebCapture], page_paths: &BTreeMap<String, String>) -> BTreeSet<String> {
     fn hrefs<'a>(nodes: &'a [WebNode], out: &mut Vec<&'a str>) {
         for node in nodes {
@@ -331,6 +331,7 @@ fn own_hosts(captures: &[WebCapture], page_paths: &BTreeMap<String, String>) -> 
         .map(|path| path.to_ascii_lowercase())
         .collect();
     let mut matches: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut by_file = BTreeSet::new();
     for capture in captures {
         let mut links = Vec::new();
         hrefs(&capture.nodes, &mut links);
@@ -339,11 +340,15 @@ fn own_hosts(captures: &[WebCapture], page_paths: &BTreeMap<String, String>) -> 
             let (Some(host), true) = (url.host_str(), matches!(url.scheme(), "http" | "https")) else { continue };
             let path = normalize_url(url.path()).to_ascii_lowercase();
             if served_path(url.as_str()).is_none() && pages.contains(&path) {
+                let file = url.path().to_ascii_lowercase();
+                if file.ends_with(".htm") || file.ends_with(".html") {
+                    by_file.insert(host.to_ascii_lowercase());
+                }
                 matches.entry(host.to_ascii_lowercase()).or_default().insert(path);
             }
         }
     }
-    matches.into_iter().filter(|(_, paths)| paths.len() >= 2).map(|(host, _)| host).collect()
+    matches.into_iter().filter(|(host, paths)| paths.len() >= 2 || by_file.contains(host)).map(|(host, _)| host).collect()
 }
 
 /// The path a loopback URL serves, without the first segment that is a serving token.

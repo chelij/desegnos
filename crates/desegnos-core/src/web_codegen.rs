@@ -54,7 +54,7 @@ fn fallback_family_list(family: &str) -> String {
 
 /// The generic family a font list falls back to when nothing in it is installed. Serif and
 /// monospace names keep their look; everything else ends as the browser's sans-serif.
-fn generic_fallback(family: &str) -> &'static str {
+pub(crate) fn generic_fallback(family: &str) -> &'static str {
     let lower = family.to_ascii_lowercase();
     let without_sans = lower
         .replace("sans-serif", "")

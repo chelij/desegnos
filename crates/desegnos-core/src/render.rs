@@ -1530,7 +1530,11 @@ fn resolve_font_uncached(family: &str, weight: u16, italic: bool) -> ResolvedFon
         .get_or_init(|| Mutex::new((system_fonts(), BTreeMap::new())))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for requested in family.split(',') {
+    // A missing serif or monospace family keeps its kind through the installed generic face,
+    // the same kind the web export names as its fallback.
+    let inferred = crate::export::generic_fallback(family);
+    let candidates = family.split(',').chain((inferred != "sans-serif").then_some(inferred));
+    for requested in candidates {
         let name = requested.trim().trim_matches(['"', '\'']).trim();
         if name.eq_ignore_ascii_case("Archivo") {
             return bundled_font(false);
@@ -2312,6 +2316,17 @@ mod tests {
         let list = resolve_font("Desegnos nonexistent font 987654, Archivo", 400, false);
         assert!(!list.fell_back);
         assert_eq!(list.id, explicit.id);
+    }
+
+    #[test]
+    fn a_missing_serif_family_keeps_a_serif_look() {
+        let generic = resolve_font("serif", 400, false);
+        let missing = resolve_font("Desegnos missing Times 987654", 400, false);
+        if !generic.bundled {
+            assert_eq!(missing.id, generic.id);
+        }
+        let sans = resolve_font("Desegnos missing font 987654", 400, false);
+        assert!(sans.bundled && sans.fell_back);
     }
 
     #[test]

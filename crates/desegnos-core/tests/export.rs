@@ -655,8 +655,7 @@ fn old_site_links_on_the_original_domain_find_the_imported_pages() {
         "/",
         Some("http://www.oldsite.example/pages/P002.HTM"),
     );
-    // The old domain counts as the site's own once it links to two of its pages.
-    let main = capture("http://127.0.0.1:9/token/main.htm", "/main.htm", Some("http://www.oldsite.example/MAIN.HTM"));
+    let main = capture("http://127.0.0.1:9/token/main.htm", "/main.htm", None);
     let p002 = capture("http://127.0.0.1:9/token/pages/p002", "/pages/p002", Some("../MAIN.HTM"));
     let imported = import_website(&[home, main, p002], &BTreeMap::new(), &project).unwrap();
     fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
@@ -703,4 +702,32 @@ fn public_import_links_keep_pointing_at_the_original_site() {
     }
     let link = link(&imported.pages[0].elements).expect("the home link is kept");
     assert_eq!(link.url.as_deref(), Some(href));
+}
+
+#[test]
+fn a_matching_path_on_another_domain_stays_external() {
+    let project = project();
+    let capture = |url: &str, route: &str, href: Option<&str>| {
+        let mut link = node("a", rect(20.0, 20.0, 120.0, 30.0), styles(""), vec![]);
+        link.text = Some("Go".into());
+        link.href = href.map(str::to_owned);
+        WebCapture {
+            url: url.into(),
+            site: "Site".into(),
+            route: route.into(),
+            title: route.into(),
+            width: 1440.0,
+            height: 900.0,
+            nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles("#ffffff"), vec![link])],
+            scripts: vec![],
+        }
+    };
+    let home = capture("http://127.0.0.1:9/token/", "/", Some("https://social.example/about"));
+    let about = capture("http://127.0.0.1:9/token/about", "/about", None);
+    let imported = import_website(&[home, about], &BTreeMap::new(), &project).unwrap();
+    fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
+        elements.iter().find_map(|element| (element.kind == ElementKind::Link).then_some(element).or_else(|| link(&element.children)))
+    }
+    let social = link(&imported.pages[0].elements).expect("the social link is kept");
+    assert_eq!(social.url.as_deref(), Some("https://social.example/about"));
 }
