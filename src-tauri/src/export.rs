@@ -15,7 +15,7 @@ use desegnos_core::{
     ExportBundle, ExportPlan, ExportPlanKind, ExportRecord, GenerationMode, Project, WebsiteExport,
     export_manifest, pointer_fingerprints,
 };
-use desegnos_storage::{export_folder_name, read_export_file, write_export_at, write_export_into};
+use desegnos_storage::{read_export_file, write_export_named, write_export_into};
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -552,33 +552,35 @@ fn commit(
         write_export_into(folder, &export).map_err(message)?;
         (folder.to_path_buf(), export.files.len())
     } else {
-        let name = export_folder_name(&project.name);
-        let path = destination.join(&name);
         let version = {
             let mut workspace = workspace.lock().map_err(message)?;
             workspace.head_version()?
         };
-        let record = ExportRecord {
+        let mut record = ExportRecord {
             id: Uuid::new_v4(),
             project_id: project.id,
             version,
-            destination: path.to_string_lossy().into_owned(),
+            destination: String::new(),
             exported_at: now(),
             pages: bundle.pages.clone(),
             pointers: bundle.pointers.clone(),
             behaviours: bundle.behaviours.clone(),
         };
-        let mut export = export_website(bundle);
-        export.files.insert(
-            desegnos_core::EXPORT_MANIFEST_FILE.into(),
-            export_manifest(&record),
-        );
-        let written = write_export_at(destination, &name, &export).map_err(message)?;
+        let written = write_export_named(destination, &project.name, |path| {
+            record.destination = path.to_string_lossy().into_owned();
+            let mut export = export_website(bundle);
+            export.files.insert(
+                desegnos_core::EXPORT_MANIFEST_FILE.into(),
+                export_manifest(&record),
+            );
+            Ok(export)
+        })
+        .map_err(message)?;
         {
             let mut workspace = workspace.lock().map_err(message)?;
             workspace.record_export(record)?;
         }
-        (written.path, export.files.len())
+        (written.path, written.file_count)
     };
     let preview_url = if preview {
         Some(

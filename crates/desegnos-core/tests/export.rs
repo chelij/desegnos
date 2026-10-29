@@ -324,16 +324,52 @@ fn slides_render_a_valid_pdf_and_images_render_png_and_svg() {
             .any(|window| window == b"/Type /Page")
     );
 
-    let png = bundle.files.get("hero.png").expect("a PNG image");
+    let png = bundle.files.get("image.png").expect("a PNG image");
     assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     assert_eq!(&png[12..16], b"IHDR");
     assert!(png.ends_with(b"IEND\xaeB`\x82"));
 
-    let svg = bundle.files.get("hero.svg").expect("a vector image");
+    let svg = bundle.files.get("image.svg").expect("a vector image");
     let svg = std::str::from_utf8(svg).unwrap();
     assert!(svg.contains("<svg"));
     assert!(svg.contains("width=\"640\""));
     assert!(svg.contains("height=\"480\""));
+}
+
+#[test]
+fn image_export_names_use_page_names_and_remain_unique() {
+    let mut project = direct_project();
+    for page in &mut project.pages {
+        page.output = OutputType::Image;
+        page.name = "My Hero".into();
+    }
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    assert_eq!(
+        plan.pages
+            .iter()
+            .map(|page| page.file.as_str())
+            .collect::<Vec<_>>(),
+        vec!["my-hero.png", "my-hero-2.png"]
+    );
+    let bundle = direct_export_bundle(&project, &[]).unwrap();
+    for name in [
+        "my-hero.png",
+        "my-hero-2.png",
+        "my-hero.svg",
+        "my-hero-2.svg",
+    ] {
+        assert!(bundle.files.contains_key(name), "missing {name}");
+    }
+    project.pages[0].output = OutputType::Webpage;
+    project.pages[1].output = OutputType::Webpage;
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    assert_eq!(
+        plan.pages
+            .iter()
+            .map(|page| page.file.as_str())
+            .collect::<Vec<_>>(),
+        vec!["index.html", "hero.html"]
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -33,7 +33,7 @@ pub use website_snapshot::{
 };
 pub use website_export::{
     WrittenWebsiteExport, export_folder_name, read_export_file, write_export_at,
-    write_export_into, write_website_export,
+    write_export_into, write_export_named, write_website_export,
 };
 
 pub const PROJECT_FILE_EXTENSIONS: [&str; 1] = ["desegnos"];

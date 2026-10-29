@@ -512,7 +512,10 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
                     },
                 ),
                 crate::OutputType::Image => {
-                    let png = unique_file(&mut used_files, format!("{stem}.png"));
+                    let png = unique_file(
+                        &mut used_files,
+                        format!("{}.png", crate::file_stem(&page.name)),
+                    );
                     let svg_stem = png.trim_end_matches(".png").to_owned();
                     used_files.insert(format!("{svg_stem}.svg"));
                     png
@@ -1150,6 +1153,12 @@ fn add_direct_outputs(
         }
         files.insert("slides.pdf".into(), crate::slide_pdf(project, &render)?);
     }
+    let mut used_files: BTreeSet<String> = files.keys().map(|name| name.to_lowercase()).collect();
+    used_files.extend(
+        plan.pages.iter()
+            .filter(|page| !page.file.is_empty())
+            .map(|page| page.file.to_lowercase()),
+    );
     for page in plan
         .pages
         .iter()
@@ -1162,8 +1171,8 @@ fn add_direct_outputs(
             .ok_or_else(|| Error("An image boundary in this export no longer exists.".into()))?;
         let png = if page.file.is_empty() {
             unique_file(
-                &mut BTreeSet::new(),
-                format!("{}.png", crate::file_stem(&page.path)),
+                &mut used_files,
+                format!("{}.png", crate::file_stem(&page.name)),
             )
         } else {
             page.file.clone()
