@@ -59,9 +59,10 @@ pub enum StackJustify {
     SpaceBetween,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TextAlign {
+    #[default]
     Left,
     Center,
     Right,
@@ -198,6 +199,23 @@ pub struct ElementTextStyle {
     pub letter_spacing: f64,
     pub color: String,
     pub align: TextAlign,
+}
+
+/// The text style a new layer starts with; exported CSS resets every layer to these values so a
+/// layer only has to state the text properties that differ.
+impl Default for ElementTextStyle {
+    fn default() -> Self {
+        Self {
+            font_family: "system-ui".into(),
+            size: 16.0,
+            weight: 400,
+            italic: false,
+            line_height: 1.4,
+            letter_spacing: 0.0,
+            color: "#1a1a1a".into(),
+            align: TextAlign::Left,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -2611,16 +2629,7 @@ pub fn empty_element(kind: ElementKind, rect: Rect) -> Element {
                 blur: 0.0,
                 color: None,
             },
-            text_style: ElementTextStyle {
-                font_family: "system-ui".into(),
-                size: 16.0,
-                weight: 400,
-                italic: false,
-                line_height: 1.4,
-                letter_spacing: 0.0,
-                color: "#1a1a1a".into(),
-                align: TextAlign::Left,
-            },
+            text_style: ElementTextStyle::default(),
         },
         text: String::new(),
         image: None,
