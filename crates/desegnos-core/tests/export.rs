@@ -731,3 +731,39 @@ fn a_matching_path_on_another_domain_stays_external() {
     let social = link(&imported.pages[0].elements).expect("the social link is kept");
     assert_eq!(social.url.as_deref(), Some("https://social.example/about"));
 }
+
+#[test]
+fn table_cells_keep_their_background_and_place_their_content() {
+    let project = project();
+    let mut link = node("a", rect(18.0, 60.0, 40.0, 16.0), styles(""), vec![]);
+    link.text = Some("Home".into());
+    let nav = node("td", rect(10.0, 50.0, 160.0, 200.0), styles("#ccccff"), vec![link]);
+    let mut words = node("p", rect(180.0, 60.0, 500.0, 40.0), styles(""), vec![]);
+    words.text = Some("Article text".into());
+    let body = node("td", rect(170.0, 50.0, 600.0, 200.0), styles(""), vec![words]);
+    let row = node("tr", rect(10.0, 50.0, 760.0, 200.0), styles(""), vec![nav, body]);
+    let table = node("table", rect(10.0, 50.0, 760.0, 200.0), styles("#ffffff"), vec![row]);
+    let capture = WebCapture {
+        url: "http://127.0.0.1:9/token/".into(),
+        site: "Old".into(),
+        route: "/".into(),
+        title: "Old".into(),
+        width: 1440.0,
+        height: 900.0,
+        nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles(""), vec![table])],
+        scripts: vec![],
+    };
+    let imported = import_website(&[capture], &BTreeMap::new(), &project).unwrap();
+    fn all(elements: &[desegnos_core::Element], origin: (f64, f64), out: &mut Vec<(desegnos_core::Element, f64, f64)>) {
+        for element in elements {
+            let at = (origin.0 + element.rect.x, origin.1 + element.rect.y);
+            out.push((element.clone(), at.0, at.1));
+            all(&element.children, at, out);
+        }
+    }
+    let mut placed = Vec::new();
+    all(&imported.pages[0].elements, (0.0, 0.0), &mut placed);
+    assert!(placed.iter().any(|(element, ..)| element.style.fill.as_deref() == Some("#ccccff")), "the nav cell keeps its background");
+    let text = placed.iter().find(|(element, ..)| element.text == "Article text").unwrap();
+    assert_eq!((text.1, text.2), (180.0, 60.0), "the second cell's text keeps its page position");
+}

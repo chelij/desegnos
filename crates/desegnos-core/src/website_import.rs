@@ -787,7 +787,7 @@ impl Converter<'_> {
                 .into();
         }
         if is_text_tag(&tag) {
-            if let Some(text) = text {
+            if let Some(text) = text.clone() {
                 if children.is_empty() {
                     return [self.text_element(&tag, path, local, node, &text)].into();
                 }
@@ -809,10 +809,8 @@ impl Converter<'_> {
                 let boxed = self.base_element(&tag, path, local, node, ElementKind::Box, &None, None, merged);
                 return [boxed].into();
             }
-            if children.is_empty() {
-                return vec![];
-            }
-            return children;
+            // Without its own text, a cell or list item is a container like any other: its
+            // children move into the parent's coordinates and a painted background stays.
         }
 
         // Every other visible element is a container. Transparent wrappers are merged into
