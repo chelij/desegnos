@@ -383,7 +383,7 @@ pub async fn prepare_export(
         project
     };
     let page_ids = page_ids.unwrap_or_default();
-    if preview {
+    let preview_page_id = if preview {
         if page_ids.len() != 1 {
             return Err("Preview export prints one boundary at a time.".into());
         }
@@ -395,16 +395,29 @@ pub async fn prepare_export(
         if !page.output.needs_ai() {
             return Err("Preview shows webpages and app screens.".into());
         }
-    } else if !page_ids.is_empty() {
-        return Err("Export writes every included boundary.".into());
-    }
+        Some(page.id)
+    } else {
+        if !page_ids.is_empty() {
+            return Err("Export writes every included boundary.".into());
+        }
+        None
+    };
+    // A preview writes every included boundary, so links from the chosen page keep working.
+    // AI pages render directly here: Preview never starts paid generation.
+    let export_page_ids = match preview_page_id {
+        Some(chosen) => desegnos_core::preview_page_ids(&project, chosen),
+        None => page_ids.clone(),
+    };
     if !preview {
         // A full export records the version it came from, so the project needs a file first.
         workspace.lock().map_err(message)?.head_version()?;
     }
     let job_id = Uuid::new_v4();
     let project = service.lock().map_err(message)?.with_accepted(project);
-    let plan = desegnos_core::plan_export(&project, &page_ids, job_id).map_err(message)?;
+    let plan = desegnos_core::plan_export(&project, &export_page_ids, job_id).map_err(message)?;
+    let preview_page = preview_page_id
+        .and_then(|id| plan.pages.iter().find(|page| page.page_id == id))
+        .map(|page| page.file.clone());
     let (destination_path, preview_folder) = if preview {
         let folder = {
             let service = service.lock().map_err(message)?;
@@ -418,7 +431,7 @@ pub async fn prepare_export(
         create_default_destination(&app, &parent)?;
         (Some(trusted_destination(parent)?), None)
     };
-    let has_ai = plan.request_count > 0;
+    let has_ai = !preview && plan.request_count > 0;
     let mut view = ExportJobView {
         job_id,
         project_id,
@@ -442,7 +455,8 @@ pub async fn prepare_export(
         error: None,
     };
     if !has_ai {
-        let bundle = desegnos_core::direct_export_bundle(&project, &page_ids).map_err(message)?;
+        let bundle =
+            desegnos_core::direct_export_bundle(&project, &export_page_ids).map_err(message)?;
         let written = commit(
             &workspace,
             &site,
@@ -453,6 +467,7 @@ pub async fn prepare_export(
                 .ok_or("Choose a destination folder.")?,
             preview_folder.as_deref(),
             preview,
+            preview_page.as_deref(),
         )?;
         service
             .lock()
@@ -544,20 +559,26 @@ fn commit(
     destination: &Path,
     preview_folder: Option<&Path>,
     preview: bool,
+    preview_page: Option<&str>,
 ) -> NativeResult<ExportResultView> {
-    // A preview opens its one page's own file: a page away from the root is not index.html.
-    let mut preview_page = String::new();
+    // A preview opens the chosen page's own file: a page away from the root is not index.html.
+    let mut preview_file = String::new();
     let (path, file_count) = if preview {
         let folder = preview_folder.ok_or("A preview needs its temporary folder.")?;
         let mut export = export_website(bundle);
         export.files.remove(desegnos_core::EXPORT_MANIFEST_FILE);
-        write_export_into(folder, &export).map_err(message)?;
-        preview_page = export
-            .files
-            .keys()
-            .find(|file| file.ends_with(".html") && !file.contains('/'))
-            .cloned()
+        preview_file = preview_page
+            .filter(|file| !file.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                export
+                    .files
+                    .keys()
+                    .find(|file| file.ends_with(".html") && !file.contains('/'))
+                    .cloned()
+            })
             .unwrap_or_default();
+        write_export_into(folder, &export).map_err(message)?;
         (folder.to_path_buf(), export.files.len())
     } else {
         let version = {
@@ -596,7 +617,7 @@ fn commit(
                 .map_err(message)?
                 .serve(&path, 64 * 1024 * 1024)
                 .map_err(message)?
-                + &preview_page,
+                + &preview_file,
         )
     } else {
         None
@@ -789,6 +810,7 @@ fn finish(
                                     destination,
                                     preview_folder.as_deref(),
                                     preview,
+                                    None,
                                 ) {
                                     Ok(written) => {
                                         service

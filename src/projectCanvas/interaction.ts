@@ -149,14 +149,8 @@ export function createCanvasInteraction(context: () => Context) {
       const chain = elementChain(target);
       const clickedPage = chainPage(chain);
       if (clickedPage && latest.current.play.boundary === clickedPage) {
-        // The innermost ancestor that carries a Play pointer is the one a click runs.
-        const source = chain.find(entry => {
-          const id = entry.dataset.element;
-          return !!id && (project.pointers ?? []).some(pointer =>
-            pointer.play && pointer.from.kind === 'element'
-            && pointer.from.pageId === clickedPage && pointer.from.elementId === id);
-        });
-        const elementId = source?.dataset.element;
+        // Play resolves the innermost Play pointer or page link from the clicked layer outward.
+        const elementId = chain.find(entry => entry.dataset.element)?.dataset.element;
         if (elementId) latest.current.onPlayElement(clickedPage, elementId);
       }
       return;

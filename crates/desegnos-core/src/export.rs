@@ -275,6 +275,19 @@ pub fn included_pages(project: &Project) -> Vec<&Page> {
     pages
 }
 
+/// The boundaries a preview writes: every included boundary, plus the chosen one when it is not
+/// included, so links from the previewed page reach the other pages instead of a missing file.
+pub fn preview_page_ids(project: &Project, chosen: Uuid) -> Vec<Uuid> {
+    let mut ids: Vec<Uuid> = included_pages(project)
+        .into_iter()
+        .map(|page| page.id)
+        .collect();
+    if !ids.contains(&chosen) {
+        ids.push(chosen);
+    }
+    ids
+}
+
 /// Slide order: canvas order, or following `go_to` pointers between slide boundaries.
 pub fn slide_order(project: &Project) -> Vec<&Page> {
     let slides: Vec<&Page> = included_pages(project)
