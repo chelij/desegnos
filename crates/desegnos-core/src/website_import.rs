@@ -891,10 +891,11 @@ impl Converter<'_> {
             visible: true,
             locked: false,
             style: {
-                // A single line hugs its text, so a substitute font that runs wider than the
-                // site's own never cuts the line short.
+                // A single line that stands alone hugs its text, so a substitute font that runs
+                // wider than the site's own never cuts it short. Text sharing its line with a
+                // link or other inline child keeps its width, so it does not run into them.
                 let mut style = self.node_style(node, true);
-                if rect.height <= node.styles.font_size * node.styles.line_height.clamp(0.5, 4.0) * 1.5 && !text.contains('\n') {
+                if node.children.is_empty() && rect.height <= node.styles.font_size * node.styles.line_height.clamp(0.5, 4.0) * 1.5 && !text.contains('\n') {
                     style.sizing.width = SizingMode::Fit;
                 }
                 style
@@ -1357,13 +1358,21 @@ fn layout_sitemap(
         .fold(0.0_f64, f64::max) + 160.0;
     let mut top = project.pages.iter().flat_map(|page| &page.sizes)
         .map(|size| size.y).fold(0.0_f64, f64::min);
+    // A long level wraps after a few pages, so it reads as a block rather than a strip.
+    const PAGES_PER_LINE: usize = 6;
+    let label_room = if labelled { 120.0 } else { 0.0 };
     for (depth, mut row) in rows {
         row.sort_by_key(|&index| (&sections[index], order[index], index));
-        let page_y = top + if labelled { 120.0 } else { 0.0 };
+        let mut page_y = top + label_room;
         let mut x = left;
         let mut bottom = page_y;
         let mut previous_section = None;
-        for index in row {
+        for (position, index) in row.into_iter().enumerate() {
+            if position > 0 && position % PAGES_PER_LINE == 0 {
+                x = left;
+                page_y = bottom + 240.0 + label_room;
+                previous_section = None;
+            }
             let section = &sections[index];
             if previous_section != Some(section) {
                 if previous_section.is_some() {
@@ -1371,15 +1380,15 @@ fn layout_sitemap(
                 }
                 if labelled && project.reference.len() + imported.reference.len() < crate::MAX_REFERENCE_ITEMS {
                     let label = if section.is_empty() {
-                        "Root".to_owned()
+                        "Top level".to_owned()
                     } else {
                         let name = section.replace(['-', '_'], " ");
                         let mut chars = name.chars();
                         chars.next().unwrap().to_uppercase().collect::<String>() + chars.as_str()
                     };
                     imported.reference.push(ReferenceItem {
-                        id: stable_uuid(&format!("website:section:{}:{depth}:{section}", plans[home].url)),
-                        rect: Rect { x, y: top, width: 280.0, height: 80.0 },
+                        id: stable_uuid(&format!("website:section:{}:{depth}:{}:{section}", plans[home].url, position / PAGES_PER_LINE)),
+                        rect: Rect { x, y: page_y - label_room, width: 280.0, height: 80.0 },
                         kind: ReferenceKind::Note { text: label },
                     });
                 }

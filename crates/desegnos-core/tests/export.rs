@@ -6,7 +6,7 @@ use desegnos_core::{
     WebStyles, direct_export_bundle, empty_element, import_website, parse_export_reply,
     plan_export, preview_page_ids, validate_export_reply,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 fn rect(x: f64, y: f64, width: f64, height: f64) -> Rect {
@@ -888,7 +888,7 @@ fn website_import_sitemap_groups_sections_and_labels_each_row_group() {
     assert!(gap(0, 1) > gap(1, 2));
     assert!(gap(2, 3) > gap(3, 4));
     assert_eq!(imported.reference.len(), 4);
-    for (name, text) in [("/", "Root"), ("/about", "Root"), ("/blog/z", "Blog"), ("/products/z", "Products")] {
+    for (name, text) in [("/", "Top level"), ("/about", "Top level"), ("/blog/z", "Blog"), ("/products/z", "Products")] {
         let size = &imported.pages.iter().find(|page| page.name == name).unwrap().sizes[0];
         assert!(imported.reference.iter().any(|note| note.rect.x == size.x
             && note.rect.y + note.rect.height < size.y
@@ -926,4 +926,20 @@ fn website_import_sitemap_clears_existing_boundaries_and_references() {
         pages: imported.pages, reference: imported.reference, pointers: imported.pointers,
         pictures: BTreeMap::new(),
     }, |_| Ok(())).unwrap();
+}
+
+#[test]
+fn website_import_sitemap_wraps_a_long_level_into_lines() {
+    let project = project();
+    let children: Vec<String> = (0..13).map(|index| format!("/p{index:02}")).collect();
+    let links: Vec<&str> = children.iter().map(String::as_str).collect();
+    let mut captures = vec![sitemap_capture("/", &links)];
+    captures.extend(children.iter().map(|route| sitemap_capture(route, &[])));
+    let imported = import_website(&captures, &BTreeMap::new(), &project).unwrap();
+    let level: Vec<_> = imported.pages.iter().filter(|page| page.name != "/").collect();
+    let lines: BTreeSet<i64> = level.iter().map(|page| page.sizes[0].y.round() as i64).collect();
+    assert_eq!(lines.len(), 3, "13 pages at one level wrap into three lines of up to six");
+    let first = imported.pages.iter().find(|page| page.name == "/p00").unwrap();
+    let seventh = imported.pages.iter().find(|page| page.name == "/p06").unwrap();
+    assert_eq!(first.sizes[0].x, seventh.sizes[0].x, "each line starts at the same left edge");
 }

@@ -100,7 +100,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
   }
 
   async function runImport() {
-    if (!source || locked || imported) return false;
+    if (!source || locked || imported) return null;
     stopped.current = false;
     setError(''); setWarnings(source.skipped); setPhase('rendering');
     const captures: WebCapture[] = [];
@@ -142,11 +142,12 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
       onImported({ ...result, warnings: [...notes, ...result.warnings] });
       setImported(true);
       setPhase('idle');
-      return true;
+      // What this import left out beyond the files the read already listed.
+      return [...notes.slice(source.skipped.length), ...result.warnings];
     } catch (reason) {
       if (!stopped.current) setError(messageOf(reason));
       setPhase('idle');
-      return false;
+      return null;
     }
   }
 

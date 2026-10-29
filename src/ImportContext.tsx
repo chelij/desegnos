@@ -186,8 +186,11 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
   }
   async function importSource() {
     if (locked) return;
-    if (hasPages && !await pages.runImport()) return;
-    if (alsoBrand) await analyze();
+    const leftOut = hasPages ? await pages.runImport() : [];
+    if (!leftOut) return;
+    // The brand reading continues in this panel; a clean pages-only import is done, while
+    // one that left something out stays open so its warnings can be read.
+    if (alsoBrand) await analyze(); else if (!leftOut.length) close();
   }
   function acceptSource(value: IdentitySource) {
     setSource(value); setPreviousBrand(false); setKept(false); setFiles([]); setAutomatic(true); setSelection(null); setAnalysis(null); setFindings([]); setAssets([]); setPhotoIds([]); setItemIndices([]);

@@ -16,7 +16,7 @@ try {
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--types', 'vite/client', '--jsx', 'react-jsx', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/ImportContext.tsx'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   const code = (await Promise.all(['WebsiteImport.js', 'ImportContext.js'].map(file => readFile(join(temporary, file), 'utf8')))).map(code => code.replace(/^import .*;$/gm, '').replace(/^export /gm, '')).join('\n');
-  function setup({ connected = true, previous = false, initialSource = null, pageCount = 0, fail = '', deferred = '' } = {}) {
+  function setup({ connected = true, previous = false, initialSource = null, pageCount = 0, fail = '', deferred = '', pageWarnings = ['A picture was skipped.'] } = {}) {
     let cursor = 0, closed = 0, configured = connected, completeDeferred;
     const state = [], dependencies = [], effects = [], cleanups = [], calls = [], kept = [], imported = [], listeners = new Set();
     const useState = initial => { const index = cursor++; if (!(index in state)) state[index] = initial; return [state[index], value => { state[index] = typeof value === 'function' ? value(state[index]) : value; }]; };
@@ -34,7 +34,7 @@ try {
       if (command === 'prepare_identity_selection') return { fits: true, fileIds: ['html'], message: null, needsSettings: false };
       if (command === 'pick_website_import_source' || command === 'prepare_website_import_url') return website;
       if (command === 'analyze_identity') return analysis;
-      if (command === 'import_website_pages') return { workspace: {}, pages: pageCount, layers: 3, pictures: 0, warnings: ['A picture was skipped.'] };
+      if (command === 'import_website_pages') return { workspace: {}, pages: pageCount, layers: 3, pictures: 0, warnings: pageWarnings };
       return null;
     };
     const jsx = (type, props) => typeof type === 'function' ? type(props) : ({ type, props });
@@ -88,6 +88,13 @@ try {
     assert.equal(flow.closed(), 0);
     assert.ok(all(tree).some(node => node.props?.message === 'A picture was skipped.'));
     assert.match(text(tree), /secret.txt: May contain private information/);
+  });
+  await test('a clean pages-only import closes the panel', async () => {
+    const flow = setup({ connected: false, pageCount: 2, pageWarnings: [] });
+    let tree = await flow.pick('Choose ZIP…');
+    button(tree, 'Import 2 pages').props.onClick(); tree = await flow.pump(); tree = await flow.pump();
+    assert.equal(flow.imported.length, 1);
+    assert.equal(flow.closed(), 1);
   });
   await test('one source imports pages then analyzes its brand by default', async () => {
     const flow = setup({ pageCount: 1 });
