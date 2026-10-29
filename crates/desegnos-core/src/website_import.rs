@@ -10,7 +10,7 @@ use crate::{
     PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Result, SizingMode, StackAlign,
     StackDirection, StackJustify, TextAlign, ensure,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use uuid::Uuid;
 
 /// A page rendered at one width. `url` is the absolute local-static-server URL the browser
@@ -1121,12 +1121,13 @@ pub fn import_website(
     let pointer_room = crate::MAX_POINTERS.saturating_sub(project.pointers.len());
     let mut pointer_total = 0usize;
     let mut reference_room = crate::MAX_REFERENCE_ITEMS.saturating_sub(project.reference.len());
-    for plan in plans {
+    let mut script_ranges = Vec::new();
+    for plan in &plans {
         let page_x = right;
         let page_y = top;
         let desktop_height = plan.desktop.height.clamp(1.0, 100_000.0).round() as u32;
         let converter = Converter {
-            page: &plan,
+            page: plan,
             picture_ids,
             page_paths: &page_paths,
             own_hosts: &own_hosts,
@@ -1159,7 +1160,7 @@ pub fn import_website(
         if let Some(phone) = plan.phone {
             let phone_height = phone.height.clamp(1.0, 100_000.0).round() as u32;
             let phone_converter = Converter {
-                page: &plan,
+                page: plan,
                 picture_ids,
                 page_paths: &page_paths,
                 own_hosts: &own_hosts,
@@ -1216,7 +1217,17 @@ pub fn import_website(
         let width = if plan.phone.is_some() { 1440.0 + 160.0 + 390.0 } else { 1440.0 };
         right = page_x + width + 160.0;
 
+        let page_elements = count_elements(&base_elements);
+        if element_total + page_elements > crate::MAX_ELEMENTS {
+            imported
+                .warnings
+                .push("The remaining pages were left out to stay inside the project element limit.".into());
+            break;
+        }
+        element_total += page_elements;
+
         // Scripts are reference notes below the boundary, not layers inside it.
+        let script_start = imported.reference.len();
         let mut note_x = page_x;
         let mut note_y = page_y + f64::from(desktop_height) + 24.0;
         for (index, script) in plan.desktop.scripts.iter().take(12.min(reference_room)).enumerate() {
@@ -1251,18 +1262,11 @@ pub fn import_website(
             }
         }
 
-        let pointers = behaviour_pointers(plan.desktop, &plan);
-        let page_elements = count_elements(&base_elements);
-        if element_total + page_elements > crate::MAX_ELEMENTS {
-            imported
-                .warnings
-                .push("The remaining pages were left out to stay inside the project element limit.".into());
-            break;
-        }
-        element_total += page_elements;
+        let pointers = behaviour_pointers(plan.desktop, plan);
+        script_ranges.push(script_start..imported.reference.len());
         let page = Page {
             id: plan.page_id,
-            name: plan.name,
+            name: plan.name.clone(),
             path: plan.path.clone(),
             included: true,
             output: OutputType::Webpage,
@@ -1282,7 +1286,131 @@ pub fn import_website(
         }
         imported.pages.push(page);
     }
+    layout_sitemap(&mut imported, &plans, &script_ranges, project);
     Ok(imported)
+}
+
+/// Keep the stored page order intact; only canvas positions follow the site's navigation.
+fn layout_sitemap(
+    imported: &mut ImportedWebsite,
+    plans: &[PagePlan<'_>],
+    script_ranges: &[std::ops::Range<usize>],
+    project: &Project,
+) {
+    fn links(elements: &[Element], paths: &BTreeMap<&str, usize>, out: &mut Vec<usize>) {
+        for element in elements {
+            if matches!(element.kind, ElementKind::Link | ElementKind::Button | ElementKind::Box)
+                && let Some(target) = element.url.as_deref().and_then(|url| paths.get(url))
+            {
+                out.push(*target);
+            }
+            links(&element.children, paths, out);
+        }
+    }
+
+    if imported.pages.is_empty() {
+        return;
+    }
+    let routes: Vec<String> = plans.iter().take(imported.pages.len()).map(|plan| {
+        if plan.desktop.route.is_empty() {
+            url::Url::parse(&plan.url).map(|url| normalize_url(url.path())).unwrap_or_else(|_| "/".into())
+        } else {
+            normalize_url(&plan.desktop.route)
+        }
+    }).collect();
+    let sections: Vec<String> = routes.iter().map(|route| {
+        let segments: Vec<_> = route.split('/').filter(|segment| !segment.is_empty()).collect();
+        if segments.len() > 1 { segments[0].to_owned() } else { String::new() }
+    }).collect();
+    let labelled = sections.iter().collect::<BTreeSet<_>>().len() > 1;
+    let paths = imported.pages.iter().enumerate().map(|(index, page)| (page.path.as_str(), index)).collect();
+    let mut edges = Vec::new();
+    for page in &imported.pages {
+        let mut targets = Vec::new();
+        links(&page.elements, &paths, &mut targets);
+        edges.push(targets);
+    }
+    let home = routes.iter().position(|route| route == "/").unwrap_or(0);
+    let mut depths = vec![usize::MAX; imported.pages.len()];
+    let mut order = vec![usize::MAX; imported.pages.len()];
+    let mut queue = VecDeque::from([home]);
+    depths[home] = 0;
+    order[home] = 0;
+    let mut next_order = 1;
+    while let Some(source) = queue.pop_front() {
+        for &target in &edges[source] {
+            if depths[target] == usize::MAX {
+                depths[target] = depths[source] + 1;
+                order[target] = next_order;
+                next_order += 1;
+                queue.push_back(target);
+            }
+        }
+    }
+    let mut rows: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (index, depth) in depths.into_iter().enumerate() {
+        rows.entry(depth).or_default().push(index);
+    }
+    let left = project.pages.iter().flat_map(|page| &page.sizes)
+        .map(|size| size.x + f64::from(size.width))
+        .chain(project.reference.iter().map(|item| item.rect.x + item.rect.width))
+        .fold(0.0_f64, f64::max) + 160.0;
+    let mut top = project.pages.iter().flat_map(|page| &page.sizes)
+        .map(|size| size.y).fold(0.0_f64, f64::min);
+    for (depth, mut row) in rows {
+        row.sort_by_key(|&index| (&sections[index], order[index], index));
+        let page_y = top + if labelled { 120.0 } else { 0.0 };
+        let mut x = left;
+        let mut bottom = page_y;
+        let mut previous_section = None;
+        for index in row {
+            let section = &sections[index];
+            if previous_section != Some(section) {
+                if previous_section.is_some() {
+                    x += 240.0;
+                }
+                if labelled && project.reference.len() + imported.reference.len() < crate::MAX_REFERENCE_ITEMS {
+                    let label = if section.is_empty() {
+                        "Root".to_owned()
+                    } else {
+                        let name = section.replace(['-', '_'], " ");
+                        let mut chars = name.chars();
+                        chars.next().unwrap().to_uppercase().collect::<String>() + chars.as_str()
+                    };
+                    imported.reference.push(ReferenceItem {
+                        id: stable_uuid(&format!("website:section:{}:{depth}:{section}", plans[home].url)),
+                        rect: Rect { x, y: top, width: 280.0, height: 80.0 },
+                        kind: ReferenceKind::Note { text: label },
+                    });
+                }
+                previous_section = Some(section);
+            }
+            let page = &mut imported.pages[index];
+            let dx = x - page.sizes[0].x;
+            let dy = page_y - page.sizes[0].y;
+            let mut right = x;
+            let mut page_bottom = page_y;
+            for size in &mut page.sizes {
+                size.x += dx;
+                size.y += dy;
+                right = right.max(size.x + f64::from(size.width));
+                page_bottom = page_bottom.max(size.y + f64::from(size.height));
+            }
+            // Script notes clear both sizes, including a phone taller than the desktop.
+            let notes = &mut imported.reference[script_ranges[index].clone()];
+            if let Some(first) = notes.first() {
+                let note_dy = page_bottom + 24.0 - first.rect.y;
+                for note in notes {
+                    note.rect.x += dx;
+                    note.rect.y += note_dy;
+                    bottom = bottom.max(note.rect.y + note.rect.height);
+                }
+            }
+            bottom = bottom.max(page_bottom);
+            x = right + 160.0;
+        }
+        top = bottom + 240.0;
+    }
 }
 
 fn count_elements(elements: &[Element]) -> usize {

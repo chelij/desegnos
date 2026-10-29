@@ -768,3 +768,105 @@ fn table_cells_keep_their_background_and_place_their_content() {
     assert_eq!((text.1, text.2), (180.0, 60.0), "the second cell's text keeps its page position");
     assert_eq!(text.0.style.sizing.width, desegnos_core::SizingMode::Fit, "a single line hugs its text");
 }
+
+fn sitemap_capture(route: &str, links: &[&str]) -> WebCapture {
+    let mut capture = import_website_capture();
+    capture.url = format!("https://example.test{route}");
+    capture.route = route.into();
+    capture.title = route.into();
+    capture.nodes = links.iter().map(|target| {
+        let mut link = node("a", rect(20.0, 20.0, 120.0, 30.0), styles(""), vec![]);
+        link.text = Some("Go".into());
+        link.href = Some(format!("https://example.test{target}"));
+        link
+    }).collect();
+    capture
+}
+
+#[test]
+fn website_import_sitemap_uses_breadth_first_rows_and_keeps_sizes_together() {
+    let project = project();
+    let home = sitemap_capture("/", &["/z", "/a"]);
+    let mut phone = home.clone();
+    phone.width = 390.0;
+    phone.height = 1800.0;
+    let mut tall = sitemap_capture("/z", &["/a", "/deep"]);
+    tall.height = 2400.0;
+    tall.scripts.push(WebScript { src: Some("app.js".into()), text: None });
+    let captures = vec![home, phone, sitemap_capture("/a", &["/deep"]), tall,
+        sitemap_capture("/deep", &["/"]), sitemap_capture("/unreachable", &["/a"])];
+    let imported = import_website(&captures, &BTreeMap::new(), &project).unwrap();
+    let page = |name: &str| imported.pages.iter().find(|page| page.name == name).unwrap();
+    let home = page("/");
+    assert_eq!(home.sizes.len(), 2);
+    assert_eq!(home.sizes[0].y, home.sizes[1].y);
+    assert!(home.sizes[0].x + f64::from(home.sizes[0].width) < home.sizes[1].x);
+    assert!(home.sizes[1].y + f64::from(home.sizes[1].height) < page("/a").sizes[0].y);
+    assert_eq!(page("/a").sizes[0].y, page("/z").sizes[0].y);
+    assert!(page("/z").sizes[0].x < page("/a").sizes[0].x, "link order beats URL order");
+    assert!(page("/z").sizes[0].y + 2400.0 < page("/deep").sizes[0].y);
+    assert!(page("/deep").sizes[0].y + 900.0 < page("/unreachable").sizes[0].y);
+    assert_eq!(imported.reference.len(), 1, "a single root section needs no labels");
+    assert!(imported.reference[0].rect.y + imported.reference[0].rect.height < page("/deep").sizes[0].y);
+    let again = import_website(&captures, &BTreeMap::new(), &project).unwrap();
+    assert_eq!(imported.pages, again.pages);
+    assert_eq!(imported.reference, again.reference);
+}
+
+#[test]
+fn website_import_sitemap_groups_sections_and_labels_each_row_group() {
+    let project = project();
+    let captures = vec![
+        sitemap_capture("/", &["/products/z", "/blog/z", "/products/a", "/about", "/blog/a"]),
+        sitemap_capture("/products/z", &[]), sitemap_capture("/blog/z", &[]),
+        sitemap_capture("/products/a", &[]), sitemap_capture("/about", &[]),
+        sitemap_capture("/blog/a", &[]),
+    ];
+    let imported = import_website(&captures, &BTreeMap::new(), &project).unwrap();
+    let mut row: Vec<_> = imported.pages.iter().filter(|page| page.name != "/").collect();
+    row.sort_by(|a, b| a.sizes[0].x.total_cmp(&b.sizes[0].x));
+    assert_eq!(row.iter().map(|page| page.name.as_str()).collect::<Vec<_>>(),
+        ["/about", "/blog/z", "/blog/a", "/products/z", "/products/a"]);
+    let gap = |a: usize, b: usize| row[b].sizes[0].x - row[a].sizes[0].x - 1440.0;
+    assert!(gap(0, 1) > gap(1, 2));
+    assert!(gap(2, 3) > gap(3, 4));
+    assert_eq!(imported.reference.len(), 4);
+    for (name, text) in [("/", "Root"), ("/about", "Root"), ("/blog/z", "Blog"), ("/products/z", "Products")] {
+        let size = &imported.pages.iter().find(|page| page.name == name).unwrap().sizes[0];
+        assert!(imported.reference.iter().any(|note| note.rect.x == size.x
+            && note.rect.y + note.rect.height < size.y
+            && matches!(&note.kind, ReferenceKind::Note { text: label } if label == text)));
+    }
+    let single = import_website(&[sitemap_capture("/blog/a", &["/blog/b"]), sitemap_capture("/blog/b", &[])],
+        &BTreeMap::new(), &project).unwrap();
+    assert!(single.reference.is_empty());
+    assert!(single.pages[0].sizes[0].y < single.pages[1].sizes[0].y, "without home, use the first page");
+}
+
+#[test]
+fn website_import_sitemap_clears_existing_boundaries_and_references() {
+    let mut project = project();
+    project.pages[0].sizes[0].x = 4000.0;
+    project.pages[0].sizes[0].y = -300.0;
+    project.reference.push(desegnos_core::ReferenceItem {
+        id: Uuid::new_v4(), rect: rect(8000.0, -500.0, 1200.0, 10000.0),
+        kind: ReferenceKind::Note { text: "Existing".into() },
+    });
+    let captures = vec![sitemap_capture("/", &["/blog/post"]), sitemap_capture("/blog/post", &[])];
+    let imported = import_website(&captures, &BTreeMap::new(), &project).unwrap();
+    let boundaries: Vec<_> = imported.pages.iter().flat_map(|page| &page.sizes)
+        .map(|size| rect(size.x, size.y, f64::from(size.width), f64::from(size.height))).collect();
+    let added: Vec<_> = boundaries.into_iter().chain(imported.reference.iter().map(|note| note.rect)).collect();
+    for (index, item) in added.iter().enumerate() {
+        assert!(item.x > 9200.0);
+        for other in &added[index + 1..] {
+            assert!(item.x + item.width <= other.x || other.x + other.width <= item.x
+                || item.y + item.height <= other.y || other.y + other.height <= item.y);
+        }
+    }
+    let mut session = Session::new(project).unwrap();
+    session.execute(session.project().revision, Command::ImportWebsite {
+        pages: imported.pages, reference: imported.reference, pointers: imported.pointers,
+        pictures: BTreeMap::new(),
+    }, |_| Ok(())).unwrap();
+}
