@@ -1,5 +1,5 @@
 import type { IdentityCandidate, IdentitySource, SourcePage } from './types';
-import { colourHex } from './colourValue';
+import { colourHex } from './colourValue.js';
 
 export type IdentityFinding = IdentityCandidate['findings'][number];
 export type ReviewSection = 'Colours' | 'Fonts' | 'Logos' | 'Style & tone' | 'Other';

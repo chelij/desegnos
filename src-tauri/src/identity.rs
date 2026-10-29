@@ -979,6 +979,25 @@ impl IdentityService {
         self.website_files.insert(id, files);
         Ok(view)
     }
+    /// Reuse the native page snapshot; the renderer never supplies filesystem paths.
+    pub(crate) fn retain_import_snapshot(
+        &mut self,
+        snapshot: &desegnos_storage::WebsiteSnapshot,
+        project: Option<IdentitySource>,
+    ) -> NativeResult<IdentitySourceManifest> {
+        let source = match project {
+            Some(source) => Ok(source),
+            None => desegnos_storage::identity_source_from_files(
+                &snapshot.name,
+                snapshot.files.clone(),
+                snapshot.skipped.clone(),
+            )
+            .map_err(error),
+        }
+        .and_then(normalize_source)?;
+        self.retain_source(source)
+    }
+
     fn reserve(
         &mut self,
         source_id: Uuid,
