@@ -655,7 +655,8 @@ fn old_site_links_on_the_original_domain_find_the_imported_pages() {
         "/",
         Some("http://www.oldsite.example/pages/P002.HTM"),
     );
-    let main = capture("http://127.0.0.1:9/token/main.htm", "/main.htm", None);
+    // The old domain counts as the site's own once it links to two of its pages.
+    let main = capture("http://127.0.0.1:9/token/main.htm", "/main.htm", Some("http://www.oldsite.example/MAIN.HTM"));
     let p002 = capture("http://127.0.0.1:9/token/pages/p002", "/pages/p002", Some("../MAIN.HTM"));
     let imported = import_website(&[home, main, p002], &BTreeMap::new(), &project).unwrap();
     fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {

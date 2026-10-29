@@ -282,7 +282,7 @@ fn normalize_url(value: &str) -> String {
     value
 }
 
-fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, String>) -> Option<String> {
+fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, String>, own_hosts: &BTreeSet<String>) -> Option<String> {
     let target = normalize_url(href);
     let page = normalize_url(page_url);
     if target.is_empty() || target == page {
@@ -296,8 +296,11 @@ fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, Strin
     // their original domain and with different letter case, so match those paths without case.
     let page_path = served_path(&page)?;
     let linked = url::Url::parse(&page_url).ok()?.join(href).ok()?;
+    // Another domain counts only when the site links to several of its own pages there, so
+    // a link to https://social.example/ never lands on the imported home page.
     let linked_path = served_path(linked.as_str()).or_else(|| {
-        matches!(linked.scheme(), "http" | "https").then(|| normalize_url(linked.path()))
+        (matches!(linked.scheme(), "http" | "https") && linked.host_str().is_some_and(|host| own_hosts.contains(&host.to_ascii_lowercase())))
+            .then(|| normalize_url(linked.path()))
     })?;
     if linked_path.eq_ignore_ascii_case(&page_path) {
         return None;
@@ -308,6 +311,39 @@ fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, Strin
             served_path(url).is_some_and(|path| path.eq_ignore_ascii_case(&linked_path))
         })
         .map(|(_, path)| path.clone())
+}
+
+/// Hosts the site uses for its own pages: absolute links there reach at least two different
+/// imported pages other than the home page.
+fn own_hosts(captures: &[WebCapture], page_paths: &BTreeMap<String, String>) -> BTreeSet<String> {
+    fn hrefs<'a>(nodes: &'a [WebNode], out: &mut Vec<&'a str>) {
+        for node in nodes {
+            if let Some(href) = node.href.as_deref() {
+                out.push(href);
+            }
+            hrefs(&node.children, out);
+        }
+    }
+    let pages: BTreeSet<String> = page_paths
+        .keys()
+        .filter_map(|url| served_path(url))
+        .filter(|path| path != "/")
+        .map(|path| path.to_ascii_lowercase())
+        .collect();
+    let mut matches: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for capture in captures {
+        let mut links = Vec::new();
+        hrefs(&capture.nodes, &mut links);
+        for link in links {
+            let Ok(url) = url::Url::parse(link) else { continue };
+            let (Some(host), true) = (url.host_str(), matches!(url.scheme(), "http" | "https")) else { continue };
+            let path = normalize_url(url.path()).to_ascii_lowercase();
+            if served_path(url.as_str()).is_none() && pages.contains(&path) {
+                matches.entry(host.to_ascii_lowercase()).or_default().insert(path);
+            }
+        }
+    }
+    matches.into_iter().filter(|(_, paths)| paths.len() >= 2).map(|(host, _)| host).collect()
 }
 
 /// The path a loopback URL serves, without the first segment that is a serving token.
@@ -570,6 +606,7 @@ struct Converter<'a> {
     page: &'a PagePlan<'a>,
     picture_ids: &'a BTreeMap<String, Uuid>,
     page_paths: &'a BTreeMap<String, String>,
+    own_hosts: &'a BTreeSet<String>,
     element_count: usize,
     warnings: Vec<String>,
 }
@@ -589,7 +626,7 @@ impl Converter<'_> {
         if href.is_empty() {
             return None;
         }
-        if let Some(path) = internal_href(href, &self.page.url, self.page_paths) {
+        if let Some(path) = internal_href(href, &self.page.url, self.page_paths, self.own_hosts) {
             return Some(path);
         }
         // A local server address that is not an imported page would export as localhost.
@@ -1048,6 +1085,7 @@ pub fn import_website(
         .iter()
         .map(|plan| (normalize_url(&plan.url), plan.path.clone()))
         .collect();
+    let own_hosts = own_hosts(captures, &page_paths);
     let mut right = project
         .pages
         .iter()
@@ -1080,6 +1118,7 @@ pub fn import_website(
             page: &plan,
             picture_ids,
             page_paths: &page_paths,
+            own_hosts: &own_hosts,
             element_count: 0,
             warnings: Vec::new(),
         };
@@ -1112,6 +1151,7 @@ pub fn import_website(
                 page: &plan,
                 picture_ids,
                 page_paths: &page_paths,
+                own_hosts: &own_hosts,
                 element_count: 0,
                 warnings: Vec::new(),
             };
@@ -1321,7 +1361,11 @@ fn walk_behaviours(nodes: &[WebNode], path: &mut Vec<usize>, plan: &PagePlan<'_>
 #[cfg(test)]
 mod tests {
     use super::{internal_href, normalize_url};
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    fn own() -> BTreeSet<String> {
+        ["www.oldsite.example".to_string()].into()
+    }
 
     fn page_paths() -> BTreeMap<String, String> {
         [
@@ -1339,17 +1383,20 @@ mod tests {
         let pages = page_paths();
         let page = "http://127.0.0.1:9/token/pages/p001";
         assert_eq!(
-            internal_href("http://www.oldsite.example/pages/P002.HTM", page, &pages).as_deref(),
+            internal_href("http://www.oldsite.example/pages/P002.HTM", page, &pages, &own()).as_deref(),
             Some("/site/pages/p002")
         );
         assert_eq!(
-            internal_href("https://www.oldsite.example/pages/p002.html", page, &pages).as_deref(),
+            internal_href("https://www.oldsite.example/pages/p002.html", page, &pages, &own()).as_deref(),
             Some("/site/pages/p002")
         );
         assert_eq!(
-            internal_href("http://www.oldsite.example/pages/p999.htm", page, &pages),
+            internal_href("http://www.oldsite.example/pages/p999.htm", page, &pages, &own()),
             None
         );
+        // A domain the site does not use for its own pages stays external, even at a matching path.
+        assert_eq!(internal_href("https://social.example/", page, &pages, &own()), None);
+        assert_eq!(internal_href("https://social.example/pages/p002", page, &pages, &own()), None);
     }
 
     #[test]
@@ -1357,18 +1404,19 @@ mod tests {
         let pages = page_paths();
         let page = "http://127.0.0.1:9/token/pages/p002";
         assert_eq!(
-            internal_href("../MAIN.HTM", page, &pages).as_deref(),
+            internal_href("../MAIN.HTM", page, &pages, &own()).as_deref(),
             Some("/site/main")
         );
         assert_eq!(
-            internal_href("http://127.0.0.1:9/token/MAIN.htm", page, &pages).as_deref(),
+            internal_href("http://127.0.0.1:9/token/MAIN.htm", page, &pages, &own()).as_deref(),
             Some("/site/main")
         );
         assert_eq!(
             internal_href(
                 "http://www.oldsite.example/MAIN.htm",
                 "http://127.0.0.1:9/token/main.htm",
-                &pages
+                &pages,
+                &own()
             ),
             None
         );
@@ -1385,11 +1433,11 @@ mod tests {
         .collect();
         let page = "https://oldsite.example/pages/p001";
         assert_eq!(
-            internal_href("https://www.oldsite.example/pages/P002.HTM", page, &pages),
+            internal_href("https://www.oldsite.example/pages/P002.HTM", page, &pages, &own()),
             None
         );
         assert_eq!(
-            internal_href("https://www.oldsite.example/pages/p002.html", page, &pages),
+            internal_href("https://www.oldsite.example/pages/p002.html", page, &pages, &own()),
             None
         );
     }
