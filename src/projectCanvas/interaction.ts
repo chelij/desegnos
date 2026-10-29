@@ -586,12 +586,17 @@ export function createCanvasInteraction(context: () => Context) {
       return;
     }
     if (tool !== 'select') return;
-    const hit = elementTargetAt(project, selection, event.target);
+    // The first click captured the pointer, so the browser aims the double-click at the canvas
+    // itself; find the layer under the pointer instead.
+    const target = (event.target as HTMLElement).closest('[data-element]') ? event.target as HTMLElement
+      : document.elementsFromPoint(event.clientX, event.clientY).find(node => node.closest('[data-element]')) as HTMLElement | undefined;
+    if (!target) return;
+    const hit = elementTargetAt(project, selection, target);
     if (!hit) return;
     event.preventDefault();
     event.stopPropagation();
     const element = findElementIn(pageFor(hit.pageId, hit.sizeId)?.elements ?? [], hit.elementId);
-    const inside = elementChain(event.target)[0]?.dataset.element ?? null;
+    const inside = elementChain(target)[0]?.dataset.element ?? null;
     if (element?.kind === 'group' && inside && inside !== hit.elementId) selectElement(hit.pageId, inside, hit.sizeId, false);
     else if (element && isTextKind(element.kind)) startEditingElement(hit.pageId, hit.elementId, hit.sizeId ?? editingSizeId(hit.pageId), false);
     else selectElement(hit.pageId, hit.elementId, hit.sizeId, false);
