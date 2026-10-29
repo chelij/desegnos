@@ -1527,11 +1527,7 @@ fn resolve_font_uncached(family: &str, weight: u16, italic: bool) -> ResolvedFon
     static DATABASE: OnceLock<Mutex<(Database, BTreeMap<fontdb::ID, ResolvedFont>)>> =
         OnceLock::new();
     let mut database = DATABASE
-        .get_or_init(|| {
-            let mut database = Database::new();
-            database.load_system_fonts();
-            Mutex::new((database, BTreeMap::new()))
-        })
+        .get_or_init(|| Mutex::new((system_fonts(), BTreeMap::new())))
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     for requested in family.split(',') {
@@ -1572,6 +1568,30 @@ fn resolve_font_uncached(family: &str, weight: u16, italic: bool) -> ResolvedFon
         }
     }
     bundled_font(true)
+}
+
+/// Installed fonts with the CSS generic families pointed at real installed faces. fontdb
+/// defaults to Windows names such as Times New Roman; where those are missing it can land on
+/// a symbol font that draws Latin letters as Greek. A generic family with no installed match
+/// resolves to nothing, so the bundled Archivo stands in.
+fn system_fonts() -> Database {
+    let mut database = Database::new();
+    database.load_system_fonts();
+    let installed = |name: &str| {
+        database.faces().any(|face| face.families.iter().any(|(family, _)| family.eq_ignore_ascii_case(name)))
+    };
+    let pick = |candidates: &[&str]| {
+        candidates.iter().find(|name| installed(name)).map_or("Desegnos no generic font", |name| *name).to_owned()
+    };
+    let sans = pick(&["Arial", "Helvetica", "Liberation Sans", "Arimo", "DejaVu Sans", "Noto Sans", "Nimbus Sans", "Cantarell", "Roboto", "Ubuntu"]);
+    let serif = pick(&["Times New Roman", "Times", "Liberation Serif", "Tinos", "DejaVu Serif", "Noto Serif", "Nimbus Roman", "Georgia"]);
+    let mono = pick(&["Courier New", "Menlo", "Consolas", "Liberation Mono", "Cousine", "DejaVu Sans Mono", "Noto Sans Mono", "Nimbus Mono PS", "Ubuntu Mono"]);
+    database.set_sans_serif_family(sans.clone());
+    database.set_serif_family(serif);
+    database.set_monospace_family(mono);
+    database.set_cursive_family(sans.clone());
+    database.set_fantasy_family(sans);
+    database
 }
 
 fn bundled_font(fell_back: bool) -> ResolvedFont {
@@ -2295,10 +2315,22 @@ mod tests {
     }
 
     #[test]
+    fn generic_families_resolve_to_faces_that_draw_latin_text() {
+        // A symbol font maps the letter 'a' to its Greek alpha glyph.
+        for family in ["serif", "sans-serif", "monospace", "cursive", "fantasy", "Georgia, serif"] {
+            let resolved = resolve_font(family, 400, false);
+            let face = Face::parse(&resolved.bytes, resolved.index).unwrap();
+            let glyph = face.glyph_index('a').unwrap_or_else(|| panic!("{family} has no glyph for 'a'"));
+            if let Some(name) = face.glyph_name(glyph) {
+                assert_eq!(name, "a", "{family} draws 'a' with the glyph {name}");
+            }
+        }
+    }
+
+    #[test]
     fn resolver_matches_fontdb_style_selection() {
         // Compare against fontdb directly when this host has a generic sans-serif.
-        let mut database = Database::new();
-        database.load_system_fonts();
+        let database = system_fonts();
         let query = Query {
             families: &[Family::SansSerif],
             weight: Weight(700),
