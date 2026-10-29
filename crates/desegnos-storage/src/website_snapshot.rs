@@ -330,7 +330,125 @@ struct Candidate {
     index: usize,
 }
 
-fn select_files(mut candidates: Vec<Candidate>, skipped: &mut Vec<String>) -> Vec<Candidate> {
+// Scan CSS tokens without treating URLs in comments or ordinary strings as dependencies.
+fn css_references(css: &str) -> Vec<String> {
+    fn string_end(bytes: &[u8], start: usize) -> usize {
+        let mut end = start + 1;
+        while end < bytes.len() {
+            if bytes[end] == b'\\' {
+                end += 2;
+            } else if bytes[end] == bytes[start] {
+                return end + 1;
+            } else {
+                end += 1;
+            }
+        }
+        bytes.len()
+    }
+    let bytes = css.as_bytes();
+    let mut references = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            while i < bytes.len() && !bytes[i..].starts_with(b"*/") {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+        } else if matches!(bytes[i], b'\'' | b'"') {
+            i = string_end(bytes, i);
+        } else if bytes[i..]
+            .get(..4)
+            .is_some_and(|v| v.eq_ignore_ascii_case(b"url("))
+        {
+            i += 4;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let start = i;
+            if i < bytes.len() && matches!(bytes[i], b'\'' | b'"') {
+                i = string_end(bytes, i);
+                if i > start + 1 && bytes[i - 1] == bytes[start] {
+                    references.push(css[start + 1..i - 1].to_owned());
+                }
+            } else {
+                while i < bytes.len() && bytes[i] != b')' {
+                    i += 1;
+                }
+                references.push(css[start..i].trim().to_owned());
+            }
+        } else if bytes[i..]
+            .get(..7)
+            .is_some_and(|v| v.eq_ignore_ascii_case(b"@import"))
+        {
+            i += 7;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < bytes.len() && matches!(bytes[i], b'\'' | b'"') {
+                let start = i;
+                i = string_end(bytes, i);
+                if i > start + 1 && bytes[i - 1] == bytes[start] {
+                    references.push(css[start + 1..i - 1].to_owned());
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    references
+}
+
+fn render_references(name: &str, bytes: &[u8]) -> Vec<String> {
+    if priority(name) == Some(1) {
+        return css_references(&decode_html(bytes));
+    }
+    if priority(name) != Some(0) {
+        return Vec::new();
+    }
+    let text = decode_html(bytes);
+    let doc = dom_query::Document::from(text.as_str());
+    let mut references = Vec::new();
+    for node in doc.select("img, script, frame, iframe").nodes().iter() {
+        if let Some(src) = node.attr("src") {
+            references.push(src.to_string());
+        }
+    }
+    for node in doc.select("img[srcset]").nodes().iter() {
+        if let Some(srcset) = node.attr("srcset") {
+            for candidate in srcset.split(',') {
+                if let Some(src) = candidate.split_whitespace().next() {
+                    references.push(src.to_owned());
+                }
+            }
+        }
+    }
+    for node in doc.select("link[href]").nodes().iter() {
+        if node.attr("rel").is_some_and(|rel| {
+            rel.split_whitespace()
+                .any(|v| v.eq_ignore_ascii_case("stylesheet"))
+        }) {
+            if let Some(href) = node.attr("href") {
+                references.push(href.to_string());
+            }
+        }
+    }
+    for node in doc.select("[style]").nodes().iter() {
+        if let Some(style) = node.attr("style") {
+            references.extend(css_references(&style));
+        }
+    }
+    for node in doc.select("style").nodes().iter() {
+        references.extend(css_references(&node.text()));
+    }
+    references
+}
+
+fn select_files(
+    mut candidates: Vec<Candidate>,
+    skipped: &mut Vec<String>,
+    mut read: impl FnMut(&Candidate) -> Result<Vec<u8>>,
+) -> Result<Vec<(String, Vec<u8>)>> {
     let downloads = candidates
         .iter()
         .filter(|file| download(&file.name))
@@ -348,27 +466,102 @@ fn select_files(mut candidates: Vec<Candidate>, skipped: &mut Vec<String>) -> Ve
             file.name.clone(),
         )
     });
+    candidates.dedup_by(|a, b| a.name == b.name);
+    // Use the same root handling as the final snapshot, including root-relative URLs.
+    // Keep source names on candidates so folder reads still use their original paths.
+    let mut inventory = candidates
+        .iter()
+        .map(|c| (c.name.clone(), Vec::new()))
+        .collect();
+    let prefix = strip_site_root(&mut inventory);
+    candidates.retain(|c| c.name.starts_with(&prefix));
+    let normalized = inventory
+        .iter()
+        .map(|(name, _)| (name.to_ascii_lowercase(), name.clone()))
+        .collect::<BTreeMap<_, _>>();
     let mut total = 0;
-    let mut count = 0;
-    let mut omitted = 0;
-    let mut names = BTreeSet::new();
-    candidates.retain(|file| {
-        if !names.insert(file.name.clone()) {
-            return false;
+    let mut files = Vec::new();
+    let mut selected = BTreeSet::new();
+    let mut rejected = BTreeSet::new();
+    // HTML and CSS must be available for discovery, but share all final snapshot limits.
+    for file in candidates
+        .iter()
+        .filter(|c| matches!(priority(&c.name), Some(0 | 1)))
+    {
+        if files.len() >= MAX_FILES
+            || file.size > MAX_FILE_BYTES
+            || file.size > MAX_TOTAL_BYTES - total
+        {
+            rejected.insert(file.name.clone());
+            continue;
         }
-        if count >= MAX_FILES || file.size > MAX_FILE_BYTES || file.size > MAX_TOTAL_BYTES - total {
-            omitted += 1;
-            return false;
-        }
-        count += 1;
+        let bytes = read(file)?;
         total += file.size;
-        true
-    });
-    if omitted > 0 {
-        skipped.push(format!("Left out {omitted} rendering files to keep the snapshot within 1,500 files, 128 MiB total and 8 MiB per file."));
+        selected.insert(file.name.clone());
+        files.push((file.name.clone(), bytes));
     }
-    candidates
+    // Strip only names here: the bytes stay in this cache and are never read again.
+    for (name, _) in &mut files {
+        *name = name[prefix.len()..].to_owned();
+    }
+    let cached = files
+        .iter()
+        .enumerate()
+        .map(|(i, (name, _))| (name.clone(), i))
+        .collect::<BTreeMap<_, _>>();
+    let mut queue = snapshot_pages(&files)
+        .into_iter()
+        .take(30)
+        .map(|page| page.file)
+        .collect::<VecDeque<_>>();
+    let mut needed = BTreeSet::new();
+    while let Some(name) = queue.pop_front() {
+        if !needed.insert(name.clone()) {
+            continue;
+        }
+        if let Some(index) = cached.get(&name) {
+            for reference in render_references(&name, &files[*index].1) {
+                if let Some(target) = resolve_link(&name, &reference, &normalized) {
+                    queue.push_back(target);
+                }
+            }
+        }
+    }
+    candidates.sort_by_key(|file| {
+        (
+            !needed.contains(file.name.strip_prefix(&prefix).unwrap_or(&file.name)),
+            priority(&file.name),
+            file.name.to_ascii_lowercase(),
+            file.name.clone(),
+        )
+    });
+    for file in candidates {
+        if selected.contains(&file.name) || rejected.contains(&file.name) {
+            continue;
+        }
+        if files.len() >= MAX_FILES
+            || file.size > MAX_FILE_BYTES
+            || file.size > MAX_TOTAL_BYTES - total
+        {
+            rejected.insert(file.name);
+            continue;
+        }
+        let bytes = read(&file)?;
+        total += file.size;
+        files.push((
+            file.name
+                .strip_prefix(&prefix)
+                .unwrap_or(&file.name)
+                .to_owned(),
+            bytes,
+        ));
+    }
+    if !rejected.is_empty() {
+        skipped.push(format!("Left out {} rendering files to keep the snapshot within 1,500 files, 128 MiB total and 8 MiB per file.", rejected.len()));
+    }
+    Ok(files)
 }
+
 
 fn inventory_folder(
     root: &Path,
@@ -412,7 +605,7 @@ fn inventory_folder(
     Ok(())
 }
 
-/// Read only the selected rendering files after inventorying a folder or ZIP.
+/// Inventory a folder or ZIP, then read bounded HTML/CSS and the selected rendering assets.
 pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
     let metadata = fs::symlink_metadata(path).map_err(io)?;
     if metadata.file_type().is_symlink() {
@@ -433,10 +626,10 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
         .collect();
     let mut candidates = Vec::new();
     let mut skipped = Vec::new();
-    let mut files = Vec::new();
+    let mut files;
     if metadata.is_dir() {
         inventory_folder(path, path, &mut candidates, &mut skipped, &mut 0)?;
-        for file in select_files(candidates, &mut skipped) {
+        files = select_files(candidates, &mut skipped, |file| {
             let mut bytes = Vec::new();
             fs::File::open(path.join(&file.name))
                 .map_err(io)?
@@ -448,8 +641,8 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
                     "An imported file changed size. Try importing again.".into(),
                 ));
             }
-            files.push((file.name, bytes));
-        }
+            Ok(bytes)
+        })?;
     } else if metadata.is_file()
         && path
             .extension()
@@ -489,7 +682,7 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
                 index,
             });
         }
-        for file in select_files(candidates, &mut skipped) {
+        files = select_files(candidates, &mut skipped, |file| {
             let mut bytes = Vec::new();
             archive
                 .by_index(file.index)
@@ -500,14 +693,13 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
             if bytes.len() as u64 != file.size {
                 return Err(Error("A ZIP entry has an invalid size.".into()));
             }
-            files.push((file.name, bytes));
-        }
+            Ok(bytes)
+        })?;
     } else {
         return Err(Error(
             "Choose a website folder or a .zip website archive.".into(),
         ));
     }
-    strip_site_root(&mut files);
     let pages = snapshot_pages(&files);
     if pages.is_empty() {
         return Err(Error(
@@ -523,12 +715,12 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
     })
 }
 
-fn strip_site_root(files: &mut Vec<(String, Vec<u8>)>) {
+fn strip_site_root(files: &mut Vec<(String, Vec<u8>)>) -> String {
     if files
         .iter()
         .any(|(name, _)| !name.contains('/') && index_name(name))
     {
-        return;
+        return String::new();
     }
     let candidates = files
         .iter()
@@ -547,18 +739,19 @@ fn strip_site_root(files: &mut Vec<(String, Vec<u8>)>) {
                 None
             }
         });
-    let Some(root) = root else { return };
+    let Some(root) = root else { return String::new() };
     let prefix = format!("{root}/");
     if !files.iter().any(|(name, _)| {
         name.strip_prefix(&prefix)
             .is_some_and(|rest| !rest.contains('/') && index_name(rest))
     }) {
-        return;
+        return String::new();
     }
     files.retain(|(name, _)| name.starts_with(&prefix));
     for (name, _) in files {
         *name = name[prefix.len()..].to_owned();
     }
+    prefix
 }
 
 /// Write the snapshot into a private temporary folder for the local static server.
@@ -791,15 +984,17 @@ mod tests {
             });
         }
         let mut skipped = Vec::new();
-        let selected = select_files(candidates, &mut skipped);
-        assert_eq!(selected[0].name, "INDEX.HTM");
-        assert_eq!(selected[1].name, "z.css");
-        assert!(selected.iter().map(|c| c.size).sum::<u64>() <= MAX_TOTAL_BYTES);
-        assert!(selected.iter().any(|c| c.name == "z.js"));
+        let selected = select_files(candidates, &mut skipped, |file| {
+            Ok(vec![0; file.size as usize])
+        }).unwrap();
+        assert_eq!(selected[0].0, "INDEX.HTM");
+        assert_eq!(selected[1].0, "z.css");
+        assert!(selected.iter().map(|c| c.1.len() as u64).sum::<u64>() <= MAX_TOTAL_BYTES);
+        assert!(selected.iter().any(|c| c.0 == "z.js"));
         assert!(
             !selected
                 .iter()
-                .any(|c| download(&c.name) || c.name == "huge.gif")
+                .any(|c| download(&c.0) || c.0 == "huge.gif")
         );
         assert_eq!(skipped.len(), 2);
     }
@@ -835,6 +1030,145 @@ mod tests {
         assert_eq!(zipped.files, folder.files);
         assert_eq!(zipped.pages, folder.pages);
         assert_eq!(zipped.skipped, folder.skipped);
+    }
+
+    #[test]
+    fn website_snapshot_imported_pages_keep_alphabetically_last_assets() {
+        let site = Fixture::new();
+        let mut home = String::from(
+            "<link rel='alternate STYLESHEET' href='/CSS/Main.CSS'>
+            <script src='scripts/Z.JS'></script>
+            <style>body { background: URL('images/z-style.gif') }</style>
+            <div style=\"background: url(images/z-inline.gif)\"></div>
+            <img srcset='images/z-small.gif 1x, images/z-large.gif 2x'>",
+        );
+        for index in (0..29).rev() {
+            home.push_str(&format!("<a href='pages/z{index:02}.htm'>Page</a>"));
+            site.add(
+                &format!("old-site/pages/z{index:02}.htm"),
+                format!("<img src='../IMAGES/Z{index:02}.GIF?version=1#image'>").as_bytes(),
+            );
+            site.add(&format!("old-site/images/z{index:02}.gif"), b"gif");
+        }
+        home.push_str("<iframe src='frame.htm'></iframe>");
+        site.add("old-site/index.htm", home.as_bytes());
+        site.add("old-site/frame.htm", b"<img src='images/z-frame.gif'>");
+        for index in 0..371 {
+            site.add(
+                &format!("old-site/a{index:03}.htm"),
+                b"<img src='images/zz-unused.gif'>",
+            );
+        }
+        site.add(
+            "old-site/css/main.css",
+            b"@IMPORT 'nested/other.css'; body { background: url('../images/z-css.gif') }",
+        );
+        site.add(
+            "old-site/css/nested/other.css",
+            b"@import url(../main.css); @font-face { src: url('../../fonts/z.woff2') }",
+        );
+        site.add(
+            "old-site/css/unused.css",
+            b"body { background: url('../images/zz-unused.gif') }",
+        );
+        let assets = [
+            "images/z-style.gif",
+            "images/z-inline.gif",
+            "images/z-small.gif",
+            "images/z-large.gif",
+            "images/z-css.gif",
+            "images/z-frame.gif",
+            "fonts/z.woff2",
+            "scripts/z.js",
+        ];
+        for asset in assets {
+            site.add(&format!("old-site/{asset}"), b"asset");
+        }
+        site.add("old-site/images/zz-unused.gif", b"unused");
+        for index in 0..1800 {
+            site.add(&format!("old-site/images/a{index:04}.gif"), b"gif");
+        }
+        let folder = site.snapshot();
+        assert_eq!(folder.files.len(), MAX_FILES);
+        assert_eq!(folder.pages.len(), 402);
+        assert_eq!(folder.pages[1].file, "pages/z28.htm");
+        assert_eq!(folder.pages[29].file, "pages/z00.htm");
+        for page in folder.pages.iter().take(30).skip(1) {
+            let stem = page
+                .file
+                .strip_prefix("pages/")
+                .unwrap()
+                .strip_suffix(".htm")
+                .unwrap();
+            assert!(
+                folder
+                    .files
+                    .iter()
+                    .any(|(name, _)| name == &format!("images/{stem}.gif"))
+            );
+        }
+        for asset in assets {
+            assert!(
+                folder.files.iter().any(|(name, _)| name == asset),
+                "missing {asset}"
+            );
+        }
+        assert!(
+            !folder
+                .files
+                .iter()
+                .any(|(name, _)| name == "images/zz-unused.gif")
+        );
+
+        let mut candidates = Vec::new();
+        inventory_folder(&site.0, &site.0, &mut candidates, &mut Vec::new(), &mut 0).unwrap();
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for candidate in candidates {
+            zip.start_file(&candidate.name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            zip.write_all(&fs::read(site.0.join(candidate.name)).unwrap())
+                .unwrap();
+        }
+        let archive = Fixture::new();
+        archive.add("site.zip", &zip.finish().unwrap().into_inner());
+        let zipped = collect_website_snapshot(&archive.0.join("site.zip")).unwrap();
+        assert_eq!(zipped.files, folder.files);
+        assert_eq!(zipped.pages, folder.pages);
+        assert_eq!(zipped.skipped, folder.skipped);
+    }
+
+    #[test]
+    fn website_snapshot_reads_each_selected_file_once() {
+        let contents = [
+            (
+                "index.htm",
+                "<link rel='stylesheet' href='main.css'><img src='z.gif'>",
+            ),
+            (
+                "main.css",
+                "@import 'main.css'; body { background: url(z.gif) }",
+            ),
+            ("z.gif", "gif"),
+            ("unused.gif", "gif"),
+        ];
+        let candidates = contents
+            .iter()
+            .enumerate()
+            .map(|(index, (name, bytes))| Candidate {
+                name: (*name).into(),
+                size: bytes.len() as u64,
+                index,
+            })
+            .collect();
+        let mut reads = BTreeSet::new();
+        let files = select_files(candidates, &mut Vec::new(), |file| {
+            assert!(reads.insert(file.name.clone()), "read twice: {}", file.name);
+            Ok(contents[file.index].1.as_bytes().to_vec())
+        })
+        .unwrap();
+        assert_eq!(files.len(), contents.len());
+        assert_eq!(reads.len(), contents.len());
+        assert_eq!(files[2].0, "z.gif");
     }
 
     #[test]
