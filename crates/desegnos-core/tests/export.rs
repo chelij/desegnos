@@ -631,3 +631,75 @@ fn links_to_page_files_point_at_the_imported_pages() {
     assert_eq!(to_about.url.as_deref(), Some(imported.pages[1].path.as_str()));
     assert_eq!(to_home.url.as_deref(), Some(imported.pages[0].path.as_str()));
 }
+
+#[test]
+fn old_site_links_on_the_original_domain_find_the_imported_pages() {
+    let project = project();
+    let capture = |url: &str, route: &str, href: Option<&str>| {
+        let mut link = node("a", rect(20.0, 20.0, 120.0, 30.0), styles(""), vec![]);
+        link.text = Some("Go".into());
+        link.href = href.map(str::to_owned);
+        WebCapture {
+            url: url.into(),
+            site: "Site".into(),
+            route: route.into(),
+            title: route.into(),
+            width: 1440.0,
+            height: 900.0,
+            nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles("#ffffff"), vec![link])],
+            scripts: vec![],
+        }
+    };
+    let home = capture(
+        "http://127.0.0.1:9/token/",
+        "/",
+        Some("http://www.oldsite.example/pages/P002.HTM"),
+    );
+    let main = capture("http://127.0.0.1:9/token/main.htm", "/main.htm", None);
+    let p002 = capture("http://127.0.0.1:9/token/pages/p002", "/pages/p002", Some("../MAIN.HTM"));
+    let imported = import_website(&[home, main, p002], &BTreeMap::new(), &project).unwrap();
+    fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
+        elements.iter().find_map(|element| {
+            (element.kind == ElementKind::Link)
+                .then_some(element)
+                .or_else(|| link(&element.children))
+        })
+    }
+    let to_p002 = link(&imported.pages[0].elements).expect("the home link is kept");
+    let to_main = link(&imported.pages[2].elements).expect("the page link is kept");
+    assert_eq!(to_p002.url.as_deref(), Some(imported.pages[2].path.as_str()));
+    assert_eq!(to_main.url.as_deref(), Some(imported.pages[1].path.as_str()));
+}
+
+#[test]
+fn public_import_links_keep_pointing_at_the_original_site() {
+    let project = project();
+    let capture = |url: &str, route: &str, href: &str| {
+        let mut link = node("a", rect(20.0, 20.0, 120.0, 30.0), styles(""), vec![]);
+        link.text = Some("Go".into());
+        link.href = Some(href.into());
+        WebCapture {
+            url: url.into(),
+            site: "Site".into(),
+            route: route.into(),
+            title: route.into(),
+            width: 1440.0,
+            height: 900.0,
+            nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles("#ffffff"), vec![link])],
+            scripts: vec![],
+        }
+    };
+    let href = "https://www.oldsite.example/pages/P002.HTM";
+    let home = capture("https://oldsite.example/pages/p001", "/pages/p001", href);
+    let p002 = capture("https://oldsite.example/pages/p002", "/pages/p002", "https://oldsite.example/");
+    let imported = import_website(&[home, p002], &BTreeMap::new(), &project).unwrap();
+    fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
+        elements.iter().find_map(|element| {
+            (element.kind == ElementKind::Link)
+                .then_some(element)
+                .or_else(|| link(&element.children))
+        })
+    }
+    let link = link(&imported.pages[0].elements).expect("the home link is kept");
+    assert_eq!(link.url.as_deref(), Some(href));
+}
