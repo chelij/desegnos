@@ -2,9 +2,10 @@
 //!
 //! Blobs are content-addressed by SHA-256, so an unchanged boundary, reference list or
 //! picture is stored once across every version. A version is a manifest of part hashes with
-//! its parent, time and label. Every save is one transaction in write-ahead logging mode, so
-//! a crash never leaves a half-written project. Save, autosave into the hidden `__autosave`
-//! branch, alternatives and history all live here; Tauri commands stay thin.
+//! its parent, time and label. Every save is one transaction with a rollback journal, so
+//! a crash never leaves a half-written project and no journal files linger beside it. Save,
+//! autosave into the hidden `__autosave` branch, alternatives and history all live here;
+//! Tauri commands stay thin.
 use crate::project_parts::{self, PartData};
 use crate::ensure;
 use desegnos_core::{Error, Project, Result, digest};
@@ -757,7 +758,8 @@ fn acquire_lock(path: &Path) -> Result<File> {
     let name = path
         .file_name()
         .ok_or_else(|| Error("Choose a project filename.".into()))?;
-    let lock_path = path.with_file_name(format!("{}.lock", name.to_string_lossy()));
+    // A dot-file keeps the saved project looking like one file in its folder.
+    let lock_path = path.with_file_name(format!(".{}.lock", name.to_string_lossy()));
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).read(true).write(true);
     #[cfg(unix)]
@@ -795,7 +797,7 @@ fn open_connection(path: &Path, read_only: bool) -> Result<Connection> {
     } else {
         connection
             .execute_batch(
-                "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON",
+                "PRAGMA journal_mode = DELETE; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON",
             )
             .map_err(unreadable)?;
     }
