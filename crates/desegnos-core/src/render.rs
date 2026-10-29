@@ -101,7 +101,7 @@ impl Rgba {
     };
 
     /// `#rgb`, `#rrggbb`, `#rrggbbaa` or `transparent`; the editor validates the same forms.
-    fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         if value.eq_ignore_ascii_case("transparent") {
             return Some(Self {
                 a: 0.0,

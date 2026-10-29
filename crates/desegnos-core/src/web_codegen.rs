@@ -168,21 +168,31 @@ fn length(value: f64) -> String {
 }
 
 /// A stack or grid content inset: the four sides when the layer names them, else the layout's
-/// all-sides value that older projects and the direct renderer carry.
-fn padding_css(element: &Element) -> String {
-    let base = match &element.layout {
-        ElementLayout::Stack { padding, .. } | ElementLayout::Grid { padding, .. } => *padding,
-        ElementLayout::Free => 0.0,
-    };
+/// all-sides value that older projects and the direct renderer carry. The flag reports an inset
+/// that paints nothing, so the shared reset rule can carry it instead.
+fn padding_css(element: &Element) -> (String, bool) {
     match &element.style.padding {
-        Some(padding) => format!(
-            "{} {} {} {}",
-            length(padding.top),
-            length(padding.right),
-            length(padding.bottom),
-            length(padding.left)
+        Some(padding) => (
+            format!(
+                "{} {} {} {}",
+                length(padding.top),
+                length(padding.right),
+                length(padding.bottom),
+                length(padding.left)
+            ),
+            [padding.top, padding.right, padding.bottom, padding.left]
+                .iter()
+                .all(|side| *side == 0.0),
         ),
-        None => length(base),
+        None => {
+            let base = match &element.layout {
+                ElementLayout::Stack { padding, .. } | ElementLayout::Grid { padding, .. } => {
+                    *padding
+                }
+                ElementLayout::Free => 0.0,
+            };
+            (length(base), base == 0.0)
+        }
     }
 }
 fn class(id: Uuid) -> String {
@@ -215,6 +225,31 @@ fn link_href(element: &Element, plan: &ExportPlan) -> String {
         .unwrap_or_else(|| safe_url(element.url.as_deref()))
 }
 
+/// The HTML tag a layer renders as. A link target on a text, box or button turns that layer into
+/// a real anchor.
+fn tag_name(element: &Element) -> &'static str {
+    use ElementKind::*;
+    let hyperlink =
+        element.url.is_some() && matches!(element.kind, Box | Text | Button | Link);
+    match &element.kind {
+        Box if hyperlink => "a",
+        Text if hyperlink => "a",
+        Button if hyperlink => "a",
+        Box | Group | Ellipse | Line => "div",
+        Text => "div",
+        Image => "img",
+        Button => "button",
+        Link => "a",
+        Input { .. } | Checkbox | Radio => "input",
+        Textarea => "textarea",
+        Select { .. } => "select",
+        Video => "video",
+        Audio => "audio",
+        Embed => "iframe",
+        Code { .. } => "pre",
+    }
+}
+
 fn markup(
     element: &Element,
     plan: &ExportPlan,
@@ -231,26 +266,7 @@ fn markup(
         out.push_str(&format!("<label class=\"{}\"{}><input type=\"{input_type}\" data-desegnos-id=\"{}\" aria-label=\"{}\">{}</label>\n", class(element.id), pointer_attribute(element.id, markers), element.id, escape(element.name.as_deref().unwrap_or(&element.text)), escape(&element.text)));
         return;
     }
-    // A link target on a text, box or button turns that element into a real anchor.
-    let hyperlink = element.url.is_some()
-        && matches!(element.kind, Box | Text | Button | Link);
-    let tag = match &element.kind {
-        Box if hyperlink => "a",
-        Text if hyperlink => "a",
-        Button if hyperlink => "a",
-        Box | Group | Ellipse | Line => "div",
-        Text => "div",
-        Image => "img",
-        Button => "button",
-        Link => "a",
-        Input { .. } | Checkbox | Radio => "input",
-        Textarea => "textarea",
-        Select { .. } => "select",
-        Video => "video",
-        Audio => "audio",
-        Embed => "iframe",
-        Code { .. } => "pre",
-    };
+    let tag = tag_name(element);
     out.push_str(&format!(
         "<{tag} class=\"{}\" data-desegnos-id=\"{}\"",
         class(element.id),
@@ -351,115 +367,497 @@ fn markup(
     out.push_str(&format!("</{tag}>\n"));
 }
 
+/// One CSS declaration. `reset` marks a value that leaves the layer's default rendering in
+/// place: the common rule already sets it, so a size restates it only to undo a base size.
+struct Declarations {
+    entries: Vec<(String, String, bool)>,
+}
+
+impl Declarations {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+        }
+    }
+
+    fn set(&mut self, property: impl Into<String>, value: impl Into<String>) {
+        self.entries.push((property.into(), value.into(), false));
+    }
+
+    fn reset(&mut self, property: impl Into<String>, value: impl Into<String>) {
+        self.entries.push((property.into(), value.into(), true));
+    }
+
+    /// The last value of every property, in declaration order.
+    fn effective(&self) -> Vec<(&str, &str, bool)> {
+        let mut out: Vec<(&str, &str, bool)> = Vec::new();
+        let mut slots: BTreeMap<&str, usize> = BTreeMap::new();
+        for (property, value, reset) in &self.entries {
+            let entry = (property.as_str(), value.as_str(), *reset);
+            match slots.get(property.as_str()) {
+                Some(slot) => out[*slot] = entry,
+                None => {
+                    slots.insert(property.as_str(), out.len());
+                    out.push(entry);
+                }
+            }
+        }
+        out
+    }
+
+    /// The declaration block of the base size, without what the common rule already sets.
+    fn block(&self) -> String {
+        let mut css = String::new();
+        for (property, value, reset) in self.effective() {
+            if !reset {
+                css.push_str(&format!("{property}:{value};"));
+            }
+        }
+        css
+    }
+
+    /// Only what this size changes, restating a base value when the layer returns to its default.
+    fn diff(&self, base: &Declarations) -> String {
+        let mut base_values: BTreeMap<&str, &str> = BTreeMap::new();
+        for (property, value, reset) in base.effective() {
+            if !reset {
+                base_values.insert(property, value);
+            }
+        }
+        let mut css = String::new();
+        for (property, value, reset) in self.effective() {
+            let changed = match base_values.get(property) {
+                Some(base) => *base != value,
+                None => !reset,
+            };
+            if changed {
+                css.push_str(&format!("{property}:{value};"));
+            }
+        }
+        css
+    }
+}
+
+/// Whether a colour paints anything; a missing, transparent or zero-alpha colour draws nothing.
+fn paints(colour: Option<&str>) -> bool {
+    colour
+        .and_then(crate::Rgba::parse)
+        .is_some_and(|colour| colour.a > 0.0)
+}
+
+/// Whether a layer paints its own text; only then do its font and colour declarations matter.
+fn renders_text(element: &Element) -> bool {
+    match &element.kind {
+        // The canvas paints these kinds with the layer's text style, and an empty string still
+        // reserves the line box, so an edit never has to rewrite the stylesheet.
+        ElementKind::Text
+        | ElementKind::Button
+        | ElementKind::Link
+        | ElementKind::Input { .. }
+        | ElementKind::Textarea
+        | ElementKind::Select { .. }
+        | ElementKind::Checkbox
+        | ElementKind::Radio
+        | ElementKind::Code { .. } => true,
+        // A box, group or ellipse only paints the text it carries.
+        ElementKind::Box | ElementKind::Group | ElementKind::Ellipse => !element.text.is_empty(),
+        ElementKind::Image
+        | ElementKind::Line
+        | ElementKind::Video
+        | ElementKind::Audio
+        | ElementKind::Embed => false,
+    }
+}
+
+/// Everything one layer sets, including the values the common rule shares.
+fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) -> Declarations {
+    let defaults = crate::ElementTextStyle::default();
+    let free = parent.is_free();
+    let rect = element.rect;
+    let style = &element.style;
+    let text = &style.text_style;
+    let line = matches!(element.kind, ElementKind::Line);
+    let group = matches!(element.kind, ElementKind::Group);
+    let control = matches!(element.kind, ElementKind::Checkbox | ElementKind::Radio);
+    // A button or link is a text control on the canvas: a centred row rather than a block.
+    let text_control = matches!(element.kind, ElementKind::Button | ElementKind::Link);
+    let display = match &element.layout {
+        ElementLayout::Free if control || text_control => "flex",
+        ElementLayout::Free => "block",
+        ElementLayout::Stack { .. } => "flex",
+        ElementLayout::Grid { .. } => "grid",
+    };
+    let width = if line {
+        length(rect.width.max(1.0))
+    } else if rect.width > 0.0 {
+        length(rect.width)
+    } else if matches!(
+        element.kind,
+        ElementKind::Text | ElementKind::Button | ElementKind::Link
+    ) {
+        "max-content".into()
+    } else {
+        "auto".into()
+    };
+    let height = if line {
+        length(rect.height.max(1.0))
+    } else if rect.height > 0.0 {
+        length(rect.height)
+    } else {
+        "auto".into()
+    };
+    let mut css = Declarations::new();
+    // The common rule carries the resets, so a layer states only what differs from them.
+    if !element.visible {
+        css.set("display", "none");
+    } else if display == "block" && matches!(tag_name(element), "div" | "pre") {
+        css.reset("display", display);
+    } else {
+        css.set("display", display);
+    }
+    if free {
+        css.set("position", "absolute");
+        css.set("left", length(rect.x));
+        css.set("top", length(rect.y));
+    } else {
+        css.reset("position", "relative");
+        css.reset("left", length(0.0));
+        css.reset("top", length(0.0));
+    }
+    css.set("width", width);
+    css.set("height", height);
+    let sizing = &style.sizing;
+    let main_fill = match parent {
+        ElementLayout::Stack {
+            direction: StackDirection::Row,
+            ..
+        } => sizing.width == crate::SizingMode::Fill,
+        ElementLayout::Stack { .. } => sizing.height == crate::SizingMode::Fill,
+        _ => false,
+    };
+    for (axis, mode, offset, min, max) in [
+        (
+            "width",
+            sizing.width,
+            rect.x,
+            sizing.min_width,
+            sizing.max_width,
+        ),
+        (
+            "height",
+            sizing.height,
+            rect.y,
+            sizing.min_height,
+            sizing.max_height,
+        ),
+    ] {
+        match mode {
+            crate::SizingMode::Fixed => {}
+            crate::SizingMode::Fit => css.set(
+                axis,
+                if axis == "width" { "max-content" } else { "auto" },
+            ),
+            crate::SizingMode::Fill => {
+                let main_axis = matches!(
+                    parent,
+                    ElementLayout::Stack {
+                        direction: StackDirection::Row,
+                        ..
+                    }
+                ) == (axis == "width");
+                let value = if free {
+                    format!("calc(100% - {})", length(offset))
+                } else if main_fill && main_axis {
+                    "0px".into()
+                } else {
+                    "100%".into()
+                };
+                css.set(axis, value);
+                css.set(format!("min-{axis}"), "0");
+            }
+        }
+        if let Some(value) = min {
+            css.set(format!("min-{axis}"), length(value));
+        }
+        if let Some(value) = max {
+            css.set(format!("max-{axis}"), length(value));
+        }
+    }
+    if main_fill {
+        css.set("flex", "1 1 0");
+    } else {
+        // `flex-shrink:0` in the common rule is everything `flex:0 0 auto` sets.
+        css.reset("flex", "0 0 auto");
+    }
+    match style.fill.as_deref().filter(|value| paints(Some(value))) {
+        Some(fill) => css.set("background", fill),
+        None => css.reset("background", "transparent"),
+    }
+    if !line && !group && style.stroke.width > 0.0 && paints(style.stroke.color.as_deref()) {
+        css.set(
+            "border",
+            format!(
+                "{} solid {}",
+                length(style.stroke.width),
+                style.stroke.color.as_deref().unwrap_or("transparent")
+            ),
+        );
+    } else {
+        css.reset("border", "0 solid transparent");
+    }
+    if matches!(element.kind, ElementKind::Ellipse) {
+        css.set("border-radius", "50%");
+    } else if style.radius != 0.0 {
+        css.set("border-radius", length(style.radius));
+    } else {
+        css.reset("border-radius", length(0.0));
+    }
+    if style.opacity == 1.0 {
+        css.reset("opacity", "1");
+    } else {
+        css.set("opacity", format!("{}", style.opacity));
+    }
+    let flipped = style.flip_x || style.flip_y;
+    if (element.rotation % 360.0).abs() > 0.000_001 || flipped {
+        let mut transform = format!("rotate({}deg)", element.rotation);
+        if flipped {
+            transform.push_str(&format!(
+                " scale({},{})",
+                if style.flip_x { -1 } else { 1 },
+                if style.flip_y { -1 } else { 1 }
+            ));
+        }
+        css.set("transform", transform);
+    } else {
+        css.reset("transform", "none");
+    }
+    if !line && !group && paints(style.shadow.color.as_deref()) {
+        css.set(
+            "box-shadow",
+            format!(
+                "{} {} {} {}",
+                length(style.shadow.x),
+                length(style.shadow.y),
+                length(style.shadow.blur),
+                style.shadow.color.as_deref().unwrap_or("transparent")
+            ),
+        );
+    } else {
+        css.reset("box-shadow", "none");
+    }
+    if renders_text(element) {
+        // Every text property is stated so no layer inherits a neighbour's or parent's value;
+        // one that matches the common rule is a reset instead.
+        css.set(
+            "font-family",
+            fonts.family(&text.font_family, text.weight, text.italic),
+        );
+        if text.size != defaults.size {
+            css.set("font-size", length(text.size));
+        } else {
+            css.reset("font-size", length(defaults.size));
+        }
+        if text.weight != defaults.weight {
+            css.set("font-weight", format!("{}", text.weight));
+        } else {
+            css.reset("font-weight", format!("{}", defaults.weight));
+        }
+        if text.italic {
+            css.set("font-style", "italic");
+        } else {
+            css.reset("font-style", "normal");
+        }
+        if text.line_height != defaults.line_height {
+            css.set("line-height", format!("{}", text.line_height));
+        } else {
+            css.reset("line-height", format!("{}", defaults.line_height));
+        }
+        if text.letter_spacing != defaults.letter_spacing {
+            css.set("letter-spacing", length(text.letter_spacing));
+        } else {
+            css.reset("letter-spacing", length(defaults.letter_spacing));
+        }
+        if text.align != defaults.align {
+            css.set(
+                "text-align",
+                match text.align {
+                    TextAlign::Left => "left",
+                    TextAlign::Center => "center",
+                    TextAlign::Right => "right",
+                },
+            );
+        } else {
+            css.reset("text-align", "left");
+        }
+        if text.color.eq_ignore_ascii_case(&defaults.color) {
+            css.reset("color", defaults.color.clone());
+        } else {
+            css.set("color", text.color.clone());
+        }
+    }
+    // `object-fit` only affects replaced content; text, boxes and shapes ignore it.
+    if matches!(element.kind, ElementKind::Image | ElementKind::Video) {
+        css.set("object-fit", "cover");
+    }
+    if matches!(element.kind, ElementKind::Link) || element.url.is_some() {
+        css.set("text-decoration", "none");
+        css.set("cursor", "pointer");
+    }
+    if control {
+        css.set("align-items", "center");
+        css.set("gap", "0.4em");
+    }
+    if let Some(id) = style.references.fill {
+        css.set("background", format!("var(--colour-{id})"));
+    }
+    if let Some(id) = style.references.stroke {
+        css.set("border-color", format!("var(--colour-{id})"));
+    }
+    if let Some(id) = style.references.text_colour {
+        css.set("color", format!("var(--colour-{id})"));
+    }
+    if let Some(id) = style.references.text {
+        for property in [
+            "font-family",
+            "font-size",
+            "font-weight",
+            "line-height",
+            "letter-spacing",
+            "font-style",
+        ] {
+            css.set(property, format!("var(--text-{id}-{property})"));
+        }
+    }
+    match &element.layout {
+        ElementLayout::Free => {}
+        ElementLayout::Stack {
+            direction,
+            gap,
+            align,
+            justify,
+            wrap,
+            ..
+        } => {
+            match direction {
+                StackDirection::Row => css.reset("flex-direction", "row"),
+                StackDirection::Column => css.set("flex-direction", "column"),
+            }
+            if *gap == 0.0 {
+                css.reset("gap", length(0.0));
+            } else {
+                css.set("gap", length(*gap));
+            }
+            let (padding, clear) = padding_css(element);
+            if clear {
+                css.reset("padding", padding);
+            } else {
+                css.set("padding", padding);
+            }
+            css.set(
+                "align-items",
+                match align {
+                    StackAlign::Start => "flex-start",
+                    StackAlign::Center => "center",
+                    StackAlign::End => "flex-end",
+                    StackAlign::Stretch => "stretch",
+                },
+            );
+            match justify {
+                StackJustify::Start => css.reset("justify-content", "flex-start"),
+                StackJustify::Center => css.set("justify-content", "center"),
+                StackJustify::End => css.set("justify-content", "flex-end"),
+                StackJustify::SpaceBetween => css.set("justify-content", "space-between"),
+            }
+            if *wrap {
+                css.set("flex-wrap", "wrap");
+            } else {
+                css.reset("flex-wrap", "nowrap");
+            }
+        }
+        ElementLayout::Grid { columns, gap, .. } => {
+            css.set(
+                "grid-template-columns",
+                format!("repeat({columns},minmax(0,1fr))"),
+            );
+            css.reset("grid-auto-rows", "auto");
+            if *gap == 0.0 {
+                css.reset("gap", length(0.0));
+            } else {
+                css.set("gap", length(*gap));
+            }
+            let (padding, clear) = padding_css(element);
+            if clear {
+                css.reset("padding", padding);
+            } else {
+                css.set("padding", padding);
+            }
+        }
+    }
+    // The canvas centres a button's label on both axes and a link's label vertically, with its
+    // horizontal position from text-align; the PNG renderer paints the same boxes.
+    if matches!(element.kind, ElementKind::Button) {
+        css.set("align-items", "center");
+        css.set("justify-content", "center");
+    } else if matches!(element.kind, ElementKind::Link) {
+        css.set("align-items", "center");
+        css.set(
+            "justify-content",
+            match text.align {
+                TextAlign::Left => "flex-start",
+                TextAlign::Center => "center",
+                TextAlign::Right => "flex-end",
+            },
+        );
+    }
+    css
+}
+
 fn rules(
     elements: &[Element],
     parent: &ElementLayout,
     fonts: &mut Fonts,
-    rules: &mut BTreeMap<Uuid, String>,
+    rules: &mut BTreeMap<Uuid, Declarations>,
 ) {
-    let free = parent.is_free();
     for element in elements {
-        let rect = element.rect;
-        let style = &element.style;
-        let text = &style.text_style;
-        let line = matches!(element.kind, ElementKind::Line);
-        let control = matches!(element.kind, ElementKind::Checkbox | ElementKind::Radio);
-        // A button or link is a text control on the canvas: a centred row rather than a block.
-        let text_control = matches!(element.kind, ElementKind::Button | ElementKind::Link);
-        let display = match &element.layout {
-            ElementLayout::Free if control || text_control => "flex",
-            ElementLayout::Free => "block",
-            ElementLayout::Stack { .. } => "flex",
-            ElementLayout::Grid { .. } => "grid",
-        };
-        let width = if line {
-            length(rect.width.max(1.0))
-        } else if rect.width > 0.0 {
-            length(rect.width)
-        } else if matches!(
-            element.kind,
-            ElementKind::Text | ElementKind::Button | ElementKind::Link
-        ) {
-            "max-content".into()
-        } else {
-            "auto".into()
-        };
-        let height = if line {
-            length(rect.height.max(1.0))
-        } else if rect.height > 0.0 {
-            length(rect.height)
-        } else {
-            "auto".into()
-        };
-        let mut css = format!(
-            "display:{};position:{};left:{};top:{};width:{width};height:{height};flex-shrink:0;box-sizing:border-box;margin:0;padding:0;min-width:0;white-space:pre-wrap;overflow-wrap:break-word;",
-            if element.visible { display } else { "none" },
-            if free { "absolute" } else { "relative" },
-            length(if free { rect.x } else { 0.0 }),
-            length(if free { rect.y } else { 0.0 }),
-        );
-        let sizing = &style.sizing;
-        let main_fill = match parent { ElementLayout::Stack { direction: StackDirection::Row, .. } => sizing.width == crate::SizingMode::Fill, ElementLayout::Stack { .. } => sizing.height == crate::SizingMode::Fill, _ => false };
-        for (axis, mode, offset, min, max) in [("width", sizing.width, rect.x, sizing.min_width, sizing.max_width), ("height", sizing.height, rect.y, sizing.min_height, sizing.max_height)] {
-            match mode {
-                crate::SizingMode::Fixed => {},
-                crate::SizingMode::Fit => css.push_str(&format!("{axis}:{};", if axis == "width" { "max-content" } else { "auto" })),
-                crate::SizingMode::Fill => {
-                    let main_axis = matches!(parent, ElementLayout::Stack { direction: StackDirection::Row, .. }) == (axis == "width");
-                    let value = if free { format!("calc(100% - {})", length(offset)) } else if main_fill && main_axis { "0px".into() } else { "100%".into() };
-                    css.push_str(&format!("{axis}:{value};min-{axis}:0;"));
-                }
-            }
-            if let Some(value) = min { css.push_str(&format!("min-{axis}:{};", length(value))); }
-            if let Some(value) = max { css.push_str(&format!("max-{axis}:{};", length(value))); }
-        }
-        css.push_str(if main_fill { "flex:1 1 0;" } else { "flex:0 0 auto;" });
-        css.push_str(&format!("background:{};border:{} solid {};border-radius:{};opacity:{};transform:rotate({}deg) scale({},{});transform-origin:center;box-shadow:{} {} {} {};color:{};font-family:{};font-size:{};font-weight:{};font-style:{};line-height:{};letter-spacing:{};text-align:{};object-fit:cover;",
-            style.fill.as_deref().unwrap_or("transparent"), length(style.stroke.width), style.stroke.color.as_deref().unwrap_or("transparent"),
-            if matches!(element.kind, ElementKind::Ellipse) { "50%".into() } else { length(style.radius) }, style.opacity, element.rotation, if style.flip_x { -1 } else { 1 }, if style.flip_y { -1 } else { 1 },
-            length(style.shadow.x), length(style.shadow.y), length(style.shadow.blur), style.shadow.color.as_deref().unwrap_or("transparent"),
-            text.color, fonts.family(&text.font_family, text.weight, text.italic), length(text.size), text.weight, if text.italic { "italic" } else { "normal" }, text.line_height,
-            length(text.letter_spacing), match text.align { TextAlign::Left => "left", TextAlign::Center => "center", TextAlign::Right => "right" }));
-        if line || matches!(element.kind, ElementKind::Group) {
-            css.push_str("background:transparent;border:0;box-shadow:none;");
-        }
-        if matches!(element.kind, ElementKind::Link) || element.url.is_some() {
-            css.push_str("text-decoration:none;cursor:pointer;");
-        }
-        if control {
-            css.push_str("align-items:center;gap:0.4em;");
-        }
-        for (property, id) in [("background", style.references.fill), ("border-color", style.references.stroke), ("color", style.references.text_colour)] {
-            if let Some(id) = id { css.push_str(&format!("{property}:var(--colour-{id});")); }
-        }
-        if let Some(id) = style.references.text {
-            for property in ["font-family", "font-size", "font-weight", "line-height", "letter-spacing", "font-style"] { css.push_str(&format!("{property}:var(--text-{id}-{property});")); }
-        }
-        match &element.layout {
-            ElementLayout::Free => {}
-            ElementLayout::Stack { direction, gap, align, justify, wrap, .. } => css.push_str(&format!("flex-direction:{};gap:{};padding:{};align-items:{};justify-content:{};flex-wrap:{};",
-                match direction { StackDirection::Row => "row", StackDirection::Column => "column" }, length(*gap), padding_css(element),
-                match align { StackAlign::Start => "flex-start", StackAlign::Center => "center", StackAlign::End => "flex-end", StackAlign::Stretch => "stretch" },
-                match justify { StackJustify::Start => "flex-start", StackJustify::Center => "center", StackJustify::End => "flex-end", StackJustify::SpaceBetween => "space-between" }, if *wrap { "wrap" } else { "nowrap" })),
-            ElementLayout::Grid { columns, gap, .. } => css.push_str(&format!("grid-template-columns:repeat({columns},minmax(0,1fr));grid-auto-rows:auto;gap:{};padding:{};", length(*gap), padding_css(element))),
-        }
-        // The canvas centres a button's label on both axes and a link's label vertically, with
-        // its horizontal position from text-align; the PNG renderer paints the same boxes.
-        if matches!(element.kind, ElementKind::Button) {
-            css.push_str("align-items:center;justify-content:center;");
-        } else if matches!(element.kind, ElementKind::Link) {
-            css.push_str(&format!(
-                "align-items:center;justify-content:{};",
-                match text.align {
-                    TextAlign::Left => "flex-start",
-                    TextAlign::Center => "center",
-                    TextAlign::Right => "flex-end",
-                }
-            ));
-        }
-        rules.insert(element.id, css);
+        rules.insert(element.id, declarations(element, parent, fonts));
         self::rules(&element.children, &element.layout, fonts, rules);
     }
+}
+
+/// The page shell's declarations for one size.
+fn page_declarations(
+    size: &crate::PageSize,
+    elements: &[Element],
+    page: &crate::Page,
+) -> Declarations {
+    let height = if matches!(size.kind, crate::BoundaryKind::Page) {
+        elements
+            .iter()
+            .filter(|element| element.visible)
+            .fold(size.height as f64, |height, element| {
+                height.max(element.rect.y + element.rect.height)
+            })
+    } else {
+        size.height as f64
+    };
+    let mut css = Declarations::new();
+    css.set("--desegnos-unit", format!("calc(100cqw / {})", size.width));
+    css.set("height", length(height));
+    if matches!(size.kind, crate::BoundaryKind::Screen) {
+        css.set("overflow", "auto");
+    } else {
+        css.reset("overflow", "visible");
+    }
+    css.set("background", page.background.clone());
+    css.set(
+        "color",
+        if page.color_scheme() == "dark" {
+            "#ffffff"
+        } else {
+            "#111111"
+        },
+    );
+    css
 }
 
 fn pointer_attribute(id: Uuid, markers: &BTreeMap<Uuid, Vec<Uuid>>) -> String {
@@ -546,6 +944,12 @@ pub(super) fn render(
             "html,body{{margin:0;padding:0;}}\n.desegnos-viewport{{container-type:inline-size;width:100%;max-width:{}px;margin:0 auto;}}\n.desegnos-page{{position:relative;width:100%;isolation:isolate;}}\n",
             sizes.last().map_or(1, |size| size.width)
         );
+        let default_text = crate::ElementTextStyle::default();
+        let default_family = fonts.family(
+            &default_text.font_family,
+            default_text.weight,
+            default_text.italic,
+        );
         css.push_str(&fonts.css());
         css.push_str(&format!(":root{{color-scheme:{scheme};"));
         for colour in &project.styles.colours { css.push_str(&format!("--colour-{}:{};", colour.id, colour.value)); }
@@ -554,28 +958,58 @@ pub(super) fn render(
             css.push_str(&format!("--text-{}-font-family:{};--text-{}-font-size:{}px;--text-{}-font-weight:{};--text-{}-line-height:{};--text-{}-letter-spacing:{}px;--text-{}-font-style:{};", text.id, family, text.id, text.size, text.id, text.weight, text.id, text.line_height, text.id, text.letter_spacing, text.id, if text.italic { "italic" } else { "normal" }));
         }
         css.push_str("}\n");
+        // Every layer's rule carries the `d-` class, so these resets apply once instead of in every
+        // rule. The text resets also stop a layer from inheriting a parent's font or colour.
+        css.push_str(&format!(
+            "[class^=\"d-\"]{{box-sizing:border-box;margin:0;padding:0;min-width:0;flex-shrink:0;white-space:pre-wrap;overflow-wrap:break-word;position:relative;transform-origin:center;color:{};font-family:{};font-size:{};font-weight:{};font-style:normal;line-height:{};letter-spacing:{};text-align:left;}}\n",
+            default_text.color,
+            default_family,
+            length(default_text.size),
+            default_text.weight,
+            default_text.line_height,
+            length(default_text.letter_spacing)
+        ));
+        let mut base_page: Option<Declarations> = None;
+        let mut base_rules: Option<BTreeMap<Uuid, Declarations>> = None;
         for (index, size) in sizes.iter().enumerate() {
             if index > 0 {
                 css.push_str(&format!("@media (min-width:{}px){{\n", size.width));
             }
             let elements = crate::resolve_for_size(project, page, size.id);
-            let height = if matches!(size.kind, crate::BoundaryKind::Page) {
-                elements
-                    .iter()
-                    .filter(|e| e.visible)
-                    .fold(size.height as f64, |height, e| {
-                        height.max(e.rect.y + e.rect.height)
-                    })
-            } else {
-                size.height as f64
-            };
-            css.push_str(&format!("/* size:{} */\n.desegnos-page{{--desegnos-unit:calc(100cqw / {});height:{};overflow:{};background:{};color:{};}}\n",
-                size.id, size.width, length(height), if matches!(size.kind, crate::BoundaryKind::Screen) { "auto" } else { "visible" },
-                page.background, if page.color_scheme() == "dark" { "#ffffff" } else { "#111111" }));
+            css.push_str(&format!("/* size:{} */\n", size.id));
+            let page_css = page_declarations(size, &elements, page);
             let mut sorted = BTreeMap::new();
             rules(&elements, &ElementLayout::Free, &mut fonts, &mut sorted);
-            for (id, rule) in sorted {
-                css.push_str(&format!(".{}{{{rule}}}\n", class(id)));
+            match (&base_page, &base_rules) {
+                (Some(base_page), Some(base_rules)) => {
+                    // A size restates only the declarations that differ from the base size.
+                    let declarations = page_css.diff(base_page);
+                    if !declarations.is_empty() {
+                        css.push_str(&format!(".desegnos-page{{{declarations}}}\n"));
+                    }
+                    for (id, declarations) in &sorted {
+                        let block = match base_rules.get(id) {
+                            Some(base) => declarations.diff(base),
+                            None => declarations.block(),
+                        };
+                        if !block.is_empty() {
+                            css.push_str(&format!(".{}{{{block}}}\n", class(*id)));
+                        }
+                    }
+                }
+                _ => {
+                    css.push_str(&format!(".desegnos-page{{{}}}\n", page_css.block()));
+                    for (id, declarations) in &sorted {
+                        let block = declarations.block();
+                        if !block.is_empty() {
+                            css.push_str(&format!(".{}{{{block}}}\n", class(*id)));
+                        }
+                    }
+                }
+            }
+            if index == 0 {
+                base_page = Some(page_css);
+                base_rules = Some(sorted);
             }
             if index > 0 {
                 css.push_str("}\n");
@@ -606,8 +1040,8 @@ pub(super) fn render(
 mod tests {
     use super::*;
     use crate::{
-        Appearance, BoundaryKind, ElementOverride, InputType, PageSize, PointerKind, Rect,
-        Viewport, empty_element,
+        Appearance, BoundaryKind, ElementOverride, ElementStroke, InputType, PageSize, PointerKind,
+        Rect, Viewport, empty_element,
     };
 
     fn project() -> Project {
@@ -632,6 +1066,211 @@ mod tests {
                 height: 40.0,
             },
         )
+    }
+
+    /// The stylesheet a direct export writes for a project.
+    fn exported_css(project: &Project) -> String {
+        let bundle = direct_export_bundle(project, &[]).unwrap();
+        String::from_utf8(bundle.files["index.css"].clone()).unwrap()
+    }
+
+    /// The stylesheet the export wrote before per-element rules were compacted, in bytes: 1.67 MB
+    /// for the dense page below. Rebuild it from the commit before the compaction with
+    /// `git show <commit>:crates/desegnos-core/src/web_codegen.rs` if the dense page changes.
+    const DENSE_CSS_BEFORE: usize = 1_678_979;
+
+    /// A page of many plain layers with a size-specific position for every tenth layer, over
+    /// three widths, matching the pages that made the old stylesheet 1.67 MB.
+    fn dense_project(count: usize) -> Project {
+        let mut project = project();
+        let tablet = Uuid::new_v4();
+        let phone = Uuid::new_v4();
+        project.pages[0].sizes.push(PageSize {
+            id: tablet,
+            label: "Tablet".into(),
+            width: 600,
+            height: 900,
+            kind: BoundaryKind::Screen,
+            x: 0.0,
+            y: 0.0,
+        });
+        project.pages[0].sizes.push(PageSize {
+            id: phone,
+            label: "Phone".into(),
+            width: 390,
+            height: 844,
+            kind: BoundaryKind::Screen,
+            x: 0.0,
+            y: 0.0,
+        });
+        let mut elements = Vec::new();
+        for index in 0..count {
+            let kind = if index % 3 == 0 {
+                ElementKind::Text
+            } else {
+                ElementKind::Box
+            };
+            let mut layer = element(kind);
+            layer.rect = Rect {
+                x: (index % 20) as f64 * 40.0,
+                y: (index / 20) as f64 * 25.0,
+                width: 160.0,
+                height: 40.0,
+            };
+            if matches!(layer.kind, ElementKind::Text) {
+                layer.text = format!("Layer {index}");
+            }
+            if index % 4 == 0 {
+                layer.style.fill = Some("#eeeeee".into());
+                layer.style.radius = 4.0;
+            }
+            if index % 7 == 0 {
+                layer.style.stroke = ElementStroke {
+                    color: Some("#cccccc".into()),
+                    width: 1.0,
+                };
+            }
+            if index % 11 == 0 {
+                layer.style.shadow.color = Some("#00000033".into());
+                layer.style.opacity = 0.9;
+            }
+            if index % 10 == 0 {
+                for (id, width) in [(tablet, 120.0), (phone, 90.0)] {
+                    layer.overrides.insert(
+                        id,
+                        ElementOverride {
+                            rect: Some(Rect {
+                                x: layer.rect.x,
+                                y: layer.rect.y,
+                                width,
+                                height: layer.rect.height,
+                            }),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            elements.push(layer);
+        }
+        project.pages[0].elements = elements;
+        project
+    }
+
+    #[test]
+    fn css_for_many_plain_layers_is_a_fraction_of_the_uncompacted_size() {
+        let css = exported_css(&dense_project(640));
+        println!("dense stylesheet: {} bytes", css.len());
+        assert!(
+            css.len() * 4 <= DENSE_CSS_BEFORE,
+            "{} bytes, expected at least four times smaller than {DENSE_CSS_BEFORE}",
+            css.len()
+        );
+    }
+
+    #[test]
+    fn a_size_override_emits_only_the_declarations_it_changes() {
+        let mut project = project();
+        let tablet = Uuid::new_v4();
+        project.pages[0].sizes.push(PageSize {
+            id: tablet,
+            label: "Tablet".into(),
+            width: 600,
+            height: 900,
+            kind: BoundaryKind::Screen,
+            x: 0.0,
+            y: 0.0,
+        });
+        project.pages[0].sizes.push(PageSize {
+            id: Uuid::new_v4(),
+            label: "Phone".into(),
+            width: 390,
+            height: 844,
+            kind: BoundaryKind::Screen,
+            x: 0.0,
+            y: 0.0,
+        });
+        let mut changed = element(ElementKind::Box);
+        // Only the width differs at tablet; every other declaration matches the base size.
+        changed.overrides.insert(
+            tablet,
+            ElementOverride {
+                rect: Some(Rect {
+                    x: 12.0,
+                    y: 24.0,
+                    width: 100.0,
+                    height: 40.0,
+                }),
+                ..Default::default()
+            },
+        );
+        let unchanged = element(ElementKind::Box);
+        project.pages[0].elements = vec![changed.clone(), unchanged.clone()];
+        let css = exported_css(&project);
+        assert!(css.contains(&format!(
+            ".{}{{position:absolute;left:{};top:{};width:{};height:{};",
+            class(changed.id),
+            length(12.0),
+            length(24.0),
+            length(160.0),
+            length(40.0)
+        )));
+        let start = css.find("@media (min-width:600px){").expect("tablet query");
+        let media = &css[start..];
+        let media = &media[..media.find("\n}\n").expect("tablet query end")];
+        let rule = rule_of(media, changed.id);
+        assert!(
+            rule.contains(&format!("width:{};", length(100.0))),
+            "{rule}"
+        );
+        // Unchanged declarations are inherited from the base rule instead of repeated.
+        for property in ["height:", "left:", "top:", "display:", "background:"] {
+            assert!(!rule.contains(property), "{property} repeated in {rule}");
+        }
+        assert!(
+            !media.contains(&format!(".{}{{", class(unchanged.id))),
+            "a layer with no change still wrote a rule"
+        );
+    }
+
+    #[test]
+    fn a_plain_layer_states_only_what_it_paints() {
+        let mut project = project();
+        let plain = element(ElementKind::Box);
+        let mut text = element(ElementKind::Text);
+        text.text = "Hi".into();
+        let image = element(ElementKind::Image);
+        project.pages[0].elements = vec![plain.clone(), text.clone(), image.clone()];
+        let css = exported_css(&project);
+        let rule = rule_of(&css, plain.id);
+        for property in [
+            "font-family",
+            "font-size",
+            "font-weight",
+            "line-height",
+            "letter-spacing",
+            "text-align",
+            "color",
+            "object-fit",
+            "box-shadow",
+            "border",
+            "transform",
+            "opacity",
+            "background",
+        ] {
+            assert!(!rule.contains(property), "{property} in {rule}");
+        }
+        assert!(!rule_of(&css, text.id).contains("object-fit"));
+        assert!(rule_of(&css, image.id).contains("object-fit:cover;"));
+        // The resets live in one shared rule instead of every layer's rule.
+        for reset in [
+            "box-sizing:border-box",
+            "white-space:pre-wrap",
+            "overflow-wrap:break-word",
+            "transform-origin:center",
+        ] {
+            assert_eq!(css.matches(reset).count(), 1, "{reset}");
+        }
+        lightningcss::stylesheet::StyleSheet::parse(&css, Default::default()).unwrap();
     }
 
     /// One element's declaration block from the exported stylesheet.
@@ -881,13 +1520,13 @@ mod tests {
         let layout = ElementLayout::Stack { direction: StackDirection::Row, gap: 8.0, padding: 0.0, align: StackAlign::Start, justify: StackJustify::Start, wrap: false };
         let mut fonts = Fonts::default();
         let mut output = BTreeMap::new(); rules(&[child.clone()], &layout, &mut fonts, &mut output);
-        let css = &output[&child.id];
+        let css = output[&child.id].block();
         assert!(css.contains("flex:1 1 0;"));
         assert!(css.contains("height:auto;"));
         assert!(css.contains("min-width:calc(20 * var(--desegnos-unit));"));
         assert!(css.contains(&format!("background:var(--colour-{colour});")));
         output.clear(); rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
-        assert!(output[&child.id].contains("width:calc(100% -"));
+        assert!(output[&child.id].block().contains("width:calc(100% -"));
     }
 
     #[test]
@@ -910,7 +1549,7 @@ mod tests {
         let mut fonts = Fonts::default();
         let mut output = BTreeMap::new();
         rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
-        let css = &output[&child.id];
+        let css = output[&child.id].block();
         assert!(css.contains(&format!(
             "padding:{} {} {} {};",
             length(4.0),
@@ -927,7 +1566,7 @@ mod tests {
         };
         output.clear();
         rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
-        assert!(output[&child.id].contains(&format!("padding:{};", length(6.0))));
+        assert!(output[&child.id].block().contains(&format!("padding:{};", length(6.0))));
     }
 
     #[test]
