@@ -166,7 +166,7 @@ async fn answer(
             _ => return missing(),
         }
     };
-    let mut response = response(StatusCode::OK, mime(&path), bytes);
+    let mut response = response(StatusCode::OK, mime(&file.to_string_lossy()), bytes);
     if head {
         response.headers_mut().insert(
             "content-length",

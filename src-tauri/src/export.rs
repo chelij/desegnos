@@ -24,7 +24,7 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{AppHandle, Manager, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
@@ -284,6 +284,23 @@ pub struct PickDestination {
     path: String,
 }
 
+/// The default destination, <Documents>/Desegnos/<project>, may not exist yet, so Export creates
+/// it. Any other missing folder still has to be chosen.
+fn create_default_destination(app: &AppHandle, path: &str) -> NativeResult<()> {
+    let path = Path::new(path);
+    let Ok(documents) = app.path().document_dir() else {
+        return Ok(());
+    };
+    if path.parent() == Some(documents.join("Desegnos").as_path())
+        && path.file_name().is_some()
+        && !path.exists()
+    {
+        fs::create_dir_all(path)
+            .map_err(|error| format!("The export folder could not be created: {error}"))?;
+    }
+    Ok(())
+}
+
 fn trusted_destination(path: String) -> NativeResult<PathBuf> {
     let path = PathBuf::from(path);
     if !path.is_absolute() {
@@ -343,6 +360,7 @@ fn page_views(plan: &ExportPlan) -> Vec<ExportPageView> {
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_export(
+    app: AppHandle,
     window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     ai: AiState<'_>,
@@ -397,6 +415,7 @@ pub async fn prepare_export(
         (Some(folder.clone()), Some(folder))
     } else {
         let parent = destination.ok_or("Choose a destination folder before exporting.")?;
+        create_default_destination(&app, &parent)?;
         (Some(trusted_destination(parent)?), None)
     };
     let has_ai = plan.request_count > 0;
