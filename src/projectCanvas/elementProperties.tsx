@@ -163,7 +163,7 @@ function StylePicker({ project, category, label, value, choose, create, disabled
   project: Project; category: 'colour' | 'text'; label: string; value?: string | null; choose: (id: string | null) => void; create: () => void; disabled: boolean;
 }) {
   const styles = category === 'colour' ? project.styles?.colours : project.styles?.text;
-  return <select aria-label={`${label} style`} title="Style" value={value ?? ''} disabled={disabled} style={{ width: 80, minWidth: 0 }}
+  return <select aria-label={`${label} style`} title="Style" value={value ?? ''} disabled={disabled} style={{ width: 100, minWidth: 0, flex: 'none' }}
     onChange={event => event.target.value === '__create' ? create() : choose(event.target.value || null)}>
     <option value="">Custom</option>{styles?.map(style => <option key={style.id} value={style.id}>{style.name}</option>)}
     <option value="__create">Create style from this</option>

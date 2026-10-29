@@ -622,3 +622,7 @@
 .boundary-preview-heading output { margin-left: auto; font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .boundary-preview-heading .dock-action { width: auto; }
 .boundary-preview-range { flex: none; width: calc(100% - 12px); margin: 0 6px; }
+
+/* Presenting hides the editor around the slide. */
+.editor-shell.presenting .app-bar, .editor-shell.presenting .tool-strip, .editor-shell.presenting .editor-dock,
+.editor-shell.presenting .status-bar, .editor-shell.presenting .show-panels { display: none; }

@@ -596,6 +596,34 @@ export function useProjectCanvas({
     imagePicker.current?.click();
   }, [tool, pendingImage]);
   useEffect(() => { if (tool !== 'image') setPendingImage(null); }, [tool]);
+  // A chosen picture appears at once, centred in the boundary in view, rather than waiting
+  // for a click nobody is told to make. Clicking or dragging can still place it instead.
+  useEffect(() => {
+    if (tool !== 'image' || !pendingImage || viewSize.width < 1 || busy.current) return;
+    const view = viewportWorldRect(camera, viewSize);
+    const centre = { x: view.x + view.width / 2, y: view.y + view.height / 2 };
+    const distance = (rect: Rect) => Math.hypot(Math.max(rect.x - centre.x, 0, centre.x - rect.x - rect.width), Math.max(rect.y - centre.y, 0, centre.y - rect.y - rect.height));
+    const boundary = boundaryUnder(centre) ?? [...boundaries].sort((a, b) => distance(a.rect) - distance(b.rect))[0];
+    if (!boundary) return;
+    const shown = {
+      x: Math.max(boundary.rect.x, view.x), y: Math.max(boundary.rect.y, view.y),
+      right: Math.min(boundary.rect.x + boundary.rect.width, view.x + view.width), bottom: Math.min(boundary.rect.y + boundary.rect.height, view.y + view.height),
+    };
+    const width = Math.max(1, Math.round(Math.min(pendingImage.width, 480, boundary.rect.width * 0.6)));
+    const height = Math.max(1, Math.round(width * pendingImage.height / Math.max(1, pendingImage.width)));
+    const middle = shown.right > shown.x && shown.bottom > shown.y
+      ? { x: (shown.x + shown.right) / 2, y: (shown.y + shown.bottom) / 2 }
+      : { x: boundary.rect.x + boundary.rect.width / 2, y: boundary.rect.y + boundary.rect.height / 2 };
+    const rect = { x: Math.round(middle.x - width / 2), y: Math.round(middle.y - height / 2), width, height };
+    const picture = pendingImage.uri;
+    // Leave the Image tool first: clearing the picture under it would open the picker again.
+    onTool('select');
+    setPendingImage(null);
+    busy.current = true;
+    void placeElement('image', boundary.pageId, boundary.sizeId, null, { x: 0, y: 0 }, boundary.rect, rect, picture)
+      .then(() => { createdElement.current = null; })
+      .catch(() => {}).finally(() => { busy.current = false; });
+  }, [pendingImage]);
 
   /**
    * Capture is best effort: the window listeners below carry the drag even when a platform

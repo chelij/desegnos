@@ -284,6 +284,8 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   remove: () => void;
   busy: boolean;
 }) {
+  // People make slides, pages, screens and images; 'boundary' is the app's word, not theirs.
+  const kindWord = page.output === 'slide' ? 'Slide' : page.output === 'image' ? 'Image' : page.output === 'appScreen' ? 'Screen' : 'Page';
   const [customWidth, setCustomWidth] = useState('1280');
   const [customHeight, setCustomHeight] = useState('800');
   const [customOpen, setCustomOpen] = useState(false);
@@ -301,7 +303,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   const previewing = widthPreview?.sizeId === selectedSize.id;
   const shownWidth = previewing ? widthPreview.width : selectedSize.width;
   return <div className="dock-form props boundary-props">
-    <div className="dock-layer-title"><strong>Boundary</strong></div>
+    <div className="dock-layer-title"><strong>{kindWord}</strong></div>
     <PropsSection id="boundary-layout" title="Layout">
       <CompactTextField label="Name" placeholder="Name" value={page.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => commit({ name: name.trim() })} />
       {hasPath && <CompactTextField prefix="URL" label="Path" placeholder="/path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />}
@@ -350,7 +352,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
       </div>
     </PropsSection>
     <div className="boundary-footer">
-      <button type="button" className="dock-action danger" disabled={busy} onClick={remove}>Delete boundary</button>
+      <button type="button" className="dock-action danger" disabled={busy} onClick={remove}>Delete {kindWord.toLowerCase()}</button>
     </div>
   </div>;
 }
