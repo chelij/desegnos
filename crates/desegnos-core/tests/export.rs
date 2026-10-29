@@ -766,4 +766,5 @@ fn table_cells_keep_their_background_and_place_their_content() {
     assert!(placed.iter().any(|(element, ..)| element.style.fill.as_deref() == Some("#ccccff")), "the nav cell keeps its background");
     let text = placed.iter().find(|(element, ..)| element.text == "Article text").unwrap();
     assert_eq!((text.1, text.2), (180.0, 60.0), "the second cell's text keeps its page position");
+    assert_eq!(text.0.style.sizing.width, desegnos_core::SizingMode::Fit, "a single line hugs its text");
 }

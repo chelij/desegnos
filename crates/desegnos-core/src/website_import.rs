@@ -7,7 +7,7 @@
 use crate::{
     BoundaryKind, Element, ElementKind, ElementLayout, ElementMeta, ElementOverride, ElementShadow,
     ElementStroke, ElementStyle, ElementTextStyle, InputType, OutputType, Page, PageSize, Pointer,
-    PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Result, StackAlign,
+    PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Result, SizingMode, StackAlign,
     StackDirection, StackJustify, TextAlign, ensure,
 };
 use std::collections::{BTreeMap, BTreeSet};
@@ -890,7 +890,15 @@ impl Converter<'_> {
             rotation: 0.0,
             visible: true,
             locked: false,
-            style: self.node_style(node, true),
+            style: {
+                // A single line hugs its text, so a substitute font that runs wider than the
+                // site's own never cuts the line short.
+                let mut style = self.node_style(node, true);
+                if rect.height <= node.styles.font_size * node.styles.line_height.clamp(0.5, 4.0) * 1.5 && !text.contains('\n') {
+                    style.sizing.width = SizingMode::Fit;
+                }
+                style
+            },
             text: clip_text(text),
             image: None,
             url: None,
