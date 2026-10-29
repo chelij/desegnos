@@ -2,14 +2,14 @@
 //! for rendering. Nothing here writes outside the returned list or follows symlinks.
 use desegnos_core::{Error, Result};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
-    io::{Read, Seek},
+    io::Read,
     path::{Path, PathBuf},
 };
 use zip::ZipArchive;
 
-const MAX_ENTRIES: usize = 4_000;
+const MAX_ENTRIES: usize = 50_000;
 const MAX_FILES: usize = 1_500;
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
@@ -28,6 +28,8 @@ pub struct WebsitePage {
     /// The URL path the page is served at, e.g. `/` or `/about`.
     pub route: String,
     pub title: String,
+    /// Exact relative file name, including its original case and extension.
+    pub file: String,
 }
 
 fn io(error: impl std::fmt::Display) -> Error {
@@ -38,12 +40,21 @@ fn extension(name: &str) -> String {
     name.rsplit('.').next().unwrap_or("").to_ascii_lowercase()
 }
 
-fn web_file(name: &str) -> bool {
+fn priority(name: &str) -> Option<u8> {
+    Some(match extension(name).as_str() {
+        "html" | "htm" => 0,
+        "css" => 1,
+        "svg" | "png" | "jpg" | "jpeg" | "webp" | "gif" | "avif" | "ico" | "bmp" => 2,
+        "woff" | "woff2" | "ttf" | "otf" | "eot" => 3,
+        "js" | "mjs" | "cjs" => 4,
+        _ => return None,
+    })
+}
+
+fn download(name: &str) -> bool {
     matches!(
         extension(name).as_str(),
-        "html" | "htm" | "css" | "js" | "mjs" | "cjs" | "json" | "xml" | "svg" | "png" | "jpg"
-            | "jpeg" | "webp" | "gif" | "avif" | "ico" | "bmp" | "woff" | "woff2" | "ttf" | "otf"
-            | "eot" | "mp4" | "webm" | "ogg" | "mp3" | "wav" | "pdf" | "txt"
+        "mp3" | "mp4" | "webm" | "ogg" | "wav" | "pdf" | "txt" | "json" | "xml"
     )
 }
 
@@ -67,7 +78,9 @@ fn safe_name(name: &str) -> Option<String> {
                 || part == "."
                 || part == ".."
                 || part.ends_with(['.', ' '])
-                || part.chars().any(|character| character.is_control() || "<>\"|*:?".contains(character))
+                || part
+                    .chars()
+                    .any(|character| character.is_control() || "<>\"|*:?".contains(character))
         })
     {
         return None;
@@ -75,43 +88,331 @@ fn safe_name(name: &str) -> Option<String> {
     Some(name.to_owned())
 }
 
+fn index_name(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "index.html" | "index.htm" | "default.html" | "default.htm" | "home.html" | "home.htm"
+    )
+}
+
 fn page_route(name: &str) -> Option<String> {
-    if !matches!(extension(name).as_str(), "html" | "htm") {
+    if priority(name) != Some(0) {
         return None;
     }
-    let name = name.trim_start_matches('/');
-    if name == "index.html" || name == "index.htm" {
-        return Some("/".into());
+    let (directory, leaf) = name.rsplit_once('/').unwrap_or(("", name));
+    if index_name(leaf) {
+        return Some(if directory.is_empty() {
+            "/".into()
+        } else {
+            format!("/{directory}/")
+        });
     }
-    if let Some(directory) = name.strip_suffix("/index.html").or_else(|| name.strip_suffix("/index.htm")) {
-        return Some(format!("/{directory}/"));
-    }
-    let without = name
-        .strip_suffix(".html")
-        .or_else(|| name.strip_suffix(".htm"))
-        .unwrap_or(name);
-    Some(format!("/{without}"))
+    Some(format!("/{}", name.rsplit_once('.')?.0))
 }
 
-fn page_title(name: &str, bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes);
-    desegnos_core::identity_source_page(name, &text)
-        .map(|page| page.title)
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| {
-            name.trim_end_matches(".html")
-                .trim_end_matches(".htm")
-                .trim_matches('/')
-                .rsplit('/')
-                .next()
-                .filter(|part| !part.is_empty() && *part != "index")
-                .map(|part| part.replace(['-', '_'], " "))
-                .unwrap_or_else(|| "Home".into())
-        })
+fn decode_html(bytes: &[u8]) -> String {
+    use encoding_rs::{Encoding, WINDOWS_1252};
+    if let Some((encoding, length)) = Encoding::for_bom(bytes) {
+        return encoding.decode(&bytes[length..]).0.into_owned();
+    }
+    // Charset declarations are ASCII even when the surrounding document is not UTF-8.
+    let preview = String::from_utf8_lossy(bytes);
+    let doc = dom_query::Document::from(preview.as_ref());
+    for node in doc.select("meta").nodes().iter() {
+        let label = node
+            .attr("charset")
+            .map(|value| value.to_string())
+            .or_else(|| {
+                if !node
+                    .attr("http-equiv")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+                {
+                    return None;
+                }
+                let content = node.attr("content")?;
+                let lower = content.to_ascii_lowercase();
+                let start = lower.find("charset")? + 7;
+                Some(
+                    content[start..]
+                        .trim_start()
+                        .strip_prefix('=')?
+                        .trim()
+                        .trim_matches(['\'', '"'])
+                        .split([';', ' ', '\'', '"'])
+                        .next()?
+                        .to_owned(),
+                )
+            });
+        if let Some(encoding) = label.and_then(|label| Encoding::for_label(label.trim().as_bytes()))
+        {
+            return encoding.decode(bytes).0.into_owned();
+        }
+    }
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .unwrap_or_else(|_| WINDOWS_1252.decode(bytes).0.into_owned())
 }
 
-/// Read a folder or ZIP without changing it. A folder with one obvious site subfolder
-/// (`dist`, `build`, `public`, `_site`, `out`) is served from that subfolder.
+fn page_title(name: &str, doc: &dom_query::Document) -> String {
+    let title = doc.select("title").first().text().trim().to_owned();
+    if !title.is_empty() {
+        return title;
+    }
+    let leaf = name.rsplit('/').next().unwrap_or(name);
+    if index_name(leaf) {
+        "Home".into()
+    } else {
+        leaf.rsplit_once('.')
+            .map_or(leaf, |(stem, _)| stem)
+            .replace(['-', '_'], " ")
+    }
+}
+
+fn resolve_link(from: &str, target: &str, files: &BTreeMap<String, String>) -> Option<String> {
+    let mut base = url::Url::parse("https://snapshot.invalid/").ok()?;
+    base.path_segments_mut()
+        .ok()?
+        .pop_if_empty()
+        .extend(from.split('/'));
+    let resolved = base.join(&target.replace('\\', "/")).ok()?;
+    if resolved.origin() != base.origin() {
+        return None;
+    }
+    // URL paths escape spaces/non-ASCII file names. Decode before matching the inventory.
+    let path = resolved.path().as_bytes();
+    let mut decoded = Vec::new();
+    let mut i = 0;
+    while i < path.len() {
+        if path[i] == b'%' && i + 2 < path.len() {
+            let byte =
+                u8::from_str_radix(std::str::from_utf8(&path[i + 1..i + 3]).ok()?, 16).ok()?;
+            decoded.push(byte);
+            i += 3;
+        } else {
+            decoded.push(path[i]);
+            i += 1;
+        }
+    }
+    let path = String::from_utf8(decoded)
+        .ok()?
+        .trim_start_matches('/')
+        .to_ascii_lowercase();
+    if let Some(file) = files.get(&path) {
+        return Some(file.clone());
+    }
+    for index in [
+        "index.html",
+        "index.htm",
+        "default.html",
+        "default.htm",
+        "home.html",
+        "home.htm",
+    ] {
+        let candidate = format!(
+            "{}{index}",
+            if path.is_empty() {
+                String::new()
+            } else {
+                format!("{}/", path.trim_end_matches('/'))
+            }
+        );
+        if let Some(file) = files.get(&candidate) {
+            return Some(file.clone());
+        }
+    }
+    None
+}
+
+fn snapshot_pages(files: &[(String, Vec<u8>)]) -> Vec<WebsitePage> {
+    let names = files
+        .iter()
+        .filter(|(name, _)| priority(name) == Some(0))
+        .map(|(name, _)| (name.to_ascii_lowercase(), name.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut pages = BTreeMap::new();
+    let mut links = BTreeMap::new();
+    let mut frames = BTreeMap::new();
+    for (name, bytes) in files.iter().filter(|(name, _)| priority(name) == Some(0)) {
+        let text = decode_html(bytes);
+        let doc = dom_query::Document::from(text.as_str());
+        let targets = doc
+            .select("a[href], frame[src], iframe[src]")
+            .nodes()
+            .iter()
+            .filter_map(|node| {
+                let target = node.attr("href").or_else(|| node.attr("src"))?;
+                resolve_link(name, &target, &names)
+            })
+            .collect::<Vec<_>>();
+        links.insert(name.clone(), targets);
+        if doc.select("frameset").length() > 0 {
+            let frame_nodes = doc.select("frame[src]");
+            let nodes = frame_nodes.nodes();
+            let main = nodes
+                .iter()
+                .find(|node| {
+                    node.attr("name").is_some_and(|v| {
+                        matches!(v.to_ascii_lowercase().as_str(), "main" | "content" | "body")
+                    })
+                })
+                .or_else(|| nodes.last());
+            if let Some(target) = main
+                .and_then(|node| node.attr("src"))
+                .and_then(|src| resolve_link(name, &src, &names))
+            {
+                frames.insert(name.clone(), target);
+            }
+        } else {
+            pages.insert(
+                name.clone(),
+                WebsitePage {
+                    route: page_route(name).unwrap(),
+                    title: page_title(name, &doc),
+                    file: name.clone(),
+                },
+            );
+        }
+    }
+    let home = [
+        "index.html",
+        "index.htm",
+        "default.html",
+        "default.htm",
+        "home.html",
+        "home.htm",
+    ]
+    .iter()
+    .find_map(|name| names.get(*name))
+    .cloned()
+    .or_else(|| pages.keys().next().cloned());
+    if let Some(home) = &home {
+        let mut target = home.clone();
+        let mut seen = BTreeSet::new();
+        while seen.insert(target.clone()) {
+            let Some(next) = frames.get(&target) else {
+                break;
+            };
+            target = next.clone();
+        }
+        if frames.contains_key(home) {
+            if let Some(page) = pages.get_mut(&target) {
+                page.route = "/".into();
+            }
+        }
+    }
+    let mut queue = VecDeque::from_iter(home);
+    let mut visited = BTreeSet::new();
+    let mut ordered = Vec::new();
+    while let Some(file) = queue.pop_front() {
+        if !visited.insert(file.clone()) {
+            continue;
+        }
+        if let Some(page) = pages.remove(&file) {
+            ordered.push(page);
+        }
+        if let Some(targets) = links.get(&file) {
+            queue.extend(targets.iter().cloned());
+        }
+    }
+    let mut unreachable = pages.into_values().collect::<Vec<_>>();
+    unreachable.sort_by_key(|page| (page.file.to_ascii_lowercase(), page.file.clone()));
+    ordered.extend(unreachable);
+    // The promoted frame is home even if another frame appears first in the document.
+    ordered.sort_by_key(|page| page.route != "/");
+    let mut routes = BTreeSet::new();
+    ordered.retain(|page| routes.insert(page.route.to_ascii_lowercase()));
+    ordered
+}
+
+struct Candidate {
+    name: String,
+    size: u64,
+    index: usize,
+}
+
+fn select_files(mut candidates: Vec<Candidate>, skipped: &mut Vec<String>) -> Vec<Candidate> {
+    let downloads = candidates
+        .iter()
+        .filter(|file| download(&file.name))
+        .count();
+    if downloads > 0 {
+        skipped.push(format!(
+            "Left out {downloads} audio, video, document or data files not needed to render pages."
+        ));
+    }
+    candidates.retain(|file| priority(&file.name).is_some());
+    candidates.sort_by_key(|file| {
+        (
+            priority(&file.name),
+            file.name.to_ascii_lowercase(),
+            file.name.clone(),
+        )
+    });
+    let mut total = 0;
+    let mut count = 0;
+    let mut omitted = 0;
+    let mut names = BTreeSet::new();
+    candidates.retain(|file| {
+        if !names.insert(file.name.clone()) {
+            return false;
+        }
+        if count >= MAX_FILES || file.size > MAX_FILE_BYTES || file.size > MAX_TOTAL_BYTES - total {
+            omitted += 1;
+            return false;
+        }
+        count += 1;
+        total += file.size;
+        true
+    });
+    if omitted > 0 {
+        skipped.push(format!("Left out {omitted} rendering files to keep the snapshot within 1,500 files, 128 MiB total and 8 MiB per file."));
+    }
+    candidates
+}
+
+fn inventory_folder(
+    root: &Path,
+    directory: &Path,
+    candidates: &mut Vec<Candidate>,
+    skipped: &mut Vec<String>,
+    entries: &mut usize,
+) -> Result<()> {
+    for child in fs::read_dir(directory).map_err(io)? {
+        let child = child.map_err(io)?;
+        *entries += 1;
+        if *entries > MAX_ENTRIES {
+            return Err(Error(
+                "The website has more than 50,000 entries. Choose the site folder itself.".into(),
+            ));
+        }
+        let path = child.path();
+        let relative = path.strip_prefix(root).map_err(io)?;
+        let Some(name) = safe_name(&relative.to_string_lossy()) else {
+            skipped.push(format!("{}: unsafe name", relative.display()));
+            continue;
+        };
+        if excluded(&name) {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path).map_err(io)?;
+        if metadata.file_type().is_symlink() {
+            skipped.push(format!("{name}: symbolic link"));
+            continue;
+        }
+        if metadata.is_dir() {
+            inventory_folder(root, &path, candidates, skipped, entries)?;
+        } else if metadata.is_file() {
+            candidates.push(Candidate {
+                name,
+                size: metadata.len(),
+                index: 0,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Read only the selected rendering files after inventorying a folder or ZIP.
 pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
     let metadata = fs::symlink_metadata(path).map_err(io)?;
     if metadata.file_type().is_symlink() {
@@ -130,49 +431,90 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
         .chars()
         .take(120)
         .collect();
-    let mut files = Vec::new();
+    let mut candidates = Vec::new();
     let mut skipped = Vec::new();
+    let mut files = Vec::new();
     if metadata.is_dir() {
-        let root = path.canonicalize().map_err(io)?;
-        let mut entries = 0;
-        let mut total = 0_u64;
-        collect_folder(&root, &root, &mut files, &mut skipped, &mut entries, &mut total)?;
-        strip_site_root(&mut files);
-    } else if metadata.is_file() {
-        if !path
+        inventory_folder(path, path, &mut candidates, &mut skipped, &mut 0)?;
+        for file in select_files(candidates, &mut skipped) {
+            let mut bytes = Vec::new();
+            fs::File::open(path.join(&file.name))
+                .map_err(io)?
+                .take(file.size + 1)
+                .read_to_end(&mut bytes)
+                .map_err(io)?;
+            if bytes.len() as u64 != file.size {
+                return Err(Error(
+                    "An imported file changed size. Try importing again.".into(),
+                ));
+            }
+            files.push((file.name, bytes));
+        }
+    } else if metadata.is_file()
+        && path
             .extension()
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
-        {
-            return Err(Error("Choose a website folder or a .zip website archive.".into()));
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
+    {
+        let mut archive = ZipArchive::new(fs::File::open(path).map_err(io)?).map_err(io)?;
+        if archive.len() > MAX_ENTRIES {
+            return Err(Error(
+                "The website ZIP has more than 50,000 entries. Choose the site folder itself."
+                    .into(),
+            ));
         }
-        if metadata.len() > MAX_TOTAL_BYTES {
-            return Err(Error("The website ZIP exceeds the 128 MiB limit.".into()));
+        for index in 0..archive.len() {
+            let entry = archive.by_index(index).map_err(io)?;
+            if entry.is_dir() {
+                continue;
+            }
+            let name = super::identity_source::safe_archive_name(entry.name())
+                .and_then(|name| safe_name(&name));
+            let Some(name) = name.filter(|_| entry.enclosed_name().is_some()) else {
+                skipped.push(format!("{}: unsafe path", entry.name()));
+                continue;
+            };
+            if excluded(&name) {
+                continue;
+            }
+            if entry
+                .unix_mode()
+                .is_some_and(|mode| !matches!(mode & 0o170000, 0 | 0o100000))
+            {
+                skipped.push(format!("{name}: symbolic link or special file"));
+                continue;
+            }
+            candidates.push(Candidate {
+                name,
+                size: entry.size(),
+                index,
+            });
         }
-        let file = fs::File::open(path).map_err(io)?;
-        collect_zip(file, &mut files, &mut skipped)?;
-        strip_site_root(&mut files);
+        for file in select_files(candidates, &mut skipped) {
+            let mut bytes = Vec::new();
+            archive
+                .by_index(file.index)
+                .map_err(io)?
+                .take(file.size + 1)
+                .read_to_end(&mut bytes)
+                .map_err(io)?;
+            if bytes.len() as u64 != file.size {
+                return Err(Error("A ZIP entry has an invalid size.".into()));
+            }
+            files.push((file.name, bytes));
+        }
     } else {
-        return Err(Error("Choose a website folder or a .zip website archive.".into()));
+        return Err(Error(
+            "Choose a website folder or a .zip website archive.".into(),
+        ));
     }
-    if files.iter().all(|(name, _)| !matches!(extension(name).as_str(), "html" | "htm")) {
+    strip_site_root(&mut files);
+    let pages = snapshot_pages(&files);
+    if pages.is_empty() {
         return Err(Error(
             "That folder or archive has no HTML page to render.".into(),
         ));
     }
-    let mut pages = files
-        .iter()
-        .filter_map(|(name, bytes)| {
-            page_route(name).map(|route| WebsitePage {
-                title: page_title(name, bytes),
-                route,
-            })
-        })
-        .collect::<Vec<_>>();
-    pages.sort_by(|first, second| {
-        (first.route != "/", &first.route).cmp(&(second.route != "/", &second.route))
-    });
-    pages.dedup_by(|first, second| first.route == second.route);
-    files.sort_by(|first, second| first.0.cmp(&second.0));
+    files.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(WebsiteSnapshot {
         name,
         files,
@@ -181,161 +523,49 @@ pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
     })
 }
 
-fn collect_folder(
-    root: &Path,
-    directory: &Path,
-    files: &mut Vec<(String, Vec<u8>)>,
-    skipped: &mut Vec<String>,
-    entries: &mut usize,
-    total: &mut u64,
-) -> Result<()> {
-    let mut children = fs::read_dir(directory)
-        .map_err(io)?
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(io)?;
-    children.sort_by_key(|entry| entry.file_name());
-    for child in children {
-        *entries += 1;
-        if *entries > MAX_ENTRIES {
-            return Err(Error(
-                "The website has more than 4,000 entries. Choose the site folder itself.".into(),
-            ));
-        }
-        let path = child.path();
-        let relative = path.strip_prefix(root).map_err(io)?;
-        let Some(name) = safe_name(&relative.to_string_lossy()) else {
-            skipped.push(format!("{}: unsafe or unsupported name", relative.display()));
-            continue;
-        };
-        if excluded(&name) {
-            skipped.push(format!("{name}: hidden or dependency folder"));
-            continue;
-        }
-        let metadata = fs::symlink_metadata(&path).map_err(io)?;
-        if metadata.file_type().is_symlink() {
-            skipped.push(format!("{name}: symbolic link"));
-            continue;
-        }
-        if metadata.is_dir() {
-            collect_folder(root, &path, files, skipped, entries, total)?;
-            continue;
-        }
-        if !metadata.is_file() || !web_file(&name) {
-            skipped.push(format!("{name}: not a web file"));
-            continue;
-        }
-        if files.len() >= MAX_FILES {
-            return Err(Error("The website has more than 1,500 web files.".into()));
-        }
-        if metadata.len() > MAX_FILE_BYTES {
-            skipped.push(format!("{name}: larger than 8 MiB"));
-            continue;
-        }
-        *total = total.checked_add(metadata.len()).ok_or_else(|| Error("Website size overflow.".into()))?;
-        if *total > MAX_TOTAL_BYTES {
-            return Err(Error("The website exceeds the 128 MiB import limit.".into()));
-        }
-        let bytes = fs::read(&path).map_err(io)?;
-        files.push((name, bytes));
-    }
-    Ok(())
-}
-
-fn collect_zip<R: Read + Seek>(reader: R, files: &mut Vec<(String, Vec<u8>)>, skipped: &mut Vec<String>) -> Result<()> {
-    let mut archive = ZipArchive::new(reader).map_err(|_| Error("The ZIP could not be opened.".into()))?;
-    if archive.len() > MAX_ENTRIES {
-        return Err(Error("The website ZIP has more than 4,000 entries.".into()));
-    }
-    let mut total = 0_u64;
-    let mut names = BTreeSet::new();
-    for index in 0..archive.len() {
-        let mut entry = archive
-            .by_index(index)
-            .map_err(|_| Error("The ZIP contains an unreadable entry.".into()))?;
-        let Some(name) = super::identity_source::safe_archive_name(entry.name()) else {
-            skipped.push(format!("{}: unsafe path", entry.name()));
-            continue;
-        };
-        if entry.enclosed_name().is_none() {
-            skipped.push(format!("{name}: unsafe path"));
-            continue;
-        }
-        let Some(name) = safe_name(&name) else {
-            skipped.push(format!("{name}: unsafe path"));
-            continue;
-        };
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| !matches!(mode & 0o170000, 0 | 0o100000 | 0o040000))
-        {
-            skipped.push(format!("{name}: symbolic link or special file"));
-            continue;
-        }
-        if entry.is_dir() || excluded(&name) || !web_file(&name) {
-            continue;
-        }
-        if files.len() >= MAX_FILES {
-            return Err(Error("The website ZIP has more than 1,500 web files.".into()));
-        }
-        total = total
-            .checked_add(entry.size())
-            .ok_or_else(|| Error("Website ZIP size overflow.".into()))?;
-        if total > MAX_TOTAL_BYTES {
-            return Err(Error("The website ZIP exceeds the 128 MiB expanded limit.".into()));
-        }
-        if entry.size() > MAX_FILE_BYTES {
-            skipped.push(format!("{name}: larger than 8 MiB"));
-            continue;
-        }
-        if !names.insert(name.clone()) {
-            continue;
-        }
-        let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes).map_err(io)?;
-        if bytes.len() as u64 > MAX_FILE_BYTES {
-            skipped.push(format!("{name}: larger than 8 MiB"));
-            continue;
-        }
-        files.push((name, bytes));
-    }
-    Ok(())
-}
-
-/// If the site lives in one obvious build folder, serve that folder as the site root.
 fn strip_site_root(files: &mut Vec<(String, Vec<u8>)>) {
-    let has_root_index = files.iter().any(|(name, _)| name == "index.html" || name == "index.htm");
-    if has_root_index {
+    if files
+        .iter()
+        .any(|(name, _)| !name.contains('/') && index_name(name))
+    {
         return;
     }
-    let mut candidates = BTreeSet::new();
-    for (name, _) in files.iter() {
-        if let Some((first, _rest)) = name.split_once('/') {
-            candidates.insert(first.to_owned());
-        }
-    }
-    let obvious = ["dist", "build", "public", "_site", "out", "site"];
+    let candidates = files
+        .iter()
+        .filter_map(|(name, _)| name.split_once('/').map(|(first, _)| first.to_owned()))
+        .collect::<BTreeSet<_>>();
     let root = candidates
         .iter()
-        .find(|name| obvious.contains(&name.as_str()))
-        .cloned()
-        .or_else(|| (candidates.len() == 1).then(|| candidates.iter().next().cloned()).flatten());
+        .find(|name| {
+            ["dist", "build", "public", "_site", "out", "site"]
+                .contains(&name.to_ascii_lowercase().as_str())
+        })
+        .or_else(|| {
+            if candidates.len() == 1 {
+                candidates.first()
+            } else {
+                None
+            }
+        });
     let Some(root) = root else { return };
     let prefix = format!("{root}/");
-    if !files.iter().any(|(name, _)| name.starts_with(&prefix) && (name.ends_with("/index.html") || name == "index.html")) {
+    if !files.iter().any(|(name, _)| {
+        name.strip_prefix(&prefix)
+            .is_some_and(|rest| !rest.contains('/') && index_name(rest))
+    }) {
         return;
     }
-    let mut stripped = Vec::new();
-    for (name, bytes) in files.drain(..) {
-        if let Some(name) = name.strip_prefix(&prefix) {
-            stripped.push((name.to_owned(), bytes));
-        }
+    files.retain(|(name, _)| name.starts_with(&prefix));
+    for (name, _) in files {
+        *name = name[prefix.len()..].to_owned();
     }
-    *files = stripped;
 }
 
 /// Write the snapshot into a private temporary folder for the local static server.
 pub fn write_website_snapshot(folder: &Path, snapshot: &WebsiteSnapshot) -> Result<()> {
-    let root = folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf());
+    let root = folder
+        .canonicalize()
+        .unwrap_or_else(|_| folder.to_path_buf());
     for (name, bytes) in &snapshot.files {
         let Some(name) = safe_name(name) else {
             return Err(Error("An imported file has an unsafe name.".into()));
@@ -354,10 +584,8 @@ pub fn write_website_snapshot(folder: &Path, snapshot: &WebsiteSnapshot) -> Resu
 
 /// A private folder for one import; the caller removes it when another source is chosen.
 pub fn new_import_folder() -> Result<PathBuf> {
-    let folder = std::env::temp_dir().join(format!(
-        "desegnos-website-import-{}",
-        uuid::Uuid::new_v4()
-    ));
+    let folder =
+        std::env::temp_dir().join(format!("desegnos-website-import-{}", uuid::Uuid::new_v4()));
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]
@@ -367,4 +595,281 @@ pub fn new_import_folder() -> Result<PathBuf> {
     }
     builder.create(&folder).map_err(io)?;
     Ok(folder)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+
+    struct Fixture(PathBuf);
+    impl Fixture {
+        fn new() -> Self {
+            Self(new_import_folder().unwrap())
+        }
+        fn add(&self, name: &str, bytes: &[u8]) {
+            let path = self.0.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, bytes).unwrap();
+        }
+        fn snapshot(&self) -> WebsiteSnapshot {
+            collect_website_snapshot(&self.0).unwrap()
+        }
+    }
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
+    }
+
+    #[test]
+    fn website_snapshot_case_insensitive_home_and_directory_indexes() {
+        for home in [
+            "INDEX.HTM",
+            "Index.HTML",
+            "DEFAULT.HTM",
+            "Default.HTML",
+            "HOME.HTM",
+            "Home.HTML",
+        ] {
+            let site = Fixture::new();
+            site.add(home, b"<title>Home &amp; news</title>");
+            site.add("Articles/INDEX.HTM", b"<title>Articles</title>");
+            site.add("NEWS.HTM", b"<p>News</p>");
+            let snapshot = site.snapshot();
+            assert_eq!(snapshot.pages[0].route, "/");
+            assert_eq!(snapshot.pages[0].file, home);
+            assert_eq!(snapshot.pages[0].title, "Home & news");
+            assert!(snapshot.pages.iter().any(|p| p.route == "/Articles/"));
+            assert!(
+                snapshot
+                    .pages
+                    .iter()
+                    .any(|p| p.route == "/NEWS" && p.title == "NEWS")
+            );
+        }
+    }
+
+    #[test]
+    fn website_snapshot_frameset_home_promotes_main_once() {
+        for (frames, expected) in [
+            (
+                "<frame name='main' src='CONTENT.HTM'><frame src='menu.htm'>",
+                "content.htm",
+            ),
+            (
+                "<frame src='menu.htm'><frame src='content.htm'>",
+                "content.htm",
+            ),
+            (
+                "<frame name='BODY' src='content.htm'><frame src='menu.htm'>",
+                "content.htm",
+            ),
+        ] {
+            let site = Fixture::new();
+            site.add(
+                "INDEX.HTM",
+                format!("<frameset>{frames}</frameset>").as_bytes(),
+            );
+            site.add(
+                "content.htm",
+                b"<title>Main content</title><a href='next.htm'>Next</a>",
+            );
+            site.add("menu.htm", b"<p>Menu</p>");
+            site.add("next.htm", b"<p>Next</p>");
+            site.add("other.htm", b"<frameset><frame src='next.htm'></frameset>");
+            let snapshot = site.snapshot();
+            assert_eq!(snapshot.pages[0].route, "/");
+            assert_eq!(snapshot.pages[0].file, expected);
+            assert_eq!(snapshot.pages.len(), 3);
+            assert_eq!(
+                snapshot.pages.iter().filter(|p| p.file == expected).count(),
+                1
+            );
+            assert!(
+                !snapshot
+                    .pages
+                    .iter()
+                    .any(|p| p.file == "INDEX.HTM" || p.file == "other.htm")
+            );
+        }
+    }
+
+    #[test]
+    fn website_snapshot_legacy_titles_and_encoding_precedence() {
+        for prefix in [
+            "",
+            "<meta charset='windows-1252'>",
+            "<meta http-equiv='Content-Type' content='text/html; charset=windows-1252'>",
+        ] {
+            let html = [
+                prefix.as_bytes(),
+                b"<title>Article 1 \x96 Caf\xe9 news</title>",
+            ]
+            .concat();
+            let text = decode_html(&html);
+            let doc = dom_query::Document::from(text.as_str());
+            assert_eq!(page_title("ARTICLE.HTM", &doc), "Article 1 – Café news");
+        }
+        assert_eq!(
+            decode_html("<title>Café</title>".as_bytes()),
+            "<title>Café</title>"
+        );
+        assert_eq!(
+            decode_html(b"\xef\xbb\xbf<meta charset=windows-1252><title>Caf\xc3\xa9</title>"),
+            "<meta charset=windows-1252><title>Café</title>"
+        );
+        assert_eq!(decode_html(&[0xff, 0xfe, b'A', 0]), "A");
+        let site = Fixture::new();
+        site.add("INDEX.HTM", b"<title>Article 1 - Caf\xe9 news</title>");
+        assert_eq!(site.snapshot().pages[0].title, "Article 1 - Café news");
+    }
+
+    #[test]
+    fn website_snapshot_breadth_first_links_and_true_total() {
+        let site = Fixture::new();
+        site.add("INDEX.HTM", b"<a href='z.HTM?view=1#top'>Z</a><iframe src='dir/'></iframe><a href='https://elsewhere.invalid/a.htm'>External</a>");
+        site.add(
+            "Z.htm",
+            b"<a href='deep/../B.htm'>B</a><a href='INDEX.HTM'>Home</a>",
+        );
+        site.add(
+            "dir/DEFAULT.HTML",
+            b"<a href='../space%20page.htm'>Space</a>",
+        );
+        site.add("B.htm", b"<p>B</p>");
+        site.add("space page.htm", b"<p>Space</p>");
+        for index in 0..58 {
+            site.add(&format!("a{index:02}.htm"), b"<p>Unreachable</p>");
+        }
+        let pages = site.snapshot().pages;
+        assert_eq!(pages.len(), 63);
+        assert_eq!(
+            pages
+                .iter()
+                .take(5)
+                .map(|p| p.file.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "INDEX.HTM",
+                "Z.htm",
+                "dir/DEFAULT.HTML",
+                "B.htm",
+                "space page.htm"
+            ]
+        );
+        assert_eq!(pages[5].file, "a00.htm");
+    }
+
+    #[test]
+    fn website_snapshot_priority_and_size_limits_skip_without_failing() {
+        let mut candidates = vec![Candidate {
+            name: "INDEX.HTM".into(),
+            size: 20,
+            index: 0,
+        }];
+        for (name, size) in [
+            ("a.mp3", MAX_TOTAL_BYTES * 2),
+            ("big.pdf", MAX_TOTAL_BYTES),
+            ("z.css", 100),
+            ("z.gif", 100),
+            ("z.woff", 100),
+            ("z.js", 100),
+            ("huge.gif", MAX_FILE_BYTES + 1),
+        ] {
+            candidates.push(Candidate {
+                name: name.into(),
+                size,
+                index: 0,
+            });
+        }
+        for index in 0..20 {
+            candidates.push(Candidate {
+                name: format!("{index:02}.png"),
+                size: MAX_FILE_BYTES,
+                index: 0,
+            });
+        }
+        let mut skipped = Vec::new();
+        let selected = select_files(candidates, &mut skipped);
+        assert_eq!(selected[0].name, "INDEX.HTM");
+        assert_eq!(selected[1].name, "z.css");
+        assert!(selected.iter().map(|c| c.size).sum::<u64>() <= MAX_TOTAL_BYTES);
+        assert!(selected.iter().any(|c| c.name == "z.js"));
+        assert!(
+            !selected
+                .iter()
+                .any(|c| download(&c.name) || c.name == "huge.gif")
+        );
+        assert_eq!(skipped.len(), 2);
+    }
+
+    #[test]
+    fn website_snapshot_folder_and_zip_inventory_before_reading() {
+        let site = Fixture::new();
+        site.add("INDEX.HTM", b"<title>Home</title>");
+        // More than the old 4,000-entry limit, with more than 1,500 rendering files.
+        for index in 0..1800 {
+            site.add(&format!("a{index:04}.GIF"), b"gif");
+        }
+        for index in 0..2200 {
+            site.add(&format!("download{index:04}.MP3"), b"audio");
+        }
+        let folder = site.snapshot();
+        assert_eq!(folder.files.len(), MAX_FILES);
+        assert_eq!(folder.pages[0].file, "INDEX.HTM");
+        assert_eq!(folder.skipped.len(), 2);
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for entry in fs::read_dir(&site.0).unwrap() {
+            let path = entry.unwrap().path();
+            zip.start_file(
+                path.file_name().unwrap().to_str().unwrap(),
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+            zip.write_all(&fs::read(path).unwrap()).unwrap();
+        }
+        let archive = Fixture::new();
+        archive.add("website.ZIP", &zip.finish().unwrap().into_inner());
+        let zipped = collect_website_snapshot(&archive.0.join("website.ZIP")).unwrap();
+        assert_eq!(zipped.files, folder.files);
+        assert_eq!(zipped.pages, folder.pages);
+        assert_eq!(zipped.skipped, folder.skipped);
+    }
+
+    #[test]
+    fn website_snapshot_entry_limit_allows_exactly_fifty_thousand() {
+        let site = Fixture::new();
+        site.add("INDEX.HTM", b"<p>Home</p>");
+        let mut candidates = Vec::new();
+        let mut skipped = Vec::new();
+        let mut entries = MAX_ENTRIES - 1;
+        inventory_folder(
+            &site.0,
+            &site.0,
+            &mut candidates,
+            &mut skipped,
+            &mut entries,
+        )
+        .unwrap();
+        assert_eq!(entries, MAX_ENTRIES);
+        let error = inventory_folder(
+            &site.0,
+            &site.0,
+            &mut candidates,
+            &mut skipped,
+            &mut entries,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("50,000"));
+        assert!(error.to_string().contains("site folder itself"));
+    }
+
+    #[test]
+    fn website_snapshot_wrapped_uppercase_home() {
+        let site = Fixture::new();
+        site.add("old-site/HOME.HTM", b"<title>Old site</title>");
+        site.add("old-site/about.HTM", b"<p>About</p>");
+        assert_eq!(site.snapshot().pages[0].file, "HOME.HTM");
+    }
 }

@@ -72,6 +72,7 @@ export function WebsiteImport({ busy, onImported, close }: Props) {
     try {
       const view = await native<WebsiteImportSourceView>('prepare_website_import_url', { url: address.trim(), extractor: EXTRACTOR_SCRIPT });
       setSource(view);
+      setWarnings(view.skipped);
     } catch (reason) {
       setError(messageOf(reason));
     } finally {
@@ -84,7 +85,7 @@ export function WebsiteImport({ busy, onImported, close }: Props) {
     setError(''); setWarnings([]); setSource(null); setPhase('reading');
     try {
       const view = await native<WebsiteImportSourceView | null>('pick_website_import_source', { kind, extractor: EXTRACTOR_SCRIPT });
-      if (view) setSource(view);
+      if (view) { setSource(view); setWarnings(view.skipped); }
     } catch (reason) {
       setError(messageOf(reason));
     } finally {
@@ -106,17 +107,24 @@ export function WebsiteImport({ busy, onImported, close }: Props) {
   async function runImport() {
     if (!source || locked) return;
     stopped.current = false;
-    setError(''); setWarnings([]); setPhase('rendering');
+    setError(''); setWarnings(source.skipped); setPhase('rendering');
     const captures: WebCapture[] = [];
-    const notes: string[] = [];
+    const notes: string[] = [...source.skipped];
     const pages = source.pages.slice(0, 30);
     const total = pages.length * 2;
     setProgress({ done: 0, total, label: 'Rendering pages at 1440 px and 390 px…' });
     try {
       for (const [index, page] of pages.entries()) {
         setProgress({ done: index * 2, total, label: `Rendering ${page.title || page.route}…` });
-        const desktop = await capturePage(page, 1440);
-        captures.push(desktop);
+        try {
+          captures.push(await capturePage(page, 1440));
+        } catch (reason) {
+          if (stopped.current) throw reason;
+          const note = `${page.title || page.route} (${page.route}): skipped because it could not render. ${messageOf(reason)}`;
+          notes.push(note);
+          setWarnings(items => [...items, note]);
+          continue;
+        }
         setProgress({ done: index * 2 + 1, total, label: `Rendering ${page.title || page.route} on a phone…` });
         try {
           captures.push(await capturePage(page, 390));
@@ -128,6 +136,7 @@ export function WebsiteImport({ busy, onImported, close }: Props) {
           setWarnings(items => [...items, note]);
         }
       }
+      if (!captures.length) throw new Error('No page could be rendered.');
       setPhase('applying');
       setProgress({ done: total, total, label: 'Adding pages to the canvas…' });
       const result = await native<WebsiteImportResultView>('import_website_pages', { captures });
@@ -164,10 +173,9 @@ export function WebsiteImport({ busy, onImported, close }: Props) {
       <p className="field-help">Pages are read from your computer or the public website. Their code does not run during the import.</p>
     </form>
     {source && <section className="website-import-pages" aria-label="Pages to import">
-      <div className="website-import-heading"><div><strong>{source.name}</strong><p className="field-help">{source.pages.length} {source.pages.length === 1 ? 'page' : 'pages'} found. Each becomes a webpage boundary.</p></div>
+      <div className="website-import-heading"><div><strong>{source.name}</strong><p className="field-help">{source.totalPages} {source.totalPages === 1 ? 'page' : 'pages'} found.{source.totalPages > 30 ? ' The 30 closest to the home page are imported.' : ''}</p></div>
         <button type="button" disabled={locked} onClick={() => { void cancel(); }}>Choose another</button></div>
       <ul className="website-import-list">{source.pages.slice(0, 30).map(page => <li key={page.route}>{page.title ? <><span>{page.title}</span> <span className="muted">{page.route}</span></> : <span>{page.route}</span>}</li>)}</ul>
-      {source.pages.length > 30 && <p className="field-help">Only the first 30 pages are imported.</p>}
       <div className="form-actions"><button className="primary" disabled={locked} onClick={() => { void runImport(); }}>Import {Math.min(source.pages.length, 30) > 1 ? `${Math.min(source.pages.length, 30)} pages` : 'page'}</button>
         {working && phase !== 'applying' && <button type="button" disabled={busy} onClick={() => { void cancel(); }}>Stop</button>}</div>
     </section>}

@@ -7,6 +7,7 @@
 use crate::local_site::ImportSite;
 use crate::workspace::Workspace;
 use base64::{Engine, engine::general_purpose::STANDARD};
+use desegnos_ai::WebUrl as Url;
 use desegnos_core::WebCapture;
 use desegnos_storage::{
     WebsiteSnapshot, collect_website_snapshot, new_import_folder, write_website_snapshot,
@@ -20,7 +21,6 @@ use std::{
 };
 use tauri::{AppHandle, State, WebviewWindow};
 use tauri_plugin_dialog::DialogExt;
-use desegnos_ai::WebUrl as Url;
 use uuid::Uuid;
 
 type NativeResult<T> = Result<T, String>;
@@ -51,6 +51,7 @@ struct ImportSource {
 }
 
 struct ImportPage {
+    file: String,
     route: String,
     title: String,
 }
@@ -93,6 +94,8 @@ pub struct WebsiteImportView {
     base_url: String,
     extractor_url: String,
     pages: Vec<WebsiteImportPageView>,
+    total_pages: usize,
+    skipped: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -120,6 +123,15 @@ fn extractor_html(script: &str) -> String {
     )
 }
 
+fn page_url(base_url: &str, file: &str) -> String {
+    let mut url = Url::parse(base_url).expect("local server URL");
+    url.path_segments_mut()
+        .expect("local server path")
+        .pop_if_empty()
+        .extend(file.split('/'));
+    url.to_string()
+}
+
 fn install(
     state: &Mutex<WebsiteImportState>,
     snapshot: WebsiteSnapshot,
@@ -127,8 +139,11 @@ fn install(
 ) -> NativeResult<WebsiteImportView> {
     let folder = new_import_folder().map_err(message)?;
     write_website_snapshot(&folder, &snapshot).map_err(message)?;
-    fs::write(folder.join("__desegnos_extract.html"), extractor_html(extractor))
-        .map_err(message)?;
+    fs::write(
+        folder.join("__desegnos_extract.html"),
+        extractor_html(extractor),
+    )
+    .map_err(message)?;
     let name = snapshot.name.clone();
     let mut seen_routes = BTreeSet::new();
     let mut pages = snapshot
@@ -139,10 +154,12 @@ fn install(
             seen_routes.insert(if key.is_empty() { "/".into() } else { key })
         })
         .map(|page| ImportPage {
+            file: page.file.clone(),
             route: page.route.clone(),
             title: page.title.clone(),
         })
         .collect::<Vec<_>>();
+    let total_pages = pages.len();
     pages.truncate(30);
     let mut state = state.lock().map_err(message)?;
     state.clear();
@@ -154,6 +171,8 @@ fn install(
     let view = WebsiteImportView {
         id,
         name: name.clone(),
+        total_pages,
+        skipped: snapshot.skipped.clone(),
         base_url: base_url.clone(),
         extractor_url: format!("{base_url}__desegnos_extract.html"),
         pages: pages
@@ -161,7 +180,7 @@ fn install(
             .map(|page| WebsiteImportPageView {
                 route: page.route.clone(),
                 title: page.title.clone(),
-                url: format!("{base_url}{}", page.route.trim_start_matches('/')),
+                url: page_url(&base_url, &page.file),
             })
             .collect(),
     };
@@ -198,6 +217,16 @@ pub async fn prepare_website_import_url(
                 .pages
                 .into_iter()
                 .map(|page| desegnos_storage::WebsitePage {
+                    file: {
+                        let route = page.route.trim_start_matches('/');
+                        if route.is_empty() || route.ends_with('/') {
+                            format!("{route}index.html")
+                        } else if route.ends_with(".html") || route.ends_with(".htm") {
+                            route.to_owned()
+                        } else {
+                            format!("{route}.html")
+                        }
+                    },
                     route: page.route,
                     title: page.title,
                 })
@@ -227,7 +256,9 @@ pub async fn pick_website_import_source(
                 .blocking_pick_file()
                 .map(|path| vec![path]),
         })?;
-        let Some(picked) = picked else { return Ok(None) };
+        let Some(picked) = picked else {
+            return Ok(None);
+        };
         let path = picked
             .into_iter()
             .next()
@@ -278,7 +309,9 @@ fn decode_path(path: &str) -> Option<String> {
     if value.is_empty()
         || value.contains(['\\', '\0'])
         || value.chars().any(char::is_control)
-        || value.split('/').any(|part| part.is_empty() || part == "." || part == "..")
+        || value
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
     {
         return None;
     }
@@ -288,7 +321,10 @@ fn decode_path(path: &str) -> Option<String> {
 fn local_image(folder: &Path, base_url: &str, source: &str) -> Option<Vec<u8>> {
     let url = Url::parse(source).ok()?;
     let base = Url::parse(base_url).ok()?;
-    let rest = url.path().strip_prefix(base.path())?.trim_start_matches('/');
+    let rest = url
+        .path()
+        .strip_prefix(base.path())?
+        .trim_start_matches('/');
     let path = decode_path(rest)?;
     let mut file = folder.to_path_buf();
     for part in path.split('/') {
@@ -343,20 +379,15 @@ pub async fn import_website_pages(
         (
             source.folder.clone(),
             source.base_url.clone(),
-            source.pages.iter().map(|page| page.route.clone()).collect::<Vec<_>>(),
+            source
+                .pages
+                .iter()
+                .map(|page| (page_url(&source.base_url, &page.file), page.route.clone()))
+                .collect::<BTreeMap<_, _>>(),
         )
     };
-    let allowed = pages.into_iter().collect::<BTreeSet<_>>();
     for capture in &captures {
-        let Some(rest) = capture.url.strip_prefix(&base_url) else {
-            return Err("A captured page is not part of the website being imported.".into());
-        };
-        let route = if rest.is_empty() {
-            "/".to_owned()
-        } else {
-            format!("/{rest}")
-        };
-        if !allowed.contains(&route) {
+        if pages.get(&capture.url) != Some(&capture.route) {
             return Err("A captured page is not part of the website being imported.".into());
         }
     }
@@ -381,7 +412,9 @@ pub async fn import_website_pages(
         let resolved = if source.starts_with("data:image/") {
             parse_data_uri(&source)
         } else if source.starts_with(&base_url) {
-            let path = Url::parse(&source).map(|url| url.path().to_owned()).unwrap_or_else(|_| source.clone());
+            let path = Url::parse(&source)
+                .map(|url| url.path().to_owned())
+                .unwrap_or_else(|_| source.clone());
             local_image(&folder, &base_url, &source)
                 .and_then(|bytes| image_mime(&path).map(|mime| (mime.to_owned(), bytes)))
         } else {
@@ -406,7 +439,8 @@ pub async fn import_website_pages(
             break;
         }
         let uri = data_uri(&mime, &bytes);
-        let (picture, stored) = desegnos_core::Project::prepare_picture(&uri, 1440).map_err(message)?;
+        let (picture, stored) =
+            desegnos_core::Project::prepare_picture(&uri, 1440).map_err(message)?;
         picture_ids.insert(source, picture);
         pictures.insert(picture, stored);
     }
@@ -416,13 +450,10 @@ pub async fn import_website_pages(
         .project()
         .map_err(message)?
         .clone();
-    let imported = desegnos_core::import_website(&captures, &picture_ids, &project).map_err(message)?;
+    let imported =
+        desegnos_core::import_website(&captures, &picture_ids, &project).map_err(message)?;
     let page_count = imported.pages.len();
-    let layers = imported
-        .pages
-        .iter()
-        .map(element_count)
-        .sum::<usize>();
+    let layers = imported.pages.iter().map(element_count).sum::<usize>();
     warnings.extend(imported.warnings.iter().cloned());
     let picture_count = pictures.len();
     let view = workspace

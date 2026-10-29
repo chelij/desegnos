@@ -243,5 +243,5 @@ export type WebNode = { tag: string; rect: Rect; text?: string | null; src?: str
   attributes: WebNodeAttributes; styles: WebNodeStyles; children: WebNode[] };
 export type WebCapture = { url: string; site?: string; route?: string; title: string; width: number; height: number; nodes: WebNode[]; scripts: WebScript[] };
 export type WebsiteImportPageView = { route: string; title: string; url: string };
-export type WebsiteImportSourceView = { id: string; name: string; baseUrl: string; extractorUrl: string; pages: WebsiteImportPageView[] };
+export type WebsiteImportSourceView = { id: string; name: string; baseUrl: string; extractorUrl: string; totalPages: number; skipped: string[]; pages: WebsiteImportPageView[] };
 export type WebsiteImportResultView = { workspace: WorkspaceView; pages: number; layers: number; pictures: number; warnings: string[] };
