@@ -583,6 +583,25 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
             css.set(format!("max-{axis}"), length(value));
         }
     }
+    if sizing.width == crate::SizingMode::Fit && matches!(
+        element.kind,
+        ElementKind::Text | ElementKind::Button | ElementKind::Link | ElementKind::Input { .. }
+            | ElementKind::Textarea | ElementKind::Select { .. } | ElementKind::Checkbox | ElementKind::Radio
+    ) {
+        let available = if free {
+            format!("max(0px, calc(100% - {}))", length(rect.x))
+        } else {
+            "100%".into()
+        };
+        css.set("min-width", sizing.min_width.map_or_else(
+            || "0".into(),
+            |min| format!("min({}, {available})", length(min)),
+        ));
+        css.set("max-width", sizing.max_width.map_or_else(
+            || available.clone(),
+            |max| format!("min({}, {available})", length(max)),
+        ));
+    }
     if main_fill {
         css.set("flex", "1 1 0");
     } else {
@@ -1567,6 +1586,28 @@ mod tests {
         output.clear();
         rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
         assert!(output[&child.id].block().contains(&format!("padding:{};", length(6.0))));
+    }
+
+    #[test]
+    fn fit_text_css_caps_width_at_the_container_edge() {
+        let mut element = crate::empty_element(ElementKind::Text, Rect { x: 104.0, y: 0.0, width: 800.0, height: 60.0 });
+        element.style.sizing.width = crate::SizingMode::Fit;
+        element.style.sizing.height = crate::SizingMode::Fit;
+        let mut fonts = Fonts::default();
+        let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
+        assert!(css.contains("width:max-content;"));
+        assert!(css.contains("height:auto;"));
+        assert!(css.contains(&format!("max-width:max(0px, calc(100% - {}));", length(104.0))), "{css}");
+        element.style.sizing.max_width = Some(200.0);
+        let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
+        assert!(css.contains(&format!("max-width:min({}, max(0px, calc(100% - {})));", length(200.0), length(104.0))), "{css}");
+        let parent = ElementLayout::Stack { direction: StackDirection::Column, gap: 0.0, padding: 20.0, align: crate::StackAlign::Start, justify: crate::StackJustify::Start, wrap: false };
+        let css = declarations(&element, &parent, &mut fonts).block();
+        assert!(css.contains(&format!("max-width:min({}, 100%);", length(200.0))), "{css}");
+        element.style.sizing.width = crate::SizingMode::Fixed;
+        let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
+        assert!(css.contains(&format!("width:{};", length(800.0))));
+        assert!(css.contains(&format!("max-width:{};", length(200.0))));
     }
 
     #[test]

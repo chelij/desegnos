@@ -595,7 +595,7 @@ fn paint_element(
     if opacity <= 0.0 {
         return;
     }
-    let at = resolve_auto_size(fonts, element, at);
+    let at = resolve_auto_size(fonts, element, at, at.width);
     // A line carries no height; every other element needs a real box to draw in.
     if at.width <= 0.0 || (at.height <= 0.0 && element.kind != ElementKind::Line) {
         return;
@@ -787,7 +787,7 @@ fn sized_in(fonts: &mut FontSet, element: &Element, parent: Rect) -> Rect {
     if element.style.sizing.height == crate::SizingMode::Fill {
         rect.height = (parent.height - rect.y).max(0.0);
     }
-    resolve_auto_size(fonts, element, rect)
+    resolve_auto_size(fonts, element, rect, (parent.width - rect.x).max(0.0))
 }
 
 fn paint_children(
@@ -827,7 +827,7 @@ fn paint_children(
             let cross_extent = if row { inner.height } else { inner.width };
             let mut rects: Vec<_> = children
                 .iter()
-                .map(|child| resolve_auto_size(fonts, child, child.rect))
+                .map(|child| resolve_auto_size(fonts, child, child.rect, inner.width))
                 .collect();
             let fill = |index: usize| if row { children[index].style.sizing.width } else { children[index].style.sizing.height } == crate::SizingMode::Fill;
             let main = |rect: Rect| if row { rect.width } else { rect.height };
@@ -950,7 +950,7 @@ fn paint_children(
                 .map(|row| {
                     row.iter()
                         .filter(|child| child.style.sizing.height != crate::SizingMode::Fill)
-                        .map(|child| resolve_auto_size(fonts, child, child.rect).height)
+                        .map(|child| resolve_auto_size(fonts, child, child.rect, width).height)
                         .fold(0.0_f64, f64::max)
                 })
                 .collect();
@@ -963,7 +963,7 @@ fn paint_children(
             for (row_index, row) in children.chunks(columns).enumerate() {
                 let rects: Vec<_> = row
                     .iter()
-                    .map(|child| resolve_auto_size(fonts, child, child.rect))
+                    .map(|child| resolve_auto_size(fonts, child, child.rect, width))
                     .collect();
                 let height = natural[row_index] + extra;
                 for (column, (child, mut rect)) in row.iter().zip(rects).enumerate() {
@@ -1004,6 +1004,20 @@ fn effective_padding(element: &Element, fallback: f64) -> crate::ElementPadding 
         bottom: fallback,
         left: fallback,
     })
+}
+
+/// Space offered to children, including borders, layout padding and grid column widths.
+fn child_content_rect(element: &Element, at: Rect) -> Rect {
+    let content = inset(at, stroke_of(&element.style).map_or(0.0, |(_, width)| width));
+    match element.layout {
+        ElementLayout::Free => content,
+        ElementLayout::Stack { padding, .. } => inset_sides(content, effective_padding(element, padding)),
+        ElementLayout::Grid { columns, gap, padding } => {
+            let mut inner = inset_sides(content, effective_padding(element, padding));
+            inner.width = ((inner.width - gap * columns.saturating_sub(1) as f64) / columns as f64).max(0.0);
+            inner
+        }
+    }
 }
 
 /// A rect shrunk by each named side, never below zero.
@@ -1073,7 +1087,8 @@ fn text_of(element: &Element) -> Option<&str> {
 fn wraps(kind: &ElementKind) -> bool {
     !matches!(
         kind,
-        ElementKind::Button
+        ElementKind::Input { .. }
+            | ElementKind::Button
             | ElementKind::Link
             | ElementKind::Select { .. }
             | ElementKind::Checkbox
@@ -1086,9 +1101,14 @@ fn line_height(style: &ElementTextStyle) -> f64 {
     (style.size * style.line_height).max(style.size)
 }
 
-/// An element with no explicit size takes the size its own text needs, like the canvas's
-/// `max-content` width and automatic height.
-fn resolve_auto_size(fonts: &mut FontSet, element: &Element, mut at: Rect) -> Rect {
+/// Hug text takes its natural width up to the available container space, then wraps before
+/// measuring automatic height. Fixed widths keep their editing intent.
+fn resolve_auto_size(
+    fonts: &mut FontSet,
+    element: &Element,
+    mut at: Rect,
+    available_width: f64,
+) -> Rect {
     let sizing = &element.style.sizing;
     let fit_width = sizing.width == crate::SizingMode::Fit;
     let fit_height = sizing.height == crate::SizingMode::Fit;
@@ -1102,19 +1122,39 @@ fn resolve_auto_size(fonts: &mut FontSet, element: &Element, mut at: Rect) -> Re
                 .max(1.0);
         }
         at.width = sizing.constrain(at.width, at.height).0;
+        if fit_width {
+            at.width = at.width.min(available_width.max(0.0));
+        }
         if at.height <= 0.0 || fit_height {
-            at.height = (wrap_text(fonts, text, style, at.width, wraps(&element.kind))
+            let width = if fit_width {
+                let content = inset(at, stroke_of(&element.style).map_or(0.0, |(_, width)| width));
+                text_box(element, content).0.width
+            } else {
+                at.width
+            };
+            at.height = (wrap_text(fonts, text, style, width, wraps(&element.kind))
                 .len()
                 .max(1) as f64
                 * line_height(style))
             .max(1.0);
         }
     } else if fit_width || fit_height {
+        // A Hug parent has no definite width yet: use its containing space rather than its
+        // previous stored width, so edits can both grow and shrink the intrinsic content.
+        let offered = if fit_width {
+            Rect { width: sizing.max_width.map_or(available_width, |max| max.min(available_width)), ..at }
+        } else {
+            at
+        };
+        let inner = child_content_rect(element, offered);
         let children: Vec<_> = element
             .children
             .iter()
             .filter(|c| c.visible)
-            .map(|c| resolve_auto_size(fonts, c, c.rect))
+            .map(|c| {
+                let offset = if element.layout.is_free() { c.rect.x } else { 0.0 };
+                resolve_auto_size(fonts, c, c.rect, (inner.width - offset).max(0.0))
+            })
             .collect();
         let (width, height) = match &element.layout {
             ElementLayout::Free => (
@@ -1179,6 +1219,9 @@ fn resolve_auto_size(fonts: &mut FontSet, element: &Element, mut at: Rect) -> Re
         }
     }
     (at.width, at.height) = sizing.constrain(at.width, at.height);
+    if fit_width && text_of(element).is_some() {
+        at.width = at.width.min(available_width.max(0.0));
+    }
     at
 }
 
@@ -1212,15 +1255,18 @@ pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
     {
         return false;
     }
-    fn measure_tree(fonts: &mut FontSet, elements: &mut [Element]) {
+    fn measure_tree(fonts: &mut FontSet, elements: &mut [Element], parent: Rect, flow: bool) {
         for element in elements {
-            measure_tree(fonts, &mut element.children);
-            if element.style.sizing.width != crate::SizingMode::Fit
-                && element.style.sizing.height != crate::SizingMode::Fit
-            {
-                continue;
-            }
-            let rect = resolve_auto_size(fonts, element, element.rect);
+            let available = (parent.width - if flow { 0.0 } else { element.rect.x }).max(0.0);
+            let mut rect = if flow {
+                resolve_auto_size(fonts, element, element.rect, available)
+            } else {
+                sized_in(fonts, element, parent)
+            };
+            let inner = child_content_rect(element, rect);
+            measure_tree(fonts, &mut element.children, inner, !element.layout.is_free());
+            // Children may have grown taller after wrapping; remeasure Hug parents afterwards.
+            rect = resolve_auto_size(fonts, element, rect, available);
             if element.style.sizing.width == crate::SizingMode::Fit {
                 element.rect.width = rect.width;
             }
@@ -1272,7 +1318,7 @@ pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
                     project, std::slice::from_ref(&definition.master),
                 );
                 crate::elements::resolve_shared_styles(project, &mut elements);
-                measure_tree(fonts, &mut elements);
+                measure_tree(fonts, &mut elements, Rect { x: 0.0, y: 0.0, width: f64::INFINITY, height: f64::INFINITY }, false);
                 (*id, elements)
             })
             .collect();
@@ -1285,13 +1331,13 @@ pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
             let page = &project.pages[index];
             let mut base = crate::elements::resolve_elements(project, &page.elements);
             crate::elements::resolve_shared_styles(project, &mut base);
-            measure_tree(fonts, &mut base);
+            measure_tree(fonts, &mut base, Rect { x: 0.0, y: 0.0, width: page.base_size().width as f64, height: page.base_size().height as f64 }, false);
             let sizes: Vec<_> = page
                 .sizes
                 .iter()
                 .map(|size| {
                     let mut elements = crate::elements::resolve_for_size(project, page, size.id);
-                    measure_tree(fonts, &mut elements);
+                    measure_tree(fonts, &mut elements, Rect { x: 0.0, y: 0.0, width: size.width as f64, height: size.height as f64 }, false);
                     (size.id, elements)
                 })
                 .collect();
@@ -2444,6 +2490,72 @@ mod tests {
     }
 
     #[test]
+    fn fit_text_wraps_at_boundary_and_syncs_the_painted_size() {
+        let mut project = Project::new("Phone".into(), crate::Viewport { width: 390, height: 844 }, crate::Appearance::Dark).unwrap();
+        let mut heading = text_element("Archivo");
+        heading.rect = rect(104.0, 0.0, 800.0, 60.0);
+        heading.text = "A heading that wraps inside the phone boundary".into();
+        heading.style.text_style.size = 48.0;
+        heading.style.sizing.width = crate::SizingMode::Fit;
+        heading.style.sizing.height = crate::SizingMode::Fit;
+        project.pages[0].elements = vec![heading];
+        assert!(sync_fit_rects(&mut project));
+        let heading = &project.pages[0].elements[0];
+        assert_eq!(heading.rect.width, 286.0);
+        let mut fonts = FontSet::new();
+        let lines = wrap_text(&mut fonts, &heading.text, &heading.style.text_style, 286.0, true);
+        assert!(lines.len() > 1);
+        assert_eq!(heading.rect.height, lines.len() as f64 * line_height(&heading.style.text_style));
+        let painted = sized_in(&mut fonts, heading, rect(0.0, 0.0, 390.0, 844.0));
+        assert_eq!(painted, heading.rect);
+        assert_eq!(resolve_auto_size(&mut fonts, heading, painted, painted.width), painted);
+        let page = &project.pages[0];
+        let svg = boundary_svg(&project, page, page.base_size_id()).unwrap();
+        let mut fixed_project = project.clone();
+        fixed_project.pages[0].elements[0].style.sizing.width = crate::SizingMode::Fixed;
+        fixed_project.pages[0].elements[0].style.sizing.height = crate::SizingMode::Fixed;
+        let page = &fixed_project.pages[0];
+        assert_eq!(svg, boundary_svg(&fixed_project, page, page.base_size_id()).unwrap());
+        let before = project.pages[0].elements[0].rect;
+        sync_fit_rects(&mut project);
+        assert_eq!(project.pages[0].elements[0].rect, before);
+
+        // Free boxes subtract the child offset; stacks use their padded content width.
+        let mut parent = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 240.0, 600.0));
+        parent.children = project.pages[0].elements.clone();
+        project.pages[0].elements = vec![parent];
+        sync_fit_rects(&mut project);
+        assert_eq!(project.pages[0].elements[0].children[0].rect.width, 136.0);
+        project.pages[0].elements[0].layout = ElementLayout::Stack {
+            direction: crate::StackDirection::Column, gap: 0.0, padding: 20.0,
+            align: StackAlign::Start, justify: StackJustify::Start, wrap: false,
+        };
+        sync_fit_rects(&mut project);
+        assert_eq!(project.pages[0].elements[0].children[0].rect.width, 200.0);
+
+        project.pages[0].elements[0].style.sizing.width = crate::SizingMode::Fit;
+        project.pages[0].elements[0].style.sizing.height = crate::SizingMode::Fit;
+        project.pages[0].elements[0].style.sizing.max_width = Some(160.0);
+        sync_fit_rects(&mut project);
+        let parent = &project.pages[0].elements[0];
+        assert_eq!(parent.rect.width, 160.0);
+        assert_eq!(parent.children[0].rect.width, 120.0);
+        assert_eq!(parent.rect.height, parent.children[0].rect.height + 40.0);
+
+        for kind in [ElementKind::Button, ElementKind::Link, ElementKind::Input { input_type: crate::InputType::Text }] {
+            let mut control = project.pages[0].elements[0].children[0].clone();
+            control.kind = kind;
+            let measured = sized_in(&mut fonts, &control, rect(0.0, 0.0, 390.0, 844.0));
+            assert_eq!(measured.width, 286.0);
+            assert_eq!(measured.height, line_height(&control.style.text_style));
+        }
+        let mut fixed = project.pages[0].elements[0].children[0].clone();
+        fixed.style.sizing.width = crate::SizingMode::Fixed;
+        fixed.rect.width = 800.0;
+        assert_eq!(sized_in(&mut fonts, &fixed, rect(0.0, 0.0, 390.0, 844.0)).width, 800.0);
+    }
+
+    #[test]
     fn fill_reaches_parent_edge_and_hug_uses_child_bounds_with_limits() {
         let mut fonts = FontSet::new();
         let mut child = crate::empty_element(ElementKind::Box, rect(20.0, 10.0, 40.0, 30.0));
@@ -2456,10 +2568,10 @@ mod tests {
         parent.style.sizing.width = crate::SizingMode::Fit;
         parent.style.sizing.height = crate::SizingMode::Fit;
         parent.children.push(child);
-        let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect);
+        let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect, f64::INFINITY);
         assert_eq!((hugged.width, hugged.height), (60.0, 40.0));
         parent.layout = ElementLayout::Stack { direction: crate::StackDirection::Row, gap: 8.0, padding: 4.0, align: StackAlign::Start, justify: StackJustify::Start, wrap: false };
-        let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect);
+        let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect, f64::INFINITY);
         assert_eq!((hugged.width, hugged.height), (48.0, 38.0));
     }
 
@@ -2514,7 +2626,7 @@ mod tests {
             child.style.fill = Some("#000000".into());
         }
         parent.children = vec![first, second];
-        let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect);
+        let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect, f64::INFINITY);
         assert_eq!(
             (hugged.width, hugged.height),
             (80.0, 48.0),
@@ -2546,7 +2658,7 @@ mod tests {
         );
 
         parent.style.padding = None;
-        let uniform = resolve_auto_size(&mut fonts, &parent, parent.rect);
+        let uniform = resolve_auto_size(&mut fonts, &parent, parent.rect, f64::INFINITY);
         assert_eq!(
             (uniform.width, uniform.height),
             (44.0, 40.0),
@@ -2559,7 +2671,7 @@ mod tests {
         let mut fonts = FontSet::new();
         let mut element = text_element("Archivo");
         element.rect = rect(0.0, 0.0, 0.0, 0.0);
-        let at = resolve_auto_size(&mut fonts, &element, element.rect);
+        let at = resolve_auto_size(&mut fonts, &element, element.rect, f64::INFINITY);
         assert!(at.width > 1.0, "{at:?}");
         assert!(at.height > element.style.text_style.size, "{at:?}");
     }

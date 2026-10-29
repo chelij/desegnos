@@ -6,6 +6,7 @@ import { compileModules, root } from './typescript.mjs';
 
 const modules = await compileModules([
   'src/projectCanvas/canvasView.ts',
+  'src/projectCanvas/elements.tsx',
   'src/projectCanvas/arrange.ts',
   'src/projectCanvas/sizes.ts',
   'src/projectCanvas/links.ts',
@@ -58,6 +59,22 @@ try {
     homePageId: pages[0]?.id ?? 'home', pages, reference: [], pointers: [], linked: {},
     brief: { purpose: '', audience: '', brandName: '', tone: '' }, latestGeneration: null,
     decisions: [], exceptions: [], appliedJobIds: [], extensions: {}, ...patch,
+  });
+
+  const { wrapperStyle } = await modules.load('projectCanvas/elements.js');
+  await test('Hug text and controls cap their width at the containing edge', () => {
+    for (const kind of ['text', 'button', 'link', 'input']) {
+      const element = makeElement('heading', { kind, rect: { x: 104, y: 0, width: 800, height: 60 } });
+      element.style.sizing = { width: 'fit', height: 'fit' };
+      assert.equal(wrapperStyle(element, false, element.rect).width, 'max-content');
+      assert.equal(wrapperStyle(element, false, element.rect).maxWidth, 'max(0px, calc(100% - 104px))');
+      assert.equal(wrapperStyle(element, true, element.rect).maxWidth, '100%');
+      element.style.sizing.maxWidth = 200;
+      assert.equal(wrapperStyle(element, false, element.rect).maxWidth, 'min(200px, max(0px, calc(100% - 104px)))');
+      element.style.sizing.width = 'fixed';
+      assert.equal(wrapperStyle(element, false, element.rect).width, 800);
+      assert.equal(wrapperStyle(element, false, element.rect).maxWidth, 200);
+    }
   });
 
   await test('new text and shapes use readable defaults for the boundary background', () => {

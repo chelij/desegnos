@@ -40,12 +40,14 @@ function shadowCss(shadow: Element['style']['shadow']): string | undefined {
   return shadow.color ? `${shadow.x}px ${shadow.y}px ${shadow.blur}px 0 ${shadow.color}` : undefined;
 }
 
-function wrapperStyle(element: Element, flow: boolean, rect: Rect, parentLayout?: Element['layout']): CSSProperties {
+export function wrapperStyle(element: Element, flow: boolean, rect: Rect, parentLayout?: Element['layout']): CSSProperties {
   const style = element.style;
   const line = element.kind === 'line';
   const plain = element.kind === 'group';
   const autoText = (element.kind === 'text' || element.kind === 'button' || element.kind === 'link') && rect.width === 0;
   const sizing = style.sizing;
+  const fitText = sizing?.width === 'fit' && isTextKind(element.kind);
+  const availableWidth = flow ? '100%' : `max(0px, calc(100% - ${rect.x}px))`;
   const row = parentLayout?.kind === 'stack' && parentLayout.direction === 'row';
   const mainFill = parentLayout?.kind === 'stack' && (row ? sizing?.width : sizing?.height) === 'fill';
   const axis = (mode: string | undefined, fixed: number, offset: number, horizontal: boolean): CSSProperties['width'] => {
@@ -62,7 +64,8 @@ function wrapperStyle(element: Element, flow: boolean, rect: Rect, parentLayout?
   const size = {
     width: line && (sizing?.width ?? 'fixed') === 'fixed' ? Math.max(1, rect.width) : axis(sizing?.width, rect.width, rect.x, true),
     height: line && (sizing?.height ?? 'fixed') === 'fixed' ? Math.max(1, rect.height) : axis(sizing?.height, rect.height, rect.y, false),
-    minWidth: sizing?.minWidth ?? (sizing?.width === 'fill' ? 0 : undefined), maxWidth: sizing?.maxWidth ?? undefined,
+    minWidth: fitText ? sizing?.minWidth == null ? 0 : `min(${sizing.minWidth}px, ${availableWidth})` : sizing?.minWidth ?? (sizing?.width === 'fill' ? 0 : undefined),
+    maxWidth: fitText ? sizing?.maxWidth == null ? availableWidth : `min(${sizing.maxWidth}px, ${availableWidth})` : sizing?.maxWidth ?? undefined,
     minHeight: sizing?.minHeight ?? (sizing?.height === 'fill' ? 0 : undefined), maxHeight: sizing?.maxHeight ?? undefined,
     background: line || plain ? undefined : style.fill ?? undefined,
     borderColor: line || plain ? undefined : style.stroke.color ?? undefined,
