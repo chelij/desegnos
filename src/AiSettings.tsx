@@ -149,7 +149,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           {usesChatgpt && view.chatgpt.accounts.length > 1 && <select aria-label="ChatGPT account" className="ai-account-switcher" value={view.chatgpt.activeAccountId ?? ''} disabled={busy || pending} onChange={event => { if (event.target.value) void action('select_chatgpt_account', { accountId: event.target.value }); }}>
             {!account && <option value="" disabled>Choose account</option>}{view.chatgpt.accounts.map((item, index) => <option key={item.id} value={item.id}>{item.email ?? item.label}{view.chatgpt.accounts.filter(other => (other.email ?? other.label) === (item.email ?? item.label)).length > 1 ? ` (${index + 1})` : ''}{!item.connected ? ' · Not connected' : !item.planEnabled ? ' · Plan permission needed' : ''}</option>)}
           </select>}
-          <MenuButton className="ai-account-options" align="end" reserveSpace label={<Icon name="more" />} ariaLabel="Account options" title={canTest ? 'Account options' : testHelp} showChevron={false} items={[
+          <MenuButton className="ai-account-options" align="end" label={<Icon name="more" />} ariaLabel="Account options" title={canTest ? 'Account options' : testHelp} showChevron={false} items={[
             ...(usesChatgpt ? [
               { id: 'add', label: 'Add account', disabled: busy || pending, action: () => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: null }); } },
               ...(account ? [{ id: 'reconnect', label: 'Reconnect', disabled: busy || pending, action: () => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: account.id }); } }] : []),

@@ -90,6 +90,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [requestToolShape, setRequestToolShape] = useState<RequestToolShape>('pick');
   const [canvasSelection, setCanvasSelection] = useState<CanvasTarget[]>([]);
   const [canvasFocus, setCanvasFocus] = useState<string | null>(null);
+  const [widthPreview, setWidthPreview] = useState<{ sizeId: string; width: number } | null>(null);
   const [canvasFocusSize, setCanvasFocusSize] = useState<string | null>(null);
 
   const [canvasZoom, setCanvasZoom] = useState(1);
@@ -816,6 +817,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     dismiss: () => setPendingRecovery(null),
   } : null;
   const selectedBoundary = canvasFocus ? project?.pages.find(item => item.id === canvasFocus) ?? null : null;
+  useEffect(() => setWidthPreview(null), [project?.id, project?.revision, canvasFocus, canvasFocusSize, canvasSelection]);
   const selectedReferenceItem = canvasSelection.length === 1 && canvasSelection[0].kind === 'reference'
     ? project?.reference.find(item => item.id === (canvasSelection[0] as { kind: 'reference'; itemId: string }).itemId) ?? null
     : null;
@@ -908,7 +910,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     forgetRecent, pinRecent, recover, dismissRecoveries, canvasTool, chooseTool, canvasZoom, canvasRef,
     boundaryKind, setBoundaryKind, requestToolShape, setRequestToolShape, armInsert, insertSignal,
     selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, saveCanvasPlacements, addNamedViewAt, saveCurrentView,
-    canvasSelection, canvasFocus, canvasFocusSize, selectCanvasReference, selectCanvasPointer,
+    canvasSelection, canvasFocus, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasReference, selectCanvasPointer,
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, addCanvasReference,
     updateCanvasReference, elementToReference, referenceToElement, attachToRequest, addCanvasRequest,
     updateCanvasRequest, deleteBoundary, addCanvasPointer, updateCanvasPointer, pointerStateMap, insertKind,

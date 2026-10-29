@@ -9,7 +9,7 @@ try {
     boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapToBoundaryGrid, canvasRectFromPage, pageRectFromCanvas,
     pushApartBoundaries, boundaryMoves, boundariesByPosition, boundaryKey, dotGrid, unionBounds, sameBoundaries,
     fitCamera, zoomCameraAt, panCamera, drawnFrameRect, referenceNoteRect, movedReferenceRect, resizedReferenceRect,
-    convertedReferenceRects, referenceFrameRect, pushApartReference, referenceMoves, insideRect, boundaryAt,
+    convertedReferenceRects, referenceFrameRect, pushApartReference, referenceMoves, insideRect, boundaryAt, boundaryNear,
     insideAnyBoundary, referenceItemAt, canvasTargetKey, selectedPointers, selectedReference, selectedElementIds,
     selectedElementTargets, hasCanvasTarget, toggleCanvasTarget, sizeTarget, nearestEdgeAnchors, pointerEndpointKey,
     samePointerEndpoint, pointerEndpointRect, pointerRoute, pointerAt, pointSegmentDistance, pointerVisible,
@@ -247,6 +247,13 @@ try {
     const moved = [...pushed];
     moved[0] = { ...moved[0], rect: box(460, 0, 100, 100) };
     assert.deepEqual(referenceMoves(moved, pushed), [{ itemId: 'a', x: 460, y: 0 }]);
+  });
+
+  await test('a press just outside a boundary corner still finds that boundary', () => {
+    const boundaries = [boundary('left', box(0, 0, 100, 100)), boundary('right', box(300, 0, 100, 100))];
+    assert.equal(boundaryNear(boundaries, { x: -6, y: -6 }, 16).sizeId, 'left');
+    assert.equal(boundaryNear(boundaries, { x: 290, y: 50 }, 16).sizeId, 'right');
+    assert.equal(boundaryNear(boundaries, { x: 200, y: 50 }, 16), null);
   });
 
   await test('inside and outside detection reads the topmost boundary', () => {

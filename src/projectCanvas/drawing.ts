@@ -19,6 +19,7 @@ type Context = {
   insertElements: (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => Promise<void>;
   selectElement: (pageId: string, elementId: string, sizeId: string | null, additive?: boolean) => void;
   boundaryUnder: (point: Point) => Boundary | null;
+  boundaryNear: (point: Point) => Boundary | null;
   beginPointerSession: (event: { pointerId: number; }) => void;
   drag: { current: Drag | null; };
   busy: import("react").RefObject<boolean>;
@@ -76,9 +77,12 @@ export function createDrawingActions(context: () => Context) {
   }
 
   function drawElementDrag(event: ReactPointerEvent<HTMLDivElement>, point: Point, kind: ElementKind, line: boolean): DrawElementDrag | null {
-    const { boundaryUnder, project, beginPointerSession, drag } = context();
-    const boundary = boundaryUnder(point);
+    const { boundaryUnder, boundaryNear, project, beginPointerSession, drag } = context();
+    const boundary = boundaryUnder(point) ?? boundaryNear(point);
     if (!boundary) return null;
+    // A press just outside the edge starts on the edge itself.
+    const { rect: edge } = boundary;
+    point = { x: Math.min(Math.max(point.x, edge.x), edge.x + edge.width), y: Math.min(Math.max(point.y, edge.y), edge.y + edge.height) };
     const { parentId, parentOrigin } = boxParentAt(project, boundary.pageId, boundary.sizeId, event.target);
     event.preventDefault();
     beginPointerSession(event);

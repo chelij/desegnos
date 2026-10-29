@@ -40,7 +40,7 @@ export function WorkspaceSurfaces({ children }: { children: ReactNode }) {
   useLayoutEffect(() => {
     const escape = (event: KeyboardEvent) => {
       // A focused text box takes the first Escape; the app then leaves it.
-      if (event.key !== 'Escape' || event.defaultPrevented || isTextField(event.target)) return;
+      if (event.key !== 'Escape' || event.defaultPrevented || isTextField(event.target) || (event.target instanceof HTMLElement && event.target.closest('dialog[open]'))) return;
       // Let open menus and native select controls handle their own Escape first.
       if (document.querySelector('.editor-menu')) return;
       const entry = entries.current.at(-1);

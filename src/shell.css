@@ -618,3 +618,7 @@
 .website-import-frame { position: fixed; left: -20000px; top: 0; width: 1600px; height: 1000px; border: 0; pointer-events: none; }
 .website-import-list { display: grid; gap: var(--space-2); max-height: 240px; overflow-y: auto; padding-left: var(--space-4); }
 .website-import-list li > span + span { margin-left: var(--space-2); }
+.boundary-preview-heading { display: flex; align-items: center; gap: var(--space-3); min-height: var(--control-md); }
+.boundary-preview-heading output { margin-left: auto; font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.boundary-preview-heading .dock-action { width: auto; }
+.boundary-preview-range { flex: none; width: calc(100% - 12px); margin: 0 6px; }

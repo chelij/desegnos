@@ -25,6 +25,11 @@ try {
     await writeFile(path, replacements.reduce((text, [from, to]) => text.replaceAll(from, to), source));
   }
   const { RecoveryChoice, isPendingRecovery } = await import(pathToFileURL(join(temporary, 'RecoveryBanner.js')).href);
+  const { userError } = await import(pathToFileURL(join(temporary, 'userErrors.js')).href);
+  await test('startup recovery failures do not become AI failures when diagnostics name elements', () => {
+    const reason = 'de94f600-bf86-4db4-84e1-8af71e5f1522: The unsaved work in this project is damaged: unknown field `appearance`, expected one of `id`, `name`, `path`, `included`, `output`, `sizes`, `background`, `elements`';
+    assert.equal(userError(reason), "Desegnos couldn't restore an unsaved project. Its original file is still on disk.");
+  });
   const pending = { code: 'pendingRecovery', projectId: 'project-id', path: '/chosen/site.desegnos' };
   const choices = (overrides = {}) => ({ path: pending.path, busy: false, recover() {}, openSaved() {}, dismiss() {}, ...overrides });
 

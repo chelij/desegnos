@@ -118,6 +118,7 @@ export type ProjectCanvasProps = {
   pointerStates: Record<string, PointerStateView>;
   tool: ProjectTool; insertKind: ElementKind | null; onTool: (tool: ProjectTool) => void;
   boundaryKind: BoundaryToolKind; requestShape: RequestToolShape; onRequestShape: (shape: RequestToolShape) => void; focusedSize: string | null;
+  widthPreview?: { sizeId: string; width: number } | null;
   onZoom: (zoom: number) => void; onLayout: (boundaries: Boundary[]) => void;
   onPlayBoundary: (id: string) => void;
   play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; onPlayExit: () => void;

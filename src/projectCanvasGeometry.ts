@@ -248,6 +248,18 @@ export function boundaryAt<T extends { rect: Rect }>(items: T[], point: Point): 
   return null;
 }
 
+/** The boundary a press within `slack` of its edge belongs to, nearest first. */
+export function boundaryNear<T extends { rect: Rect }>(items: T[], point: Point, slack: number): T | null {
+  let best: T | null = null;
+  let bestDistance = slack;
+  for (const item of items) {
+    const { x, y, width, height } = item.rect;
+    const distance = Math.hypot(Math.max(x - point.x, 0, point.x - x - width), Math.max(y - point.y, 0, point.y - y - height));
+    if (distance <= bestDistance) { best = item; bestDistance = distance; }
+  }
+  return best;
+}
+
 export function insideAnyBoundary(boundaries: { rect: Rect }[], point: Point): boolean {
   return boundaries.some(boundary => insideRect(boundary.rect, point));
 }

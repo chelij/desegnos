@@ -25,7 +25,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
   addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
-  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout,
+  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout,
   play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
 }, ref) {
   const {
@@ -33,7 +33,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, moving, editing, movingElements,
     openPlaceholder, viewport, inverse, boundaries, requestDraft, draftArea, movingItems, draftNote, draft,
     draftElement, marquee, zoomRect, entries, autoLinks, pointerDraft, selectedPointerIds, choosePointer,
-    createdPointer, widthPreview, setWidthPreview, selectionScreen, viewSize, selectionFill, selectionLinked,
+    createdPointer, selectionScreen, viewSize, selectionFill, selectionLinked,
     selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection, distributeSelection, setSelectionScope,
     startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements, deleteSelectedLayers,
     minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer, startReattach,
@@ -42,7 +42,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, previewScreen, dropNotice,
     setDropNotice,
-  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
+  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
   const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
   const slides = project.pages;
   const slideIndex = Math.max(0, slides.findIndex(page => page.id === play.boundary));
@@ -100,20 +100,6 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       change={(pointerId, comment) => updatePointer(pointerId, { comment })}
       changeKind={(pointerId, kind) => updatePointer(pointerId, { kind })}
       autoFocusId={createdPointer.current} close={() => { createdPointer.current = null; surface.current?.focus({ preventScroll: true }); }} />
-    {boundaries.map(boundary => {
-      const page = project.pages.find(page => page.id === boundary.pageId);
-      if (!page || page.sizes.length < 2) return null;
-      const widths = page.sizes.map(size => size.width), min = Math.min(...widths), max = Math.max(...widths);
-      if (min === max) return null;
-      const box = screenRect(boundary.rect, camera);
-      return <input key={`width:${boundary.sizeId}`} type="range" aria-label={`Preview ${page.name} width`} title={`${widthPreview?.sizeId === boundary.sizeId ? widthPreview.width : boundary.rect.width}px`}
-        min={min} max={max} step={1} value={widthPreview?.sizeId === boundary.sizeId ? widthPreview.width : boundary.rect.width}
-        style={{ position: 'absolute', left: box.left + Math.max(0, box.width - 120), top: box.top - 10, width: Math.min(120, box.width), height: 8, margin: 0, zIndex: 8, cursor: 'ew-resize' }}
-        onPointerDown={event => { event.stopPropagation(); event.currentTarget.setPointerCapture(event.pointerId); }}
-        onChange={event => setWidthPreview({ sizeId: boundary.sizeId, width: Number(event.target.value) })}
-        onPointerUp={() => setWidthPreview(null)} onPointerCancel={() => setWidthPreview(null)} onLostPointerCapture={() => setWidthPreview(null)} onBlur={() => setWidthPreview(null)}
-        onKeyUp={() => setWidthPreview(null)} />;
-    })}
     <BoundaryLabels project={project} boundaries={boundaries} moving={moving} draft={draft} draftKind={boundaryKind} focused={focused} selection={selection} camera={camera} openPage={openPage} />
     {selectionScreen && <SelectionBar screen={selectionScreen} viewWidth={viewSize.width} fill={selectionFill} linked={selectionLinked} linkable={selectionLinkable} hyperlink={selectionHyperlink} scope={selectionScope}
       onFill={setSelectionFill} onAlign={alignSelection} onDistribute={distributeSelection} count={selectedElementTargets.length} onScope={setSelectionScope} onRequest={() => { startRequestOnSelection(); }}

@@ -402,6 +402,29 @@ async function runIsolated() {
       for (const label of ['Website', 'App screen', 'Slide deck', 'Social image']) {
         await createFromHome(label);
         assert.ok((await driver.execute(() => document.querySelectorAll('[data-boundary]').length)) > 0, `${label} has no boundary`);
+        if (label === 'Website') {
+          assert.equal(await driver.execute(() => document.querySelectorAll('#project-canvas input[type="range"]').length), 0, 'Canvas has no floating width sliders');
+          const labelRect = await driver.execute(() => document.querySelector('.boundary-label-name').getBoundingClientRect().toJSON());
+          await mouse.click({ x: labelRect.x + labelRect.width / 2, y: labelRect.y + labelRect.height / 2 });
+          const slider = 'input[aria-label="Preview width"]';
+          await driver.ready(slider);
+          const before = await driver.invoke('get_workspace');
+          const range = await driver.execute(selector => {
+            const node = document.querySelector(selector), rect = node.getBoundingClientRect();
+            return { value: Number(node.value), x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          }, slider);
+          await mouse.drag({ x: range.x + range.width - 5, y: range.y + range.height / 2 },
+            { x: range.x + 30, y: range.y + range.height / 2 });
+          await waitFor(() => driver.execute((selector, original) => {
+            const width = Number(document.querySelector(selector).value);
+            return width < original && document.querySelector('.page-boundary').style.width === `${width}px`
+              && document.querySelector('.boundary-preview-heading output')?.textContent === `${width} px`;
+          }, slider, range.value), 'Properties preview stays visible after release');
+          assert.deepEqual((await driver.invoke('get_workspace')).project, before.project, 'Preview does not edit the saved sizes');
+          await driver.click('.boundary-preview-heading button');
+          await waitFor(() => driver.execute((selector, original) => Number(document.querySelector(selector).value) === original
+            && !document.querySelector('.boundary-preview-heading button'), slider, range.value), 'Reset restores the named width');
+        }
       }
       await home();
     });
@@ -604,7 +627,9 @@ async function runIsolated() {
       await mouse.click({ x: box.left + box.width - 24, y: box.top + box.height - 24 });
       await driver.ready('//div[@role="group" and @aria-label="Sizes"]', 'xpath');
       const before = await driver.execute(() => document.querySelectorAll('[data-size-row]').length);
-      await driver.click(`//div[@role="group" and @aria-label="Sizes"]//button[@aria-label=${xpathString('Add Phone')}]`, 'xpath');
+      // The presets resize this boundary; a linked size is added from the section's + button.
+      await driver.click(`//button[@aria-label=${xpathString('Add a linked size')}]`, 'xpath');
+      await driver.click(`//div[@role="group" and @aria-label="Sizes"]//button[normalize-space(.)=${xpathString('Add Phone')}]`, 'xpath');
       await waitFor(() => driver.execute(previous => document.querySelectorAll('[data-size-row]').length > previous, before), 'The Phone size was not added');
     });
 

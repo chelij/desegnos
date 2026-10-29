@@ -92,6 +92,7 @@ export function userError(error: unknown): string {
     [/clipboard.*(?:read|unavailable)|could not be read.*clipboard/i, "Desegnos couldn't read the clipboard. Copy the item again."],
     [/clipboard|could not be copied/i, "Desegnos couldn't copy this item. Try again."],
     [/recovery.*(?:disagree|identity|revision|pointer)|safety checkpoint.*differs/i, "This saved backup doesn't match the project. Open the project again."],
+    [/unsaved work in this project is damaged/i, "Desegnos couldn't restore an unsaved project. Its original file is still on disk."],
     [/recovery.*(?:record|load|unavailable|attention)|recover.*(?:failed|error)/i, "Your unsaved work couldn't be restored. Open the saved project."],
     [/dossier|project brief.*(?:save|attention)/i, "Your result is saved, but the project brief couldn't be updated."],
     [/secure storage|vault|keyring|secret service/i, "Desegnos couldn't access your saved sign-in details. Check AI settings."],

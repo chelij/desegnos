@@ -16,7 +16,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTextField } from '../WorkspaceSurface';
 import {
-  automaticLinks, boundaryAt, canvasTargetKey, dotGrid, fitCamera, nearestEdgeAnchors, selectedPointers,
+  automaticLinks, boundaryAt, boundaryNear, canvasTargetKey, dotGrid, fitCamera, nearestEdgeAnchors, selectedPointers,
   viewportWorldRect, type Boundary, type CanvasTarget, type Point, type ReferenceBox, type RequestBox,
 } from '../projectCanvasGeometry';
 import type { Element, ElementPatch, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
@@ -48,7 +48,7 @@ export function useProjectCanvas({
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
   addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
-  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, onZoom, onLayout,
+  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview = null, onZoom, onLayout,
   play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
 }: ProjectCanvasProps, ref: ForwardedRef<ProjectCanvasHandle>) {
 
@@ -70,7 +70,7 @@ export function useProjectCanvas({
     chooseImage, insertionPoint, elementRectAt, placeElement, drawElementDrag, persistDraw,
   } = createDrawingActions(() => ({
     setPendingImage, project, boundaryRect, createdElement, editingAllSizes, insertElements, selectElement, pendingText,
-    boundaryUnder, beginPointerSession, drag, busy, boundaryKind, createBoundary, onTool,
+    boundaryUnder, boundaryNear: boundaryNearPress, beginPointerSession, drag, busy, boundaryKind, createBoundary, onTool,
     selectBoundary,
   }));
   const {
@@ -153,7 +153,6 @@ export function useProjectCanvas({
   const [placeholderChoice, setPlaceholderChoice] = useState<{ pageId: string; sizeId: string; elementId: string; screen: ScreenRect } | null>(null);
   const [linkChoice, setLinkChoice] = useState<LinkDecision | null>(null);
   const { boundaries } = useMemo(() => canvasView(project), [project, project.revision]);
-  const [widthPreview, setWidthPreview] = useState<{ sizeId: string; width: number } | null>(null);
   const scrubbed = useMemo(() => {
     if (!widthPreview) return { project, boundaries };
     const previewProject = structuredClone(project);
@@ -526,6 +525,8 @@ export function useProjectCanvas({
     return page ? { ...page, elements: resolveForSize(project, page, sizeId ?? baseSizeId(page)) } : null;
   };
   const boundaryUnder = (point: Point): Boundary | null => boundaryAt(boundaries.map(item => moving?.sizeId === item.sizeId ? { ...item, rect: moving.rect } : item), point);
+  // Drawing forgives a press that misses the edge by a few screen pixels, as at a corner.
+  const boundaryNearPress = (point: Point): Boundary | null => boundaryNear(boundaries, point, 16 / camera.zoom);
   const referenceBoxes = (): ReferenceBox[] => (project.reference ?? []).map(item => ({ itemId: item.id, rect: movingItems[item.id] ?? item.rect }));
   const requestBoxes = (): RequestBox[] => elementBoxes(project, boundaries, moving);
   const pointerWorldNow = () => pointerWorld(project, boundaries, moving, {}, movingItems);
@@ -746,7 +747,7 @@ export function useProjectCanvas({
     selection, moving, openPage, editing, movingElements, openPlaceholder, viewport, inverse, project,
     boundaries, requestDraft, draftArea, selectRequest, movingItems, draftNote, draft, boundaryKind,
     draftElement, marquee, zoomRect, entries, autoLinks, pointerDraft, selectedPointerIds, pointerStates,
-    choosePointer, updatePointer, createdPointer, widthPreview, setWidthPreview, selectionScreen, viewSize,
+    choosePointer, updatePointer, createdPointer, selectionScreen, viewSize,
     selectionFill, selectionLinked, selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection, distributeSelection,
     setSelectionScope, startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements,
     deleteSelectedLayers, minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer,

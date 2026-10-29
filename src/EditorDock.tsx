@@ -272,8 +272,11 @@ export function ChoiceRow<T extends string>({ label, value, choices, choose, dis
 }
 
 /** Boundary properties: one rhythm — 8px rows inside a section, 16px between sections. */
-export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy }: {
+export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy, selectedSizeId, widthPreview, previewWidth }: {
   page: Page;
+  selectedSizeId?: string | null;
+  widthPreview?: { sizeId: string; width: number } | null;
+  previewWidth?: (value: { sizeId: string; width: number } | null) => void;
   commit: (patch: { name?: string; path?: string; background?: string; included?: boolean }) => void;
   updateSize: (sizeId: string, patch: { label?: string; width?: number; height?: number; kind?: BoundaryKind }) => void;
   addSize: (preset: SizePreset, width?: number, height?: number) => void;
@@ -292,18 +295,29 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
     ? presets.find(preset => preset.width === size.width && preset.height === size.height)?.label ?? `${size.width} × ${size.height}`
     : sizeLabel(size.width);
   const hasPath = page.output === 'webpage' || page.output === 'appScreen';
+  const selectedSize = page.sizes.find(size => size.id === selectedSizeId) ?? page.sizes[0];
+  const minWidth = Math.min(...page.sizes.map(size => size.width));
+  const maxWidth = Math.max(...page.sizes.map(size => size.width));
+  const previewing = widthPreview?.sizeId === selectedSize.id;
+  const shownWidth = previewing ? widthPreview.width : selectedSize.width;
   return <div className="dock-form props boundary-props">
     <div className="dock-layer-title"><strong>Boundary</strong></div>
     <PropsSection id="boundary-layout" title="Layout">
       <CompactTextField label="Name" placeholder="Name" value={page.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => commit({ name: name.trim() })} />
       {hasPath && <CompactTextField prefix="URL" label="Path" placeholder="/path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />}
     </PropsSection>
+    {hasPath && minWidth < maxWidth && previewWidth && <PropsSection id="boundary-preview" title="Responsive preview">
+      <div className="boundary-preview-heading"><label htmlFor={`preview-width-${selectedSize.id}`}>Width</label><output htmlFor={`preview-width-${selectedSize.id}`}>{shownWidth} px</output>{previewing && <button type="button" className="dock-action" onClick={() => previewWidth(null)}>Reset</button>}</div>
+      <input id={`preview-width-${selectedSize.id}`} className="props-range boundary-preview-range" type="range" aria-label="Preview width" min={minWidth} max={maxWidth} step={1} value={shownWidth} disabled={busy}
+        onChange={event => previewWidth({ sizeId: selectedSize.id, width: Number(event.target.value) })}
+        onKeyDown={event => { event.stopPropagation(); if (event.key === 'Escape') { event.preventDefault(); previewWidth(null); } }} />
+    </PropsSection>}
     <PropsSection id="boundary-background" title="Background">
       <ColourField label="Background" value={page.background} disabled={busy} optional={false} commit={background => commit({ background })} />
       <div className="boundary-background-presets">{[['#ffffff', 'White'], ['#f7f7f5', 'Off-white'], ['#e9e9e9', 'Light grey'], ['#1f1f1f', 'Dark grey'], ['#121212', 'Near-black'], ['#000000', 'Black']].map(([colour, name]) =>
         <button key={colour} type="button" className="props-swatch" style={{ background: colour }} aria-label={`${name} background`} aria-pressed={page.background === colour} disabled={busy} onClick={() => commit({ background: colour })} />)}</div>
     </PropsSection>
-    <PropsSection id="boundary-sizes" title="Sizes" group add={() => setCustomOpen(open => !open)} addLabel="Add custom size" addExpanded={customOpen}>
+    <PropsSection id="boundary-sizes" title="Sizes" group add={() => setCustomOpen(open => !open)} addLabel={presets ? 'Add custom size' : 'Add a linked size'} addExpanded={customOpen}>
       {page.sizes.map((size, index) => <div key={size.id} className="dock-size-row" data-size-row={size.id}>
         {index === 0
           ? page.sizes.length > 1 && <span className="dock-size-tag">Base</span>
@@ -321,9 +335,13 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
       </div>)}
       <div className="dock-size-add">
         <div className="boundary-add-row">
-          {presets ? presets.map(preset => <button key={preset.label} type="button" className="dock-action" disabled={busy} title={`${preset.width} × ${preset.height}`} onClick={() => updateSize(page.sizes[0].id, { label: preset.label, width: preset.width, height: preset.height })}>{preset.label}</button>) : SIZE_PRESETS.map(preset => <button key={preset.preset} type="button" className="dock-action" disabled={busy}
-            aria-label={`Add ${preset.label}`} title={`Add ${preset.label} · ${preset.width} × ${preset.height}`} onClick={() => addSize(preset.preset)}>{preset.label}</button>)}
+          {/* A preset resizes this boundary; adding another linked size lives behind the + above. */}
+          {(presets ?? SIZE_PRESETS).map(preset => <button key={preset.label} type="button" className="dock-action" disabled={busy} title={`${preset.width} × ${preset.height}`}
+            aria-pressed={page.sizes[0].width === preset.width && page.sizes[0].height === preset.height}
+            onClick={() => updateSize(page.sizes[0].id, { label: preset.label, width: preset.width, height: preset.height })}>{preset.label}</button>)}
         </div>
+        {customOpen && !presets && <div className="boundary-add-row">{SIZE_PRESETS.map(preset => <button key={preset.preset} type="button" className="dock-action" disabled={busy}
+          title={`${preset.width} × ${preset.height}`} onClick={() => { addSize(preset.preset); setCustomOpen(false); }}>Add {preset.label}</button>)}</div>}
         {customOpen && <div className="boundary-custom-row">
           <CompactNumberField prefix="W" label="Custom width" min={1} max={100000} unit="px" value={customWidth} disabled={busy} valid={width => wholeSize(width, 1, 100000)} commit={setCustomWidth} />
           <CompactNumberField prefix="H" label="Custom height" min={1} max={100000} unit="px" value={customHeight} disabled={busy} valid={height => wholeSize(height, 1, 100000)} commit={setCustomHeight} />
