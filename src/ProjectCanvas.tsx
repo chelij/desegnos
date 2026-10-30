@@ -79,7 +79,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     </div>;
   }
   return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${zoomHeld ? ' zoom-ready' : ''}${painterArmed ? ' paint-format' : ''}${playIsActive(play) ? ' playing' : ''}${dropHover && !dropHover.rect ? ' drop-bed' : ''}${pointerFocus ? ' pointer-focus' : ''}`} style={dotStyle} tabIndex={0}
-    onPointerDownCapture={() => setPointerFocus(true)} onKeyDownCapture={() => setPointerFocus(false)}
+    onPointerDownCapture={() => setPointerFocus(true)}
     onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setPointerFocus(false); }}
     onPointerDown={pointerDown} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>
