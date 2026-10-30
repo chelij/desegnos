@@ -42,9 +42,9 @@ export function BoundaryLabels({ project, boundaries, moving, draft, draftKind =
       const highlighted = focused === pageId || selection.some(target => target.kind === 'element' && target.pageId === pageId
         && (target.sizeId === null || target.sizeId === sizeId));
       const resizing = moving?.sizeId === sizeId;
-      return <div key={sizeId} className={`boundary-label${highlighted ? ' selected' : ''}`} data-boundary={pageId} data-size={sizeId} title={boundaryName(page, size)}
+      return <div key={sizeId} className={`boundary-label${highlighted ? ' selected' : ''}`} data-boundary={pageId} data-size={sizeId}
         style={{ left: camera.x + shown.x * camera.zoom, top: camera.y + shown.y * camera.zoom, width: Math.max(0, shown.width * camera.zoom), overflow: 'hidden', pointerEvents: 'auto' }}>
-        <span className="boundary-label-name" data-boundary-handle={sizeId} title={boundaryName(page, size)}
+        <span className="boundary-label-name" data-boundary-handle={sizeId}
           onDoubleClick={event => { event.stopPropagation(); openPage(pageId); }}>
           {boundaryName(page, size)}
         </span>

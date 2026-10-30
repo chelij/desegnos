@@ -163,22 +163,22 @@ export function createProjectCommands(context: () => Context) {
     const { settle } = context(); await settle(); await run(false); }
 
   async function open(folder = false, path?: string, discardRecovery = false) {
-    const { queue, accept, setShowStartPage, setSelected, setNotice, refreshRecent, setZoom } = context();
+    const { queue, accept, setShowStartPage, setSelected, refreshRecent, setZoom } = context();
     await openAlongside(async discard => {
       await queue(async () => {
         const opened = await requestProjectOpen(() => native<WorkspaceView | null>('open_project', { discard, folder, path: path ?? null, discardRecovery }));
-        if (opened) { accept(opened); setShowStartPage(false); setSelected(null); setNotice('Project opened.'); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
+        if (opened) { accept(opened); setShowStartPage(false); setSelected(null); void refreshRecent().catch(() => {}); if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height)); }
       });
     });
   }
 
   async function openRecent(path: string) {
-    const { queue, accept, setShowStartPage, setSelected, setNotice, setZoom, refreshRecent } = context();
+    const { queue, accept, setShowStartPage, setSelected, setZoom, refreshRecent } = context();
     await openAlongside(async discard => {
       await queue(async () => {
         const opened = await requestProjectOpen(() => native<WorkspaceView>('open_recent_project', { path, discard }));
         if (!opened) return;
-        accept(opened); setShowStartPage(false); setSelected(null); setNotice('Project opened.');
+        accept(opened); setShowStartPage(false); setSelected(null);
         if (opened.project) setZoom(initialZoom(opened.project.viewport.width, opened.project.viewport.height));
         void refreshRecent().catch(() => {});
       }, false);

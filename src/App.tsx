@@ -29,7 +29,7 @@ import {
 } from './EditorDock';
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
-import { showsOpener } from './visibleActions';
+import { projectHasPreviewPages, showsOpener } from './visibleActions';
 import { StyleGuide } from './StyleGuide';
 import { ImportContext } from './ImportContext';
 import { GenerationLog } from './GenerationLog';
@@ -91,6 +91,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const playingSize = playingPage ? playingPage.sizes.find(size => size.id === canvasFocusSize) ?? playingPage.sizes[0] ?? null : null;
   const playingLabel = playingPage && playingSize ? `${playingPage.name} · ${sizeLabel(playingSize.width)}` : null;
   const nothingToGenerate = requestedAreas === 0 && pendingImages === 0;
+  const previewAvailable = !onStartPage && !!project && projectHasPreviewPages(project);
   return <div className={presenting ? 'application editor-shell presenting' : 'application editor-shell'}>
     {showPalette && <CommandPalette commands={paletteCommands} close={() => setShowPalette(false)} />}
     {untitledSave && view?.untitled && project && <ModalDialog title="Save project" close={() => closeUntitledSave(null)}>
@@ -118,7 +119,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         {!onStartPage && project && <>{view?.canUndo && <button aria-label="Undo last change" type="button" className="icon-button" title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}><Icon name="undo" /></button>}{view?.canRedo && <button aria-label="Redo last change" type="button" className="icon-button" title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}><Icon name="redo" /></button>}
           <button type="button" className={showHistory ? 'icon-button active' : 'icon-button'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
         {!onStartPage && project && <button type="button" className={`icon-button labeled${playIsActive(play) ? ' active' : ''}`} aria-pressed={playIsActive(play)} aria-label={playIsActive(play) ? 'Stop Play' : 'Play'} title={withShortcut(playIsActive(play) ? 'Stop Play' : 'Play', 'play')} onClick={() => playIsActive(play) ? setPlay(idlePlay) : togglePlay()}><Icon name={playIsActive(play) ? 'stop' : 'play'} /><span className="button-label">{playIsActive(play) ? 'Stop' : 'Play'}</span></button>}
-        {!onStartPage && project && <button type="button" className="icon-button labeled" aria-label="Preview export" title={withShortcut('Preview export', 'preview')} onClick={previewSelectedBoundary}><Icon name="monitor" /><span className="button-label">Preview</span></button>}
+        {previewAvailable && <button type="button" className="icon-button labeled" aria-label="Preview export" title={withShortcut('Preview export', 'preview')} onClick={previewSelectedBoundary}><Icon name="monitor" /><span className="button-label">Preview</span></button>}
         {!onStartPage && project && <button type="button" className={`icon-button labeled${showExport ? ' active' : ''}`} aria-pressed={showExport} aria-label="Export" title={withShortcut('Export', 'export')} onClick={() => openExportPanel()}><Icon name="download" /><span className="button-label">Export</span></button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" className="icon-button" aria-label="AI log" title="AI conversation" onClick={() => setShowLog(true)}><Icon name="note" /></button>}

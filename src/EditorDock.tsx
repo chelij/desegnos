@@ -118,11 +118,11 @@ export function usePanelState(): [PanelState, PanelActions] {
   return [{ width, collapsed, hidden }, actions];
 }
 
-function DockSection({ name, open, toggle, children, grow, register }: {
+function DockSection({ name, open, toggle, children, grow, register, fitContent }: {
   name: string; open: boolean; toggle: () => void; children: ReactNode;
-  grow: number; register: (node: HTMLElement | null) => void;
+  grow: number; register: (node: HTMLElement | null) => void; fitContent?: boolean;
 }) {
-  return <section ref={register} className={open ? 'dock-panel' : 'dock-panel is-collapsed'} aria-label={name} style={open ? { flexGrow: grow } : undefined}>
+  return <section ref={register} className={`dock-panel${open ? '' : ' is-collapsed'}${fitContent ? ' is-fit-content' : ''}`} aria-label={name} style={open ? { flexGrow: grow } : undefined}>
     <header className="dock-panel-header">
       <h2>{name}</h2>
       <button type="button" className="icon-button sm" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${name.toLowerCase()}`} title={open ? `Collapse ${name}` : `Expand ${name}`} onClick={toggle}><Icon name="chevron-right" className={open ? 'expanded' : undefined} /></button>
@@ -228,7 +228,7 @@ export function EditorDock({ state, actions, properties, layers, history, export
         return <Fragment key={panel.key}>
           {previous && open && !collapsed.has(previous.key) && <div className="dock-splitter" role="separator" aria-orientation="horizontal"
             aria-label={`Resize ${previous.name} and ${panel.name}`} onPointerDown={event => startPanelResize(event, previous.key, panel.key)} />}
-          <DockSection name={panel.name} open={open} toggle={() => togglePanel(panel.key)} grow={weights[panel.key] ?? DEFAULT_PANEL_WEIGHTS[panel.key] ?? 1}
+          <DockSection name={panel.name} open={open} toggle={() => togglePanel(panel.key)} grow={weights[panel.key] ?? DEFAULT_PANEL_WEIGHTS[panel.key] ?? 1} fitContent={panel.key === 'export'}
             register={node => { if (node) nodes.current.set(panel.key, node); else nodes.current.delete(panel.key); }}>{panel.content}</DockSection>
         </Fragment>;
       })}
