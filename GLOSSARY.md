@@ -63,6 +63,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | **Pointer kind** | `reference` (default) reads the target as context only, drawn dashed and thin; `change` may read and change it, drawn solid with an arrowhead. | `Pointer.kind`, `PointerKind`, `pointer_grants_change` |
 | **Comment** | The pointer's instruction, written on the line. It is the spec. | `Pointer.comment` |
 | **Simple pointer** | Go to, show, hide, toggle or swap; runs visually in Play. | `Pointer.play` (`PlayAction`) |
+| **Behaviour** | What a layer or boundary does by itself, in plain words ("rotates to point at the mouse"). Set in Properties or by a request; the AI writes it as JavaScript at export, and Preview or Play runs it. Drawn as a badge, not a line. | change `Pointer` whose target is its own source, `Pointer::is_behaviour`, `isBehaviour`, `SetBehaviour` |
 | **Wired** | The last export built the pointer and its code still matches. Solid line. | `Pointer.wiring`, `ExportRecord.pointers`, `pointer_states_with_fingerprints` |
 | **Needs exporting** | Comment is new or changed since the last export. Dashed line. | `PointerState::NeedsExporting`, `ExportRecord.pointers` |
 | **Fingerprint** | Hash of the code an export made for a pointer, used to spot outside changes. | `ExportRecord.pointers`, `pointer_fingerprints`, `wiring.fingerprint` |

@@ -30,6 +30,7 @@ One infinite canvas per project. Everything on it is visual: you place elements 
 
 - An element is any visual item that can have children: box, text, ellipse, line, image, button, input and other controls, video, embed, and code blocks carried into the export. Boxes hold children and lay them out freely, in a stack (row or column, gap, padding) or in a grid.
 - Elements carry visual properties only: position, size, fill, stroke, radius, shadow, opacity, text style, image, layout. No HTML, CSS or JavaScript lives on the canvas.
+- A layer or boundary can carry a **behaviour**: what it does by itself, in plain words, such as "rotates to point at the mouse" or "text scrolls left forever". It is a change pointer from the layer to itself, drawn as a badge. A request can set it when the canvas cannot show what was asked (motion, timers, hover, data, games). The AI writes it as JavaScript at export; it may change anything on its page.
 - A layer is one element or a collection of elements (a group). Each layer carries its AI request history and context (attachments, reference items, pointers touching it), shown in Properties under the layer's own settings.
 - Users add elements by hand; the AI request box is the fallback for anything they would rather describe. Common elements sit in the tool strip; Insert lists every kind.
 - The Request tool works like a pointer by default: the cursor is an arrow, clicking anything targets it (Shift-click adds more, click again removes), and a request box appears beside the targets to type in. Enter sends it to the pending requests; Escape cancels.
@@ -94,8 +95,8 @@ For websites and app screens, export compiles the resolved element tree and link
 ## Rendering, Play and Preview export
 
 - The canvas draws elements directly. There are no snapshots of code and no per-page editor; everything is edited on the canvas.
-- **Play** (Shift+Space on a boundary): the boundary becomes clickable and simple pointers run visually. In slide decks, Play presents one slide at a time, starting from the selected slide or the first; arrows, Space and Page Up/Down navigate. Escape stops.
-- **Preview export**: exports the focused webpage/app-screen boundary in the background, requesting AI behaviour only when needed and runs the real result in place over the boundary, in a sandbox. It shows the last preview until the design changes; Escape returns to the design.
+- **Play** (Shift+Space on a boundary): the boundary becomes clickable and simple pointers run visually. A web boundary with behaviours or other change pointers opens Preview instead, since only exported code runs them. In slide decks, Play presents one slide at a time, starting from the selected slide or the first; arrows, Space and Page Up/Down navigate. Escape stops.
+- **Preview export**: exports the focused webpage/app-screen boundary in the background. When AI is connected and behaviours are missing, it prepares the AI request and waits for Send, like Export; without AI it names the unbuilt behaviours. It runs the real result in place over the boundary, in a sandbox. It shows the last preview until the design changes; Escape returns to the design.
 - Web exports set CSS `color-scheme` on `:root` and a matching meta tag. AI behaviour requests judge light/dark suitability from the boundary background and content colours; direct exports and invalid AI values use background luminance.
 - **Open in browser** serves the last export for a final check in a real browser.
 - **Minimap**: a small overview in the bottom-right corner draws every boundary and reference item with the visible viewport on top; click or drag it to move the view. It hides while the whole canvas fits on screen; Shift+M shows or hides it.

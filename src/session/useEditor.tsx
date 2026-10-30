@@ -148,7 +148,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const untitledSaveResolve = useRef<((workspace: WorkspaceView | null) => void) | null>(null);
   const generationRef = useRef<GenerationJobView | null>(null);
   const generationOwns = useRef(false);
-  const { openExportPanel, chooseExportDestination, refreshWorkspace, showJobResult, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, showHistory, play, setPlay }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, setShowHistory, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, showHistory }));
+  const { openExportPanel, chooseExportDestination, refreshWorkspace, showJobResult, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, showHistory, play, setPlay }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, setShowHistory, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, showHistory, aiConnected }));
 
   const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
   const refreshAiSettings = useCallback(async () => {

@@ -25,6 +25,7 @@ type Context = {
   selectedElementPageId: string | null;
   play: PlayState;
   setPlay: import("react").Dispatch<import("react").SetStateAction<PlayState>>;
+  aiConnected: boolean;
 };
 
 const EXPORT_FOLDERS_KEY = 'desegnos.export-folders';
@@ -160,7 +161,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
   }
 
   async function runExport(previewPageId: string | null = null) {
-    const { settle, current } = context();
+    const { settle, current, aiConnected } = context();
     await settle();
     const project = current.current?.project;
     if (!project) return;
@@ -173,6 +174,8 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
         destination,
         pageIds: previewPageId ? [previewPageId] : null,
         preview: !!previewPageId,
+        // A preview asks the AI only for behaviours it cannot otherwise show, and still waits for Send.
+        buildBehaviours: !!previewPageId && aiConnected,
       });
       setExportJob(job);
       showJobResult(job, previewPageId);

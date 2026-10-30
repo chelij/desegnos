@@ -850,7 +850,10 @@ pub fn validate_export_reply(plan: &ExportPlan, reply: &ExportReply) -> Result<(
     let mut page_ids = BTreeSet::new();
     for page in &reply.pages {
         ensure(
-            plan.pages.iter().any(|planned| planned.page_id == page.page_id && planned.output.needs_ai()) && page_ids.insert(page.page_id),
+            plan.pages
+                .iter()
+                .any(|planned| planned.page_id == page.page_id && planned.output.needs_ai())
+                && page_ids.insert(page.page_id),
             "The AI export reply contains an unknown or duplicate boundary.",
         )?;
     }
@@ -1126,10 +1129,7 @@ fn deterministic_bundle(
         .collect();
     for pointer in &plan.pointers {
         if !behaviours.contains_key(&pointer.id) {
-            warnings.push(format!(
-                "Behaviour {} has not been implemented.",
-                pointer.id
-            ));
+            warnings.push(format!("Not built: {}", pointer.comment));
         }
     }
     let pages = plan
@@ -1170,7 +1170,8 @@ fn add_direct_outputs(
     }
     let mut used_files: BTreeSet<String> = files.keys().map(|name| name.to_lowercase()).collect();
     used_files.extend(
-        plan.pages.iter()
+        plan.pages
+            .iter()
             .filter(|page| !page.file.is_empty())
             .map(|page| page.file.to_lowercase()),
     );

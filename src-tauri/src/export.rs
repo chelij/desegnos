@@ -15,7 +15,7 @@ use desegnos_core::{
     ExportBundle, ExportPlan, ExportPlanKind, ExportRecord, GenerationMode, Project, WebsiteExport,
     export_manifest, pointer_fingerprints,
 };
-use desegnos_storage::{read_export_file, write_export_named, write_export_into};
+use desegnos_storage::{read_export_file, write_export_into, write_export_named};
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -372,6 +372,7 @@ pub async fn prepare_export(
     destination: Option<String>,
     page_ids: Option<Vec<Uuid>>,
     preview: bool,
+    build_behaviours: Option<bool>,
 ) -> NativeResult<ExportJobView> {
     trusted(&window)?;
     let project = {
@@ -431,7 +432,7 @@ pub async fn prepare_export(
         create_default_destination(&app, &parent)?;
         (Some(trusted_destination(parent)?), None)
     };
-    let has_ai = !preview && plan.request_count > 0;
+    let has_ai = plan.request_count > 0 && (!preview || build_behaviours.unwrap_or(false));
     let mut view = ExportJobView {
         job_id,
         project_id,
@@ -476,6 +477,11 @@ pub async fn prepare_export(
         view.status = JobStatus::Ready.label();
         view.message = written.label.clone();
         view.summary = "Rendered directly from the design.".into();
+        // Each unbuilt behaviour is named; Connect AI says how to build them.
+        view.warnings.extend(bundle.warnings.iter().cloned());
+        if plan.request_count > 0 {
+            view.warnings.push("Connect AI to build behaviours.".into());
+        }
         view.result = Some(written);
         let mut service = service.lock().map_err(message)?;
         service.jobs.insert(

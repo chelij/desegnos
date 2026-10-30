@@ -532,8 +532,8 @@ export function BehaviourField({ project, pointer, state, commit, focusToken, bu
   }
   const clash = !!pointer && (pointerBroken(pointer, project) || state?.state === 'codeChanged' || state?.state === 'contradicts');
   return <>
-    <label className="dock-field">Behaviour
-      <textarea ref={field} data-behaviour-field value={draft} rows={3} maxLength={16384} disabled={busy}
+    <label className="dock-field">
+      <textarea ref={field} data-behaviour-field aria-label="Behaviour" value={draft} rows={3} maxLength={16384} disabled={busy}
         placeholder="Describe what it does, like follows the mouse"
         onChange={event => setDraft(event.target.value)}
         onBlur={save}
