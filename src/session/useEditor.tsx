@@ -858,6 +858,8 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     // button keeps focus or the pointer.
     canvasRef.current?.focusCanvas();
   }
+  // The inline preview covers its page, so a tool that draws or types there would act on nothing.
+  useEffect(() => { if (preview && canvasTool !== 'select' && canvasTool !== 'pan') closePreview(); }, [canvasTool]);
   function moveCanvasElementTo(pageId: string, sizeId: string, elementId: string, parentId: string | null, index: number) {
     const projectNow = current.current?.project;
     const page = projectNow?.pages.find(page => page.id === pageId);
