@@ -361,7 +361,8 @@ pub(crate) struct Clip {
     pub radius: f64,
 }
 
-/// Rotation and reflection about the centre of a layer's rect.
+/// Rotation and reflection about the centre of a layer's rect, then a translation: content
+/// scaled into another layer's box needs both.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct LayerTransform {
     pub sx: f64,
@@ -369,6 +370,8 @@ pub(crate) struct LayerTransform {
     pub degrees: f64,
     pub cx: f64,
     pub cy: f64,
+    pub tx: f64,
+    pub ty: f64,
 }
 
 /// The silhouette a shadow is cast by.
@@ -551,6 +554,7 @@ fn build_scene(project: &Project, page: &RenderPage<'_>) -> Scene {
     };
     let mut fonts = FontSet::new();
     let mut items = Vec::new();
+    let stack = [page.page.id];
     for element in &page.elements {
         let rect = sized_in(
             &mut fonts,
@@ -562,7 +566,9 @@ fn build_scene(project: &Project, page: &RenderPage<'_>) -> Scene {
                 height: page.height,
             },
         );
-        paint_element(project, &mut scene, &mut fonts, element, rect, &mut items);
+        paint_element(
+            project, &mut scene, &mut fonts, element, rect, &mut items, &stack,
+        );
     }
     scene.items.push(Item::Group(Group {
         clip: Some(Clip {
@@ -588,6 +594,7 @@ fn paint_element(
     element: &Element,
     at: Rect,
     out: &mut Vec<Item>,
+    stack: &[uuid::Uuid],
 ) {
     if !element.visible {
         return;
@@ -633,7 +640,26 @@ fn paint_element(
     }
     let mut content_items: Vec<Item> = Vec::new();
     paint_text(scene, fonts, element, content, &mut content_items);
-    paint_children(project, scene, fonts, element, content, &mut content_items);
+    paint_children(
+        project,
+        scene,
+        fonts,
+        element,
+        content,
+        &mut content_items,
+        stack,
+    );
+    if element.kind == ElementKind::Embed {
+        paint_embedded_page(
+            project,
+            scene,
+            fonts,
+            element,
+            content,
+            stack,
+            &mut content_items,
+        );
+    }
     if !content_items.is_empty() {
         // Boxes, groups and lines let content overflow, matching the canvas.
         let clip = clips_content(&element.kind).then_some(Clip { rect: at, radius });
@@ -655,11 +681,85 @@ fn paint_element(
             degrees,
             cx: at.x + at.width / 2.0,
             cy: at.y + at.height / 2.0,
+            tx: 0.0,
+            ty: 0.0,
         });
     out.push(Item::Group(Group {
         clip: None,
         transform,
         alpha: opacity,
+        items,
+    }));
+}
+
+/// The page an Embed frames, drawn live inside its box: the linked size that best fits the
+/// width, scaled to it and clipped to it. A page never frames itself, and nesting stops after
+/// two frames, matching the canvas.
+fn paint_embedded_page(
+    project: &Project,
+    scene: &mut Scene,
+    fonts: &mut FontSet,
+    element: &Element,
+    at: Rect,
+    stack: &[uuid::Uuid],
+    out: &mut Vec<Item>,
+) {
+    let Some(page) = element
+        .url
+        .as_deref()
+        .and_then(|url| project.pages.iter().find(|page| page.path == url))
+    else {
+        return;
+    };
+    if stack.len() >= 3 || stack.contains(&page.id) {
+        return;
+    }
+    let size = page
+        .sizes
+        .iter()
+        .filter(|size| f64::from(size.width) <= at.width)
+        .max_by_key(|size| size.width)
+        .or_else(|| page.sizes.iter().min_by_key(|size| size.width));
+    let Some(size) = size else { return };
+    let scale = at.width / f64::from(size.width).max(1.0);
+    if !scale.is_finite() || scale <= 0.0 {
+        return;
+    }
+    let page_rect = Rect {
+        x: 0.0,
+        y: 0.0,
+        width: f64::from(size.width),
+        height: f64::from(size.height),
+    };
+    let mut items: Vec<Item> = Vec::new();
+    if let Some(background) = Rgba::parse(&page.background)
+        && background.a > 0.0
+    {
+        let path_ref = scene.push_path(Path::rect(page_rect, 0.0));
+        items.push(Item::Shape(Shape {
+            path_ref,
+            fill: Some(background),
+            stroke: None,
+        }));
+    }
+    let mut next = stack.to_vec();
+    next.push(page.id);
+    for child in crate::resolve_for_size(project, page, size.id) {
+        let rect = sized_in(fonts, &child, page_rect);
+        paint_element(project, scene, fonts, &child, rect, &mut items, &next);
+    }
+    out.push(Item::Group(Group {
+        clip: None,
+        transform: Some(LayerTransform {
+            sx: scale,
+            sy: scale,
+            degrees: 0.0,
+            cx: 0.0,
+            cy: 0.0,
+            tx: at.x,
+            ty: at.y,
+        }),
+        alpha: 1.0,
         items,
     }));
 }
@@ -803,6 +903,7 @@ fn paint_children(
     element: &Element,
     content: Rect,
     out: &mut Vec<Item>,
+    stack: &[uuid::Uuid],
 ) {
     let children: Vec<_> = element
         .children
@@ -816,7 +917,15 @@ fn paint_children(
         ElementLayout::Free => {
             for child in children {
                 let rect = sized_in(fonts, child, content);
-                paint_element(project, scene, fonts, child, offset(content, rect), out);
+                paint_element(
+                    project,
+                    scene,
+                    fonts,
+                    child,
+                    offset(content, rect),
+                    out,
+                    stack,
+                );
             }
         }
         ElementLayout::Stack {
@@ -936,7 +1045,7 @@ fn paint_children(
                     };
                     rect.x = inner.x + if row { cursor } else { cross + cross_offset };
                     rect.y = inner.y + if row { cross + cross_offset } else { cursor };
-                    paint_element(project, scene, fonts, child, rect, out);
+                    paint_element(project, scene, fonts, child, rect, out, stack);
                     cursor += main(rect) + gap + between;
                 }
                 cross += line_cross + gap;
@@ -983,7 +1092,7 @@ fn paint_children(
                         child.style.sizing.constrain(rect.width, rect.height);
                     rect.x = inner.x + column as f64 * (width + gap);
                     rect.y = y;
-                    paint_element(project, scene, fonts, child, rect, out);
+                    paint_element(project, scene, fonts, child, rect, out, stack);
                 }
                 y += height + gap;
             }
@@ -2231,8 +2340,13 @@ fn write_items(svg: &mut String, scene: &Scene, items: &[Item], ids: &mut SvgIds
                             -transform.cy
                         )
                     };
+                    let shift = if transform.tx == 0.0 && transform.ty == 0.0 {
+                        String::new()
+                    } else {
+                        format!("translate({:.3} {:.3}) ", transform.tx, transform.ty)
+                    };
                     attributes.push_str(&format!(
-                        " transform=\"rotate({:.4} {:.3} {:.3}){}\"",
+                        " transform=\"{shift}rotate({:.4} {:.3} {:.3}){}\"",
                         transform.degrees, transform.cx, transform.cy, reflection
                     ));
                 }
@@ -2275,6 +2389,56 @@ mod tests {
         let pdf = slide_pdf(&project, &[rendered]).unwrap();
         let pdf = String::from_utf8_lossy(&pdf);
         assert!(pdf.contains("0.071 0.204 0.337 rg 0 0 12.000 12.000 re f"));
+    }
+
+    #[test]
+    fn an_embed_draws_the_framed_page_and_never_the_page_it_sits_on() {
+        let project = Project::new(
+            "Frames".into(),
+            crate::Viewport {
+                width: 400,
+                height: 300,
+            },
+            crate::Appearance::Light,
+        )
+        .unwrap();
+        let mut project = project
+            .apply(
+                project.revision,
+                crate::Command::AddCanvasPage {
+                    name: "About".into(),
+                    path: "/about".into(),
+                    size: crate::PageSize {
+                        id: uuid::Uuid::new_v4(),
+                        label: "Desktop".into(),
+                        width: 800,
+                        height: 600,
+                        kind: crate::BoundaryKind::Page,
+                        x: 0.0,
+                        y: 1000.0,
+                    },
+                    moves: vec![],
+                    reference: vec![],
+                },
+            )
+            .unwrap();
+        let mut framed = crate::empty_element(ElementKind::Text, rect(20.0, 20.0, 200.0, 40.0));
+        framed.text = "Framed".into();
+        project.pages[1].elements = vec![framed];
+        let mut embed = crate::empty_element(ElementKind::Embed, rect(10.0, 10.0, 200.0, 100.0));
+        embed.url = Some("/about".into());
+        project.pages[0].elements = vec![embed.clone()];
+        let page = &project.pages[0];
+        let svg = boundary_svg(&project, page, page.base_size_id()).unwrap();
+        // The framed page's text arrives as glyph paths, scaled from its size into the box.
+        assert!(svg.matches("<path").count() > 1, "{svg}");
+        assert!(svg.contains("scale(0.25 0.25)"), "{svg}");
+        embed.url = Some(project.pages[0].path.clone());
+        project.pages[0].elements = vec![embed];
+        let page = &project.pages[0];
+        let svg = boundary_svg(&project, page, page.base_size_id()).unwrap();
+        assert!(!svg.contains("scale("), "{svg}");
+        assert!(svg.matches("<path").count() <= 1, "{svg}");
     }
 
     #[test]
@@ -2368,6 +2532,8 @@ mod tests {
                 degrees: 45.0,
                 cx: 50.0,
                 cy: 25.0,
+                tx: 0.0,
+                ty: 0.0,
             }),
             1.0,
             vec![child],
@@ -2391,6 +2557,8 @@ mod tests {
                 degrees: 0.0,
                 cx: 50.0,
                 cy: 25.0,
+                tx: 0.0,
+                ty: 0.0,
             }),
             1.0,
             vec![child],
@@ -2459,6 +2627,8 @@ mod tests {
                 degrees: 30.0,
                 cx: 50.0,
                 cy: 40.0,
+                tx: 0.0,
+                ty: 0.0,
             }),
             alpha: 0.5,
             items: vec![child],
@@ -2839,6 +3009,7 @@ mod tests {
             &parent,
             parent.rect,
             &mut items,
+            &[],
         );
         assert_eq!(
             painted_boxes(&target, &items),

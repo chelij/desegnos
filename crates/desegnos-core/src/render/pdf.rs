@@ -465,8 +465,9 @@ fn write_transform(stream: &mut String, scene: &Scene, transform: &LayerTransfor
     let b = -sin * transform.sx;
     let c = sin * transform.sy;
     let d = cos * transform.sy;
-    let e = cx - a * cx - c * cy;
-    let f = cy - b * cx - d * cy;
+    // The translation stays in layer coordinates; PDF's Y axis points the other way.
+    let e = cx - a * cx - c * cy + transform.tx * SCALE;
+    let f = cy - b * cx - d * cy - transform.ty * SCALE;
     let _ = writeln!(stream, "{a:.6} {b:.6} {c:.6} {d:.6} {e:.6} {f:.6} cm");
 }
 
@@ -860,6 +861,8 @@ mod tests {
                 degrees: 0.0,
                 cx: 100.0,
                 cy: 100.0,
+                tx: 0.0,
+                ty: 0.0,
             },
         );
         let matrix: Vec<f64> = stream
@@ -892,6 +895,8 @@ mod tests {
                     degrees: 30.0,
                     cx: 100.0,
                     cy: 100.0,
+                    tx: 0.0,
+                    ty: 0.0,
                 }),
                 alpha: 0.5,
                 items: vec![Item::Shadow(moved)],

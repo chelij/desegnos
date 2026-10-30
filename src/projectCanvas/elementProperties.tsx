@@ -20,6 +20,19 @@ const validUrl = (value: string) => {
 };
 /** A hyperlink is a web address or a path to one of this project's boundaries. */
 const validLink = (value: string) => !value.trim() || (value.trim().startsWith('/') && !value.trim().startsWith('//')) || validUrl(value);
+/** An Embed needs a target: a web address or one of this project's page paths. */
+const validEmbedAddress = (value: string) => !!value.trim() && validLink(value);
+
+/** The project boundary an Embed or hyperlink names, as one shared picker. */
+function ProjectPageSelect({ label, project, value, disabled, choose }: { label: string; project: Project; value: string | null | undefined; disabled: boolean; choose: (path: string) => void }) {
+  return <label className="dock-field">{label}
+    <select aria-label="Link to a project page" value={project.pages.some(page => page.path === value) ? value ?? '' : ''} disabled={disabled}
+      onChange={event => { if (event.target.value) choose(event.target.value); }}>
+      <option value="">Project page…</option>
+      {project.pages.map(page => <option key={page.id} value={page.path}>{page.name} · {page.path}</option>)}
+    </select>
+  </label>;
+}
 
 function stylePatches(elements: Element[], change: (style: ElementStyle) => void): ElementPatch[] {
   return elements.map(element => {
@@ -371,13 +384,7 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
       </>}
     </PropsSection>}
     {hyperlinkKind && single && <PropsSection id="props-link" title="Link">
-      <label className="dock-field">Link to…
-        <select aria-label="Link to a project page" value={project.pages.some(page => page.path === single.url) ? single.url ?? '' : ''} disabled={busy}
-          onChange={event => { if (event.target.value) commitUrl(event.target.value); }}>
-          <option value="">Project page…</option>
-          {project.pages.map(page => <option key={page.id} value={page.path}>{page.name} · {page.path}</option>)}
-        </select>
-      </label>
+      <ProjectPageSelect label="Link to…" project={project} value={single.url} disabled={busy} choose={commitUrl} />
       <CompactTextField label="Link address" field="element-link" placeholder="https://example.com or /page" value={single.url ?? ''}
         disabled={busy} valid={validLink} commit={commitUrl} />
       {single.url && <button type="button" className="dock-action" disabled={busy} onClick={() => commitUrl('')}>Remove link</button>}
@@ -401,7 +408,8 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
         <button type="button" className="dock-action" disabled={busy} onClick={() => picture.current?.click()}>Replace</button>
         <input ref={picture} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { choosePicture(event.target.files?.[0]); event.target.value = ''; }} />
       </div>}
-      {mediaKind && <CompactTextField label="Address" value={url ?? ''} disabled={busy} valid={validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
+      {kind === 'embed' && single && <ProjectPageSelect label="Embed page…" project={project} value={single.url} disabled={busy} choose={commitUrl} />}
+      {mediaKind && <CompactTextField label="Address" value={url ?? ''} disabled={busy} valid={kind === 'embed' ? validEmbedAddress : validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
     </PropsSection>}
     {textKind && <PropsSection id="props-text" title="Text">
       {picker('text')}

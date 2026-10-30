@@ -215,14 +215,20 @@ fn safe_url(value: Option<&str>) -> String {
     }
 }
 
+/// The planned page a url names, when that page is part of the export.
+fn page_target<'a>(url: &str, plan: &'a ExportPlan) -> Option<&'a ExportPagePlan> {
+    plan.pages
+        .iter()
+        .find(|page| page.path == url && !page.file.is_empty())
+}
+
 /// The address a hyperlink renders: a project boundary becomes its exported file, and an
 /// external address stays as it was typed.
 fn link_href(element: &Element, plan: &ExportPlan) -> String {
-    let target = element.url.as_deref().and_then(|url| {
-        plan.pages
-            .iter()
-            .find(|page| page.path == url && !page.file.is_empty())
-    });
+    let target = element
+        .url
+        .as_deref()
+        .and_then(|url| page_target(url, plan));
     target
         .map(|page| escape(&page.file))
         .unwrap_or_else(|| safe_url(element.url.as_deref()))
@@ -255,6 +261,7 @@ fn tag_name(element: &Element) -> &'static str {
 fn markup(
     element: &Element,
     plan: &ExportPlan,
+    owner_path: &str,
     markers: &BTreeMap<Uuid, Vec<Uuid>>,
     out: &mut String,
 ) {
@@ -317,10 +324,21 @@ fn markup(
             " controls src=\"{}\"",
             safe_url(element.url.as_deref())
         )),
-        Embed => out.push_str(&format!(
-            " sandbox=\"\" title=\"{label}\" src=\"{}\"",
-            safe_url(element.url.as_deref())
-        )),
+        Embed => {
+            let url = element.url.as_deref().unwrap_or_default();
+            if url == owner_path {
+                // A page never frames itself; the empty frame keeps the box without nesting.
+                out.push_str(&format!(" sandbox=\"\" title=\"{label}\""));
+            } else {
+                // A project page frames its exported file as trusted output, so its behaviours run.
+                let own = page_target(url, plan).is_some();
+                out.push_str(&format!(
+                    " sandbox=\"{}\" title=\"{label}\" src=\"{}\"",
+                    if own { "allow-scripts" } else { "" },
+                    link_href(element, plan)
+                ));
+            }
+        }
         Textarea | Select { .. } => out.push_str(&format!(" aria-label=\"{label}\"")),
         _ => {}
     }
@@ -369,7 +387,7 @@ fn markup(
         _ => out.push_str(&escape(&element.text)),
     }
     for child in &element.children {
-        markup(child, plan, markers, out);
+        markup(child, plan, owner_path, markers, out);
     }
     out.push_str(&format!("</{tag}>\n"));
 }
@@ -988,7 +1006,7 @@ pub(super) fn render(
         }
         let mut html = String::new();
         for element in crate::resolve_for_size(project, page, page.base_size_id()) {
-            markup(&element, plan, &markers, &mut html);
+            markup(&element, plan, &page.path, &markers, &mut html);
         }
         let mut css = format!(
             "html,body{{margin:0;padding:0;}}\n.desegnos-viewport{{container-type:inline-size;width:100%;max-width:{}px;margin:0 auto;}}\n.desegnos-page{{position:relative;width:100%;isolation:isolate;}}\n",
@@ -2003,5 +2021,63 @@ mod tests {
             pointer_fingerprints(&reused.files),
             pointer_fingerprints(&edited)
         );
+    }
+
+    #[test]
+    fn an_embed_frames_a_project_page_file_with_scripts_and_never_the_page_itself() {
+        let project = project();
+        let mut project = project
+            .apply(
+                project.revision,
+                crate::Command::AddCanvasPage {
+                    name: "About".into(),
+                    path: "/about".into(),
+                    size: PageSize {
+                        id: Uuid::new_v4(),
+                        label: "Desktop".into(),
+                        width: 800,
+                        height: 600,
+                        kind: BoundaryKind::Page,
+                        x: 0.0,
+                        y: 1000.0,
+                    },
+                    moves: vec![],
+                    reference: vec![],
+                },
+            )
+            .unwrap();
+        let mut own = element(ElementKind::Embed);
+        own.url = Some("/about".into());
+        let mut external = element(ElementKind::Embed);
+        external.url = Some("https://example.test/map".into());
+        let mut itself = element(ElementKind::Embed);
+        itself.url = Some(project.pages[0].path.clone());
+        project.pages[0].elements = vec![own.clone(), external.clone(), itself.clone()];
+        let bundle = direct_export_bundle(&project, &[]).unwrap();
+        let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
+        assert!(
+            html.contains(&format!(
+                "data-desegnos-id=\"{}\" sandbox=\"allow-scripts\" title=\"\" src=\"about.html\"",
+                own.id
+            )),
+            "{html}"
+        );
+        assert!(
+            html.contains(&format!(
+                "data-desegnos-id=\"{}\" sandbox=\"\" title=\"\" src=\"https://example.test/map\"",
+                external.id
+            )),
+            "{html}"
+        );
+        // A self-embed keeps the frame but drops the address, so nothing nests inside itself.
+        assert!(
+            html.contains(&format!(
+                "data-desegnos-id=\"{}\" sandbox=\"\" title=\"\"",
+                itself.id
+            )),
+            "{html}"
+        );
+        assert!(!html.contains("src=\"/\""), "{html}");
+        assert!(!html.contains("allow-same-origin"), "{html}");
     }
 }

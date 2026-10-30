@@ -32,7 +32,7 @@ fn content_guidance(outputs: &[crate::OutputType], web_search: bool) -> String {
         .iter()
         .any(|o| matches!(o, OutputType::Webpage | OutputType::AppScreen))
     {
-        md.push_str("\n## Whole pages and pieces of pages\n\nBuild only what the request covers. A request on a layer or an area is one piece of the page: build it in place, match the style of the boundary outline around it, and add navigation, headers or footers only when the request asks for them. A request on a whole empty boundary is a whole page: give it the parts the request implies (navigation, sections, calls to action, footer) and the same header and style as the site's other pages. Link between pages with a Link element whose `url` is a path from `siteRoutes`.\n\n## Frames\n\nA frame shows other content inside a page. For a live external site, map or widget, use an Embed element with its https `url`; it exports as an iframe and only takes web addresses. To show a page of this project inside a frame, such as a device or browser mockup or a preview card, draw that page's design as layers grouped inside the frame box, and wrap it in a Link to its path when it should open the page. A request on a layer drawn as a frame changes what is inside it and keeps the frame itself unless the request asks otherwise.\n");
+        md.push_str("\n## Whole pages and pieces of pages\n\nBuild only what the request covers. A request on a layer or an area is one piece of the page: build it in place, match the style of the boundary outline around it, and add navigation, headers or footers only when the request asks for them. A request on a whole empty boundary is a whole page: give it the parts the request implies (navigation, sections, calls to action, footer) and the same header and style as the site's other pages. Link between pages with a Link element whose `url` is a path from `siteRoutes`.\n\n## Frames\n\nA frame shows other content inside a page. For a live external site, map or widget, use an Embed element with its https `url`. An Embed's `url` may also be a path from `siteRoutes`: it frames that page live and stays in sync with it. Draw a page's design as layers inside the frame box only for a mockup that should differ from the real page, and wrap it in a Link to its path when it should open the page. A request on a layer drawn as a frame changes what is inside it and keeps the frame itself unless the request asks otherwise.\n");
     }
     if outputs.contains(&OutputType::Slide) {
         md.push_str("- `slide`: one presentation slide in a fixed frame. One idea per slide: a short headline, a few words or bullets in large legible type, and a clear visual. No paragraphs, and nothing beyond the frame.\n");
@@ -960,6 +960,8 @@ mod content_guidance_tests {
         assert!(site.contains("use web search"));
         assert!(site.contains("never on the canvas"));
         assert!(site.contains("## Frames") && site.contains("siteRoutes"));
+        assert!(site.contains("a path from `siteRoutes`: it frames that page live"));
+        assert!(!site.contains("only takes web addresses"));
         assert!(!slides.contains("## Frames"));
     }
 }
