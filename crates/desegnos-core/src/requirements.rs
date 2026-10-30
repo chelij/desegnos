@@ -15,6 +15,30 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
+/// What the boundaries in scope ship as, and how to fill them with real content. Everything on
+/// the canvas reaches the audience, so the AI is told what it is making before it draws.
+fn content_guidance(outputs: &[crate::OutputType], web_search: bool) -> String {
+    use crate::OutputType;
+    let mut md = String::from("\n## What you are making\n\nEach boundary in `pages` has an `output`: what it ships as. Draw for that audience.\n\n");
+    if outputs.iter().any(|o| matches!(o, OutputType::Webpage | OutputType::AppScreen)) {
+        md.push_str("- `webpage` (or `appScreen`): one page of the project's public website, built from this canvas at export. A `page` boundary scrolls and grows taller; a `screen` boundary is one fixed view, such as an app screen. Use the familiar parts the request implies (navigation, headings, sections, calls to action, footer), give pages of one site a consistent header and style, and keep text readable at every listed size.\n");
+    }
+    if outputs.contains(&OutputType::Slide) {
+        md.push_str("- `slide`: one presentation slide in a fixed frame. One idea per slide: a short headline, a few words or bullets in large legible type, and a clear visual. No paragraphs, and nothing beyond the frame.\n");
+    }
+    if outputs.contains(&OutputType::Image) {
+        md.push_str("- `image`: a standalone picture such as a poster, social post or banner, exported as pixels. Compose to fill the frame around one focal point, with only the text the request needs.\n");
+    }
+    md.push_str("\n## Content, not commentary\n\nThe audience sees exactly what you draw. Draw only content the request asks for or the accepted project context establishes. Put notes, design criticism, assumptions, questions and explanations of your choices in `summary`, `criticism` or `decisionProposals`, never on the canvas. No draft badges, intro notes, sample banners, unsolicited taglines, slogans or invented marketing claims. Ordinary concise wording that fulfils the request is fine; do not pad it.\n\n");
+    md.push_str("## Complete a usable draft\n\nFill what is requested with real content: the project brief and accepted decisions, the user's attachments and project material, and concise original wording. ");
+    if web_search {
+        md.push_str("Before settling for a placeholder, use web search for missing public facts, names and destinations, only within the request's scope. ");
+    }
+    md.push_str("Never invent private facts such as a business name, address, phone number, prices, people, customer work or account links: leave the detail out, or when it is essential, keep one short local label in its place (for example Add your phone number) and ask in `summary`. Never fabricate reviews, endorsements or working services.\n\n");
+    md.push_str("## The user's material\n\nText attachments are the user's own content (copy, menus, prices, details): use them and keep their facts exactly. Link attachments are destinations or references to use. When the imported identity lists `photos`, they are the user's own pictures with descriptions: when a request needs pictures (a portfolio, products, team, places), choose fitting photos by description and set a new Image element's `image` to the id after `desegnos-asset:` in its url, instead of a placeholder or a new picture. Its `content` lists the user's existing work and pages; when a request refers to them, use those titles, summaries and links and never invent others. Pictures come only from the project, the request's attachments or `images` you ask Desegnos to make, never from an online URL.\n\n");
+    md
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerationCapabilities {
@@ -402,7 +426,6 @@ impl Project {
             }
         }
 
-        md.push_str("\n## Boundaries and requests\n\nEach request names what it may change. Positions in operations are in the parent box's coordinate space; a new or changed element must stay inside its parent's box. The boundary outline is context at lower detail. Only operations on the request's targets and change-pointer-granted targets are accepted; a reference pointer's target is context only. A request with an area over empty space inside a boundary may insert new layers within the area; an area outside every boundary may add reference items.\n\nA page boundary may have several linked sizes (phone, tablet, desktop) that share one element tree. The first size is the base size: its values are what every other size inherits. A request names the size it was written in (`sizeId`), and every size with its dimensions is listed so you can answer for each.\n\n");
         let requests = self.requests_in_scope(&targets);
         let mut page_ids: Vec<Uuid> = targets.iter().map(|(page, _)| page.id).collect();
         for request in &requests {
@@ -415,15 +438,24 @@ impl Project {
             }
         }
         let mut pages = Vec::new();
+        let mut outputs = Vec::new();
         for page_id in page_ids {
             let page = self.page(page_id)?;
             pages.push(serde_json::json!({
                 "id": page.id, "name": page.name, "path": page.path, "included": page.included,
                 "viewport": page.viewport(), "boundary": page.base_size().kind,
-                "sizes": page.sizes,
+                "output": page.output, "sizes": page.sizes,
                 "elements": crate::element_outline(&crate::resolve_elements(self, &page.elements)),
             }));
+            if !outputs.contains(&page.output) {
+                outputs.push(page.output);
+            }
         }
+        md.push_str(&content_guidance(
+            &outputs,
+            capabilities.as_ref().is_some_and(|c| c.web_search),
+        ));
+        md.push_str("\n## Boundaries and requests\n\nEach request names what it may change. Positions in operations are in the parent box's coordinate space; a new or changed element must stay inside its parent's box. The boundary outline is context at lower detail. Only operations on the request's targets and change-pointer-granted targets are accepted; a reference pointer's target is context only. A request with an area over empty space inside a boundary may insert new layers within the area; an area outside every boundary may add reference items.\n\nA page boundary may have several linked sizes (phone, tablet, desktop) that share one element tree. The first size is the base size: its values are what every other size inherits. A request names the size it was written in (`sizeId`), and every size with its dimensions is listed so you can answer for each.\n\n");
         let request_rows: Vec<_> = requests
             .iter()
             .map(|request| {
@@ -464,7 +496,7 @@ impl Project {
                             let page = self.page(*page)?;
                             targets.push(serde_json::json!({
                                 "kind": "boundary", "pageId": page.id, "sizeId": size,
-                                "boundary": { "kind": page.base_size().kind, "size": page.viewport(), "sizes": page.sizes },
+                                "boundary": { "kind": page.base_size().kind, "output": page.output, "size": page.viewport(), "sizes": page.sizes },
                                 "boundaryOutline": crate::element_outline(&crate::resolve_elements(self, &page.elements)),
                             }));
                         }
@@ -882,5 +914,22 @@ impl RequirementsSnapshot {
             "The requirements document or its target metadata disagrees with the project snapshot.",
         )?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod content_guidance_tests {
+    use super::content_guidance;
+    use crate::OutputType;
+
+    #[test]
+    fn guidance_names_only_the_outputs_in_scope() {
+        let slides = content_guidance(&[OutputType::Slide], false);
+        assert!(slides.contains("`slide`") && !slides.contains("`webpage`"));
+        assert!(!slides.contains("web search"));
+        let site = content_guidance(&[OutputType::Webpage, OutputType::Image], true);
+        assert!(site.contains("`webpage`") && site.contains("`image`"));
+        assert!(site.contains("use web search"));
+        assert!(site.contains("never on the canvas"));
     }
 }
