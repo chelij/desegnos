@@ -537,6 +537,7 @@ impl GenerationCandidate {
         // Run the operations on a copy so in-scope edits, ids, images and positions are checked
         // by the same code that later applies them.
         let mut copy = project.clone();
+        copy.store_request_pictures(&request_ids)?;
         let generated = BTreeMap::new();
         for outcome in &self.requests {
             if outcome.status == RequestStatus::Implemented {
@@ -1382,6 +1383,7 @@ pub fn apply_generation_output(
 ) -> Result<Project> {
     candidate.validate(snapshot, project)?;
     let mut next = project.clone();
+    next.store_request_pictures(&snapshot.request_ids()?)?;
     next.revision = next
         .revision
         .checked_add(1)

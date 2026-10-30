@@ -125,7 +125,8 @@ impl Project {
     /// Validate and optionally scale a picture before it enters the project store. Returns the
     /// id and the bytes that were actually stored, so the caller can build the picture map.
     pub fn prepare_picture(uri: &str, display_width: u32) -> Result<(Uuid, String)> {
-        let scaled = crate::scaled_for_display(uri, display_width).unwrap_or_else(|| uri.to_owned());
+        let scaled =
+            crate::scaled_for_display(uri, display_width).unwrap_or_else(|| uri.to_owned());
         let id = store_picture_uri(&scaled)?;
         Ok((id, scaled))
     }
@@ -133,10 +134,7 @@ impl Project {
 
 /// Validate picture bytes once and return their content-addressed identifier.
 pub(crate) fn store_picture_uri(uri: &str) -> Result<Uuid> {
-    ensure(
-        valid_picture(uri),
-        "Drop a PNG, JPEG, WebP or GIF picture.",
-    )?;
+    ensure(valid_picture(uri), "Drop a PNG, JPEG, WebP or GIF picture.")?;
     Ok(inline_image_id(uri))
 }
 

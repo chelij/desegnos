@@ -62,7 +62,6 @@ function ReviewGroup({ name, className = '', disabled, choose, children }: { nam
 
 export function ImportContext({ busy, settings, openSettings, importInto, onPagesImported, close, initialSource }: Props) {
   const [source, setSource] = useState<IdentitySource | null>(initialSource ?? null);
-  const [previousBrand, setPreviousBrand] = useState(false);
   const [files, setFiles] = useState<string[]>([]);
   const [automatic, setAutomatic] = useState(true);
   const [pickVersion, setPickVersion] = useState(0);
@@ -172,7 +171,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
   function acceptRead(value: WebsiteImportSourceView | null) {
     if (!value || !mounted.current) return;
     setError('');
-    setSource(null); setAnalysis(null); setPreviousBrand(false); setReadBrand(null);
+    setSource(null); setAnalysis(null); setReadBrand(null);
     if (value.identitySource) acceptSource(value.identitySource);
     if (value.identityError) setError(value.identityError);
   }
@@ -193,7 +192,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
     if (alsoBrand) await analyze(); else if (!leftOut.length) close();
   }
   function acceptSource(value: IdentitySource) {
-    setSource(value); setPreviousBrand(false); setKept(false); setFiles([]); setAutomatic(true); setSelection(null); setAnalysis(null); setFindings([]); setAssets([]); setPhotoIds([]); setItemIndices([]);
+    setSource(value); setKept(false); setFiles([]); setAutomatic(true); setSelection(null); setAnalysis(null); setFindings([]); setAssets([]); setPhotoIds([]); setItemIndices([]);
   }
   async function analyze() {
     if (!mounted.current || !source || !selection?.fits || !connected || locked) return;
@@ -243,7 +242,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
 
         {source && <h3 className="identity-source-name">{source.name}</h3>}
         {!source && recoveryError && <ProblemBanner message={userError(recoveryError)} action={{ label: 'Try loading again', disabled: !!locked || readingPrevious, onClick: () => { void readPrevious(); } }} />}
-        {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setPreviousBrand(true); setFiles(previous.fileIds); setAutomatic(false); setSelection(null); acceptAnalysis(previous); setPrevious(null); }}>Continue with my previous brand</button>}
+        {!source && previous && <button type="button" disabled={locked} onClick={() => { setSource(previous.source); setFiles(previous.fileIds); setAutomatic(false); setSelection(null); acceptAnalysis(previous); setPrevious(null); }}>Continue with my previous brand</button>}
         </>
         {source && source.skipped.length > 0 && <details><summary>See all skipped files · {skippedSummary(source.skipped)}</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details>}
         <WebsiteImportStatus flow={pages} busy={busy} />

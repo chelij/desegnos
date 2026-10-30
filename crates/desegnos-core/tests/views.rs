@@ -80,10 +80,7 @@ fn add_update_and_remove_a_named_view() {
         (-320.0, 64.0, 0.5)
     );
 
-    let removed = apply(
-        &moved,
-        Command::RemoveNamedView { view_id: view.id },
-    );
+    let removed = apply(&moved, Command::RemoveNamedView { view_id: view.id });
     assert!(removed.views.is_empty());
     assert_eq!(removed.revision, moved.revision + 1);
 }
@@ -200,7 +197,13 @@ fn view_commands_reject_invalid_names_cameras_and_missing_views() {
 fn a_project_holds_at_most_fifty_views() {
     let mut project = project();
     for index in 0..50 {
-        project = add(&project, &format!("View {}", index + 1), index as f64, 0.0, 1.0);
+        project = add(
+            &project,
+            &format!("View {}", index + 1),
+            index as f64,
+            0.0,
+            1.0,
+        );
     }
     assert_eq!(project.views.len(), 50);
 

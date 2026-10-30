@@ -1,5 +1,7 @@
 //! Text-only project-local history, derived from frozen job requests and outcomes.
-use crate::{Project, Rect, RequestOutcome, RequestStatus, RequirementsSnapshot, Result, digest, ensure};
+use crate::{
+    Project, Rect, RequestOutcome, RequestStatus, RequirementsSnapshot, Result, digest, ensure,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -46,8 +48,7 @@ pub fn earlier_requests(
                         let page_id = serde_json::from_value(value.get("pageId")?.clone()).ok()?;
                         let element_id =
                             serde_json::from_value(value.get("elementId")?.clone()).ok()?;
-                        let rect =
-                            serde_json::from_value(value.get("rect")?.clone()).ok()?;
+                        let rect = serde_json::from_value(value.get("rect")?.clone()).ok()?;
                         let request = value.get("request")?.as_str()?;
                         let question = requests.iter().find(|r| {
                             r.element_id == Some(element_id) && r.status == RequestStatus::Conflict
@@ -261,10 +262,7 @@ impl RequirementsSnapshot {
                 "request":clip(&r.request,300),"outcome":clip(&r.outcome,320),"summary":summary,
                 "validationReason":r.validation_rejection.as_deref().map(|reason| clip(reason, REJECTION_CHARS))});
             let line = format!("{}\n", entry);
-            if HEADING.chars().count()
-                + section.chars().count()
-                + line.chars().count()
-                + 4
+            if HEADING.chars().count() + section.chars().count() + line.chars().count() + 4
                 > REQUEST_HISTORY_CHARS
             {
                 break;
@@ -285,8 +283,7 @@ impl RequirementsSnapshot {
     pub(crate) fn set_request_history(&mut self, section: String) -> Result<()> {
         ensure(
             section.is_empty()
-                || ((section.starts_with(HEADING)
-                    || section.starts_with(RETRY_HEADING))
+                || ((section.starts_with(HEADING) || section.starts_with(RETRY_HEADING))
                     && section.chars().count() <= REQUEST_HISTORY_CHARS + RETRY_HISTORY_CHARS),
             "The request history is invalid.",
         )?;

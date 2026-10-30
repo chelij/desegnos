@@ -89,6 +89,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [providers.rs](../crates/desegnos-ai/src/providers.rs) | `ProviderId`, `ProviderDescriptor`, provider catalogue, `ProviderAdapter`, `ProviderClient`, estimates, model access checks and generation/identity dispatch. |
 | [transport.rs](../crates/desegnos-ai/src/transport.rs) | `OpenAiClient`, HTTP/SSE streaming, deadlines/idle limits, response identity and correlation, model discovery and ChatGPT bearer use. |
 | [settings.rs](../crates/desegnos-ai/src/settings.rs) | `ProviderSettings`, model catalogue, request bodies, token/size limits, cost estimates and billed output caps. |
+| [request.rs](../crates/desegnos-ai/src/request.rs) | Shared validated task content: instructions, documents, images and reply schema before provider-specific encoding. |
 | [credentials.rs](../crates/desegnos-ai/src/credentials.rs) | `ApiKey`, `CredentialManager`, system/session storage, masked identifiers and credential status. |
 | [error.rs](../crates/desegnos-ai/src/error.rs) | `ProviderError`, error kinds, submission outcomes, diagnostics scrubbing and authentication context. |
 | [sse.rs](../crates/desegnos-ai/src/sse.rs) | Bounded SSE decoder, event framing, terminal output extraction and stream validation. |
@@ -150,8 +151,8 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [ProblemBanner.tsx](../src/ProblemBanner.tsx), [noticeSummary.ts](../src/noticeSummary.ts) | Notice queue/host, problem banners and outside-change summaries. `noticeSummary.ts` is exercised by tests but has no current editor import. |
 | [Disclosure.tsx](../src/Disclosure.tsx), [StatusChip.tsx](../src/StatusChip.tsx), [icons.tsx](../src/icons.tsx) | Shared disclosure row, status badge and inline icon set. |
 | [DraftText.tsx](../src/DraftText.tsx) | `useDraftText`: batched text commits that never overwrite newer typing. |
-| [HistoryPanel.tsx](../src/HistoryPanel.tsx), [useHistory.ts](../src/useHistory.ts), [historySteps.ts](../src/historySteps.ts) | Versions/alternatives in the dock, derived history labels, and ending the native history step when a text field loses focus. |
-| [Generation.tsx](../src/Generation.tsx), [GenerationLog.tsx](../src/GenerationLog.tsx) | Generation review panel and AI conversation/details: coverage, usage, retries, proposals, criticism and raw reply. |
+| [HistoryPanel.tsx](../src/HistoryPanel.tsx), [historySteps.ts](../src/historySteps.ts) | Versions/alternatives in the dock, derived history labels, and ending the native history step when a text field loses focus. |
+| [Generation.tsx](../src/Generation.tsx), [GenerationLog.tsx](../src/GenerationLog.tsx) | Generation status and AI conversation: usage, retries, proposals, criticism and raw reply. |
 | [useGeneration.ts](../src/useGeneration.ts), [generationSession.ts](../src/generationSession.ts) | Job lifecycle/polling/submit/cancel/retry, owned-session notices and restored-job silence. |
 | [generationProblems.ts](../src/generationProblems.ts), [userErrors.ts](../src/userErrors.ts) | Per-area problem callouts/outcomes and user-facing translations of native/provider errors. |
 | [AiSettings.tsx](../src/AiSettings.tsx) | Provider/model/key, ChatGPT accounts, secure-storage status and access checks. |

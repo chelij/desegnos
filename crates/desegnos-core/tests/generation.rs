@@ -528,6 +528,57 @@ fn set_behaviour_validates_scope_and_creates_updates_removes_in_one_undo_step() 
 }
 
 #[test]
+fn mouse_following_and_scrolling_requests_apply_as_finite_designs_with_behaviours() {
+    let (mut project, page, target, other) = setup();
+    project.requests[0].text = "Make this point to mouse pointer in a website".into();
+    let mut scrolling = project.requests[0].clone();
+    scrolling.id = Uuid::new_v4();
+    scrolling.text = "Looping scrolling text of random AI chat nonsense".into();
+    scrolling.targets = vec![RequestTarget::Element {
+        page,
+        size: None,
+        id: other,
+    }];
+    project.requests.push(scrolling);
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = candidate(&snapshot, target, page, project.pointers[0].id);
+    reply.requests[0].request_id = Some(project.requests[0].id);
+    reply.requests[0].operations = serde_json::from_value(json!([
+        {"kind":"replaceChildren","children":[{
+            "kind":"text","rect":rect(10.0, 10.0, 80.0, 40.0),"text":"→"
+        }]},
+        {"kind":"setBehaviour","elementId":target,"behaviour":"Rotate the arrow to point at the mouse pointer."}
+    ])).unwrap();
+    let mut second = reply.requests[0].clone();
+    second.request_id = Some(project.requests[1].id);
+    second.element_id = Some(other);
+    second.operations = serde_json::from_value(json!([
+        {"kind":"update","patches":[{"elementId":other,"text":"Thinking about thinking…"}]},
+        {"kind":"setBehaviour","elementId":other,"behaviour":"Scroll the text left continuously in a seamless loop."}
+    ])).unwrap();
+    reply.requests.push(second);
+    let reply = GenerationCandidate::from_json(&serde_json::to_string(&reply).unwrap()).unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert!(applied.requests.is_empty());
+    assert_eq!(applied.element(target).unwrap().1.children[0].text, "→");
+    assert_eq!(
+        applied.element(other).unwrap().1.text,
+        "Thinking about thinking…"
+    );
+    assert_eq!(
+        applied
+            .pointers
+            .iter()
+            .filter(|pointer| pointer.is_behaviour())
+            .count(),
+        2
+    );
+    assert_eq!(applied.element(target).unwrap().1.meta.requests.len(), 1);
+    assert_eq!(applied.element(other).unwrap().1.meta.requests.len(), 1);
+}
+
+#[test]
 fn set_behaviour_rejects_boundary_without_a_boundary_request_and_oversized_text() {
     let (mut project, page, target, _) = setup();
     let snapshot = project.prepare_requirements().unwrap();

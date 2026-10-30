@@ -578,7 +578,9 @@ impl Element {
         }
         for over in self.overrides.values() {
             over.validate(self)?;
-            if let Some(style) = &over.style { project.styles.validate_references(&style.references)?; }
+            if let Some(style) = &over.style {
+                project.styles.validate_references(&style.references)?;
+            }
         }
         if self.link.is_some() {
             ensure(
@@ -1383,9 +1385,12 @@ impl Project {
             .map(|size| {
                 let width = parent
                     .map(|element| {
-                        element.overrides.get(&size.id)
+                        element
+                            .overrides
+                            .get(&size.id)
                             .and_then(|over| over.rect.as_ref())
-                            .unwrap_or(&element.rect).width
+                            .unwrap_or(&element.rect)
+                            .width
                     })
                     .unwrap_or(f64::from(size.width));
                 (size.id, width)
@@ -1401,19 +1406,27 @@ impl Project {
                 for &(id, width) in widths {
                     let mut rect = original;
                     if width < source_width {
-                        rect.x = (original.x * width / source_width)
-                            .clamp(0.0, (width - 1.0).max(0.0));
+                        rect.x =
+                            (original.x * width / source_width).clamp(0.0, (width - 1.0).max(0.0));
                         rect.width = original.width.min((width - rect.x).max(1.0));
                     }
                     if id != source && !element.overrides.contains_key(&id) && rect != original {
                         element.overrides.entry(id).or_default().rect = Some(rect);
                     }
-                    let child_width = element.overrides.get(&id)
+                    let child_width = element
+                        .overrides
+                        .get(&id)
                         .and_then(|over| over.rect.as_ref())
-                        .unwrap_or(&rect).width;
+                        .unwrap_or(&rect)
+                        .width;
                     child_widths.push((id, child_width));
                 }
-                fit(&mut element.children, &child_widths, source, original.width.max(1.0));
+                fit(
+                    &mut element.children,
+                    &child_widths,
+                    source,
+                    original.width.max(1.0),
+                );
             }
         }
         fit(&mut elements, &widths, source, source_width.max(1.0));
@@ -1422,7 +1435,10 @@ impl Project {
             Some(parent_id) => {
                 let parent = find_element_mut(&mut page.elements, parent_id)
                     .ok_or_else(|| Error("This box no longer exists.".into()))?;
-                ensure(parent.kind.holds_children(), "Only a box or a group can hold children.")?;
+                ensure(
+                    parent.kind.holds_children(),
+                    "Only a box or a group can hold children.",
+                )?;
                 &mut parent.children
             }
         };
@@ -1847,7 +1863,12 @@ impl Project {
         Ok(())
     }
 
-    pub(crate) fn nudge_elements(&mut self, moves: Vec<ElementMove>, dx: f64, dy: f64) -> Result<()> {
+    pub(crate) fn nudge_elements(
+        &mut self,
+        moves: Vec<ElementMove>,
+        dx: f64,
+        dy: f64,
+    ) -> Result<()> {
         ensure(!moves.is_empty(), "Choose a layer to move.")?;
         ensure(dx.is_finite() && dy.is_finite(), "Invalid nudge distance.")?;
         let mut pages: BTreeMap<Uuid, Vec<ElementMove>> = BTreeMap::new();
@@ -1855,18 +1876,28 @@ impl Project {
             pages.entry(movement.to_page_id).or_default().push(movement);
         }
         for (page_id, moves) in pages {
-            let page = self.pages.iter().find(|page| page.id == page_id)
+            let page = self
+                .pages
+                .iter()
+                .find(|page| page.id == page_id)
                 .ok_or_else(|| Error("This page no longer exists.".into()))?;
             let resolved = resolve_elements(self, &page.elements);
             let mut patches = Vec::with_capacity(moves.len());
             for movement in moves {
                 let element = find_element(&resolved, movement.id)
                     .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                let rect = movement.size_id.and_then(|id| element.overrides.get(&id))
-                    .and_then(|over| over.rect).unwrap_or(element.rect);
+                let rect = movement
+                    .size_id
+                    .and_then(|id| element.overrides.get(&id))
+                    .and_then(|over| over.rect)
+                    .unwrap_or(element.rect);
                 patches.push(ElementPatch {
                     id: movement.id,
-                    rect: Some(Rect { x: rect.x + dx, y: rect.y + dy, ..rect }),
+                    rect: Some(Rect {
+                        x: rect.x + dx,
+                        y: rect.y + dy,
+                        ..rect
+                    }),
                     size_id: movement.size_id,
                     all_sizes: movement.all_sizes,
                     ..Default::default()
@@ -2026,7 +2057,10 @@ impl Project {
 
     pub(crate) fn stack_elements(&mut self, page_id: Uuid, ids: Vec<Uuid>) -> Result<()> {
         if ids.len() == 1 {
-            let page = self.pages.iter().find(|page| page.id == page_id)
+            let page = self
+                .pages
+                .iter()
+                .find(|page| page.id == page_id)
                 .ok_or_else(|| Error("This page no longer exists.".into()))?;
             let resolved = resolve_elements(self, &page.elements);
             if let Some(element) = find_element(&resolved, ids[0])
@@ -2041,12 +2075,15 @@ impl Project {
                     style.sizing.width = SizingMode::Fit;
                     style.sizing.height = SizingMode::Fit;
                 }
-                return self.update_elements(page_id, vec![ElementPatch {
-                    id: ids[0],
-                    layout: Some(default_stack()),
-                    style: Some(style),
-                    ..Default::default()
-                }]);
+                return self.update_elements(
+                    page_id,
+                    vec![ElementPatch {
+                        id: ids[0],
+                        layout: Some(default_stack()),
+                        style: Some(style),
+                        ..Default::default()
+                    }],
+                );
             }
         }
         self.wrap_elements(page_id, ids, true)
@@ -2055,10 +2092,21 @@ impl Project {
     fn wrap_elements(&mut self, page_id: Uuid, ids: Vec<Uuid>, stack: bool) -> Result<()> {
         ensure(
             ids.len() >= if stack { 1 } else { 2 },
-            if stack { "Choose layers to wrap." } else { "Choose at least two layers to group." },
+            if stack {
+                "Choose layers to wrap."
+            } else {
+                "Choose at least two layers to group."
+            },
         )?;
         // A new group or stack is a new layer too, so it takes the next numbered name.
-        let group_name = next_default_name(self, if stack { &ElementKind::Box } else { &ElementKind::Group });
+        let group_name = next_default_name(
+            self,
+            if stack {
+                &ElementKind::Box
+            } else {
+                &ElementKind::Group
+            },
+        );
         let page = self
             .pages
             .iter_mut()
@@ -2581,7 +2629,11 @@ pub(crate) fn used_default_names(project: &Project) -> BTreeMap<String, u32> {
 /// Gives every unnamed layer its next numbered default name, children included.
 pub(crate) fn assign_default_names(elements: &mut [Element], used: &mut BTreeMap<String, u32>) {
     for element in elements {
-        if element.name.as_deref().is_none_or(|name| name.trim().is_empty()) {
+        if element
+            .name
+            .as_deref()
+            .is_none_or(|name| name.trim().is_empty())
+        {
             let base = default_layer_name_base(&element.kind);
             let next = used.get(base).copied().unwrap_or(0) + 1;
             used.insert(base.to_string(), next);
@@ -2601,7 +2653,8 @@ fn next_default_name(project: &Project, kind: &ElementKind) -> String {
 
 /// An element with the neutral visuals every new layer starts from.
 pub fn empty_element(kind: ElementKind, rect: Rect) -> Element {
-    let fill = matches!(&kind, ElementKind::Box | ElementKind::Ellipse).then(|| "#d9d9d9".to_owned());
+    let fill =
+        matches!(&kind, ElementKind::Box | ElementKind::Ellipse).then(|| "#d9d9d9".to_owned());
     Element {
         id: Uuid::new_v4(),
         kind,
@@ -2736,13 +2789,42 @@ mod tests {
 
     #[test]
     fn sizing_defaults_and_limits_are_validated() {
-        let sizing: ElementSizing = serde_json::from_str(r#"{"width":"fill","height":"fit","minWidth":30,"maxWidth":80}"#).unwrap();
+        let sizing: ElementSizing =
+            serde_json::from_str(r#"{"width":"fill","height":"fit","minWidth":30,"maxWidth":80}"#)
+                .unwrap();
         assert_eq!(sizing.constrain(10.0, 50.0), (30.0, 50.0));
         assert_eq!(sizing.constrain(100.0, 50.0), (80.0, 50.0));
         assert!(sizing.validate().is_ok());
-        assert!(ElementSizing { min_width: Some(100.0), max_width: Some(50.0), ..Default::default() }.validate().is_err());
-        assert!(ElementSizing { min_height: Some(f64::NAN), ..Default::default() }.validate().is_err());
-        let mut legacy = serde_json::to_value(empty_element(ElementKind::Box, Rect { x: 0.0, y: 0.0, width: 100.0, height: 40.0 }).style).unwrap();
+        assert!(
+            ElementSizing {
+                min_width: Some(100.0),
+                max_width: Some(50.0),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            ElementSizing {
+                min_height: Some(f64::NAN),
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
+        let mut legacy = serde_json::to_value(
+            empty_element(
+                ElementKind::Box,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 40.0,
+                },
+            )
+            .style,
+        )
+        .unwrap();
         legacy.as_object_mut().unwrap().remove("sizing");
         legacy.as_object_mut().unwrap().remove("references");
         let style: ElementStyle = serde_json::from_value(legacy).unwrap();
@@ -2753,22 +2835,50 @@ mod tests {
     fn per_side_padding_is_optional_serialized_and_validated() {
         let mut style = empty_element(
             ElementKind::Box,
-            Rect { x: 0.0, y: 0.0, width: 100.0, height: 40.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 40.0,
+            },
         )
         .style;
         assert!(style.padding.is_none());
         let value = serde_json::to_value(&style).unwrap();
-        assert!(value.get("padding").is_none(), "an all-sides layout padding stays compact");
-        style.padding = Some(ElementPadding { top: 8.0, right: 16.0, bottom: 8.0, left: 16.0 });
+        assert!(
+            value.get("padding").is_none(),
+            "an all-sides layout padding stays compact"
+        );
+        style.padding = Some(ElementPadding {
+            top: 8.0,
+            right: 16.0,
+            bottom: 8.0,
+            left: 16.0,
+        });
         assert!(style.validate().is_ok());
         let value = serde_json::to_value(&style).unwrap();
         assert_eq!(value["padding"]["top"], 8.0);
         assert_eq!(value["padding"]["left"], 16.0);
-        style.padding = Some(ElementPadding { top: -1.0, right: 0.0, bottom: 0.0, left: 0.0 });
+        style.padding = Some(ElementPadding {
+            top: -1.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        });
         assert!(style.validate().is_err());
-        style.padding = Some(ElementPadding { top: 4097.0, right: 0.0, bottom: 0.0, left: 0.0 });
+        style.padding = Some(ElementPadding {
+            top: 4097.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        });
         assert!(style.validate().is_err());
-        style.padding = Some(ElementPadding { top: f64::NAN, right: 0.0, bottom: 0.0, left: 0.0 });
+        style.padding = Some(ElementPadding {
+            top: f64::NAN,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        });
         assert!(style.validate().is_err());
     }
 
@@ -2776,7 +2886,10 @@ mod tests {
     fn inserted_layers_get_numbered_default_names_per_kind() {
         let project = Project::new(
             "Names".into(),
-            crate::Viewport { width: 800, height: 600 },
+            crate::Viewport {
+                width: 800,
+                height: 600,
+            },
             crate::Appearance::Light,
         )
         .unwrap();
@@ -2798,13 +2911,26 @@ mod tests {
         };
         let mut text = empty_element(
             ElementKind::Text,
-            Rect { x: 0.0, y: 0.0, width: 120.0, height: 24.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 120.0,
+                height: 24.0,
+            },
         );
         text.text = "Hello".into();
         let project = insert(
             &project,
             vec![
-                empty_element(ElementKind::Box, Rect { x: 0.0, y: 0.0, width: 100.0, height: 80.0 }),
+                empty_element(
+                    ElementKind::Box,
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 100.0,
+                        height: 80.0,
+                    },
+                ),
                 text,
             ],
         );
@@ -2818,33 +2944,111 @@ mod tests {
         assert_eq!(project.pages[0].elements[1].label(), "Hello");
         let project = insert(
             &project,
-            vec![empty_element(ElementKind::Box, Rect { x: 0.0, y: 0.0, width: 10.0, height: 10.0 })],
+            vec![empty_element(
+                ElementKind::Box,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 10.0,
+                    height: 10.0,
+                },
+            )],
         );
-        assert_eq!(project.pages[0].elements[0].name.as_deref(), Some("Rectangle 2"));
+        assert_eq!(
+            project.pages[0].elements[0].name.as_deref(),
+            Some("Rectangle 2")
+        );
     }
 
     #[test]
     fn shared_style_edits_resolve_after_overrides_and_delete_preserves_values() {
-        let mut project = Project::new("Styles".into(), crate::Viewport { width: 800, height: 600 }, crate::Appearance::Light).unwrap();
-        let colour = crate::ColourStyle { id: Uuid::new_v4(), name: "Ink".into(), value: "#123456".into() };
-        project = project.apply(project.revision, crate::Command::AddColourStyle { style: colour.clone() }).unwrap();
+        let mut project = Project::new(
+            "Styles".into(),
+            crate::Viewport {
+                width: 800,
+                height: 600,
+            },
+            crate::Appearance::Light,
+        )
+        .unwrap();
+        let colour = crate::ColourStyle {
+            id: Uuid::new_v4(),
+            name: "Ink".into(),
+            value: "#123456".into(),
+        };
+        project = project
+            .apply(
+                project.revision,
+                crate::Command::AddColourStyle {
+                    style: colour.clone(),
+                },
+            )
+            .unwrap();
         let size = project.pages[0].base_size_id();
-        let mut element = empty_element(ElementKind::Text, Rect { x: 0.0, y: 0.0, width: 100.0, height: 40.0 });
+        let mut element = empty_element(
+            ElementKind::Text,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 100.0,
+                height: 40.0,
+            },
+        );
         element.style.references.text_colour = Some(colour.id);
-        let mut over = element.style.clone(); over.references.fill = Some(colour.id);
-        element.overrides.insert(size, ElementOverride { style: Some(over), ..Default::default() });
+        let mut over = element.style.clone();
+        over.references.fill = Some(colour.id);
+        element.overrides.insert(
+            size,
+            ElementOverride {
+                style: Some(over),
+                ..Default::default()
+            },
+        );
         project.pages[0].elements.push(element);
         project.validate().unwrap();
         let resolved = resolve_for_size(&project, &project.pages[0], size);
         assert_eq!(resolved[0].style.text_style.color, "#123456");
         assert_eq!(resolved[0].style.fill.as_deref(), Some("#123456"));
-        project = project.apply(project.revision, crate::Command::UpdateColourStyle { style: crate::ColourStyle { value: "#abcdef".into(), ..colour.clone() } }).unwrap();
-        assert_eq!(resolve_for_size(&project, &project.pages[0], size)[0].style.text_style.color, "#abcdef");
-        project = project.apply(project.revision, crate::Command::RemoveColourStyle { id: colour.id }).unwrap();
+        project = project
+            .apply(
+                project.revision,
+                crate::Command::UpdateColourStyle {
+                    style: crate::ColourStyle {
+                        value: "#abcdef".into(),
+                        ..colour.clone()
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            resolve_for_size(&project, &project.pages[0], size)[0]
+                .style
+                .text_style
+                .color,
+            "#abcdef"
+        );
+        project = project
+            .apply(
+                project.revision,
+                crate::Command::RemoveColourStyle { id: colour.id },
+            )
+            .unwrap();
         let resolved = resolve_for_size(&project, &project.pages[0], size);
         assert_eq!(resolved[0].style.text_style.color, "#abcdef");
         assert_eq!(resolved[0].style.references.text_colour, None);
-        assert!(project.apply(project.revision, crate::Command::AddColourStyle { style: crate::ColourStyle { value: "red".into(), ..colour } }).is_err());
+        assert!(
+            project
+                .apply(
+                    project.revision,
+                    crate::Command::AddColourStyle {
+                        style: crate::ColourStyle {
+                            value: "red".into(),
+                            ..colour
+                        }
+                    }
+                )
+                .is_err()
+        );
     }
 
     #[test]

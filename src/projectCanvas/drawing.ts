@@ -1,4 +1,4 @@
-import { type BoundaryToolKind, boundaryDefaults, layoutKind } from './boundaryDefaults';
+import { type BoundaryToolKind, boundaryDefaults } from './boundaryDefaults';
 import { type PointerEvent as ReactPointerEvent } from 'react';
 import type { Boundary, Point } from '../projectCanvasGeometry';
 import type { Element, ElementKind, Project, Rect } from '../types';
@@ -49,7 +49,7 @@ export function createDrawingActions(context: () => Context) {
     return elementChildrenOf(project, pageId, parentId).length;
   }
 
-  function elementRectAt(sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect): Rect {
+  function elementRectAt(sizeId: string, parentOrigin: Point, boundary: Rect, rect: Rect): Rect {
     const { boundaryRect } = context();
     return elementLocalRect(rect, boundaryRect(sizeId) ?? boundary, parentOrigin);
   }
@@ -62,7 +62,7 @@ export function createDrawingActions(context: () => Context) {
     const surface = container?.style.fill ?? page?.background ?? null;
     const element = withPickedColours(forBackground(kind === 'text' ? createTextElement(rect, '', page?.output)
       : createElement(kind, rect, kind === 'image' ? { image: null } : {}), page?.background ?? '#ffffff'), surface);
-    const local = elementRectAt(sizeId, parentId, parentOrigin, boundary, rect);
+    const local = elementRectAt(sizeId, parentOrigin, boundary, rect);
     element.rect = { ...local, width: rect.width, height: rect.height };
     if (kind === 'line' && rotation !== undefined) element.rotation = rotation;
     createdElement.current = element.id;

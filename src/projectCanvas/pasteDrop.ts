@@ -1,7 +1,8 @@
+import type { ProjectCanvasProps } from './interactionTypes';
 import { type DragEvent as ReactDragEvent } from 'react';
 import { isTextField } from '../WorkspaceSurface';
 import { boundaryAt, type Boundary, type CanvasCamera, type CanvasTarget, type Point } from '../projectCanvasGeometry';
-import type { Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, Project, Rect, ReferenceItem } from '../types';
+import type { Element, ElementKind, LinkedPasteInstance, Project, Rect, ReferenceItem } from '../types';
 import { elementBoxesNow } from './requests';
 import { type ScreenRect } from './surface';
 import { nestedLayerIds } from './links';
@@ -10,7 +11,6 @@ import { baseSizeId, hasManySizes } from './sizes';
 import {
   isClipboardMarker, newClipboardMarker, pastedImageFiles, pastedImageRect, pastedNoteRect, readPastedImage,
 } from './clipboardPaste';
-import { type PlayState } from './play';
 import { createTextElement, forBackground, withPickedColours, elementChildrenOf, elementPath, findPageElement } from './elementGeometry';
 import {
   ElementEntry, ClipboardEntry, PasteTarget, PasteChoice, LinkDecision, NIL_UUID, DuplicateRepeat,
@@ -41,14 +41,14 @@ type Context = {
   duplicateBurst: import("react").RefObject<{ key: string; at: number; count: number; offset: Point } | null>;
   addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>;
   selectReference: (itemId: string, additive?: boolean) => void;
-  elementRectAt: (sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect) => Rect;
+  elementRectAt: (sizeId: string, parentOrigin: Point, boundary: Rect, rect: Rect) => Rect;
   busy: import("react").RefObject<boolean>;
   insertionPoint: (pageId: string, parentId: string | null) => number;
   selectElement: (pageId: string, elementId: string, sizeId: string | null, additive?: boolean) => void;
   placeElement: (kind: ElementKind, pageId: string, sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect, picture?: string, rotation?: number) => Promise<Element>;
   createdElement: import("react").RefObject<string | null>;
   worldPoint: (event: { clientX: number; clientY: number; }) => Point;
-  latest: import("react").RefObject<{ camera: CanvasCamera; boundaries: Boundary[]; project: Project; selection: CanvasTarget[]; focused: string | null; addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>; attachToRequest: (requestId: string, files: File[], links: string[]) => void; selectPointer: (pointerId: string, additive?: boolean) => void; selectReference: (itemId: string, additive?: boolean) => void; selectElement: (pageId: string, elementId: string, sizeId: string | null, additive?: boolean) => void; clearSelection: () => void; removeElements: (elements: { pageId: string; elementId: string; }[]) => void; insertElements: (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => Promise<void>; updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void; moveElements: (moves: ElementMove[]) => Promise<unknown> | void; groupElements: (pageId: string, ids: string[]) => Promise<string | null>; ungroupElements: (pageId: string, id: string) => Promise<string[]>; tool: import("../EditorTools").EditorTool; insertKind: ElementKind | null; editing: { pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean; } | null; play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; }>;
+  latest: import("react").RefObject<Pick<ProjectCanvasProps, 'project'> & { boundaries: Boundary[] }>;
   attachToRequest: (requestId: string, files: File[], links: string[]) => void;
 };
 
@@ -233,7 +233,7 @@ export function createPasteDrop(context: () => Context) {
       return;
     }
     const page = project.pages.find(item => item.id === boundary.pageId);
-    const local = elementRectAt(boundary.sizeId, null, { x: 0, y: 0 }, boundary.rect, { ...point, width: 0, height: 0 });
+    const local = elementRectAt(boundary.sizeId, { x: 0, y: 0 }, boundary.rect, { ...point, width: 0, height: 0 });
     const element = withPickedColours(forBackground(createTextElement({ ...local, width: 0, height: 0 }, text, page?.output), page?.background ?? '#ffffff'));
     const singleSize = !!page && hasManySizes(page) && !editingAllSizes(boundary.pageId);
     busy.current = true;
@@ -301,7 +301,7 @@ export function createPasteDrop(context: () => Context) {
   }
 
   return {
-    copyElements, pasteTarget, pasteScreen, pasteEntries, pasteElements, confirmPaste, cloneChildren,
-    duplicateElements, createReference, referencePoint, pasteText, pasteImage, pasteClipboard, paste, dropText,
+    copyElements, pasteTarget, pasteElements, confirmPaste,
+    duplicateElements, pasteClipboard, paste, dropText,
   };
 }

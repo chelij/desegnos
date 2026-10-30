@@ -1,6 +1,8 @@
-# Desegnos OpenAI boundary
+# Desegnos AI providers
 
-This crate accepts frozen requirements and a strict core output schema. It sends one bounded Responses request, parses its stream, and returns text, response identity and reported usage. It cannot apply a candidate, edit a project, install components, register a preview or write model-selected files. The native coordinator must persist intent before calling `generate`, preserve attempts, validate returned text with core, and obtain explicit authorization for retries and application.
+This crate accepts frozen requirements and a strict core output schema. It sends one bounded provider request, parses its stream, and returns text, response identity and reported usage. It cannot apply a candidate, edit a project, install components, register a preview or write model-selected files. The native coordinator must persist intent before calling `generate`, preserve attempts, validate returned text with core, and obtain explicit authorization for retries and application.
+
+Generation and identity builders validate task content before choosing a provider wire format. OpenAI encodes documents as attachments; Anthropic and Google encode their text directly. Provider settings, schemas, image validation, final request-size limits and budget checks remain enforced before submission.
 
 ## Integration API
 

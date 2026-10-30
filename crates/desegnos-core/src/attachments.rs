@@ -65,6 +65,16 @@ fn valid_image(data_uri: &str) -> bool {
 }
 
 impl RequestAttachment {
+    /// The exact picture reference a generated image can use; filenames are not identifiers.
+    pub(crate) fn picture_id(&self) -> Option<uuid::Uuid> {
+        if self.kind != AttachmentKind::Image {
+            return None;
+        }
+        self.data_uri
+            .as_deref()
+            .map(crate::project_assets::inline_image_id)
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure(
             !self.id.is_empty()
@@ -117,5 +127,27 @@ impl RequestAttachment {
                 "Attach a web address that starts with https://.",
             ),
         }
+    }
+}
+
+impl crate::Project {
+    /// Promote the frozen requests' original pictures before validating or applying their
+    /// generated elements. The live project is unchanged until the whole reply is accepted.
+    pub(crate) fn store_request_pictures(&mut self, request_ids: &[uuid::Uuid]) -> Result<()> {
+        for request in self
+            .requests
+            .iter()
+            .filter(|request| request_ids.contains(&request.id))
+        {
+            for attachment in &request.attachments {
+                if attachment.kind == AttachmentKind::Image
+                    && let Some(uri) = &attachment.data_uri
+                {
+                    let id = crate::project_assets::store_picture_uri(uri)?;
+                    self.pictures.insert(id, uri.clone());
+                }
+            }
+        }
+        Ok(())
     }
 }

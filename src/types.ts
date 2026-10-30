@@ -16,7 +16,9 @@ export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: 
 export type Rect = { x: number; y: number; width: number; height: number };
 export type NamedView = { id: string; name: string; x: number; y: number; zoom: number };
 export type RequestAttachment = { id: string; name: string; kind: 'image' | 'text' | 'link'; dataUri?: string; preview?: string; text?: string; url?: string };
+// Persisted height modes: page grows with content; screen keeps its fixed height.
 export type BoundaryKind = 'page' | 'screen';
+// appScreen is retained for saved projects; new web boundaries use webpage.
 export type OutputType = 'webpage' | 'appScreen' | 'slide' | 'image';
 export type PageSize = { id: string; label: string; width: number; height: number; kind: BoundaryKind; x: number; y: number };
 export type SizePreset = 'phone' | 'tablet' | 'desktop' | 'custom';

@@ -44,6 +44,44 @@ try {
   const { ExportPanel } = await modules.load('projectCanvas/exportPanel.js');
   const { BoundaryProperties } = await modules.load('EditorDock.js');
   const noop = () => {};
+  const { pageKind, projectKind, boundaryDefaults, layoutKind, outputKind } = await modules.load('projectCanvas/boundaryDefaults.js');
+  await test('Page creation keeps website and app template sizes and height modes', () => {
+    for (const [template, width, height, mode] of [['website', 1440, 900, 'page'], ['appScreen', 390, 844, 'screen']]) {
+      const { project } = templates.find(item => item.template === template);
+      assert.equal(projectKind(project), 'page');
+      assert.equal(pageKind(project.pages[0]), 'page');
+      assert.equal(project.pages[0].output, 'webpage');
+      assert.equal(project.pages[0].name, 'Page 1');
+      for (const current of [project, { ...project, pages: [] }]) {
+        const defaults = boundaryDefaults(current, 'page');
+        assert.equal(defaults.width, width);
+        assert.equal(defaults.height, height);
+        assert.equal(layoutKind('page', current), mode);
+      }
+    }
+    assert.equal(outputKind('page'), 'webpage');
+  });
+  await test('legacy screens appear as Pages with fixed height and the same export choice', () => {
+    const { project } = templates.find(item => item.template === 'appScreen');
+    const page = { ...project.pages[0], name: 'Existing screen', output: 'appScreen' };
+    assert.equal(pageKind(page), 'page');
+    const properties = renderToStaticMarkup(React.createElement(BoundaryProperties, {
+      page, busy: false, commit: noop, updateSize: noop, addSize: noop, removeSize: noop, remove: noop,
+    }));
+    assert.match(properties, /<strong>Page<\/strong>/);
+    assert.match(properties, /aria-label="Height behaviour of Phone"/);
+    assert.match(properties, /<option value="screen" selected="">Fixed<\/option>/);
+    for (const label of ['Phone', 'Tablet', 'Desktop']) assert.match(properties, new RegExp(`>${label}</button>`));
+    assert.doesNotMatch(properties, />Screen<\/option>|Delete screen/);
+    const html = renderToStaticMarkup(React.createElement(ExportPanel, {
+      project: { ...project, pages: [page] }, destination: null, busy: false, job: null, sending: false, error: '',
+      selectBoundary: noop, setIncluded: noop, setOutput: noop, previewExport: noop, close: noop,
+    }));
+    assert.match(html, /<option value="webpage" selected="">Page<\/option>/);
+    assert.doesNotMatch(html, /<option value="appScreen"/);
+    assert.match(html, />Preview<\/button>/);
+    assert.equal(page.output, 'appScreen', 'rendering must not rewrite saved projects');
+  });
   await test('Export lists included and excluded boundaries with accessible controls above the folder', () => {
     const { project } = templates.find(item => item.template === 'website');
     const pages = [

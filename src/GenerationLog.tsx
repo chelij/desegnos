@@ -8,7 +8,6 @@ import type { AiSettingsView, Element, GenerationHistory, GenerationJobView, Pro
 import type { GenerationController } from './useGeneration';
 import { native } from './api';
 import { scopeLabel } from './Notes';
-import { projectElement } from './Generation';
 
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
@@ -21,9 +20,8 @@ function elementName(element: Element): string {
   return element.name?.trim() || element.text.trim().split('\n')[0] || element.kind;
 }
 
-export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, openImport, openBrief, manageUsage, editRequest, resultApplied, requestEditorOpen, reply }: {
-  resultApplied?: boolean; requestEditorOpen?: (elementId: string) => boolean;
-  settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; manageUsage: () => Promise<void>; editRequest: (id: string) => void;
+export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, openImport, openBrief, editRequest, reply }: {
+  settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; editRequest: (id: string) => void;
   job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; controller: GenerationController; close: () => void;
   reply: (targets: { pageId: string; elementId: string }[], text: string) => Promise<void>;
 }) {
@@ -105,11 +103,11 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
         <section className="log-message from-ai" aria-label="AI reply" aria-live="polite">
           <p className="log-who">{SERVICE[job.provider ?? 'openai']}</p>
           {working && !candidate && <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p>}
-          {!past && !working && !resultApplied && stale && <div className="log-stale">
+          {!past && !working && stale && <div className="log-stale">
             <p className="log-text">{staleResultMessage}</p>
             <button className="primary" disabled={busy} onClick={() => { const ids = requests.filter(item => item.exists).map(item => item.key); void controller.prepare(ids.length ? ids : undefined).catch(() => {}); }}>Try again</button>
           </div>}
-          {!past && !working && !resultApplied && !stale && (review.retryable.length > 0 || review.retryAll) && <button disabled={!!operation} onClick={() => { void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
+          {!past && !working && !stale && (review.retryable.length > 0 || review.retryAll) && <button disabled={!!operation} onClick={() => { void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
           {candidate && <p className="log-text">{candidate.summary}</p>}
           {candidate?.requests.flatMap((request, requestIndex) => request.operations.map((operation, operationIndex) => operation.kind === 'setBehaviour' ? <p className="log-text" key={`${requestIndex}-${operationIndex}`}>Behaviour: {operation.behaviour}</p> : null))}
           {candidate && candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></Disclosure>}
@@ -118,11 +116,11 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             {review.blocked.map(item => <div key={item.elementId}>
               <span className="log-meta">{label(item.elementId)}</span>
               <p className="log-text">{item.reason}</p>
-              {(!requestEditorOpen?.(item.elementId) || (item.fix && openFix(item.fix)) || (declaredConflict(job, item.elementId) && projectElement(project, item.elementId))) && <div className="log-actions">
+              <div className="log-actions">
                 {declaredConflict(job, item.elementId) && <button type="button" className="primary" disabled={busy} onClick={() => { void controller.prepare([item.elementId]).catch(() => {}); }}>Resend this request</button>}
-                {!requestEditorOpen?.(item.elementId) && <button type="button" onClick={() => editRequest(item.elementId)}>Change request</button>}
+                <button type="button" onClick={() => editRequest(item.elementId)}>Change request</button>
                 {item.fix && openFix(item.fix) && <button type="button" onClick={() => applyFix(item.fix!)}>{fixLabel(item.fix)}</button>}
-              </div>}
+              </div>
             </div>)}
           </section>}
           {candidate && candidate.decisionProposals.length > 0 && <Disclosure summary={`Suggested rules (${candidate.decisionProposals.length})`}><ul>{candidate.decisionProposals.map((proposal, index) => <li key={index}><strong>{humanText(proposal.topic)}</strong><p className="log-text">{humanText(proposal.value)}</p><p className="log-meta">{scopeLabel(project, proposal.scope)}</p></li>)}</ul></Disclosure>}

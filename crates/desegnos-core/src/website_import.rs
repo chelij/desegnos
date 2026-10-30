@@ -7,8 +7,8 @@
 use crate::{
     BoundaryKind, Element, ElementKind, ElementLayout, ElementMeta, ElementOverride, ElementShadow,
     ElementStroke, ElementStyle, ElementTextStyle, InputType, OutputType, Page, PageSize, Pointer,
-    PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Result, SizingMode, StackAlign,
-    StackDirection, StackJustify, TextAlign, ensure,
+    PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Result, SizingMode,
+    StackAlign, StackDirection, StackJustify, TextAlign, ensure,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use uuid::Uuid;
@@ -282,7 +282,12 @@ fn normalize_url(value: &str) -> String {
     value
 }
 
-fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, String>, own_hosts: &BTreeSet<String>) -> Option<String> {
+fn internal_href(
+    href: &str,
+    page_url: &str,
+    page_paths: &BTreeMap<String, String>,
+    own_hosts: &BTreeSet<String>,
+) -> Option<String> {
     let target = normalize_url(href);
     let page = normalize_url(page_url);
     if target.is_empty() || target == page {
@@ -299,8 +304,11 @@ fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, Strin
     // Another domain counts only when the site links to several of its own pages there, so
     // a link to https://social.example/ never lands on the imported home page.
     let linked_path = served_path(linked.as_str()).or_else(|| {
-        (matches!(linked.scheme(), "http" | "https") && linked.host_str().is_some_and(|host| own_hosts.contains(&host.to_ascii_lowercase())))
-            .then(|| normalize_url(linked.path()))
+        (matches!(linked.scheme(), "http" | "https")
+            && linked
+                .host_str()
+                .is_some_and(|host| own_hosts.contains(&host.to_ascii_lowercase())))
+        .then(|| normalize_url(linked.path()))
     })?;
     if linked_path.eq_ignore_ascii_case(&page_path) {
         return None;
@@ -336,19 +344,31 @@ fn own_hosts(captures: &[WebCapture], page_paths: &BTreeMap<String, String>) -> 
         let mut links = Vec::new();
         hrefs(&capture.nodes, &mut links);
         for link in links {
-            let Ok(url) = url::Url::parse(link) else { continue };
-            let (Some(host), true) = (url.host_str(), matches!(url.scheme(), "http" | "https")) else { continue };
+            let Ok(url) = url::Url::parse(link) else {
+                continue;
+            };
+            let (Some(host), true) = (url.host_str(), matches!(url.scheme(), "http" | "https"))
+            else {
+                continue;
+            };
             let path = normalize_url(url.path()).to_ascii_lowercase();
             if served_path(url.as_str()).is_none() && pages.contains(&path) {
                 let file = url.path().to_ascii_lowercase();
                 if file.ends_with(".htm") || file.ends_with(".html") {
                     by_file.insert(host.to_ascii_lowercase());
                 }
-                matches.entry(host.to_ascii_lowercase()).or_default().insert(path);
+                matches
+                    .entry(host.to_ascii_lowercase())
+                    .or_default()
+                    .insert(path);
             }
         }
     }
-    matches.into_iter().filter(|(host, paths)| paths.len() >= 2 || by_file.contains(host)).map(|(host, _)| host).collect()
+    matches
+        .into_iter()
+        .filter(|(host, paths)| paths.len() >= 2 || by_file.contains(host))
+        .map(|(host, _)| host)
+        .collect()
 }
 
 /// The path a loopback URL serves, without the first segment that is a serving token.
@@ -382,7 +402,8 @@ fn parse_colour(value: &str) -> Option<String> {
         return None;
     }
     if let Some(hex) = value.strip_prefix('#') {
-        let valid = matches!(hex.len(), 3 | 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
+        let valid =
+            matches!(hex.len(), 3 | 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
         return valid.then(|| format!("#{hex}"));
     }
     let start = value.find('(')?;
@@ -413,7 +434,10 @@ fn parse_colour(value: &str) -> Option<String> {
     if alpha >= 0.999 {
         Some(format!("#{r:02x}{g:02x}{b:02x}"))
     } else {
-        Some(format!("#{r:02x}{g:02x}{b:02x}{:02x}", (alpha * 255.0).round() as u8))
+        Some(format!(
+            "#{r:02x}{g:02x}{b:02x}{:02x}",
+            (alpha * 255.0).round() as u8
+        ))
     }
 }
 
@@ -455,7 +479,11 @@ fn element_style(styles: &WebStyles, text: bool) -> ElementStyle {
         sizing: Default::default(),
         padding: None,
         references: Default::default(),
-        fill: if text { None } else { parse_colour(&styles.background) },
+        fill: if text {
+            None
+        } else {
+            parse_colour(&styles.background)
+        },
         stroke: if text {
             ElementStroke {
                 color: None,
@@ -545,17 +573,56 @@ fn rect_local(rect: Rect, origin: (f64, f64)) -> Rect {
 fn is_text_tag(tag: &str) -> bool {
     matches!(
         tag,
-        "p" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "span" | "strong" | "em" | "b" | "i"
-            | "u" | "small" | "li" | "blockquote" | "figcaption" | "label" | "legend" | "th"
-            | "td" | "dt" | "dd" | "cite" | "q" | "code" | "pre" | "summary" | "address"
+        "p" | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "span"
+            | "strong"
+            | "em"
+            | "b"
+            | "i"
+            | "u"
+            | "small"
+            | "li"
+            | "blockquote"
+            | "figcaption"
+            | "label"
+            | "legend"
+            | "th"
+            | "td"
+            | "dt"
+            | "dd"
+            | "cite"
+            | "q"
+            | "code"
+            | "pre"
+            | "summary"
+            | "address"
     )
 }
 
 fn is_skipped(tag: &str) -> bool {
     matches!(
         tag,
-        "script" | "style" | "link" | "meta" | "head" | "title" | "noscript" | "template"
-            | "br" | "option" | "optgroup" | "col" | "colgroup" | "source" | "track" | "wbr"
+        "script"
+            | "style"
+            | "link"
+            | "meta"
+            | "head"
+            | "title"
+            | "noscript"
+            | "template"
+            | "br"
+            | "option"
+            | "optgroup"
+            | "col"
+            | "colgroup"
+            | "source"
+            | "track"
+            | "wbr"
     )
 }
 
@@ -588,10 +655,7 @@ fn clip_text(value: &str) -> String {
 
 fn trimmed_text(value: Option<&str>) -> Option<String> {
     let value = value?;
-    let value = value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let value = value.split_whitespace().collect::<Vec<_>>().join(" ");
     (!value.is_empty()).then_some(value)
 }
 
@@ -622,7 +686,10 @@ impl Converter<'_> {
             "website:{}:{}:{}",
             normalize_url(&self.page.url),
             tag,
-            path.iter().map(usize::to_string).collect::<Vec<_>>().join(".")
+            path.iter()
+                .map(usize::to_string)
+                .collect::<Vec<_>>()
+                .join(".")
         ))
     }
 
@@ -657,7 +724,13 @@ impl Converter<'_> {
     }
 
     /// One DOM node becomes zero or more elements positioned relative to `origin`.
-    fn elements(&self, node: &WebNode, origin: (f64, f64), path: &mut Vec<usize>, depth: usize) -> Vec<Element> {
+    fn elements(
+        &self,
+        node: &WebNode,
+        origin: (f64, f64),
+        path: &mut Vec<usize>,
+        depth: usize,
+    ) -> Vec<Element> {
         if depth > 28 || self.element_count >= crate::MAX_ELEMENTS {
             return vec![];
         }
@@ -707,33 +780,82 @@ impl Converter<'_> {
         }
         if tag == "video" {
             if let Some(url) = self.map_link(node.src.as_deref()) {
-                return [self.base_element(&tag, path, local, node, ElementKind::Video, &text, Some(url), children)]
-                    .into();
+                return [self.base_element(
+                    &tag,
+                    path,
+                    local,
+                    node,
+                    ElementKind::Video,
+                    &text,
+                    Some(url),
+                    children,
+                )]
+                .into();
             }
-            let Some(image) = self.picture(node.poster.as_deref()) else { return vec![] };
-            let mut element = self.base_element(&tag, path, local, node, ElementKind::Image, &text, None, vec![]);
+            let Some(image) = self.picture(node.poster.as_deref()) else {
+                return vec![];
+            };
+            let mut element = self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                ElementKind::Image,
+                &text,
+                None,
+                vec![],
+            );
             element.image = Some(image);
             return [element].into();
         }
         if tag == "audio" {
-            let Some(url) = self.map_link(node.src.as_deref()) else { return vec![] };
-            return [self.base_element(&tag, path, local, node, ElementKind::Audio, &text, Some(url), children)]
-                .into();
+            let Some(url) = self.map_link(node.src.as_deref()) else {
+                return vec![];
+            };
+            return [self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                ElementKind::Audio,
+                &text,
+                Some(url),
+                children,
+            )]
+            .into();
         }
         if tag == "iframe" || tag == "embed" || tag == "object" {
-            let Some(url) = self.map_link(node.src.as_deref()) else { return vec![] };
-            return [self.base_element(&tag, path, local, node, ElementKind::Embed, &text, Some(url), children)]
-                .into();
+            let Some(url) = self.map_link(node.src.as_deref()) else {
+                return vec![];
+            };
+            return [self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                ElementKind::Embed,
+                &text,
+                Some(url),
+                children,
+            )]
+            .into();
         }
         if tag == "input" {
-            let kind = node.input_type.as_deref().unwrap_or("text").trim().to_ascii_lowercase();
+            let kind = node
+                .input_type
+                .as_deref()
+                .unwrap_or("text")
+                .trim()
+                .to_ascii_lowercase();
             if kind == "hidden" {
                 return vec![];
             }
             let value = if matches!(kind.as_str(), "checkbox" | "radio") {
-                trimmed_text(node.alt.as_deref()).or_else(|| trimmed_text(node.attributes.name.as_deref()))
+                trimmed_text(node.alt.as_deref())
+                    .or_else(|| trimmed_text(node.attributes.name.as_deref()))
             } else {
-                trimmed_text(node.value.as_deref()).or_else(|| trimmed_text(node.placeholder.as_deref()))
+                trimmed_text(node.value.as_deref())
+                    .or_else(|| trimmed_text(node.placeholder.as_deref()))
             };
             let element_kind = match kind.as_str() {
                 "checkbox" => ElementKind::Checkbox,
@@ -743,16 +865,46 @@ impl Converter<'_> {
                     input_type: input_type(Some(&kind)),
                 },
             };
-            return [self.base_element(&tag, path, local, node, element_kind, &value, None, vec![])]
-                .into();
+            return [self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                element_kind,
+                &value,
+                None,
+                vec![],
+            )]
+            .into();
         }
         if tag == "textarea" {
-            let value = trimmed_text(node.value.as_deref()).or_else(|| trimmed_text(node.placeholder.as_deref()));
-            return [self.base_element(&tag, path, local, node, ElementKind::Textarea, &value, None, vec![])]
-                .into();
+            let value = trimmed_text(node.value.as_deref())
+                .or_else(|| trimmed_text(node.placeholder.as_deref()));
+            return [self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                ElementKind::Textarea,
+                &value,
+                None,
+                vec![],
+            )]
+            .into();
         }
         if tag == "select" {
-            let element = self.base_element(&tag, path, local, node, ElementKind::Select { options: node.options.clone() }, &text, None, vec![]);
+            let element = self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                ElementKind::Select {
+                    options: node.options.clone(),
+                },
+                &text,
+                None,
+                vec![],
+            );
             return [element].into();
         }
         if tag == "a" {
@@ -769,12 +921,30 @@ impl Converter<'_> {
             // An anchor around a card keeps its content as a linked box.
             if let Some(label) = label.filter(|_| children.is_empty() || inline_children) {
                 if url.is_some() {
-                    return [self.base_element(&tag, path, local, node, ElementKind::Link, &Some(label), url, vec![])]
-                        .into();
+                    return [self.base_element(
+                        &tag,
+                        path,
+                        local,
+                        node,
+                        ElementKind::Link,
+                        &Some(label),
+                        url,
+                        vec![],
+                    )]
+                    .into();
                 }
                 return [self.text_element(&tag, path, local, node, &label)].into();
             }
-            let element = self.base_element(&tag, path, local, node, ElementKind::Box, &text, url, children);
+            let element = self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                ElementKind::Box,
+                &text,
+                url,
+                children,
+            );
             return [element].into();
         }
         if tag == "button" {
@@ -783,8 +953,17 @@ impl Converter<'_> {
                 .or_else(|| trimmed_text(node.value.as_deref()))
                 .or_else(|| trimmed_text(node.alt.as_deref()))
                 .unwrap_or_else(|| "Button".into());
-            return [self.base_element(&tag, path, local, node, ElementKind::Button, &Some(value), None, vec![])]
-                .into();
+            return [self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                ElementKind::Button,
+                &Some(value),
+                None,
+                vec![],
+            )]
+            .into();
         }
         if is_text_tag(&tag)
             && let Some(text) = text.clone()
@@ -793,8 +972,23 @@ impl Converter<'_> {
                 return [self.text_element(&tag, path, local, node, &text)].into();
             }
             let mut merged = children;
-            let mut text_element = self.text_element(&tag, path, Rect { x: 0.0, y: 0.0, width: local.width, height: local.height }, node, &text);
-            text_element.id = stable_uuid(&format!("{}:{}:text", self.element_id(path, &tag), path.len()));
+            let mut text_element = self.text_element(
+                &tag,
+                path,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: local.width,
+                    height: local.height,
+                },
+                node,
+                &text,
+            );
+            text_element.id = stable_uuid(&format!(
+                "{}:{}:text",
+                self.element_id(path, &tag),
+                path.len()
+            ));
             merged.insert(0, text_element);
             let layout = layout_for(&node.styles);
             if !visual(&node.styles) && matches!(layout, ElementLayout::Free) {
@@ -807,7 +1001,16 @@ impl Converter<'_> {
                     })
                     .collect();
             }
-            let boxed = self.base_element(&tag, path, local, node, ElementKind::Box, &None, None, merged);
+            let boxed = self.base_element(
+                &tag,
+                path,
+                local,
+                node,
+                ElementKind::Box,
+                &None,
+                None,
+                merged,
+            );
             return [boxed].into();
         }
         // Without its own text, a cell or list item is a container like any other: its
@@ -832,11 +1035,26 @@ impl Converter<'_> {
                 })
                 .collect();
         }
-        let element = self.base_element(&tag, path, local, node, ElementKind::Box, &text, None, children);
+        let element = self.base_element(
+            &tag,
+            path,
+            local,
+            node,
+            ElementKind::Box,
+            &text,
+            None,
+            children,
+        );
         [element].into()
     }
 
-    fn children_elements(&self, node: &WebNode, path: &mut Vec<usize>, depth: usize, origin: (f64, f64)) -> Vec<Element> {
+    fn children_elements(
+        &self,
+        node: &WebNode,
+        path: &mut Vec<usize>,
+        depth: usize,
+        origin: (f64, f64),
+    ) -> Vec<Element> {
         let mut elements = Vec::new();
         for (index, child) in node.children.iter().enumerate() {
             path.push(index);
@@ -859,7 +1077,11 @@ impl Converter<'_> {
         children: Vec<Element>,
     ) -> Element {
         // A flex or grid link or button keeps its place; only boxes lay out children.
-        let layout = if kind.holds_children() { layout_for(&node.styles) } else { ElementLayout::Free };
+        let layout = if kind.holds_children() {
+            layout_for(&node.styles)
+        } else {
+            ElementLayout::Free
+        };
         Element {
             id: self.element_id(path, tag),
             kind,
@@ -880,7 +1102,14 @@ impl Converter<'_> {
         }
     }
 
-    fn text_element(&self, tag: &str, path: &[usize], rect: Rect, node: &WebNode, text: &str) -> Element {
+    fn text_element(
+        &self,
+        tag: &str,
+        path: &[usize],
+        rect: Rect,
+        node: &WebNode,
+        text: &str,
+    ) -> Element {
         Element {
             id: self.element_id(path, &format!("{tag}:text")),
             kind: ElementKind::Text,
@@ -895,7 +1124,11 @@ impl Converter<'_> {
                 // wider than the site's own never cuts it short. Text sharing its line with a
                 // link or other inline child keeps its width, so it does not run into them.
                 let mut style = self.node_style(node, true);
-                if node.children.is_empty() && rect.height <= node.styles.font_size * node.styles.line_height.clamp(0.5, 4.0) * 1.5 && !text.contains('\n') {
+                if node.children.is_empty()
+                    && rect.height
+                        <= node.styles.font_size * node.styles.line_height.clamp(0.5, 4.0) * 1.5
+                    && !text.contains('\n')
+                {
                     style.sizing.width = SizingMode::Fit;
                 }
                 style
@@ -912,8 +1145,14 @@ impl Converter<'_> {
 }
 
 fn page_plans<'a>(captures: &'a [WebCapture], project: &Project) -> Result<Vec<PagePlan<'a>>> {
-    ensure(!captures.is_empty(), "Render at least one page before importing it.")?;
-    ensure(captures.len() <= 60, "A website import renders at most 30 pages.")?;
+    ensure(
+        !captures.is_empty(),
+        "Render at least one page before importing it.",
+    )?;
+    ensure(
+        captures.len() <= 60,
+        "A website import renders at most 30 pages.",
+    )?;
     let mut grouped: BTreeMap<String, (&WebCapture, Option<&WebCapture>)> = BTreeMap::new();
     for capture in captures {
         let key = normalize_url(&capture.url);
@@ -927,7 +1166,10 @@ fn page_plans<'a>(captures: &'a [WebCapture], project: &Project) -> Result<Vec<P
         }
     }
     let remaining = crate::MAX_PAGES.saturating_sub(project.pages.len());
-    ensure(remaining > 0, "This project already holds the maximum number of boundaries.")?;
+    ensure(
+        remaining > 0,
+        "This project already holds the maximum number of boundaries.",
+    )?;
     let limit = remaining.min(30);
     let existing: BTreeSet<String> = project
         .pages
@@ -961,7 +1203,11 @@ fn page_plans<'a>(captures: &'a [WebCapture], project: &Project) -> Result<Vec<P
         .collect::<String>()
         .trim_matches('-')
         .to_owned();
-    let base = if base.is_empty() { "website".into() } else { base };
+    let base = if base.is_empty() {
+        "website".into()
+    } else {
+        base
+    };
     let mut paths = existing;
     let mut plans = Vec::new();
     for (key, (desktop, phone)) in grouped {
@@ -1028,10 +1274,12 @@ fn snake(value: &str) -> String {
 }
 
 fn reserved_segment(segment: &str) -> bool {
-    matches!(segment, "assets" | "src" | "node_modules" | "con" | "prn" | "aux" | "nul")
-        || (segment.len() == 4
-            && (segment.starts_with("com") || segment.starts_with("lpt"))
-            && segment.ends_with(['1', '2', '3', '4', '5', '6', '7', '8', '9']))
+    matches!(
+        segment,
+        "assets" | "src" | "node_modules" | "con" | "prn" | "aux" | "nul"
+    ) || (segment.len() == 4
+        && (segment.starts_with("com") || segment.starts_with("lpt"))
+        && segment.ends_with(['1', '2', '3', '4', '5', '6', '7', '8', '9']))
 }
 
 fn path_slug(raw_path: &str, base: &str) -> String {
@@ -1049,7 +1297,9 @@ fn path_slug(raw_path: &str, base: &str) -> String {
         .map(|segment| {
             let without_extension = segment
                 .rsplit_once('.')
-                .filter(|(_, extension)| matches!(extension.to_ascii_lowercase().as_str(), "html" | "htm"))
+                .filter(|(_, extension)| {
+                    matches!(extension.to_ascii_lowercase().as_str(), "html" | "htm")
+                })
                 .map_or(segment, |(stem, _)| stem);
             let slug = snake(without_extension);
             if slug.is_empty() || slug == "index" {
@@ -1081,7 +1331,12 @@ fn segment_name(raw_path: &str) -> String {
         .rsplit('/')
         .next()
         .filter(|value| !value.is_empty())
-        .map(|value| value.rsplit_once('.').map_or(value, |(stem, _)| stem).replace(['-', '_'], " "))
+        .map(|value| {
+            value
+                .rsplit_once('.')
+                .map_or(value, |(stem, _)| stem)
+                .replace(['-', '_'], " ")
+        })
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "Page".into())
 }
@@ -1102,7 +1357,12 @@ pub fn import_website(
         .pages
         .iter()
         .flat_map(|page| page.sizes.iter().map(|size| size.x + size.width as f64))
-        .chain(project.reference.iter().map(|item| item.rect.x + item.rect.width))
+        .chain(
+            project
+                .reference
+                .iter()
+                .map(|item| item.rect.x + item.rect.width),
+        )
         .fold(0.0_f64, f64::max);
     if right <= 0.0 {
         right = 0.0;
@@ -1139,7 +1399,12 @@ pub fn import_website(
         let mut base_elements = converter.children_elements(
             &WebNode {
                 tag: "body".into(),
-                rect: Rect { x: 0.0, y: 0.0, width: plan.desktop.width, height: desktop_height as f64 },
+                rect: Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: plan.desktop.width,
+                    height: desktop_height as f64,
+                },
                 text: None,
                 src: None,
                 poster: None,
@@ -1172,7 +1437,12 @@ pub fn import_website(
             let phone_elements = phone_converter.children_elements(
                 &WebNode {
                     tag: "body".into(),
-                    rect: Rect { x: 0.0, y: 0.0, width: phone.width, height: phone_height as f64 },
+                    rect: Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: phone.width,
+                        height: phone_height as f64,
+                    },
                     text: None,
                     src: None,
                     poster: None,
@@ -1203,7 +1473,9 @@ pub fn import_website(
                 y: page_y,
             });
             imported.warnings.extend(converter.warnings.iter().cloned());
-            imported.warnings.extend(phone_converter.warnings.iter().cloned());
+            imported
+                .warnings
+                .extend(phone_converter.warnings.iter().cloned());
         }
         let mut sizes = vec![PageSize {
             id: plan.size_id,
@@ -1215,14 +1487,19 @@ pub fn import_website(
             y: page_y,
         }];
         sizes.extend(phone_size);
-        let width = if plan.phone.is_some() { 1440.0 + 160.0 + 390.0 } else { 1440.0 };
+        let width = if plan.phone.is_some() {
+            1440.0 + 160.0 + 390.0
+        } else {
+            1440.0
+        };
         right = page_x + width + 160.0;
 
         let page_elements = count_elements(&base_elements);
         if element_total + page_elements > crate::MAX_ELEMENTS {
-            imported
-                .warnings
-                .push("The remaining pages were left out to stay inside the project element limit.".into());
+            imported.warnings.push(
+                "The remaining pages were left out to stay inside the project element limit."
+                    .into(),
+            );
             break;
         }
         element_total += page_elements;
@@ -1231,7 +1508,13 @@ pub fn import_website(
         let script_start = imported.reference.len();
         let mut note_x = page_x;
         let mut note_y = page_y + f64::from(desktop_height) + 24.0;
-        for (index, script) in plan.desktop.scripts.iter().take(12.min(reference_room)).enumerate() {
+        for (index, script) in plan
+            .desktop
+            .scripts
+            .iter()
+            .take(12.min(reference_room))
+            .enumerate()
+        {
             let label = script
                 .src
                 .as_deref()
@@ -1253,7 +1536,12 @@ pub fn import_website(
             reference_room -= 1;
             imported.reference.push(ReferenceItem {
                 id: stable_uuid(&format!("website:script:{}:{index}", plan.url)),
-                rect: Rect { x: note_x, y: note_y, width: 280.0, height: 96.0 },
+                rect: Rect {
+                    x: note_x,
+                    y: note_y,
+                    width: 280.0,
+                    height: 96.0,
+                },
                 kind: ReferenceKind::Note { text },
             });
             note_x += 300.0;
@@ -1277,9 +1565,10 @@ pub fn import_website(
         };
         for pointer in pointers {
             if pointer_total >= pointer_room {
-                imported
-                    .warnings
-                    .push("Some recognisable behaviours were left out at the project pointer limit.".into());
+                imported.warnings.push(
+                    "Some recognisable behaviours were left out at the project pointer limit."
+                        .into(),
+                );
                 break;
             }
             pointer_total += 1;
@@ -1300,8 +1589,10 @@ fn layout_sitemap(
 ) {
     fn links(elements: &[Element], paths: &BTreeMap<&str, usize>, out: &mut Vec<usize>) {
         for element in elements {
-            if matches!(element.kind, ElementKind::Link | ElementKind::Button | ElementKind::Box)
-                && let Some(target) = element.url.as_deref().and_then(|url| paths.get(url))
+            if matches!(
+                element.kind,
+                ElementKind::Link | ElementKind::Button | ElementKind::Box
+            ) && let Some(target) = element.url.as_deref().and_then(|url| paths.get(url))
             {
                 out.push(*target);
             }
@@ -1312,19 +1603,40 @@ fn layout_sitemap(
     if imported.pages.is_empty() {
         return;
     }
-    let routes: Vec<String> = plans.iter().take(imported.pages.len()).map(|plan| {
-        if plan.desktop.route.is_empty() {
-            url::Url::parse(&plan.url).map(|url| normalize_url(url.path())).unwrap_or_else(|_| "/".into())
-        } else {
-            normalize_url(&plan.desktop.route)
-        }
-    }).collect();
-    let sections: Vec<String> = routes.iter().map(|route| {
-        let segments: Vec<_> = route.split('/').filter(|segment| !segment.is_empty()).collect();
-        if segments.len() > 1 { segments[0].to_owned() } else { String::new() }
-    }).collect();
+    let routes: Vec<String> = plans
+        .iter()
+        .take(imported.pages.len())
+        .map(|plan| {
+            if plan.desktop.route.is_empty() {
+                url::Url::parse(&plan.url)
+                    .map(|url| normalize_url(url.path()))
+                    .unwrap_or_else(|_| "/".into())
+            } else {
+                normalize_url(&plan.desktop.route)
+            }
+        })
+        .collect();
+    let sections: Vec<String> = routes
+        .iter()
+        .map(|route| {
+            let segments: Vec<_> = route
+                .split('/')
+                .filter(|segment| !segment.is_empty())
+                .collect();
+            if segments.len() > 1 {
+                segments[0].to_owned()
+            } else {
+                String::new()
+            }
+        })
+        .collect();
     let labelled = sections.iter().collect::<BTreeSet<_>>().len() > 1;
-    let paths = imported.pages.iter().enumerate().map(|(index, page)| (page.path.as_str(), index)).collect();
+    let paths = imported
+        .pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| (page.path.as_str(), index))
+        .collect();
     let mut edges = Vec::new();
     for page in &imported.pages {
         let mut targets = Vec::new();
@@ -1352,12 +1664,25 @@ fn layout_sitemap(
     for (index, depth) in depths.into_iter().enumerate() {
         rows.entry(depth).or_default().push(index);
     }
-    let left = project.pages.iter().flat_map(|page| &page.sizes)
+    let left = project
+        .pages
+        .iter()
+        .flat_map(|page| &page.sizes)
         .map(|size| size.x + f64::from(size.width))
-        .chain(project.reference.iter().map(|item| item.rect.x + item.rect.width))
-        .fold(0.0_f64, f64::max) + 160.0;
-    let mut top = project.pages.iter().flat_map(|page| &page.sizes)
-        .map(|size| size.y).fold(0.0_f64, f64::min);
+        .chain(
+            project
+                .reference
+                .iter()
+                .map(|item| item.rect.x + item.rect.width),
+        )
+        .fold(0.0_f64, f64::max)
+        + 160.0;
+    let mut top = project
+        .pages
+        .iter()
+        .flat_map(|page| &page.sizes)
+        .map(|size| size.y)
+        .fold(0.0_f64, f64::min);
     // A long level wraps after a few pages, so it reads as a block rather than a strip.
     const PAGES_PER_LINE: usize = 6;
     let label_room = if labelled { 120.0 } else { 0.0 };
@@ -1378,7 +1703,10 @@ fn layout_sitemap(
                 if previous_section.is_some() {
                     x += 240.0;
                 }
-                if labelled && project.reference.len() + imported.reference.len() < crate::MAX_REFERENCE_ITEMS {
+                if labelled
+                    && project.reference.len() + imported.reference.len()
+                        < crate::MAX_REFERENCE_ITEMS
+                {
                     let label = if section.is_empty() {
                         "Top level".to_owned()
                     } else {
@@ -1387,8 +1715,17 @@ fn layout_sitemap(
                         chars.next().unwrap().to_uppercase().collect::<String>() + chars.as_str()
                     };
                     imported.reference.push(ReferenceItem {
-                        id: stable_uuid(&format!("website:section:{}:{depth}:{}:{section}", plans[home].url, position / PAGES_PER_LINE)),
-                        rect: Rect { x, y: page_y - label_room, width: 280.0, height: 80.0 },
+                        id: stable_uuid(&format!(
+                            "website:section:{}:{depth}:{}:{section}",
+                            plans[home].url,
+                            position / PAGES_PER_LINE
+                        )),
+                        rect: Rect {
+                            x,
+                            y: page_y - label_room,
+                            width: 280.0,
+                            height: 80.0,
+                        },
                         kind: ReferenceKind::Note { text: label },
                     });
                 }
@@ -1436,7 +1773,10 @@ fn collect_overrides(elements: &[Element], overrides: &mut BTreeMap<Uuid, Elemen
             ElementOverride {
                 rect: Some(element.rect),
                 style: Some(element.style.clone()),
-                layout: element.kind.holds_children().then(|| element.layout.clone()),
+                layout: element
+                    .kind
+                    .holds_children()
+                    .then(|| element.layout.clone()),
                 hidden: false,
                 dismissed: false,
             },
@@ -1445,7 +1785,11 @@ fn collect_overrides(elements: &[Element], overrides: &mut BTreeMap<Uuid, Elemen
     }
 }
 
-fn apply_overrides(elements: &mut [Element], overrides: &BTreeMap<Uuid, ElementOverride>, phone_size: Uuid) {
+fn apply_overrides(
+    elements: &mut [Element],
+    overrides: &BTreeMap<Uuid, ElementOverride>,
+    phone_size: Uuid,
+) {
     for element in elements {
         if let Some(over) = overrides.get(&element.id) {
             element.overrides.insert(phone_size, over.clone());
@@ -1461,7 +1805,12 @@ fn behaviour_pointers(capture: &WebCapture, plan: &PagePlan<'_>) -> Vec<Pointer>
     pointers
 }
 
-fn walk_behaviours(nodes: &[WebNode], path: &mut Vec<usize>, plan: &PagePlan<'_>, pointers: &mut Vec<Pointer>) {
+fn walk_behaviours(
+    nodes: &[WebNode],
+    path: &mut Vec<usize>,
+    plan: &PagePlan<'_>,
+    pointers: &mut Vec<Pointer>,
+) {
     for (index, node) in nodes.iter().enumerate() {
         path.push(index);
         let tag = node.tag.trim().to_ascii_lowercase();
@@ -1470,13 +1819,27 @@ fn walk_behaviours(nodes: &[WebNode], path: &mut Vec<usize>, plan: &PagePlan<'_>
         let role = node.attributes.role.to_ascii_lowercase();
         let controls = node.attributes.aria_controls.clone().unwrap_or_default();
         let expanded = node.attributes.aria_expanded.is_some();
-        let toggle = node.attributes.data_toggle.clone().unwrap_or_default().to_ascii_lowercase();
-        let menuish = class.contains("menu") || class.contains("nav") || class.contains("hamburger")
-            || id.contains("menu") || id.contains("nav") || toggle.contains("collapse") || toggle.contains("menu");
+        let toggle = node
+            .attributes
+            .data_toggle
+            .clone()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let menuish = class.contains("menu")
+            || class.contains("nav")
+            || class.contains("hamburger")
+            || id.contains("menu")
+            || id.contains("nav")
+            || toggle.contains("collapse")
+            || toggle.contains("menu");
         let tabish = role == "tab" || (class.contains("tab") && (expanded || !controls.is_empty()));
         let accordion = class.contains("accordion") || toggle.contains("collapse");
-        let visible = node.rect.width >= 1.0 && node.rect.height >= 1.0 && node.styles.opacity > 0.001;
-        if visible && (tag == "button" || tag == "a" || role == "button") && (menuish || tabish || accordion) {
+        let visible =
+            node.rect.width >= 1.0 && node.rect.height >= 1.0 && node.styles.opacity > 0.001;
+        if visible
+            && (tag == "button" || tag == "a" || role == "button")
+            && (menuish || tabish || accordion)
+        {
             let comment = if tabish {
                 "Switches to the tab panel this control names."
             } else if accordion {
@@ -1488,12 +1851,29 @@ fn walk_behaviours(nodes: &[WebNode], path: &mut Vec<usize>, plan: &PagePlan<'_>
                 "website:{}:{}:{}",
                 normalize_url(&plan.url),
                 tag,
-                path.iter().map(usize::to_string).collect::<Vec<_>>().join(".")
+                path.iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(".")
             ));
             pointers.push(Pointer {
-                id: stable_uuid(&format!("website:pointer:{}:{}", plan.url, path.iter().map(usize::to_string).collect::<Vec<_>>().join("."))),
-                from: PointerSource::Element { page_id: plan.page_id, element_id, size_id: Some(plan.size_id) },
-                to: PointerTarget::Boundary { page_id: plan.page_id, size_id: Some(plan.size_id) },
+                id: stable_uuid(&format!(
+                    "website:pointer:{}:{}",
+                    plan.url,
+                    path.iter()
+                        .map(usize::to_string)
+                        .collect::<Vec<_>>()
+                        .join(".")
+                )),
+                from: PointerSource::Element {
+                    page_id: plan.page_id,
+                    element_id,
+                    size_id: Some(plan.size_id),
+                },
+                to: PointerTarget::Boundary {
+                    page_id: plan.page_id,
+                    size_id: Some(plan.size_id),
+                },
                 comment: comment.into(),
                 kind: crate::PointerKind::Reference,
                 wiring: None,
@@ -1531,20 +1911,43 @@ mod tests {
         let pages = page_paths();
         let page = "http://127.0.0.1:9/token/pages/p001";
         assert_eq!(
-            internal_href("http://www.oldsite.example/pages/P002.HTM", page, &pages, &own()).as_deref(),
+            internal_href(
+                "http://www.oldsite.example/pages/P002.HTM",
+                page,
+                &pages,
+                &own()
+            )
+            .as_deref(),
             Some("/site/pages/p002")
         );
         assert_eq!(
-            internal_href("https://www.oldsite.example/pages/p002.html", page, &pages, &own()).as_deref(),
+            internal_href(
+                "https://www.oldsite.example/pages/p002.html",
+                page,
+                &pages,
+                &own()
+            )
+            .as_deref(),
             Some("/site/pages/p002")
         );
         assert_eq!(
-            internal_href("http://www.oldsite.example/pages/p999.htm", page, &pages, &own()),
+            internal_href(
+                "http://www.oldsite.example/pages/p999.htm",
+                page,
+                &pages,
+                &own()
+            ),
             None
         );
         // A domain the site does not use for its own pages stays external, even at a matching path.
-        assert_eq!(internal_href("https://social.example/", page, &pages, &own()), None);
-        assert_eq!(internal_href("https://social.example/pages/p002", page, &pages, &own()), None);
+        assert_eq!(
+            internal_href("https://social.example/", page, &pages, &own()),
+            None
+        );
+        assert_eq!(
+            internal_href("https://social.example/pages/p002", page, &pages, &own()),
+            None
+        );
     }
 
     #[test]
@@ -1581,11 +1984,21 @@ mod tests {
         .collect();
         let page = "https://oldsite.example/pages/p001";
         assert_eq!(
-            internal_href("https://www.oldsite.example/pages/P002.HTM", page, &pages, &own()),
+            internal_href(
+                "https://www.oldsite.example/pages/P002.HTM",
+                page,
+                &pages,
+                &own()
+            ),
             None
         );
         assert_eq!(
-            internal_href("https://www.oldsite.example/pages/p002.html", page, &pages, &own()),
+            internal_href(
+                "https://www.oldsite.example/pages/p002.html",
+                page,
+                &pages,
+                &own()
+            ),
             None
         );
     }

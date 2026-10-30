@@ -86,7 +86,9 @@ pub fn pointer_target_description(
     };
     match target {
         PointerTarget::Element {
-            page_id, element_id, ..
+            page_id,
+            element_id,
+            ..
         } => {
             let Some(page) = project.pages.iter().find(|page| page.id == *page_id) else {
                 return "A layer on a page that no longer exists.".into();
@@ -140,7 +142,8 @@ pub fn pointer_target_value(
             size_id,
         } => {
             let page = project.pages.iter().find(|page| page.id == *page_id);
-            let element = page.and_then(|page| crate::elements::find_in(&page.elements, *element_id));
+            let element =
+                page.and_then(|page| crate::elements::find_in(&page.elements, *element_id));
             serde_json::json!({
                 "kind": "element",
                 "pageId": page_id,
@@ -182,7 +185,9 @@ pub fn pointer_target_value(
 
 pub fn reference_text(kind: &crate::ReferenceKind) -> String {
     match kind {
-        crate::ReferenceKind::Element { element, .. } => format!("reference layer \"{}\"", element.label()),
+        crate::ReferenceKind::Element { element, .. } => {
+            format!("reference layer \"{}\"", element.label())
+        }
         crate::ReferenceKind::Note { text } => format!("note \"{}\"", short(text, 400)),
         crate::ReferenceKind::Link { url, title } => {
             if title.trim().is_empty() {
@@ -276,11 +281,7 @@ impl Project {
     }
 
     /// Pointers that touch a requested layer, in project order.
-    pub fn pointers_touching(
-        &self,
-        page_id: Uuid,
-        element_id: Uuid,
-    ) -> Vec<&Pointer> {
+    pub fn pointers_touching(&self, page_id: Uuid, element_id: Uuid) -> Vec<&Pointer> {
         let ids = self.element_subtree_ids(element_id);
         self.pointers
             .iter()
@@ -302,7 +303,10 @@ impl Project {
                         element_id: target_element,
                         ..
                     } => *target_page == page_id && ids.contains(target_element),
-                    PointerTarget::Boundary { page_id: target_page, .. } => *target_page == page_id,
+                    PointerTarget::Boundary {
+                        page_id: target_page,
+                        ..
+                    } => *target_page == page_id,
                     PointerTarget::Reference { .. } | PointerTarget::Url { .. } => false,
                 };
                 from_matches || to_matches
@@ -350,7 +354,8 @@ impl Project {
                     .wiring
                     .as_ref()
                     .is_some_and(|wiring| wiring.generated_comment == pointer.comment);
-                let classified = pointer.play_comment == pointer.comment && !pointer.comment.trim().is_empty();
+                let classified =
+                    pointer.play_comment == pointer.comment && !pointer.comment.trim().is_empty();
                 let recorded = exported.and_then(|record| record.pointers.get(&pointer.id));
                 let code_changed = recorded.is_some_and(|recorded| {
                     current
@@ -389,10 +394,13 @@ impl Project {
 pub fn source_description(project: &Project, source: &PointerSource) -> String {
     match source {
         PointerSource::Element {
-            page_id, element_id, ..
+            page_id,
+            element_id,
+            ..
         } => {
             let page = project.pages.iter().find(|page| page.id == *page_id);
-            let element = page.and_then(|page| crate::elements::find_in(&page.elements, *element_id));
+            let element =
+                page.and_then(|page| crate::elements::find_in(&page.elements, *element_id));
             match (page, element) {
                 (Some(page), Some(element)) => format!(
                     "layer \"{}\" on page {} ({})",

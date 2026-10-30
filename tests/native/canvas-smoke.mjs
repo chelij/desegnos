@@ -460,14 +460,14 @@ async function runIsolated() {
       assert.equal((await boundary()).screen, false, 'The Page boundary rendered as a Screen boundary');
     });
 
-    await step('Draw a Screen boundary from the Boundary flyout', async () => {
-      await chooseBoundaryKind('Screen');
+    await step('Draw another Page boundary from the unified Boundary flyout', async () => {
+      await chooseBoundaryKind('Page');
       const before = (await boundaries()).length;
       const firstBefore = (await boundaries())[0];
       const spot = await emptyCanvas(280, 140);
       await mouse.drag(spot.from, spot.to);
-      await waitFor(async () => (await boundaries()).length === before + 1, 'The Screen boundary drag did not create a boundary');
-      assert.ok((await boundaries()).some(item => item.screen), 'The new boundary is not a Screen boundary');
+      await waitFor(async () => (await boundaries()).length === before + 1, 'The Page boundary drag did not create a boundary');
+      assert.ok((await boundaries()).every(item => !item.screen), 'New pages should grow by default');
       const firstAfter = (await boundaries())[0];
       assert.ok(Math.abs(firstAfter.left - firstBefore.left) < 2 && Math.abs(firstAfter.top - firstBefore.top) < 2, 'Drawing a boundary moved the view');
     });

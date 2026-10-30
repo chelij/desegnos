@@ -261,7 +261,11 @@ fn check_project(project: &Project) {
         .enumerate()
     {
         let path = format!("project.pointers[{index}]");
-        require(pointer, &path, &["id", "from", "to", "comment", "kind", "wiring"]);
+        require(
+            pointer,
+            &path,
+            &["id", "from", "to", "comment", "kind", "wiring"],
+        );
         assert!(
             pointer["wiring"].is_null(),
             "{path}.wiring must be serialized as null"

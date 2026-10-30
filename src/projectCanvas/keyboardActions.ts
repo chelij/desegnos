@@ -4,16 +4,16 @@ import type { ProjectCanvasProps } from './interactionTypes';
 import { alignSelectionMoves, distributeSelectionMoves, arrangeSiblingOrder, type SelectionDistribution, type ArrangeOperation } from './arrange';
 import { type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
-  BOUNDARY_GAP, selectedPointers, type Boundary, type CanvasCamera, type CanvasTarget, type ElementTarget, type Point,
+  BOUNDARY_GAP, selectedPointers, type CanvasCamera, type CanvasTarget, type ElementTarget, type Point,
 } from '../projectCanvasGeometry';
-import type { Element, ElementKind, ElementMove, ElementPatch, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
+import type { Element, ElementMove, ElementPatch, NamedView, Page, Project, Rect, RequestArea, RequestShape, RequestTarget } from '../types';
 import type { ProjectTool } from '../EditorTools';
 import { type SelectionAlign } from './selectionBar';
 import { type ScreenRect } from './surface';
 import { type LinkCopy } from './linkedChoices';
 import { copySummary, linkNeedsChoice, nestedLayerIds, sameStructure } from './links';
 import { viewNameForSlot, type ShortcutAction } from '../shortcuts';
-import { playIsActive, type PlayState } from './play';
+import { playIsActive } from './play';
 import { elementChildrenOf, elementParents, findPageElement } from './elementGeometry';
 import { ElementEntry, ClipboardEntry, PasteTarget, LinkDecision, Drag, CanvasActionOptions, isElementTarget } from './interactionTypes';
 
@@ -24,7 +24,7 @@ type Context = {
   cancelDrag: () => void;
   painterArmed: boolean;
   setPainterArmed: import("react").Dispatch<import("react").SetStateAction<boolean>>;
-  latest: import("react").RefObject<{ camera: CanvasCamera; boundaries: Boundary[]; project: Project; selection: CanvasTarget[]; focused: string | null; addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>; attachToRequest: (requestId: string, files: File[], links: string[]) => void; selectPointer: (pointerId: string, additive?: boolean) => void; selectReference: (itemId: string, additive?: boolean) => void; selectElement: (pageId: string, elementId: string, sizeId: string | null, additive?: boolean) => void; clearSelection: () => void; removeElements: (elements: { pageId: string; elementId: string; }[]) => void; insertElements: (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => Promise<void>; updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void; moveElements: (moves: ElementMove[]) => Promise<unknown> | void; groupElements: (pageId: string, ids: string[]) => Promise<string | null>; ungroupElements: (pageId: string, id: string) => Promise<string[]>; tool: import("../EditorTools").EditorTool; insertKind: ElementKind | null; editing: { pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean; } | null; play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; }>;
+  latest: import("react").RefObject<Pick<ProjectCanvasProps, 'play'>>;
   onPlayExit: () => void;
   requestDraft: { targets: RequestTarget[]; area: RequestArea | null; screen: ScreenRect; } | null;
   polygonDraft: Point[] | null;
@@ -518,9 +518,9 @@ export function createKeyboardActions(context: () => Context) {
   }
 
   return {
-    escapeCanvas, selectAllSiblings, arrangeElements, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
+    escapeCanvas, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
     alignSelection, distributeSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
-    groupSelection, ungroupSelection, nudgeElements, focusElement, canRunCanvasAction, runCanvasAction,
+    canRunCanvasAction, runCanvasAction,
     keyDown,
   };
 }

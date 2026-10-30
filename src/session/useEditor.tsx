@@ -5,7 +5,7 @@ import { createProjectCommands } from './projectCommands';
 import { useExportJobs } from '../exportJobs/useExportJobs';
 import { createEditorShortcuts } from '../editorShortcuts';
 import {
-  Theme, Replacement, UntitledSaveRequest, Confirmation, errorMessage, sizeName, sizeBoundaries, initialZoom,
+  Theme, Replacement, UntitledSaveRequest, Confirmation, errorMessage, sizeName, sizeBoundaries,
   readTheme, ownerPageId, selectionBounds, menuPaletteCommands,
   suggestedPagePath,
 } from '../editorShared';
@@ -27,13 +27,13 @@ import { type DossierSection } from '../Notes';
 import { type MenuItem } from '../Menus';
 import { KEYMAP, shortcutFor, shortcutLabel, viewNameForSlot } from '../shortcuts';
 import {
-  BOUNDARY_GAP, unionBounds, referenceMoves, pushApartReference, boundaryMoves, pushApartBoundaries, toggleCanvasTarget, selectedReference, type Boundary, type BoundaryMove,
+  BOUNDARY_GAP, unionBounds, referenceMoves, pushApartReference, boundaryMoves, pushApartBoundaries, toggleCanvasTarget, selectedReference, type BoundaryMove,
   type CanvasCamera, type CanvasTarget, type ReferenceMove,
 } from '../projectCanvasGeometry';
 import { findPageElement } from '../projectCanvas/elementGeometry';
 import { elementPath, findElementIn } from '../projectCanvas/elementGeometry';
 import { usePanelState } from '../EditorDock';
-import { announcedDraftCount, announcesStatus } from '../generationSession.js';
+import { announcesStatus } from '../generationSession.js';
 import { type PaletteCommand } from '../CommandPalette';
 import { activeGeneration, useGeneration } from '../useGeneration';
 import type { AiSettingsView, AppSettingsView, BoundaryKind, Brief, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, NamedView, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestAttachment, SizePreset, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
@@ -44,14 +44,14 @@ import { behaviourSourceKey, playShouldPreview } from '../projectCanvas/behaviou
 export function useEditor({ initialView }: { initialView?: WorkspaceView } = {}) {
 
   const {
-    requestProjectOpen, chooseSaveConflict, closeUntitledSave, requestUntitledSave, saveUntitledProject, save,
-    replace, closeProject, switchProjectTab, closeProjectTab, openAlongside, open, openRecent, newUntitled,
+    chooseSaveConflict, closeUntitledSave, saveUntitledProject, save,
+    closeProject, switchProjectTab, closeProjectTab, open, openRecent, newUntitled,
     recover, dismissRecoveries, travel, saveCopy, compactHistory,
   } = createProjectCommands(() => ({
     setPendingRecovery, setError, saveChoice, setSaveConflict, untitledSaveResolve, setUntitledSave,
     untitledSaveFlight, current, panels, panelActions, settle, queue, accept, setNotice, refreshRecent,
-    saveFlight, setReplacement, setSelected, setCanvasSelection, setCanvasFocus, setShowStartPage,
-    setConfirmation, setZoom, resolvedTheme, canvasRef, setShowRecovery, setHistoryEpoch,
+    saveFlight, setReplacement, setCanvasSelection, setCanvasFocus, setShowStartPage,
+    setConfirmation, resolvedTheme, canvasRef, setShowRecovery, setHistoryEpoch,
   }));
   const {
     performAction,
@@ -64,7 +64,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [closeRequest, setCloseRequest] = useState<{ message: string; resolve: (answer: boolean) => void } | null>(null);
   const [loading, setLoading] = useState(!initialView);
   const [error, setError] = useState('');
-  const { view, current, pending, accept, queue, mutate, settle, synchronize } = useProjectSession(initialView, setError);
+  const { view, current, pending, accept, queue, mutate, settle } = useProjectSession(initialView, setError);
   const [openFailure, setOpenFailure] = useState<{ message: string; url: string } | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateSummary | null>(null);
@@ -89,10 +89,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [showPalette, setShowPalette] = useState(false);
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [focusPrompt, setFocusPrompt] = useState(false);
-  const [zoom, setZoom] = useState(0.75);
-  const [tool, setTool] = useState<EditorTool>('select');
   const [canvasTool, setCanvasTool] = useState<ProjectTool>('select');
   const [insertKind, setInsertKind] = useState<ElementKind | null>(null);
   const [insertSignal, setInsertSignal] = useState(0);
@@ -114,7 +110,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [projectLocation, setProjectLocation] = useState<ProjectLocationView | null>(null);
   const [showProjectLocation, setShowProjectLocation] = useState(false);
   const [play, setPlay] = useState<PlayState>(idlePlay);
-  const [pendingImages, setPendingImages] = useState(0);
   const [untitledSave, setUntitledSave] = useState<UntitledSaveRequest | null>(null);
   const [pendingRecovery, setPendingRecovery] = useState<PendingRecovery | null>(null);
 
@@ -148,7 +143,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const untitledSaveResolve = useRef<((workspace: WorkspaceView | null) => void) | null>(null);
   const generationRef = useRef<GenerationJobView | null>(null);
   const generationOwns = useRef(false);
-  const { openExportPanel, chooseExportDestination, refreshWorkspace, showJobResult, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, showHistory, play, setPlay }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, setShowHistory, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, showHistory, aiConnected }));
+  const { openExportPanel, chooseExportDestination, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, showHistory, play, setPlay }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, setShowHistory, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, showHistory, aiConnected }));
 
   const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
   const refreshAiSettings = useCallback(async () => {
@@ -208,7 +203,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       const first = project.pages.find(page => pageKind(page) === kind);
       const template = source ?? (kind === 'page' && (first?.sizes.length ?? 0) > 1 ? first : null);
       const name = nextBoundaryName(project, kind);
-      const size: PageSize = { id: crypto.randomUUID(), label: sizeName(bounds.width), width: Math.round(bounds.width), height: Math.round(bounds.height), kind: layoutKind(kind), x: bounds.x, y: bounds.y };
+      const size: PageSize = { id: crypto.randomUUID(), label: sizeName(bounds.width), width: Math.round(bounds.width), height: Math.round(bounds.height), kind: layoutKind(kind, project), x: bounds.x, y: bounds.y };
       let nextX = bounds.x;
       const sizes = template ? template.sizes.map((old, index) => {
         const next = { ...old, id: index === 0 ? size.id : crypto.randomUUID(),
@@ -374,9 +369,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     if (existing) void updateCanvasRequest(request).catch(() => {});
     else void addCanvasRequest(request).catch(() => {});
   }, [addCanvasRequest, updateCanvasRequest, removeCanvasRequests]);
-  const updateCanvasElementContext = useCallback((elementId: string, context: RequestAttachment[]) => {
-    void mutate({ type: 'update_element_context', element_id: elementId, context }).catch(() => {});
-  }, [mutate]);
   const keepPointerComment = useCallback((pointerId: string) => {
     void mutate({ type: 'set_pointer_wiring', pointer_id: pointerId, wiring: null }).catch(() => {});
   }, [mutate]);
@@ -452,9 +444,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       };
     }).catch(() => {});
   }, [mutate]);
-  const removeCanvasPageSize = useCallback((pageId: string, sizeId: string) => {
-    void mutate({ type: 'remove_page_size', page_id: pageId, size_id: sizeId }).catch(() => {});
-  }, [mutate]);
   const renameProject = useCallback((name: string) => { void mutate({ type: 'rename_project', name }).catch(() => {}); }, [mutate]);
   const showDotGrid = useCallback((enabled: boolean) => { void mutate({ type: 'set_grid', enabled }).catch(() => {}); }, [mutate]);
   const changeGridFlags = useCallback((patch: Partial<Pick<GridSettings, 'snap'>>) => {
@@ -471,7 +460,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       accept(loaded);
       setShowStartPage(settings.showStartPage && !loaded.project);
       if (!settings.showStartPage && loaded.recoveries.length) setShowRecovery(true);
-      if (loaded.project) setZoom(initialZoom(loaded.project.viewport.width, loaded.project.viewport.height));
     }
     catch (error) { setError(errorMessage(error)); }
     finally { setLoading(false); }
@@ -603,7 +591,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const pointerStates = view?.pointerStates ?? [];
   const pointerStateMap = Object.fromEntries((checkedStates && checkedProject === project?.id ? checkedStates : pointerStates).map(item => [item.id, item])) as Record<string, PointerStateView>;
   const requestedAreas = project ? (project.requests ?? []).filter(request => request.text.trim()).length : 0;
-  const needsGeneratingPointers = pointerStates.filter(item => item.state === 'needsGenerating').length;
   const effectivePointerStates = checkedStates && checkedProject === project?.id ? checkedStates : pointerStates;
   const clashPointers = effectivePointerStates.filter(item => item.state === 'contradicts' || item.state === 'broken' || item.state === 'codeChanged');
   const activeProjectId = project?.id ?? null;
@@ -625,7 +612,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     if (command === 'apply_generation' && !signal?.aborted) accept(result as WorkspaceView);
     return result;
   })), [queue, activeProjectId, accept, refreshAiSettings]);
-  const generationApplied = useCallback((workspace: WorkspaceView) => { setSelected(null); setFocusPrompt(false); if (workspace.project?.latestGeneration) setNotice('Generated result applied.'); }, []);
+  const generationApplied = useCallback((workspace: WorkspaceView) => { if (workspace.project?.latestGeneration) setNotice('Generated result applied.'); }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
@@ -634,7 +621,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   generationRef.current = generation.job;
   generationOwns.current = generation.owns;
   const working = generation.canStop || activeGeneration(generation.job) || !!generation.operation;
-  useEffect(() => { setShowLog(false); setSelected(null); }, [activeProjectId]);
+  useEffect(() => { setShowLog(false); }, [activeProjectId]);
   useEffect(() => { setCanvasSelection([]); setCanvasFocus(null); setCanvasFocusSize(null); }, [view?.project?.id]);
   useEffect(() => {
     const pages = view?.project?.pages, reference = view?.project?.reference ?? [], pointers = view?.project?.pointers ?? [];
@@ -651,7 +638,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     if (canvasFocus && !pages?.some(page => page.id === canvasFocus)) setCanvasFocus(null);
   }, [view?.project?.pages, view?.project?.reference, view?.project?.pointers, view?.project?.requests, canvasFocus]);
   useEffect(() => { if (generation.visible) { setShowLog(true); generation.close(); } }, [generation.visible]);
-  const draftCount = announcedDraftCount(generation.job, generation.owns);
   const showGenerationStatus = !!generation.error || announcesStatus(generation.job, { owns: generation.owns, stopped: generation.stopped, working });
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
@@ -680,19 +666,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     if (!elementIds.length) throw new Error('Those requests are no longer in the project.');
     await generation.prepare(elementIds);
   }
-  async function allowWholePageAndRetry(elementId: string) {
-    await generation.prepare([elementId]);
-  }
-  const requestEditorIsOpen = () => false;
   function openImportDialog() { setImportSource(null); setShowImport(true); }
-  function resolveGenerationFix(fix: 'aiSettings' | 'import' | 'brief') {
-    if (fix === 'aiSettings') setShowAiSettings(true);
-    else if (fix === 'import') openImportDialog();
-    else setShowNotes('decisions');
-  }
   function generate(elementIds?: string[]) {
     const contextItems = selectedReference(canvasSelection);
-    if (!requestedAreas && pendingImages) { setNotice('Pictures resized and updated.'); return; }
     setError('');
     setShowLog(true);
     void generation.prepare(elementIds, contextItems).catch(() => {});
@@ -732,7 +708,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
         pointer_ids: pointerIds,
         request_ids: requestIds,
       });
-      setSelected(null); setCanvasSelection([]);
+      setCanvasSelection([]);
       requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
       setNotice(`${count} ${count === 1 ? 'item' : 'items'} deleted.`, () => { void travel('undo_project').catch(() => {}); });
     });
@@ -746,7 +722,8 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const name = removeSize ? `${page.name} · ${size.label}` : page.name;
     run(async () => {
       await mutate(removeSize ? { type: 'delete_items', size_ids: [[pageId, size!.id]] } : { type: 'delete_items', page_ids: [pageId] });
-      setCanvasFocus(null); setCanvasFocusSize(null); setCanvasSelection([]);
+      setCanvasFocus(null); setCanvasFocusSize(null);
+      setCanvasSelection([]);
       requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
       setNotice(`Removed ${name}.`, () => { void travel('undo_project').catch(() => {}); });
     });
@@ -921,7 +898,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, compactHistory, showImport,
     setImportSource, setShowImport, travel, showHistory, setShowHistory, panels, panelActions, play,
     togglePlay, previewSelectedBoundary, showExport, openExportPanel, aiConnected, showAiSettings,
-    setShowAiSettings, generation, showLog, setShowLog, requestedAreas, pendingImages, working, generate,
+    setShowAiSettings, generation, showLog, setShowLog, requestedAreas, working, generate,
     error, setError, problemAction, openFailure, setNotice, setOpenFailure, updateResult, openRelease,
     setUpdateResult, updateError, setUpdateError, notices, setNotices, dismissedRecovery, setDismissedRecovery,
     loading, load, pending, newUntitled, open, appSettings, changeShowStartPage, recentProjects, openRecent,
@@ -935,15 +912,15 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     setCanvasTool, setInsertKind, reportCanvasZoom, selectCanvasElement, insertCanvasElements,
     updateCanvasElements, moveCanvasElements, groupCanvasElements, ungroupCanvasElements, linkCanvasElements,
     unlinkCanvasElements, pasteLinkedInstances, playElement, setPlay, preview, closePreview, refreshPreview,
-    showGenerationStatus, openImportDialog, setShowNotes, editGenerationRequest, requestEditorIsOpen,
-    openGeneration, draftCount, logFocus, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
+    showGenerationStatus, openImportDialog, setShowNotes, editGenerationRequest,
+    openGeneration, logFocus, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
     exportJob, exportSending, exportError, chooseExportDestination, runExport, sendExport, cancelExport,
     openExportFolder, openInBrowser, setShowExport, historyEpoch, accept, untitledSave, projectLocation,
     closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
     keepPointerComment, keepPointerCode, selectedPointerOther, keepPointerThis, mergePointerClash,
     selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
     selectedElementTargets, renameCanvasElement, selectedElementRequest, setCanvasElementRequest,
-    updateCanvasElementContext, selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
+    selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
     addCanvasPageSize, renameProject, showDotGrid, changeGridFlags, save, canvasBoundaries,
     moveCanvasElementTo, removeLinkedDefinition, views, addNamedView, renameNamedView, removeNamedView,
     selectedBounds, clashPointers, selectNextPointerClash, zoomPercent, showGridSettings, setShowGridSettings,

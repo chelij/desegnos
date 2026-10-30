@@ -99,7 +99,7 @@ export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, bound
           </button>}
         {value === 'boundary' && boundaryKind && onBoundaryKind && <MenuButton className="tool-flyout" showChevron={false}
           label={<Icon name={boundaryIcon(boundaryKind)} size={12} />} ariaLabel="Boundary kind" title={`Boundary kind · ${boundaryName(boundaryKind)}`}
-          items={([['page', 'Page'], ['screen', 'Screen'], ['slide', 'Slide'], ['image', 'Image']] as const).map(([kind, label]) => ({ id: kind, label, checked: boundaryKind === kind, action: () => { onBoundaryKind(kind); onTool('boundary'); } }))} />}
+          items={([['page', 'Page'], ['slide', 'Slide'], ['image', 'Image']] as const).map(([kind, label]) => ({ id: kind, label, checked: boundaryKind === kind, action: () => { onBoundaryKind(kind); onTool('boundary'); } }))} />}
         {value === 'request' && requestShape && onRequestShape && <MenuButton className="tool-flyout" showChevron={false}
           label={<svg viewBox="0 0 16 16" aria-hidden="true"><path d={REQUEST_SHAPES.find(shape => shape.id === requestShape)?.icon ?? ICONS.request} /></svg>}
           ariaLabel="Request area shape" title={`Request area shape · ${REQUEST_SHAPES.find(shape => shape.id === requestShape)?.label ?? 'Pick'}`}

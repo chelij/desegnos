@@ -1,7 +1,7 @@
 import { boundaryName, boundaryIcon, pageKind, projectKind } from './projectCanvas/boundaryDefaults';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type FormEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { Icon, type IconName } from './icons';
-import { CompactNumberField, CompactTextField, useFieldDraft } from './CompactField';
+import { CompactNumberField, CompactTextField, fieldKeys, useFieldDraft } from './CompactField';
 import { useDraftText } from './DraftText';
 import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerEndpointName, pointerLabel, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
 import type { BoundaryKind, ElementPatch, NamedView, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from './types';
@@ -253,10 +253,7 @@ export function PropertyField({ label, ariaLabel, value, commit, valid, type = '
     <input type={type} aria-label={ariaLabel} value={state.draft} disabled={disabled} min={min} max={max} maxLength={maxLength} spellCheck={false} data-field={field}
       onChange={event => state.setDraft(event.target.value)}
       onBlur={state.settle}
-      onKeyDown={event => {
-        if (event.key === 'Enter') { event.preventDefault(); state.settle(); event.currentTarget.blur(); }
-        else if (event.key === 'Escape') { event.preventDefault(); state.cancel(); event.currentTarget.blur(); }
-      }} />
+      onKeyDown={fieldKeys(state.settle, state.cancel)} />
   </label>;
 }
 
@@ -286,8 +283,8 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   busy: boolean;
   behaviour?: BehaviourProperty;
 }) {
-  // People make slides, pages, screens and images; 'boundary' is the app's word, not theirs.
-  const kindWord = page.output === 'slide' ? 'Slide' : page.output === 'image' ? 'Image' : page.output === 'appScreen' ? 'Screen' : 'Page';
+  // People make slides, pages and images; 'boundary' is the app's word, not theirs.
+  const kindWord = page.output === 'slide' ? 'Slide' : page.output === 'image' ? 'Image' : 'Page';
   const [customWidth, setCustomWidth] = useState('1280');
   const [customHeight, setCustomHeight] = useState('800');
   const [customOpen, setCustomOpen] = useState(false);
@@ -332,8 +329,8 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
         <CompactNumberField prefix="H" label={`Height of ${labelForSize(size)}`} min={1} max={100000} unit="px" value={size.height} disabled={busy} valid={height => wholeSize(height, 1, 100000)}
           commit={height => { const value = Math.round(Number(height)); if (value >= 1 && value <= 100000) updateSize(size.id, { height: value }); }} />
         <div className="dock-size-tail">
-          {!presets && <select className="dock-kind" value={size.kind} disabled={busy} title="Kind" aria-label={`Kind of ${labelForSize(size)}`} onChange={event => updateSize(size.id, { kind: event.target.value as BoundaryKind })}>
-            <option value="page">Page</option><option value="screen">Screen</option>
+          {!presets && <select className="dock-kind" value={size.kind} disabled={busy} title="Height behaviour" aria-label={`Height behaviour of ${labelForSize(size)}`} onChange={event => updateSize(size.id, { kind: event.target.value as BoundaryKind })}>
+            <option value="page">Grow</option><option value="screen">Fixed</option>
           </select>}
           {index > 0 && <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Remove ${labelForSize(size)} size`} title={`Remove ${labelForSize(size)} size`} disabled={busy} onClick={() => removeSize(size)}><Icon name="trash" size={13} /></button>}
         </div>
@@ -548,9 +545,9 @@ export function BehaviourField({ project, pointer, state, commit, focusToken, bu
   </>;
 }
 
-export function PointerProperties({ pointer, project, state, change, connectAi, aiConnected, rewriting, busy, actions }: {
+export function PointerProperties({ pointer, project, state, change, aiConnected, busy, actions }: {
   pointer: Pointer; project: Project; state: PointerStateView | null; change: (comment: string) => Promise<unknown>;
-  connectAi: () => void; aiConnected: boolean; rewriting: boolean; busy: boolean; actions: PointerClashActions;
+  aiConnected: boolean; busy: boolean; actions: PointerClashActions;
 }) {
   const broken = pointerBroken(pointer, project);
   const [draft, changeDraft, flushDraft] = useDraftText(pointer.comment, (_value, latest) => Promise.resolve(change(latest())).then(() => latest()), 400);
@@ -719,7 +716,7 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
           <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Delete ${name}`} title="Delete boundary" onClick={() => deleteBoundary(pageId, sizeId)}><Icon name="trash" size={13} /></button>
         </div>
         {open && elements.length > 0 && <ElementLayers project={project} pageId={pageId} sizeId={sizeId} elements={elements} selection={selectedElements} fixed={fixedLayerIds} keep={needle ? keep : null}
-          select={selectElement} update={updateElements} remove={(page, size, id) => removeElements([id])} move={moveElement} />}
+          select={selectElement} update={updateElements} remove={(_page, _size, id) => removeElements([id])} move={moveElement} />}
       </li>;
     })}
     {shownRequests.length > 0 && <LayerGroup section="requests" title="Requests">

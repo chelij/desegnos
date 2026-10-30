@@ -12,6 +12,7 @@ Date: 2026-10-28. Owner decisions. Where this file and [RELEASE_PLAN.md](RELEASE
 
 What this means in practice:
 - **Placement fidelity is the core quality measure.** AI-made elements land in the request that asked for them, and exports keep elements where they were placed, at about that size, in that order and grouping. Precise mode honours this closely.
+- **One Page type for web output.** Website and App screen are templates, not different boundary types. Keep desktop, tablet, phone and custom sizes, with growing or fixed heights. Existing Screen projects retain their content and layout.
 - **Visual first.** Work happens on the canvas, not in code. Code exists only in exports, as ordinary files users can read and edit.
 - **Changes are scoped.** A request changes only its selected or covered targets, and everything else stays as it was. Pointers are the explicit way to let a request reach further.
 - **The output is ordinary files** that open without Desegnos and are not locked to any host.

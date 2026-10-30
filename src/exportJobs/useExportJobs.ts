@@ -266,7 +266,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
 
   return {
     showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates,
-    checkedProject, preview, openExportPanel, chooseExportDestination, refreshWorkspace, showJobResult,
+    checkedProject, preview, openExportPanel, chooseExportDestination,
     runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer,
     previewSelectedBoundary, closePreview, refreshPreview,
   };

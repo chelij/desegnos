@@ -10,8 +10,8 @@
 //! Masks use two pixels per PDF point unless the four-megapixel limit requires downsampling.
 //! Identical shadows share an XObject across pages; sharp shadows remain vector paths.
 use super::{
-    Clip, Group, Item, LayerTransform, Path, Picture, Point, Rgba, Scene, Segment, Shadow, ShadowShape,
-    Shape,
+    Clip, Group, Item, LayerTransform, Path, Picture, Point, Rgba, Scene, Segment, Shadow,
+    ShadowShape, Shape,
 };
 use flate2::{Compression, write::ZlibEncoder};
 use std::fmt::Write as _;
@@ -41,7 +41,12 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
         };
         page.paint_alpha(scene.background.a);
         set_fill(&mut page.stream, scene.background);
-        let _ = writeln!(page.stream, "0 0 {:.3} {:.3} re f", scene.width * SCALE, scene.height * SCALE);
+        let _ = writeln!(
+            page.stream,
+            "0 0 {:.3} {:.3} re f",
+            scene.width * SCALE,
+            scene.height * SCALE
+        );
         page.items(&scene.items);
         streams.push(page.stream);
     }
@@ -210,8 +215,8 @@ impl Page<'_> {
         self.pictures
             .push((picture.mime.clone(), picture.bytes.clone()));
         // `object-fit: cover`: scale to fill the box, centre it and let the clip crop it.
-        let (intrinsic_width, intrinsic_height) =
-            picture_dimensions(&picture.mime, &picture.bytes).unwrap_or((picture.width, picture.height));
+        let (intrinsic_width, intrinsic_height) = picture_dimensions(&picture.mime, &picture.bytes)
+            .unwrap_or((picture.width, picture.height));
         let scale = (picture.width / intrinsic_width).max(picture.height / intrinsic_height);
         let width = intrinsic_width * scale;
         let height = intrinsic_height * scale;
@@ -846,11 +851,22 @@ mod tests {
     fn a_horizontal_reflection_keeps_the_layer_centre_fixed_in_pdf() {
         let page = scene(vec![]);
         let mut stream = String::new();
-        write_transform(&mut stream, &page, &LayerTransform {
-            sx: -1.0, sy: 1.0, degrees: 0.0, cx: 100.0, cy: 100.0,
-        });
-        let matrix: Vec<f64> = stream.split_whitespace().take(6)
-            .map(|value| value.parse().unwrap()).collect();
+        write_transform(
+            &mut stream,
+            &page,
+            &LayerTransform {
+                sx: -1.0,
+                sy: 1.0,
+                degrees: 0.0,
+                cx: 100.0,
+                cy: 100.0,
+            },
+        );
+        let matrix: Vec<f64> = stream
+            .split_whitespace()
+            .take(6)
+            .map(|value| value.parse().unwrap())
+            .collect();
         assert_eq!(matrix, vec![-1.0, 0.0, 0.0, 1.0, 200.0 * SCALE, 0.0]);
     }
 

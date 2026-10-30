@@ -7,9 +7,9 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 | Term | Meaning | In code |
 |---|---|---|
 | **Canvas** | The one infinite surface per project where everything lives. Everything on it is visual. | `ProjectCanvas`, `src/projectCanvas/` |
-| **Boundary** | A rectangle you draw that is one output: a page, slide, image or app screen. Its hex background and contents ship when included in the Export panel. Any boundary can be deleted; the first included one is the entry. | `Page` with `Page.sizes` and `Page.background` |
-| **Page boundary** | Fixed width, grows taller as elements are added. | `BoundaryKind::Page` |
-| **Screen boundary** | Fixed size; content beyond it scrolls inside. | `BoundaryKind::Screen` |
+| **Boundary** | A rectangle you draw that is one output: a page, slide or image. Its hex background and contents ship when included in the Export panel. Any boundary can be deleted; the first included one is the entry. | `Page` with `Page.sizes` and `Page.background` |
+| **Page boundary** | A website page or app layout with linked sizes. Each size can grow with content or keep a fixed height. | `OutputType::Webpage`; legacy `AppScreen` stays readable without rewriting history |
+| **Height behaviour** | **Grow** expands with content; **Fixed** keeps the size and scrolls overflow in web exports. | Persisted `BoundaryKind::Page` / `BoundaryKind::Screen` respectively |
 | **Reference** | Everything outside every boundary. Material the AI can read; never shipped. | `Project.reference` |
 | **Reference item** | One piece of reference: note, link card, image, swatch or a preserved element tree. | `ReferenceItem`, `ReferenceKind` |
 | **Note** | Reference text. | `ReferenceKind::Note` |

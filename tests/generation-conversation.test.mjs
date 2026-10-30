@@ -32,7 +32,7 @@ try {
   const controller = { job, operation: null, elapsedSeconds: null, error: '', stopped: false, canStop: false, prepare() {}, cancel() {} };
   const render = (overrides = {}) => renderToStaticMarkup(React.createElement(GenerationLog, {
     job, project, controller, settings: null, operation: null, error: null,
-    close() {}, openSettings() {}, openImport() {}, openBrief() {}, manageUsage: async () => {}, editRequest() {}, reply: async () => {}, ...overrides,
+    close() {}, openSettings() {}, openImport() {}, openBrief() {}, editRequest() {}, reply: async () => {}, ...overrides,
   }));
 
   await test('a declared question stays in the conversation with its resolving actions', () => {
@@ -59,9 +59,9 @@ try {
     assert.doesNotMatch(html, /Needs your input|>Change request</);
   });
 
-  await test('an open request editor leaves only the fix and past generations remain reachable', () => {
-    const html = render({ requestEditorOpen: elementId => elementId === id });
-    assert.doesNotMatch(html, />Change request</);
+  await test('request actions and past generations remain reachable', () => {
+    const html = render();
+    assert.match(html, />Change request</);
     assert.match(html, /AI settings/);
     assert.match(html, /Past generations/);
     assert.match(html, /Reply to the AI/);

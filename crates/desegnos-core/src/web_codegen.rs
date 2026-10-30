@@ -78,7 +78,10 @@ fn ends_with_generic(list: &str) -> bool {
         .next_back()
         .map(|last| {
             matches!(
-                last.trim().trim_matches(['\'', '"']).to_ascii_lowercase().as_str(),
+                last.trim()
+                    .trim_matches(['\'', '"'])
+                    .to_ascii_lowercase()
+                    .as_str(),
                 "serif"
                     | "sans-serif"
                     | "monospace"
@@ -229,8 +232,7 @@ fn link_href(element: &Element, plan: &ExportPlan) -> String {
 /// a real anchor.
 fn tag_name(element: &Element) -> &'static str {
     use ElementKind::*;
-    let hyperlink =
-        element.url.is_some() && matches!(element.kind, Box | Text | Button | Link);
+    let hyperlink = element.url.is_some() && matches!(element.kind, Box | Text | Button | Link);
     match &element.kind {
         Box if hyperlink => "a",
         Text if hyperlink => "a",
@@ -560,7 +562,11 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
             crate::SizingMode::Fixed => {}
             crate::SizingMode::Fit => css.set(
                 axis,
-                if axis == "width" { "max-content" } else { "auto" },
+                if axis == "width" {
+                    "max-content"
+                } else {
+                    "auto"
+                },
             ),
             crate::SizingMode::Fill => {
                 let main_axis = matches!(
@@ -588,24 +594,38 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
             css.set(format!("max-{axis}"), length(value));
         }
     }
-    if sizing.width == crate::SizingMode::Fit && matches!(
-        element.kind,
-        ElementKind::Text | ElementKind::Button | ElementKind::Link | ElementKind::Input { .. }
-            | ElementKind::Textarea | ElementKind::Select { .. } | ElementKind::Checkbox | ElementKind::Radio
-    ) {
+    if sizing.width == crate::SizingMode::Fit
+        && matches!(
+            element.kind,
+            ElementKind::Text
+                | ElementKind::Button
+                | ElementKind::Link
+                | ElementKind::Input { .. }
+                | ElementKind::Textarea
+                | ElementKind::Select { .. }
+                | ElementKind::Checkbox
+                | ElementKind::Radio
+        )
+    {
         let available = if free {
             format!("max(0px, calc(100% - {}))", length(rect.x))
         } else {
             "100%".into()
         };
-        css.set("min-width", sizing.min_width.map_or_else(
-            || "0".into(),
-            |min| format!("min({}, {available})", length(min)),
-        ));
-        css.set("max-width", sizing.max_width.map_or_else(
-            || available.clone(),
-            |max| format!("min({}, {available})", length(max)),
-        ));
+        css.set(
+            "min-width",
+            sizing.min_width.map_or_else(
+                || "0".into(),
+                |min| format!("min({}, {available})", length(min)),
+            ),
+        );
+        css.set(
+            "max-width",
+            sizing.max_width.map_or_else(
+                || available.clone(),
+                |max| format!("min({}, {available})", length(max)),
+            ),
+        );
     }
     if main_fill {
         css.set("flex", "1 1 0");
@@ -948,7 +968,13 @@ pub(super) fn render(
             .iter()
             .find(|page| page.id == planned.page_id)
             .expect("planned page");
-        let scheme = color_scheme(page, schemes.iter().find(|entry| entry.page_id == page.id).map(|entry| entry.color_scheme.as_str()));
+        let scheme = color_scheme(
+            page,
+            schemes
+                .iter()
+                .find(|entry| entry.page_id == page.id)
+                .map(|entry| entry.color_scheme.as_str()),
+        );
         let mut sizes: Vec<_> = page.sizes.iter().collect();
         sizes.sort_by_key(|size| (size.width, size.id));
         let mut fonts = Fonts::default();
@@ -976,7 +1002,9 @@ pub(super) fn render(
         );
         css.push_str(&fonts.css());
         css.push_str(&format!(":root{{color-scheme:{scheme};"));
-        for colour in &project.styles.colours { css.push_str(&format!("--colour-{}:{};", colour.id, colour.value)); }
+        for colour in &project.styles.colours {
+            css.push_str(&format!("--colour-{}:{};", colour.id, colour.value));
+        }
         for text in &project.styles.text {
             let family = fonts.family(&text.font_family, text.weight, text.italic);
             css.push_str(&format!("--text-{}-font-family:{};--text-{}-font-size:{}px;--text-{}-font-weight:{};--text-{}-line-height:{};--text-{}-letter-spacing:{}px;--text-{}-font-style:{};", text.id, family, text.id, text.size, text.id, text.weight, text.id, text.line_height, text.id, text.letter_spacing, text.id, if text.italic { "italic" } else { "normal" }));
@@ -1364,7 +1392,12 @@ mod tests {
         let mut bundled = regular.clone();
         bundled.id = Uuid::new_v4();
         bundled.style.text_style.font_family = "Archivo".into();
-        project.pages[0].elements = vec![regular.clone(), bold.clone(), italic.clone(), bundled.clone()];
+        project.pages[0].elements = vec![
+            regular.clone(),
+            bold.clone(),
+            italic.clone(),
+            bundled.clone(),
+        ];
         let bundle = direct_export_bundle(&project, &[]).unwrap();
         let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
         let font_assets: Vec<_> = bundle
@@ -1407,7 +1440,12 @@ mod tests {
         project.pages[0].elements = vec![text.clone()];
         let bundle = direct_export_bundle(&project, &[]).unwrap();
         let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
-        assert!(!bundle.files.keys().any(|path| path.starts_with("assets/fonts/")));
+        assert!(
+            !bundle
+                .files
+                .keys()
+                .any(|path| path.starts_with("assets/fonts/"))
+        );
         assert!(!css.contains("@font-face"));
         assert!(rule_of(css, text.id).contains("font-family:system-ui,sans-serif;"));
     }
@@ -1512,21 +1550,34 @@ mod tests {
         assert_eq!(&face[..4], &0x0001_0000u32.to_be_bytes());
         // The one table now starts after the rewritten directory it was copied into.
         assert_eq!(&face[20..24], &56u32.to_be_bytes());
-        assert_eq!(&face[face.len() - collection.len()..], collection.as_slice());
+        assert_eq!(
+            &face[face.len() - collection.len()..],
+            collection.as_slice()
+        );
         assert!(crate::standalone_face(&collection[..12], 0).is_none());
     }
 
     #[test]
     fn deterministic_color_scheme_and_background_follow_luminance() {
         let mut project = project();
-        for (background, scheme) in [("#ffffff", "light"), ("#f7f7f5", "light"), ("#e9e9e9", "light"), ("#1f1f1f", "dark"), ("#121212", "dark"), ("#000000", "dark"), ("#fff", "light")] {
+        for (background, scheme) in [
+            ("#ffffff", "light"),
+            ("#f7f7f5", "light"),
+            ("#e9e9e9", "light"),
+            ("#1f1f1f", "dark"),
+            ("#121212", "dark"),
+            ("#000000", "dark"),
+            ("#fff", "light"),
+        ] {
             project.pages[0].background = background.into();
             let bundle = direct_export_bundle(&project, &[]).unwrap();
             let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
             let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
             assert!(css.contains(&format!(":root{{color-scheme:{scheme};}}")));
             assert!(css.contains(&format!("background:{background};")));
-            assert!(html.contains(&format!("<meta name=\"color-scheme\" content=\"{scheme}\">")));
+            assert!(html.contains(&format!(
+                "<meta name=\"color-scheme\" content=\"{scheme}\">"
+            )));
         }
     }
 
@@ -1537,7 +1588,11 @@ mod tests {
             project.pages[0].background = background.into();
             let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
             assert!(plan.markdown.contains("background and content colours"));
-            for (field, expected) in [("light", "light"), ("dark", "dark"), ("invalid", project.pages[0].color_scheme())] {
+            for (field, expected) in [
+                ("light", "light"),
+                ("dark", "dark"),
+                ("invalid", project.pages[0].color_scheme()),
+            ] {
                 let json = serde_json::json!({
                     "jobId": plan.job_id, "requirementsSha256": plan.sha256, "summary": "Checked colours",
                     "pages": [{"pageId": project.pages[0].id, "colorScheme": field}],
@@ -1559,16 +1614,31 @@ mod tests {
         child.style.sizing.width = crate::SizingMode::Fill;
         child.style.sizing.height = crate::SizingMode::Fit;
         child.style.sizing.min_width = Some(20.0);
-        let colour = Uuid::new_v4(); child.style.references.fill = Some(colour);
-        let layout = ElementLayout::Stack { direction: StackDirection::Row, gap: 8.0, padding: 0.0, align: StackAlign::Start, justify: StackJustify::Start, wrap: false };
+        let colour = Uuid::new_v4();
+        child.style.references.fill = Some(colour);
+        let layout = ElementLayout::Stack {
+            direction: StackDirection::Row,
+            gap: 8.0,
+            padding: 0.0,
+            align: StackAlign::Start,
+            justify: StackJustify::Start,
+            wrap: false,
+        };
         let mut fonts = Fonts::default();
-        let mut output = BTreeMap::new(); rules(&[child.clone()], &layout, &mut fonts, &mut output);
+        let mut output = BTreeMap::new();
+        rules(&[child.clone()], &layout, &mut fonts, &mut output);
         let css = output[&child.id].block();
         assert!(css.contains("flex:1 1 0;"));
         assert!(css.contains("height:auto;"));
         assert!(css.contains("min-width:calc(20 * var(--desegnos-unit));"));
         assert!(css.contains(&format!("background:var(--colour-{colour});")));
-        output.clear(); rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
+        output.clear();
+        rules(
+            &[child.clone()],
+            &ElementLayout::Free,
+            &mut fonts,
+            &mut output,
+        );
         assert!(output[&child.id].block().contains("width:calc(100% -"));
     }
 
@@ -1591,7 +1661,12 @@ mod tests {
         });
         let mut fonts = Fonts::default();
         let mut output = BTreeMap::new();
-        rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
+        rules(
+            &[child.clone()],
+            &ElementLayout::Free,
+            &mut fonts,
+            &mut output,
+        );
         let css = output[&child.id].block();
         assert!(css.contains(&format!(
             "padding:{} {} {} {};",
@@ -1608,26 +1683,66 @@ mod tests {
             padding: 6.0,
         };
         output.clear();
-        rules(&[child.clone()], &ElementLayout::Free, &mut fonts, &mut output);
-        assert!(output[&child.id].block().contains(&format!("padding:{};", length(6.0))));
+        rules(
+            &[child.clone()],
+            &ElementLayout::Free,
+            &mut fonts,
+            &mut output,
+        );
+        assert!(
+            output[&child.id]
+                .block()
+                .contains(&format!("padding:{};", length(6.0)))
+        );
     }
 
     #[test]
     fn fit_text_css_caps_width_at_the_container_edge() {
-        let mut element = crate::empty_element(ElementKind::Text, Rect { x: 104.0, y: 0.0, width: 800.0, height: 60.0 });
+        let mut element = crate::empty_element(
+            ElementKind::Text,
+            Rect {
+                x: 104.0,
+                y: 0.0,
+                width: 800.0,
+                height: 60.0,
+            },
+        );
         element.style.sizing.width = crate::SizingMode::Fit;
         element.style.sizing.height = crate::SizingMode::Fit;
         let mut fonts = Fonts::default();
         let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
         assert!(css.contains("width:max-content;"));
         assert!(css.contains("height:auto;"));
-        assert!(css.contains(&format!("max-width:max(0px, calc(100% - {}));", length(104.0))), "{css}");
+        assert!(
+            css.contains(&format!(
+                "max-width:max(0px, calc(100% - {}));",
+                length(104.0)
+            )),
+            "{css}"
+        );
         element.style.sizing.max_width = Some(200.0);
         let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
-        assert!(css.contains(&format!("max-width:min({}, max(0px, calc(100% - {})));", length(200.0), length(104.0))), "{css}");
-        let parent = ElementLayout::Stack { direction: StackDirection::Column, gap: 0.0, padding: 20.0, align: crate::StackAlign::Start, justify: crate::StackJustify::Start, wrap: false };
+        assert!(
+            css.contains(&format!(
+                "max-width:min({}, max(0px, calc(100% - {})));",
+                length(200.0),
+                length(104.0)
+            )),
+            "{css}"
+        );
+        let parent = ElementLayout::Stack {
+            direction: StackDirection::Column,
+            gap: 0.0,
+            padding: 20.0,
+            align: crate::StackAlign::Start,
+            justify: crate::StackJustify::Start,
+            wrap: false,
+        };
         let css = declarations(&element, &parent, &mut fonts).block();
-        assert!(css.contains(&format!("max-width:min({}, 100%);", length(200.0))), "{css}");
+        assert!(
+            css.contains(&format!("max-width:min({}, 100%);", length(200.0))),
+            "{css}"
+        );
         element.style.sizing.width = crate::SizingMode::Fixed;
         let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
         assert!(css.contains(&format!("width:{};", length(800.0))));

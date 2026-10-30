@@ -381,6 +381,7 @@ pub enum BoundaryKind {
 pub enum OutputType {
     #[default]
     Webpage,
+    /// Legacy web output retained for saved projects and history; new pages use Webpage.
     AppScreen,
     Slide,
     Image,
@@ -389,8 +390,7 @@ pub enum OutputType {
 impl OutputType {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Webpage => "Webpage",
-            Self::AppScreen => "App screen",
+            Self::Webpage | Self::AppScreen => "Page",
             Self::Slide => "Slide",
             Self::Image => "Image",
         }
@@ -488,13 +488,7 @@ impl CanvasTemplate {
         }
     }
 
-    fn page(
-        &self,
-        name: &str,
-        path: &str,
-        output: OutputType,
-        sizes: Vec<PageSize>,
-    ) -> Page {
+    fn page(&self, name: &str, path: &str, output: OutputType, sizes: Vec<PageSize>) -> Page {
         Page {
             id: Uuid::new_v4(),
             name: name.into(),
@@ -529,9 +523,9 @@ impl CanvasTemplate {
                 )]
             }
             Self::AppScreen => vec![self.page(
-                "Screen 1",
+                "Page 1",
                 "/",
-                OutputType::AppScreen,
+                OutputType::Webpage,
                 vec![Self::size(390, 844, BoundaryKind::Screen, 0)],
             )],
             Self::SlideDeck => (0..3)
@@ -609,12 +603,7 @@ pub struct NamedView {
 impl NamedView {
     pub fn validate(&self) -> Result<()> {
         ensure(!self.id.is_nil(), "View identifiers must be nonempty.")?;
-        validate_text(
-            &self.name,
-            "View name",
-            MAX_NAMED_VIEW_NAME_CHARS,
-            true,
-        )?;
+        validate_text(&self.name, "View name", MAX_NAMED_VIEW_NAME_CHARS, true)?;
         ensure(
             self.x.is_finite() && self.y.is_finite() && self.zoom.is_finite(),
             "A view's camera must be finite.",
@@ -1082,7 +1071,8 @@ fn valid_swatch(color: &str) -> bool {
     let Some(hex) = color.strip_prefix('#') else {
         return false;
     };
-    (hex.len() == 3 || hex.len() == 6 || hex.len() == 8) && hex.bytes().all(|b| b.is_ascii_hexdigit())
+    (hex.len() == 3 || hex.len() == 6 || hex.len() == 8)
+        && hex.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 fn normalized_swatch(color: &str) -> String {
@@ -1115,7 +1105,7 @@ pub struct Page {
     pub name: String,
     pub path: String,
     pub included: bool,
-    /// What this boundary ships as: a webpage, app screen, slide or image.
+    /// What this boundary ships as: a page, slide or image (including legacy app-screen output).
     #[serde(default)]
     pub output: OutputType,
     /// Linked sizes, base first. Every size draws its own boundary on the canvas.
@@ -1129,7 +1119,8 @@ impl Page {
     pub fn color_scheme(&self) -> &'static str {
         let hex = normalized_swatch(&self.background);
         let channel = |index| {
-            let value = u8::from_str_radix(&hex[index..index + 2], 16).unwrap_or(255) as f64 / 255.0;
+            let value =
+                u8::from_str_radix(&hex[index..index + 2], 16).unwrap_or(255) as f64 / 255.0;
             if value <= 0.04045 {
                 value / 12.92
             } else {
@@ -1390,12 +1381,24 @@ pub struct Project {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
-    AddColourStyle { style: ColourStyle },
-    UpdateColourStyle { style: ColourStyle },
-    RemoveColourStyle { id: Uuid },
-    AddTextStyle { style: TextStyle },
-    UpdateTextStyle { style: TextStyle },
-    RemoveTextStyle { id: Uuid },
+    AddColourStyle {
+        style: ColourStyle,
+    },
+    UpdateColourStyle {
+        style: ColourStyle,
+    },
+    RemoveColourStyle {
+        id: Uuid,
+    },
+    AddTextStyle {
+        style: TextStyle,
+    },
+    UpdateTextStyle {
+        style: TextStyle,
+    },
+    RemoveTextStyle {
+        id: Uuid,
+    },
     RenameProject {
         name: String,
     },
@@ -2244,7 +2247,12 @@ impl Project {
                     .find(|item| item.id == *id)
                     .ok_or_else(|| Error("This reference item no longer exists.".into()))?;
                 Ok(match &item.kind {
-                    ReferenceKind::Element { element, .. } => (element.label(), crate::AttachmentKind::Text, Some(crate::requirements::reference_element_value(element).to_string()), None),
+                    ReferenceKind::Element { element, .. } => (
+                        element.label(),
+                        crate::AttachmentKind::Text,
+                        Some(crate::requirements::reference_element_value(element).to_string()),
+                        None,
+                    ),
                     ReferenceKind::Note { text } => (
                         "Reference note".to_string(),
                         crate::AttachmentKind::Text,
@@ -2644,10 +2652,7 @@ impl Project {
         )?;
         let mut view_ids = BTreeSet::new();
         for view in &self.views {
-            ensure(
-                view_ids.insert(view.id),
-                "View identifiers must be unique.",
-            )?;
+            ensure(view_ids.insert(view.id), "View identifiers must be unique.")?;
             view.validate()?;
         }
         ensure(
@@ -2733,7 +2738,10 @@ impl Project {
         for page in &self.pages {
             ensure(ids.insert(page.id), "Project identifiers must be unique.")?;
             validate_text(&page.name, "Page name", 120, true)?;
-            ensure(valid_swatch(&page.background), "Boundary background must be a hex colour.")?;
+            ensure(
+                valid_swatch(&page.background),
+                "Boundary background must be a hex colour.",
+            )?;
             validate_path(&page.path)?;
             ensure(
                 paths.insert(page.path.to_lowercase()),
@@ -2763,11 +2771,19 @@ impl Project {
             if let ReferenceKind::Element { element, .. } = &item.kind {
                 fn sizes(element: &crate::Element, ids: &mut BTreeSet<Uuid>) {
                     ids.extend(element.overrides.keys().copied());
-                    for child in &element.children { sizes(child, ids); }
+                    for child in &element.children {
+                        sizes(child, ids);
+                    }
                 }
                 let mut size_ids = BTreeSet::new();
                 sizes(element, &mut size_ids);
-                crate::elements::validate_elements(std::slice::from_ref(element.as_ref()), self, &size_ids, &mut ids, &mut element_count)?;
+                crate::elements::validate_elements(
+                    std::slice::from_ref(element.as_ref()),
+                    self,
+                    &size_ids,
+                    &mut ids,
+                    &mut element_count,
+                )?;
             }
         }
         if !self.pages.is_empty() {
@@ -2937,7 +2953,10 @@ impl Project {
                 let p = next.page_mut(page_id)?;
                 p.name = name.trim().into();
                 p.path = path;
-                ensure(valid_swatch(&background), "Boundary background must be a hex colour.")?;
+                ensure(
+                    valid_swatch(&background),
+                    "Boundary background must be a hex colour.",
+                )?;
                 p.background = normalized_swatch(&background);
                 p.included = included;
             }
@@ -2991,8 +3010,11 @@ impl Project {
                     "This boundary already exists.",
                 )?;
                 let index = if let Some(id) = after_page_id {
-                    next.pages.iter().position(|existing| existing.id == id)
-                        .ok_or_else(|| Error("This boundary no longer exists.".into()))? + 1
+                    next.pages
+                        .iter()
+                        .position(|existing| existing.id == id)
+                        .ok_or_else(|| Error("This boundary no longer exists.".into()))?
+                        + 1
                 } else {
                     next.pages.len()
                 };
@@ -3093,12 +3115,7 @@ impl Project {
                 }
                 next.place_reference(reference)?;
             }
-            Command::AddNamedView {
-                name,
-                x,
-                y,
-                zoom,
-            } => {
+            Command::AddNamedView { name, x, y, zoom } => {
                 ensure(
                     next.views.len() < MAX_NAMED_VIEWS,
                     "A project holds at most 50 named views.",

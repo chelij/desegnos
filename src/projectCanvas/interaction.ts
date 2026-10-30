@@ -1,3 +1,4 @@
+import type { ProjectCanvasProps } from './interactionTypes';
 import { type PointerEvent as ReactPointerEvent } from 'react';
 import {
   canvasTargetKey, fitCamera, MAX_ZOOM, referenceItemAt, referenceNoteRect, movedReferenceRect, panCamera,
@@ -12,7 +13,7 @@ import { dedupeTargets, requestTargetKey } from './requests';
 import { shownReference } from './reference';
 import { type ScreenRect } from './surface';
 import { elementLocalRect, isTextKind } from './elementGeometry';
-import { playIsActive, type PlayState } from './play';
+import { playIsActive } from './play';
 import { behaviourFor, behaviourPointer } from './behaviours';
 import {
   elementTree, findElementIn, axisLockedDelta, drawRectWithKeys, rectFromPoints, resizedRectWithKeys,
@@ -43,7 +44,7 @@ type Context = {
   surface: import("react").RefObject<HTMLDivElement | null>;
   setPainterArmed: import("react").Dispatch<import("react").SetStateAction<boolean>>;
   selectRequest: (requestId: string) => void;
-  latest: import("react").RefObject<{ camera: CanvasCamera; boundaries: Boundary[]; project: Project; selection: CanvasTarget[]; focused: string | null; addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>; attachToRequest: (requestId: string, files: File[], links: string[]) => void; selectPointer: (pointerId: string, additive?: boolean) => void; selectReference: (itemId: string, additive?: boolean) => void; selectElement: (pageId: string, elementId: string, sizeId: string | null, additive?: boolean) => void; clearSelection: () => void; removeElements: (elements: { pageId: string; elementId: string; }[]) => void; insertElements: (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => Promise<void>; updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void; moveElements: (moves: ElementMove[]) => Promise<unknown> | void; groupElements: (pageId: string, ids: string[]) => Promise<string | null>; ungroupElements: (pageId: string, id: string) => Promise<string[]>; tool: import("../EditorTools").EditorTool; insertKind: ElementKind | null; editing: { pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean; } | null; play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; }>;
+  latest: import("react").RefObject<Pick<ProjectCanvasProps, 'play' | 'onPlayElement'>>;
   tool: import("../EditorTools").EditorTool;
   requestShape: RequestToolShape;
   requestTargetAt: (point: Point) => RequestTarget | null;

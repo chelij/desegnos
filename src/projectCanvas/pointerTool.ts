@@ -1,16 +1,16 @@
+import type { ProjectCanvasProps } from './interactionTypes';
 import { type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  referenceItemAt, pointerRoute, type Boundary, type CanvasCamera, type CanvasTarget, type Point,
+  referenceItemAt, pointerRoute, type Boundary, type Point,
   type RequestBox,
 } from '../projectCanvasGeometry';
-import type { Element, ElementKind, ElementMove, ElementPatch, PointerSource, PointerTarget, Project, Rect, ReferenceItem } from '../types';
+import type { PointerSource, PointerTarget, Project, Rect } from '../types';
 import { shownReference } from './reference';
 import { pointerWorld } from './pointers';
-import { type PlayState } from './play';
 import { Drag, elementAt } from './interactionTypes';
 
 type Context = {
-  latest: import("react").RefObject<{ camera: CanvasCamera; boundaries: Boundary[]; project: Project; selection: CanvasTarget[]; focused: string | null; addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>; attachToRequest: (requestId: string, files: File[], links: string[]) => void; selectPointer: (pointerId: string, additive?: boolean) => void; selectReference: (itemId: string, additive?: boolean) => void; selectElement: (pageId: string, elementId: string, sizeId: string | null, additive?: boolean) => void; clearSelection: () => void; removeElements: (elements: { pageId: string; elementId: string; }[]) => void; insertElements: (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => Promise<void>; updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void; moveElements: (moves: ElementMove[]) => Promise<unknown> | void; groupElements: (pageId: string, ids: string[]) => Promise<string | null>; ungroupElements: (pageId: string, id: string) => Promise<string[]>; tool: import("../EditorTools").EditorTool; insertKind: ElementKind | null; editing: { pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean; } | null; play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; }>;
+  latest: import("react").RefObject<Pick<ProjectCanvasProps, 'project' | 'selectPointer'> & { boundaries: Boundary[] }>;
   setArmedPointer: import("react").Dispatch<import("react").SetStateAction<{ pointerId: string; end: 'from' | 'to'; } | null>>;
   surface: import("react").RefObject<HTMLDivElement | null>;
   requestBoxes: () => RequestBox[];

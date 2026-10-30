@@ -2,12 +2,10 @@ import { canvasView } from './projectCanvas/canvasView';
 import { MIN_ZOOM } from './canvasGeometry';
 import { useState } from 'react';
 import { type MenuItem } from './Menus';
-import { layoutBoundaries, MAX_ZOOM, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
+import { MAX_ZOOM, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
 import { elementWorldRect, findElementIn, unionRects } from './projectCanvas/elementGeometry';
 import { type PaletteCommand } from './CommandPalette';
-import type { GridSettings, Page, Project, Rect, RecoveryInfo } from './types';
-import { resolveForSize } from './projectCanvas/sizes';
-import { elementBoundsHeight } from './projectCanvas/elementGeometry';
+import type { GridSettings, Project, Rect, RecoveryInfo } from './types';
 
 export type Theme = 'system' | 'light' | 'dark';
 
@@ -34,7 +32,6 @@ export function sizeBoundaries(project: Project): Boundary[] {
   return canvasView(project).boundaries;
 }
 
-export function initialZoom(width: number, height = 900) { const fit = width > 600 ? (window.innerWidth - 96) / width : (window.innerHeight - 240) / height; return Math.max(0.1, Math.min(1, fit)); }
 
 export function readTheme(): Theme {
   try {

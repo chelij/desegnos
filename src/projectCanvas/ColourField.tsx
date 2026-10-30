@@ -1,18 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { useFieldDraft } from '../CompactField';
+import { fieldKeys, useFieldDraft } from '../CompactField';
 import { colourHex } from '../colourValue';
 
 const INVALID_HOLD_MS = 1500;
-
-function keyDown(settle: () => void, cancel: () => void) {
-  return (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !(event.currentTarget instanceof HTMLTextAreaElement && event.shiftKey)) {
-      event.preventDefault(); settle(); event.currentTarget.blur();
-    } else if (event.key === 'Escape') {
-      event.preventDefault(); cancel(); event.currentTarget.blur();
-    }
-  };
-}
 
 /** Colour swatch plus hex text in one row; an empty value means no colour unless it is required. */
 export function ColourField({ label, value, commit, fallback = '#ffffff', disabled, optional = true, valid, mixed = false }: {
@@ -57,6 +47,6 @@ export function ColourField({ label, value, commit, fallback = '#ffffff', disabl
     <input className={`props-hex${invalid ? ' is-invalid' : ''}`} type="text" aria-label={label} placeholder={mixed ? 'Mixed' : 'None'} spellCheck={false}
       aria-invalid={invalid || undefined}
       value={state.draft} disabled={disabled} onChange={event => state.setDraft(event.target.value)}
-      onBlur={() => state.settle()} onKeyDown={keyDown(() => state.settle(), state.cancel)} />
+      onBlur={state.settle} onKeyDown={fieldKeys(state.settle, state.cancel)} />
   </div>;
 }

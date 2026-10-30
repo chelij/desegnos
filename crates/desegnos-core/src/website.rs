@@ -73,7 +73,6 @@ pub fn website_links(html: &str) -> WebsiteLinks {
     links
 }
 
-
 /// Every asset a rendered page needs, in document order: stylesheets, pictures, scripts,
 /// media, frames and inline-style URLs. The website importer downloads these so the page can
 /// be rendered from the local static server with scripts disabled.
@@ -91,17 +90,22 @@ pub fn website_assets(html: &str) -> WebsiteAssets {
     let doc = Document::from(html);
     let mut assets = WebsiteAssets::default();
     let push = |list: &mut Vec<String>, value: Option<&str>| {
-        if let Some(value) = value
-            .map(str::trim)
-            .filter(|value| !value.is_empty() && !value.starts_with("data:") && !value.starts_with('#'))
-            && !list.iter().any(|existing| existing == value)
+        if let Some(value) = value.map(str::trim).filter(|value| {
+            !value.is_empty() && !value.starts_with("data:") && !value.starts_with('#')
+        }) && !list.iter().any(|existing| existing == value)
         {
             list.push(value.to_owned());
         }
     };
     for node in doc.select("link[href]").nodes() {
-        let rel = node.attr("rel").map(|value| value.to_ascii_lowercase()).unwrap_or_default();
-        let as_value = node.attr("as").map(|value| value.to_ascii_lowercase()).unwrap_or_default();
+        let rel = node
+            .attr("rel")
+            .map(|value| value.to_ascii_lowercase())
+            .unwrap_or_default();
+        let as_value = node
+            .attr("as")
+            .map(|value| value.to_ascii_lowercase())
+            .unwrap_or_default();
         if rel.split_whitespace().any(|part| part == "stylesheet") {
             push(&mut assets.stylesheets, node.attr("href").as_deref());
         } else if rel.split_whitespace().any(|part| part == "preload") {
@@ -123,13 +127,23 @@ pub fn website_assets(html: &str) -> WebsiteAssets {
     for node in doc.select("script[src]").nodes() {
         push(&mut assets.scripts, node.attr("src").as_deref());
     }
-    for node in doc.select("video[src], video[poster], audio[src], source[src], source[srcset]").nodes() {
-        let tag = node.node_name().map(|name| name.to_ascii_lowercase()).unwrap_or_default();
+    for node in doc
+        .select("video[src], video[poster], audio[src], source[src], source[srcset]")
+        .nodes()
+    {
+        let tag = node
+            .node_name()
+            .map(|name| name.to_ascii_lowercase())
+            .unwrap_or_default();
         if node.attr("poster").is_some() {
             push(&mut assets.images, node.attr("poster").as_deref());
         }
         if let Some(value) = node.attr("src").as_deref() {
-            if tag == "source" && node.attr("type").is_some_and(|value| value.starts_with("image/")) {
+            if tag == "source"
+                && node
+                    .attr("type")
+                    .is_some_and(|value| value.starts_with("image/"))
+            {
                 push(&mut assets.images, Some(value));
             } else {
                 push(&mut assets.media, Some(value));
@@ -140,7 +154,10 @@ pub fn website_assets(html: &str) -> WebsiteAssets {
         }
     }
     for node in doc.select("iframe[src], embed[src], object[data]").nodes() {
-        push(&mut assets.frames, node.attr("src").or(node.attr("data")).as_deref());
+        push(
+            &mut assets.frames,
+            node.attr("src").or(node.attr("data")).as_deref(),
+        );
     }
     for node in doc.select("style").nodes() {
         for url in css_urls(node.text().as_ref()) {
@@ -172,7 +189,13 @@ pub fn css_urls(css: &str) -> Vec<String> {
     while let Some(index) = rest.find("@import") {
         rest = &rest[index + 7..];
         let rest_trimmed = rest.trim_start();
-        let Some(quote) = rest_trimmed.chars().next().filter(|value| *value == '\'' || *value == '"') else { continue };
+        let Some(quote) = rest_trimmed
+            .chars()
+            .next()
+            .filter(|value| *value == '\'' || *value == '"')
+        else {
+            continue;
+        };
         let quoted = &rest_trimmed[1..];
         let Some(end) = quoted.find(quote) else { break };
         let value = quoted[..end].trim();

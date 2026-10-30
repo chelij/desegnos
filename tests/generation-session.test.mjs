@@ -1,16 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { compileModules } from './typescript.mjs';
 
-const temporary = await mkdtemp(new URL('../.generation-session-', import.meta.url));
+const modules = await compileModules(['src/generationSession.ts']);
 try {
-  const compiler = new URL('bin/tsc', import.meta.resolve('typescript/package.json')).pathname;
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--outDir', temporary, 'src/generationSession.ts'], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  const { ownsJob, announcesStatus, announcedDraftCount } = await import(pathToFileURL(join(temporary, 'generationSession.js')));
+  const { ownsJob, announcesStatus } = await modules.load('generationSession.js');
   const job = { jobId: 'job', status: 'blocked', candidate: { requests: [{ elementId: 'area', status: 'conflict', explanation: 'Which booking service?' }] } };
   const state = { owns: false, stopped: false, working: false };
 
@@ -45,9 +39,4 @@ try {
     assert.equal(announcesStatus(null, { ...owns, stopped: true }), true);
   });
 
-  await test('drafts no longer add an automatic notice', () => {
-    assert.equal(announcedDraftCount(job, true), 0);
-    assert.equal(announcedDraftCount(job, false), 0);
-    assert.equal(announcedDraftCount(null, true), 0);
-  });
-} finally { await rm(temporary, { recursive: true, force: true }); }
+} finally { await modules.cleanup(); }

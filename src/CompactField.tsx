@@ -29,7 +29,7 @@ export function useFieldDraft(value: string | number, commit: (value: string) =>
   };
 }
 
-function fieldKeys(settle: () => void, cancel: () => void) {
+export function fieldKeys(settle: () => void, cancel: () => void) {
   return (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !(event.currentTarget instanceof HTMLTextAreaElement && event.shiftKey)) {
       event.preventDefault(); settle(); event.currentTarget.blur();

@@ -1,3 +1,4 @@
+import { layoutKind } from './projectCanvas/boundaryDefaults';
 import { boundaryVisible } from './projectCanvas/canvasView';
 import { fitCamera } from './projectCanvasGeometry';
 import { useProjectCanvas } from './projectCanvas/useProjectCanvas';
@@ -11,7 +12,6 @@ import { BoundaryLayer } from './projectCanvas/boundaries';
 import { RequestBoxEditor, RequestLayer } from './projectCanvas/requests';
 import { ReferenceLayer, ReferenceNoteEditor } from './projectCanvas/reference';
 import { PointerComments, PointerHandles, PointerLines, BehaviourBadges } from './projectCanvas/pointers';
-import { screenRect } from './projectCanvas/surface';
 import { Minimap } from './projectCanvas/Minimap';
 import { ElementSelectionOverlay, ElementTextEditor } from './projectCanvas/elements';
 import { LinkChoiceRow, PasteChoiceRow, PlaceholderChoiceRow } from './projectCanvas/linkedChoices';
@@ -23,9 +23,9 @@ import { playIsActive } from './projectCanvas/play';
 export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>(function ProjectCanvas({
   editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
-  addRequest, updateRequest, selectRequest,
+  addRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
-  addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout,
+  addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout,
   play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
 }, ref) {
   const [pointerFocus, setPointerFocus] = useState(false);
@@ -43,7 +43,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, previewScreen, dropNotice,
     setDropNotice,
-  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
+  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
   const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
   const slides = project.pages;
   const slideIndex = Math.max(0, slides.findIndex(page => page.id === play.boundary));
@@ -92,7 +92,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       <RequestLayer project={project} boundaries={boundaries} selection={selection} draft={requestDraft}
         draftArea={draftArea} inverse={inverse} selectRequest={selectRequest} />
       <ReferenceLayer project={project} movingItems={movingItems} selection={selection} draftNote={draftNote} />
-      {draft && <div className={`boundary-draft${boundaryKind === 'screen' ? ' screen' : ''}`} style={{ left: draft.x, top: draft.y, width: draft.width, height: draft.height, borderWidth: 2 * inverse }} />}
+      {draft && <div className={`boundary-draft${layoutKind(boundaryKind, project) === 'screen' ? ' screen' : ''}`} style={{ left: draft.x, top: draft.y, width: draft.width, height: draft.height, borderWidth: 2 * inverse }} />}
       {draftElement && <div className={`element-draft${draftElement.line ? ' line' : ''}`} style={{ left: draftElement.rect.x, top: draftElement.rect.y, width: draftElement.rect.width, height: draftElement.rect.height, borderWidth: inverse, transform: draftElement.rotation ? `rotate(${draftElement.rotation}deg)` : undefined }} />}
       {marquee && <div className="element-marquee" style={{ left: marquee.x, top: marquee.y, width: marquee.width, height: marquee.height, borderWidth: inverse }} />}
       {zoomRect && <div className="zoom-marquee" style={{ left: zoomRect.x, top: zoomRect.y, width: zoomRect.width, height: zoomRect.height, borderWidth: inverse }} />}

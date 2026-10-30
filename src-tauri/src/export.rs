@@ -394,7 +394,7 @@ pub async fn prepare_export(
             .find(|page| page.id == page_ids[0])
             .ok_or("This boundary no longer exists.")?;
         if !page.output.needs_ai() {
-            return Err("Preview shows webpages and app screens.".into());
+            return Err("Preview shows pages.".into());
         }
         Some(page.id)
     } else {

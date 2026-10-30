@@ -556,6 +556,7 @@ impl Project {
                     "attachments": request.attachments.iter().map(|attachment| serde_json::json!({
                         "id": attachment.id, "name": attachment.name, "kind": attachment.kind,
                         "url": attachment.url, "text": attachment.text,
+                        "pictureId": attachment.picture_id(),
                     })).collect::<Vec<_>>(),
                     "targets": targets,
                     "area": request.area,
@@ -629,7 +630,7 @@ impl Project {
         dependencies.insert("context".into(), context);
 
         let mut markdown = md;
-        markdown.push_str("\n## Response format\n\nReturn only the reply JSON. Every request listed above must appear exactly once in `requests`, keyed by its `requestId`; for a request that targets one layer, `elementId` may name that layer instead. Operations change only the request's targets, their subtrees, and what change pointers from those targets grant; reference pointers grant reads only. A request whose area sits inside a boundary uses `insertInBoundary` to add layers within the area; a request whose area sits outside every boundary uses `addReference` to add a note, link or colour within the area. New elements must not carry ids; Desegnos assigns them. New and changed rectangles use the parent's coordinate space and must fit inside the parent's box. A patch may carry `sizeId` to change only that linked size, when the change belongs to one size rather than all of them. Use `images` for pictures you want made, and reference each by the same key from a new Image element. Classify every pointer listed above exactly once and copy its current comment. The job id and requirements digest below identify this frozen request.\n");
+        markdown.push_str("\n## Response format\n\nReturn only the reply JSON. Every request listed above must appear exactly once in `requests`, keyed by its `requestId`; for a request that targets one layer, `elementId` may name that layer instead. Operations change only the request's targets, their subtrees, and what change pointers from those targets grant; reference pointers grant reads only. A request whose area sits inside a boundary uses `insertInBoundary` to add layers within the area; a request whose area sits outside every boundary uses `addReference` to add a note, link or colour within the area. New elements must not carry ids; Desegnos assigns them. New and changed rectangles use the parent's coordinate space and must fit inside the parent's box. A patch may carry `sizeId` to change only that linked size, when the change belongs to one size rather than all of them. For an attached picture, copy its exact `pictureId` into the new Image element's `image` field, with `imageRequest` null. Never invent picture IDs or derive them from filenames. Use `images` for pictures you want made, and reference each by the same key from a new Image element. Classify every pointer listed above exactly once and copy its current comment. The job id and requirements digest below identify this frozen request.\n");
         ensure(
             markdown.len() <= MAX_REQUIREMENTS_BYTES,
             "The requirements file exceeds its limit.",

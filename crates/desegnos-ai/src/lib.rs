@@ -6,6 +6,8 @@ mod image_access;
 mod image_generation;
 mod images;
 mod providers;
+mod request;
+mod schema_wire;
 mod settings;
 mod sse;
 mod transport;

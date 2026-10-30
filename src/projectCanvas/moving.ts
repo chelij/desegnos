@@ -299,7 +299,7 @@ export function createMovingActions(context: () => Context) {
   }
 
   return {
-    startPan, beginMove, boxAtPoint, marqueeTargets, rememberRepeatMove, duplicateElementMove,
-    commitElementMove, startElementResize, startReferenceResize, persistMove, saveMoves, commitMove,
+    startPan, beginMove, marqueeTargets, rememberRepeatMove, duplicateElementMove,
+    commitElementMove, startElementResize, startReferenceResize, persistMove, commitMove,
   };
 }

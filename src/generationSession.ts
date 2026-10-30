@@ -16,9 +16,3 @@ export function announcesStatus(job: GenerationJobView | null, state: { owns: bo
   if (!state.owns) return false;
   return state.stopped || state.working || !!job && (statusNotices.includes(job.status) || !!job.candidate?.requests.some(item => item.status === 'conflict'));
 }
-
-/// Draft count for the automatic notice; a restored job's drafts stay in the AI conversation.
-export function announcedDraftCount(job: GenerationJobView | null, owns: boolean): number {
-  void job; void owns;
-  return 0;
-}

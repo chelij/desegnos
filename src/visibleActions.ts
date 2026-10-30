@@ -5,14 +5,6 @@ import type { Project } from './types';
 // action that is one step away on screen, or applies something already applied. Menus and
 // keyboard shortcuts keep every command reachable.
 
-export type RequestEditor = { selectedElementId: string | null; focusedElementId: string | null };
-
-/// A request's editor is open when that request is selected and its prompt holds focus.
-/// Asking to change that same request would only put the caret back where it already is.
-export function requestEditorOpen(elementId: string | null | undefined, editor: RequestEditor): boolean {
-  return !!elementId && elementId === editor.selectedElementId && elementId === editor.focusedElementId;
-}
-
 export type OpenerState = { available: boolean; open: boolean };
 
 /// An opener is left out while the surface it opens is already on screen; that surface has

@@ -54,7 +54,11 @@ fn webpage_project() -> (Project, Uuid) {
             page_id: page,
             parent_id: None,
             index: 0,
-            elements: vec![element(element_id, ElementKind::Text, rect(0.0, 0.0, 200.0, 40.0))],
+            elements: vec![element(
+                element_id,
+                ElementKind::Text,
+                rect(0.0, 0.0, 200.0, 40.0),
+            )],
             picture_data_uri: None,
             size_id: None,
         },
@@ -93,7 +97,9 @@ fn reply(plan: &desegnos_core::ExportPlan, implemented_pointer: Uuid) -> ExportR
         pages: Vec::new(),
         shared: desegnos_core::ExportReplyShared {
             css: String::new(),
-            js: format!("/* desegnos-pointer:{implemented_pointer} */\nconsole.log('ready');\n/* /desegnos-pointer:{implemented_pointer} */"),
+            js: format!(
+                "/* desegnos-pointer:{implemented_pointer} */\nconsole.log('ready');\n/* /desegnos-pointer:{implemented_pointer} */"
+            ),
         },
         pointers: plan
             .pointers
@@ -178,14 +184,21 @@ fn preview_exports_every_included_boundary_and_keeps_the_chosen_page() {
 fn boundary_background_updates_validate_hex_and_leave_editor_theme_alone() {
     let project = project();
     let command = |background: &str| Command::UpdatePage {
-        page_id: project.pages[0].id, name: "Home".into(), path: "/".into(),
-        background: background.into(), included: true,
+        page_id: project.pages[0].id,
+        name: "Home".into(),
+        path: "/".into(),
+        background: background.into(),
+        included: true,
     };
     let changed = apply(&project, command("#123"));
     assert_eq!(changed.pages[0].background, "#112233");
     assert_eq!(changed.appearance, project.appearance);
     assert!(project.apply(project.revision, command("red")).is_err());
-    assert!(project.apply(project.revision, command("#ffffff;display:none")).is_err());
+    assert!(
+        project
+            .apply(project.revision, command("#ffffff;display:none"))
+            .is_err()
+    );
 }
 
 #[test]
@@ -222,7 +235,8 @@ fn export_reply_is_checked_against_the_frozen_plan() {
     assert!(validate_export_reply(&plan, &unmarked).is_err());
 
     let mut bad_js = valid.clone();
-    bad_js.shared.js = format!("/* desegnos-pointer:{pointer_id} */const = ;/* /desegnos-pointer:{pointer_id} */");
+    bad_js.shared.js =
+        format!("/* desegnos-pointer:{pointer_id} */const = ;/* /desegnos-pointer:{pointer_id} */");
     assert!(validate_export_reply(&plan, &bad_js).is_err());
 
     let mut missing_pointer = valid.clone();
@@ -230,10 +244,12 @@ fn export_reply_is_checked_against_the_frozen_plan() {
     assert!(parse_export_reply(&plan, &serde_json::to_string(&missing_pointer).unwrap()).is_err());
 
     let mut extra_pointer = valid.clone();
-    extra_pointer.pointers.push(desegnos_core::ExportReplyPointer {
-        pointer_id: Uuid::new_v4(),
-        implemented: true,
-    });
+    extra_pointer
+        .pointers
+        .push(desegnos_core::ExportReplyPointer {
+            pointer_id: Uuid::new_v4(),
+            implemented: true,
+        });
     assert!(parse_export_reply(&plan, &serde_json::to_string(&extra_pointer).unwrap()).is_err());
 }
 
@@ -277,10 +293,7 @@ fn recording_an_export_does_not_add_an_undo_step_and_survives_undo() {
         .iter()
         .find(|pointer| pointer.id == pointer_id)
         .unwrap();
-    assert_eq!(
-        wired.wiring.as_ref().unwrap().fingerprint,
-        "c".repeat(64)
-    );
+    assert_eq!(wired.wiring.as_ref().unwrap().fingerprint, "c".repeat(64));
 
     // A real edit can be undone; the export metadata is carried forward.
     let revision = session.project().revision;
@@ -320,7 +333,11 @@ fn direct_project() -> Project {
             page_id: home,
             parent_id: None,
             index: 0,
-            elements: vec![element(Uuid::new_v4(), ElementKind::Text, rect(80.0, 80.0, 400.0, 60.0))],
+            elements: vec![element(
+                Uuid::new_v4(),
+                ElementKind::Text,
+                rect(80.0, 80.0, 400.0, 60.0),
+            )],
             picture_data_uri: None,
             size_id: None,
         },
@@ -343,7 +360,12 @@ fn direct_project() -> Project {
             reference: vec![],
         },
     );
-    let hero = project.pages.iter().find(|page| page.path == "/hero").unwrap().id;
+    let hero = project
+        .pages
+        .iter()
+        .find(|page| page.path == "/hero")
+        .unwrap()
+        .id;
     let project = apply(
         &project,
         Command::SetPageOutput {
@@ -358,8 +380,16 @@ fn direct_project() -> Project {
             parent_id: None,
             index: 0,
             elements: vec![
-                element(Uuid::new_v4(), ElementKind::Box, rect(40.0, 40.0, 240.0, 160.0)),
-                element(Uuid::new_v4(), ElementKind::Text, rect(60.0, 60.0, 200.0, 40.0)),
+                element(
+                    Uuid::new_v4(),
+                    ElementKind::Box,
+                    rect(40.0, 40.0, 240.0, 160.0),
+                ),
+                element(
+                    Uuid::new_v4(),
+                    ElementKind::Text,
+                    rect(60.0, 60.0, 200.0, 40.0),
+                ),
             ],
             picture_data_uri: None,
             size_id: None,
@@ -466,7 +496,12 @@ fn website_captures_become_boundaries_elements_script_notes_and_pointers() {
     let project = project();
     let mut heading = node("h1", rect(40.0, 40.0, 400.0, 48.0), styles(""), vec![]);
     heading.text = Some("Hello imported site".into());
-    let mut menu = node("button", rect(40.0, 120.0, 160.0, 40.0), styles("#eeeeee"), vec![]);
+    let mut menu = node(
+        "button",
+        rect(40.0, 120.0, 160.0, 40.0),
+        styles("#eeeeee"),
+        vec![],
+    );
     menu.text = Some("Menu".into());
     menu.attributes.class_name = "menu-toggle".into();
     let mut disabled = node("input", rect(40.0, 200.0, 200.0, 40.0), styles(""), vec![]);
@@ -509,7 +544,8 @@ fn website_captures_become_boundaries_elements_script_notes_and_pointers() {
         boxed
             .children
             .iter()
-            .any(|element| element.kind == ElementKind::Text && element.text == "Hello imported site")
+            .any(|element| element.kind == ElementKind::Text
+                && element.text == "Hello imported site")
     );
     let button = boxed
         .children
@@ -673,20 +709,43 @@ fn links_to_page_files_point_at_the_imported_pages() {
             title: route.into(),
             width: 1440.0,
             height: 900.0,
-            nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles("#ffffff"), vec![link])],
+            nodes: vec![node(
+                "body",
+                rect(0.0, 0.0, 1440.0, 900.0),
+                styles("#ffffff"),
+                vec![link],
+            )],
             scripts: vec![],
         }
     };
-    let home = page("http://127.0.0.1:9/t/", "/", "http://127.0.0.1:9/t/about.html");
-    let about = page("http://127.0.0.1:9/t/about", "/about", "http://127.0.0.1:9/t/index.html");
+    let home = page(
+        "http://127.0.0.1:9/t/",
+        "/",
+        "http://127.0.0.1:9/t/about.html",
+    );
+    let about = page(
+        "http://127.0.0.1:9/t/about",
+        "/about",
+        "http://127.0.0.1:9/t/index.html",
+    );
     let imported = import_website(&[home, about], &BTreeMap::new(), &project).unwrap();
     fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
-        elements.iter().find_map(|element| (element.kind == ElementKind::Link).then_some(element).or_else(|| link(&element.children)))
+        elements.iter().find_map(|element| {
+            (element.kind == ElementKind::Link)
+                .then_some(element)
+                .or_else(|| link(&element.children))
+        })
     }
     let to_about = link(&imported.pages[0].elements).expect("the home page keeps its link");
     let to_home = link(&imported.pages[1].elements).expect("the about page keeps its link");
-    assert_eq!(to_about.url.as_deref(), Some(imported.pages[1].path.as_str()));
-    assert_eq!(to_home.url.as_deref(), Some(imported.pages[0].path.as_str()));
+    assert_eq!(
+        to_about.url.as_deref(),
+        Some(imported.pages[1].path.as_str())
+    );
+    assert_eq!(
+        to_home.url.as_deref(),
+        Some(imported.pages[0].path.as_str())
+    );
 }
 
 #[test]
@@ -703,7 +762,12 @@ fn old_site_links_on_the_original_domain_find_the_imported_pages() {
             title: route.into(),
             width: 1440.0,
             height: 900.0,
-            nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles("#ffffff"), vec![link])],
+            nodes: vec![node(
+                "body",
+                rect(0.0, 0.0, 1440.0, 900.0),
+                styles("#ffffff"),
+                vec![link],
+            )],
             scripts: vec![],
         }
     };
@@ -713,7 +777,11 @@ fn old_site_links_on_the_original_domain_find_the_imported_pages() {
         Some("http://www.oldsite.example/pages/P002.HTM"),
     );
     let main = capture("http://127.0.0.1:9/token/main.htm", "/main.htm", None);
-    let p002 = capture("http://127.0.0.1:9/token/pages/p002", "/pages/p002", Some("../MAIN.HTM"));
+    let p002 = capture(
+        "http://127.0.0.1:9/token/pages/p002",
+        "/pages/p002",
+        Some("../MAIN.HTM"),
+    );
     let imported = import_website(&[home, main, p002], &BTreeMap::new(), &project).unwrap();
     fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
         elements.iter().find_map(|element| {
@@ -724,8 +792,14 @@ fn old_site_links_on_the_original_domain_find_the_imported_pages() {
     }
     let to_p002 = link(&imported.pages[0].elements).expect("the home link is kept");
     let to_main = link(&imported.pages[2].elements).expect("the page link is kept");
-    assert_eq!(to_p002.url.as_deref(), Some(imported.pages[2].path.as_str()));
-    assert_eq!(to_main.url.as_deref(), Some(imported.pages[1].path.as_str()));
+    assert_eq!(
+        to_p002.url.as_deref(),
+        Some(imported.pages[2].path.as_str())
+    );
+    assert_eq!(
+        to_main.url.as_deref(),
+        Some(imported.pages[1].path.as_str())
+    );
 }
 
 #[test]
@@ -742,13 +816,22 @@ fn public_import_links_keep_pointing_at_the_original_site() {
             title: route.into(),
             width: 1440.0,
             height: 900.0,
-            nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles("#ffffff"), vec![link])],
+            nodes: vec![node(
+                "body",
+                rect(0.0, 0.0, 1440.0, 900.0),
+                styles("#ffffff"),
+                vec![link],
+            )],
             scripts: vec![],
         }
     };
     let href = "https://www.oldsite.example/pages/P002.HTM";
     let home = capture("https://oldsite.example/pages/p001", "/pages/p001", href);
-    let p002 = capture("https://oldsite.example/pages/p002", "/pages/p002", "https://oldsite.example/");
+    let p002 = capture(
+        "https://oldsite.example/pages/p002",
+        "/pages/p002",
+        "https://oldsite.example/",
+    );
     let imported = import_website(&[home, p002], &BTreeMap::new(), &project).unwrap();
     fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
         elements.iter().find_map(|element| {
@@ -775,15 +858,28 @@ fn a_matching_path_on_another_domain_stays_external() {
             title: route.into(),
             width: 1440.0,
             height: 900.0,
-            nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles("#ffffff"), vec![link])],
+            nodes: vec![node(
+                "body",
+                rect(0.0, 0.0, 1440.0, 900.0),
+                styles("#ffffff"),
+                vec![link],
+            )],
             scripts: vec![],
         }
     };
-    let home = capture("http://127.0.0.1:9/token/", "/", Some("https://social.example/about"));
+    let home = capture(
+        "http://127.0.0.1:9/token/",
+        "/",
+        Some("https://social.example/about"),
+    );
     let about = capture("http://127.0.0.1:9/token/about", "/about", None);
     let imported = import_website(&[home, about], &BTreeMap::new(), &project).unwrap();
     fn link(elements: &[desegnos_core::Element]) -> Option<&desegnos_core::Element> {
-        elements.iter().find_map(|element| (element.kind == ElementKind::Link).then_some(element).or_else(|| link(&element.children)))
+        elements.iter().find_map(|element| {
+            (element.kind == ElementKind::Link)
+                .then_some(element)
+                .or_else(|| link(&element.children))
+        })
     }
     let social = link(&imported.pages[0].elements).expect("the social link is kept");
     assert_eq!(social.url.as_deref(), Some("https://social.example/about"));
@@ -794,12 +890,32 @@ fn table_cells_keep_their_background_and_place_their_content() {
     let project = project();
     let mut link = node("a", rect(18.0, 60.0, 40.0, 16.0), styles(""), vec![]);
     link.text = Some("Home".into());
-    let nav = node("td", rect(10.0, 50.0, 160.0, 200.0), styles("#ccccff"), vec![link]);
+    let nav = node(
+        "td",
+        rect(10.0, 50.0, 160.0, 200.0),
+        styles("#ccccff"),
+        vec![link],
+    );
     let mut words = node("p", rect(180.0, 60.0, 500.0, 40.0), styles(""), vec![]);
     words.text = Some("Article text".into());
-    let body = node("td", rect(170.0, 50.0, 600.0, 200.0), styles(""), vec![words]);
-    let row = node("tr", rect(10.0, 50.0, 760.0, 200.0), styles(""), vec![nav, body]);
-    let table = node("table", rect(10.0, 50.0, 760.0, 200.0), styles("#ffffff"), vec![row]);
+    let body = node(
+        "td",
+        rect(170.0, 50.0, 600.0, 200.0),
+        styles(""),
+        vec![words],
+    );
+    let row = node(
+        "tr",
+        rect(10.0, 50.0, 760.0, 200.0),
+        styles(""),
+        vec![nav, body],
+    );
+    let table = node(
+        "table",
+        rect(10.0, 50.0, 760.0, 200.0),
+        styles("#ffffff"),
+        vec![row],
+    );
     let capture = WebCapture {
         url: "http://127.0.0.1:9/token/".into(),
         site: "Old".into(),
@@ -807,11 +923,20 @@ fn table_cells_keep_their_background_and_place_their_content() {
         title: "Old".into(),
         width: 1440.0,
         height: 900.0,
-        nodes: vec![node("body", rect(0.0, 0.0, 1440.0, 900.0), styles(""), vec![table])],
+        nodes: vec![node(
+            "body",
+            rect(0.0, 0.0, 1440.0, 900.0),
+            styles(""),
+            vec![table],
+        )],
         scripts: vec![],
     };
     let imported = import_website(&[capture], &BTreeMap::new(), &project).unwrap();
-    fn all(elements: &[desegnos_core::Element], origin: (f64, f64), out: &mut Vec<(desegnos_core::Element, f64, f64)>) {
+    fn all(
+        elements: &[desegnos_core::Element],
+        origin: (f64, f64),
+        out: &mut Vec<(desegnos_core::Element, f64, f64)>,
+    ) {
         for element in elements {
             let at = (origin.0 + element.rect.x, origin.1 + element.rect.y);
             out.push((element.clone(), at.0, at.1));
@@ -820,10 +945,26 @@ fn table_cells_keep_their_background_and_place_their_content() {
     }
     let mut placed = Vec::new();
     all(&imported.pages[0].elements, (0.0, 0.0), &mut placed);
-    assert!(placed.iter().any(|(element, ..)| element.style.fill.as_deref() == Some("#ccccff")), "the nav cell keeps its background");
-    let text = placed.iter().find(|(element, ..)| element.text == "Article text").unwrap();
-    assert_eq!((text.1, text.2), (180.0, 60.0), "the second cell's text keeps its page position");
-    assert_eq!(text.0.style.sizing.width, desegnos_core::SizingMode::Fit, "a single line hugs its text");
+    assert!(
+        placed
+            .iter()
+            .any(|(element, ..)| element.style.fill.as_deref() == Some("#ccccff")),
+        "the nav cell keeps its background"
+    );
+    let text = placed
+        .iter()
+        .find(|(element, ..)| element.text == "Article text")
+        .unwrap();
+    assert_eq!(
+        (text.1, text.2),
+        (180.0, 60.0),
+        "the second cell's text keeps its page position"
+    );
+    assert_eq!(
+        text.0.style.sizing.width,
+        desegnos_core::SizingMode::Fit,
+        "a single line hugs its text"
+    );
 }
 
 fn sitemap_capture(route: &str, links: &[&str]) -> WebCapture {
@@ -831,12 +972,15 @@ fn sitemap_capture(route: &str, links: &[&str]) -> WebCapture {
     capture.url = format!("https://example.test{route}");
     capture.route = route.into();
     capture.title = route.into();
-    capture.nodes = links.iter().map(|target| {
-        let mut link = node("a", rect(20.0, 20.0, 120.0, 30.0), styles(""), vec![]);
-        link.text = Some("Go".into());
-        link.href = Some(format!("https://example.test{target}"));
-        link
-    }).collect();
+    capture.nodes = links
+        .iter()
+        .map(|target| {
+            let mut link = node("a", rect(20.0, 20.0, 120.0, 30.0), styles(""), vec![]);
+            link.text = Some("Go".into());
+            link.href = Some(format!("https://example.test{target}"));
+            link
+        })
+        .collect();
     capture
 }
 
@@ -849,22 +993,46 @@ fn website_import_sitemap_uses_breadth_first_rows_and_keeps_sizes_together() {
     phone.height = 1800.0;
     let mut tall = sitemap_capture("/z", &["/a", "/deep"]);
     tall.height = 2400.0;
-    tall.scripts.push(WebScript { src: Some("app.js".into()), text: None });
-    let captures = vec![home, phone, sitemap_capture("/a", &["/deep"]), tall,
-        sitemap_capture("/deep", &["/"]), sitemap_capture("/unreachable", &["/a"])];
+    tall.scripts.push(WebScript {
+        src: Some("app.js".into()),
+        text: None,
+    });
+    let captures = vec![
+        home,
+        phone,
+        sitemap_capture("/a", &["/deep"]),
+        tall,
+        sitemap_capture("/deep", &["/"]),
+        sitemap_capture("/unreachable", &["/a"]),
+    ];
     let imported = import_website(&captures, &BTreeMap::new(), &project).unwrap();
-    let page = |name: &str| imported.pages.iter().find(|page| page.name == name).unwrap();
+    let page = |name: &str| {
+        imported
+            .pages
+            .iter()
+            .find(|page| page.name == name)
+            .unwrap()
+    };
     let home = page("/");
     assert_eq!(home.sizes.len(), 2);
     assert_eq!(home.sizes[0].y, home.sizes[1].y);
     assert!(home.sizes[0].x + f64::from(home.sizes[0].width) < home.sizes[1].x);
     assert!(home.sizes[1].y + f64::from(home.sizes[1].height) < page("/a").sizes[0].y);
     assert_eq!(page("/a").sizes[0].y, page("/z").sizes[0].y);
-    assert!(page("/z").sizes[0].x < page("/a").sizes[0].x, "link order beats URL order");
+    assert!(
+        page("/z").sizes[0].x < page("/a").sizes[0].x,
+        "link order beats URL order"
+    );
     assert!(page("/z").sizes[0].y + 2400.0 < page("/deep").sizes[0].y);
     assert!(page("/deep").sizes[0].y + 900.0 < page("/unreachable").sizes[0].y);
-    assert_eq!(imported.reference.len(), 1, "a single root section needs no labels");
-    assert!(imported.reference[0].rect.y + imported.reference[0].rect.height < page("/deep").sizes[0].y);
+    assert_eq!(
+        imported.reference.len(),
+        1,
+        "a single root section needs no labels"
+    );
+    assert!(
+        imported.reference[0].rect.y + imported.reference[0].rect.height < page("/deep").sizes[0].y
+    );
     let again = import_website(&captures, &BTreeMap::new(), &project).unwrap();
     assert_eq!(imported.pages, again.pages);
     assert_eq!(imported.reference, again.reference);
@@ -874,30 +1042,63 @@ fn website_import_sitemap_uses_breadth_first_rows_and_keeps_sizes_together() {
 fn website_import_sitemap_groups_sections_and_labels_each_row_group() {
     let project = project();
     let captures = vec![
-        sitemap_capture("/", &["/products/z", "/blog/z", "/products/a", "/about", "/blog/a"]),
-        sitemap_capture("/products/z", &[]), sitemap_capture("/blog/z", &[]),
-        sitemap_capture("/products/a", &[]), sitemap_capture("/about", &[]),
+        sitemap_capture(
+            "/",
+            &["/products/z", "/blog/z", "/products/a", "/about", "/blog/a"],
+        ),
+        sitemap_capture("/products/z", &[]),
+        sitemap_capture("/blog/z", &[]),
+        sitemap_capture("/products/a", &[]),
+        sitemap_capture("/about", &[]),
         sitemap_capture("/blog/a", &[]),
     ];
     let imported = import_website(&captures, &BTreeMap::new(), &project).unwrap();
-    let mut row: Vec<_> = imported.pages.iter().filter(|page| page.name != "/").collect();
+    let mut row: Vec<_> = imported
+        .pages
+        .iter()
+        .filter(|page| page.name != "/")
+        .collect();
     row.sort_by(|a, b| a.sizes[0].x.total_cmp(&b.sizes[0].x));
-    assert_eq!(row.iter().map(|page| page.name.as_str()).collect::<Vec<_>>(),
-        ["/about", "/blog/z", "/blog/a", "/products/z", "/products/a"]);
+    assert_eq!(
+        row.iter()
+            .map(|page| page.name.as_str())
+            .collect::<Vec<_>>(),
+        ["/about", "/blog/z", "/blog/a", "/products/z", "/products/a"]
+    );
     let gap = |a: usize, b: usize| row[b].sizes[0].x - row[a].sizes[0].x - 1440.0;
     assert!(gap(0, 1) > gap(1, 2));
     assert!(gap(2, 3) > gap(3, 4));
     assert_eq!(imported.reference.len(), 4);
-    for (name, text) in [("/", "Top level"), ("/about", "Top level"), ("/blog/z", "Blog"), ("/products/z", "Products")] {
-        let size = &imported.pages.iter().find(|page| page.name == name).unwrap().sizes[0];
+    for (name, text) in [
+        ("/", "Top level"),
+        ("/about", "Top level"),
+        ("/blog/z", "Blog"),
+        ("/products/z", "Products"),
+    ] {
+        let size = &imported
+            .pages
+            .iter()
+            .find(|page| page.name == name)
+            .unwrap()
+            .sizes[0];
         assert!(imported.reference.iter().any(|note| note.rect.x == size.x
             && note.rect.y + note.rect.height < size.y
             && matches!(&note.kind, ReferenceKind::Note { text: label } if label == text)));
     }
-    let single = import_website(&[sitemap_capture("/blog/a", &["/blog/b"]), sitemap_capture("/blog/b", &[])],
-        &BTreeMap::new(), &project).unwrap();
+    let single = import_website(
+        &[
+            sitemap_capture("/blog/a", &["/blog/b"]),
+            sitemap_capture("/blog/b", &[]),
+        ],
+        &BTreeMap::new(),
+        &project,
+    )
+    .unwrap();
     assert!(single.reference.is_empty());
-    assert!(single.pages[0].sizes[0].y < single.pages[1].sizes[0].y, "without home, use the first page");
+    assert!(
+        single.pages[0].sizes[0].y < single.pages[1].sizes[0].y,
+        "without home, use the first page"
+    );
 }
 
 #[test]
@@ -906,26 +1107,58 @@ fn website_import_sitemap_clears_existing_boundaries_and_references() {
     project.pages[0].sizes[0].x = 4000.0;
     project.pages[0].sizes[0].y = -300.0;
     project.reference.push(desegnos_core::ReferenceItem {
-        id: Uuid::new_v4(), rect: rect(8000.0, -500.0, 1200.0, 10000.0),
-        kind: ReferenceKind::Note { text: "Existing".into() },
+        id: Uuid::new_v4(),
+        rect: rect(8000.0, -500.0, 1200.0, 10000.0),
+        kind: ReferenceKind::Note {
+            text: "Existing".into(),
+        },
     });
-    let captures = vec![sitemap_capture("/", &["/blog/post"]), sitemap_capture("/blog/post", &[])];
+    let captures = vec![
+        sitemap_capture("/", &["/blog/post"]),
+        sitemap_capture("/blog/post", &[]),
+    ];
     let imported = import_website(&captures, &BTreeMap::new(), &project).unwrap();
-    let boundaries: Vec<_> = imported.pages.iter().flat_map(|page| &page.sizes)
-        .map(|size| rect(size.x, size.y, f64::from(size.width), f64::from(size.height))).collect();
-    let added: Vec<_> = boundaries.into_iter().chain(imported.reference.iter().map(|note| note.rect)).collect();
+    let boundaries: Vec<_> = imported
+        .pages
+        .iter()
+        .flat_map(|page| &page.sizes)
+        .map(|size| {
+            rect(
+                size.x,
+                size.y,
+                f64::from(size.width),
+                f64::from(size.height),
+            )
+        })
+        .collect();
+    let added: Vec<_> = boundaries
+        .into_iter()
+        .chain(imported.reference.iter().map(|note| note.rect))
+        .collect();
     for (index, item) in added.iter().enumerate() {
         assert!(item.x > 9200.0);
         for other in &added[index + 1..] {
-            assert!(item.x + item.width <= other.x || other.x + other.width <= item.x
-                || item.y + item.height <= other.y || other.y + other.height <= item.y);
+            assert!(
+                item.x + item.width <= other.x
+                    || other.x + other.width <= item.x
+                    || item.y + item.height <= other.y
+                    || other.y + other.height <= item.y
+            );
         }
     }
     let mut session = Session::new(project).unwrap();
-    session.execute(session.project().revision, Command::ImportWebsite {
-        pages: imported.pages, reference: imported.reference, pointers: imported.pointers,
-        pictures: BTreeMap::new(),
-    }, |_| Ok(())).unwrap();
+    session
+        .execute(
+            session.project().revision,
+            Command::ImportWebsite {
+                pages: imported.pages,
+                reference: imported.reference,
+                pointers: imported.pointers,
+                pictures: BTreeMap::new(),
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
 }
 
 #[test]
@@ -936,12 +1169,34 @@ fn website_import_sitemap_wraps_a_long_level_into_lines() {
     let mut captures = vec![sitemap_capture("/", &links)];
     captures.extend(children.iter().map(|route| sitemap_capture(route, &[])));
     let imported = import_website(&captures, &BTreeMap::new(), &project).unwrap();
-    let level: Vec<_> = imported.pages.iter().filter(|page| page.name != "/").collect();
-    let lines: BTreeSet<i64> = level.iter().map(|page| page.sizes[0].y.round() as i64).collect();
-    assert_eq!(lines.len(), 3, "13 pages at one level wrap into three lines of up to six");
-    let first = imported.pages.iter().find(|page| page.name == "/p00").unwrap();
-    let seventh = imported.pages.iter().find(|page| page.name == "/p06").unwrap();
-    assert_eq!(first.sizes[0].x, seventh.sizes[0].x, "each line starts at the same left edge");
+    let level: Vec<_> = imported
+        .pages
+        .iter()
+        .filter(|page| page.name != "/")
+        .collect();
+    let lines: BTreeSet<i64> = level
+        .iter()
+        .map(|page| page.sizes[0].y.round() as i64)
+        .collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "13 pages at one level wrap into three lines of up to six"
+    );
+    let first = imported
+        .pages
+        .iter()
+        .find(|page| page.name == "/p00")
+        .unwrap();
+    let seventh = imported
+        .pages
+        .iter()
+        .find(|page| page.name == "/p06")
+        .unwrap();
+    assert_eq!(
+        first.sizes[0].x, seventh.sizes[0].x,
+        "each line starts at the same left edge"
+    );
 }
 
 #[test]

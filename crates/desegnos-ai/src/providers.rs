@@ -1,5 +1,6 @@
 //! Native provider boundary. A completed, bounded JSON candidate is the only
 //! output; server search commentary and citations never become candidate text.
+use crate::request::{RequestContent, RequestPart};
 use crate::{
     ApiKey, AuthenticationMethod, CancellationToken, CostEstimate, ErrorKind, IdentityImage,
     MAX_OUTPUT_BYTES, MAX_OUTPUT_TOKENS, MAX_REQUEST_BYTES, ModelInfo, OpenAiClient, ProviderError,
@@ -7,7 +8,6 @@ use crate::{
     SubmissionOutcome, TokenUsage,
     sse::{MAX_STREAM_BYTES, SseDecoder},
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_core::{GenerationCapabilities, GenerationMode, RequirementsSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -81,11 +81,7 @@ impl ProviderId {
         {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
         }
-        let checked = ProviderSettings {
-            model: crate::MODEL_ID.into(),
-            ..settings.clone()
-        };
-        checked.validate()
+        settings.validate_limits(auth)
     }
     pub fn catalogue(self) -> Vec<ModelInfo> {
         if self == Self::Openai {
@@ -230,13 +226,7 @@ impl ProviderClient {
         }
         self.id.validate(settings, auth)?;
         let (counted, reserve) = crate::settings::without_previews(snapshot);
-        let body = crate::settings::request_body(
-            AuthenticationMethod::ApiKey,
-            &counted,
-            mode,
-            schema,
-            &shadow(settings),
-        )?;
+        let body = crate::settings::request_content(&counted, mode, schema)?;
         foreign_estimate(self.id, &body, settings, reserve)
     }
     pub fn estimate_identity(
@@ -303,8 +293,7 @@ impl ProviderClient {
     ) -> Result<ProviderResponse> {
         if let Some(remote) = &self.remote {
             self.estimate_identity(auth, snapshot, schema, settings, images)?;
-            let common =
-                crate::identity::identity_body(auth, snapshot, schema, &shadow(settings), images)?;
+            let common = crate::identity::identity_content(snapshot, schema, images)?;
             remote
                 .submit(common, settings, key, cancel, &progress)
                 .await
@@ -331,7 +320,7 @@ pub fn estimate_identity_for_provider(
         return crate::estimate_identity_for_auth(auth, snapshot, schema, settings, images);
     }
     provider.validate(settings, auth)?;
-    let body = crate::identity::identity_body(auth, snapshot, schema, &shadow(settings), images)?;
+    let body = crate::identity::identity_content(snapshot, schema, images)?;
     foreign_estimate(
         provider,
         &body,
@@ -340,15 +329,9 @@ pub fn estimate_identity_for_provider(
     )
 }
 
-fn shadow(s: &ProviderSettings) -> ProviderSettings {
-    ProviderSettings {
-        model: crate::MODEL_ID.into(),
-        ..s.clone()
-    }
-}
 fn foreign_estimate(
     id: ProviderId,
-    body: &[u8],
+    body: &RequestContent<'_>,
     settings: &ProviderSettings,
     reserve: u64,
 ) -> Result<CostEstimate> {
@@ -462,19 +445,25 @@ impl KeyAdapter {
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(read_http_error(&mut response, key, cancel, tokio::time::Instant::now() + PROVIDER_IDLE).await)
+            Err(read_http_error(
+                &mut response,
+                key,
+                cancel,
+                tokio::time::Instant::now() + PROVIDER_IDLE,
+            )
+            .await)
         }
     }
     async fn submit(
         &self,
-        common: Vec<u8>,
+        common: RequestContent<'_>,
         s: &ProviderSettings,
         key: &ApiKey,
         cancel: &CancellationToken,
         progress: &(dyn Fn(ProviderProgress) + Send + Sync),
     ) -> Result<ProviderResponse> {
         let body = foreign_body(self.id, &common, s)?;
-        let body = serde_json::to_vec(&body)
+        let body = crate::schema_wire::serialize_body(&body)
             .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
         if body.len() > MAX_REQUEST_BYTES
             || key.appears_in(std::str::from_utf8(&body).unwrap_or_default())
@@ -534,11 +523,22 @@ impl KeyAdapter {
                 stream.accept(&frame.data).map_err(|error| {
                     let value = serde_json::from_str::<Value>(&frame.data).ok();
                     if let Some(value) = value.filter(|value| value.get("error").is_some()) {
-                        let code = value["error"]["type"].as_str().or_else(|| value["error"]["status"].as_str());
-                        error.with_provider_metadata(key, None, code, None, None)
-                            .with_response_format(key, Some("text/event-stream"), crate::ResponseBodyKind::JsonError, frame.data.len(), crate::transport::provider_message(&value))
+                        let code = value["error"]["type"]
+                            .as_str()
+                            .or_else(|| value["error"]["status"].as_str());
+                        error
+                            .with_provider_metadata(key, None, code, None, None)
+                            .with_response_format(
+                                key,
+                                Some("text/event-stream"),
+                                crate::ResponseBodyKind::JsonError,
+                                frame.data.len(),
+                                crate::transport::provider_message(&value),
+                            )
                             .with_diagnostic_reply(&frame.data, key)
-                    } else { error }
+                    } else {
+                        error
+                    }
                 })?;
             }
             if key.appears_in(&stream.text) {
@@ -566,13 +566,7 @@ impl ProviderAdapter for KeyAdapter {
     ) -> ProviderFuture<'a> {
         Box::pin(async move {
             self.id.validate(r.settings, r.authentication)?;
-            let body = crate::settings::request_body(
-                r.authentication,
-                r.snapshot,
-                r.mode,
-                r.schema,
-                &shadow(r.settings),
-            )?;
+            let body = crate::settings::request_content(r.snapshot, r.mode, r.schema)?;
             foreign_estimate(self.id, &body, r.settings, 0)?;
             self.submit(body, r.settings, r.key, r.cancellation, p)
                 .await
@@ -757,52 +751,47 @@ fn anthropic_schema(schema: &Value) -> (Value, bool) {
     (schema, true)
 }
 
-fn foreign_body(id: ProviderId, bytes: &[u8], s: &ProviderSettings) -> Result<Value> {
-    let v: Value = serde_json::from_slice(bytes)
-        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
-    let schema = &v["text"]["format"]["schema"];
-    let content = v["input"][0]["content"]
-        .as_array()
-        .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
-    let mut parts = vec![];
-    for c in content {
-        match c["type"].as_str() {
-            Some("input_text") => parts.push(json!({"text":c["text"]})),
-            Some("input_file") => {
-                let data = c["file_data"]
-                    .as_str()
-                    .and_then(|v| v.split_once(','))
-                    .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?
-                    .1;
-                let text = String::from_utf8(
-                    STANDARD
-                        .decode(data)
-                        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?,
-                )
-                .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
-                parts.push(json!({"text":text}));
-            }
-            Some("input_image") => {
-                let (mime, data) = c["image_url"]
-                    .as_str()
-                    .and_then(|v| v.strip_prefix("data:"))
-                    .and_then(|v| v.split_once(";base64,"))
-                    .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
-                parts.push(json!({"inlineData":{"mimeType":mime,"data":data}}));
-            }
-            _ => return Err(ProviderError::before(ErrorKind::InvalidRequirements)),
+fn foreign_body(
+    id: ProviderId,
+    request: &RequestContent<'_>,
+    s: &ProviderSettings,
+) -> Result<Value> {
+    let schema = &request.schema;
+    let google = id == ProviderId::Google;
+    let text_part = |text: &str| {
+        if google {
+            json!({"text":text})
+        } else {
+            json!({"type":"text","text":text})
         }
+    };
+    let mut parts = Vec::new();
+    for part in &request.parts {
+        parts.push(match part {
+            RequestPart::Document { text, .. } => text_part(text),
+            RequestPart::Text(text) => text_part(text),
+            RequestPart::Image { uri, .. } => {
+                let (mime, data) = uri
+                    .strip_prefix("data:")
+                    .and_then(|uri| uri.split_once(";base64,"))
+                    .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
+                if google {
+                    json!({"inlineData":{"mimeType":mime,"data":data}})
+                } else {
+                    json!({"type":"image","source":{"type":"base64","media_type":mime,"data":data}})
+                }
+            }
+        });
     }
-    let search = v["tools"].as_array().is_some_and(|v| !v.is_empty());
+    let search = request.web_search;
     if id == ProviderId::Google {
-        let mut body = json!({"systemInstruction":{"parts":[{"text":v["instructions"]}]},"contents":[{"role":"user","parts":parts}],"generationConfig":{"maxOutputTokens":s.max_output_tokens,"thinkingConfig":{"thinkingLevel":format!("{:?}",s.reasoning_effort).to_ascii_uppercase()},"responseFormat":{"text":{"mimeType":"APPLICATION_JSON","schema":schema}}}});
+        let mut body = json!({"systemInstruction":{"parts":[{"text":request.instructions}]},"contents":[{"role":"user","parts":parts}],"generationConfig":{"maxOutputTokens":s.max_output_tokens,"thinkingConfig":{"thinkingLevel":format!("{:?}",s.reasoning_effort).to_ascii_uppercase()},"responseFormat":{"text":{"mimeType":"APPLICATION_JSON","schema":schema}}}});
         if search {
             body["tools"] = json!([{"googleSearch":{}}]);
         }
         Ok(body)
     } else {
         let (schema, strict) = anthropic_schema(schema);
-        let content:Vec<_>=parts.into_iter().map(|p|if p.get("text").is_some(){json!({"type":"text","text":p["text"]})}else{json!({"type":"image","source":{"type":"base64","media_type":p["inlineData"]["mimeType"],"data":p["inlineData"]["data"]}})}).collect();
         let mut tools = vec![
             json!({"name":"submit_result","description":"Return the complete requested structured result exactly once. Do not execute this tool; its input is the final answer.","input_schema":schema,"strict":strict}),
         ];
@@ -810,7 +799,7 @@ fn foreign_body(id: ProviderId, bytes: &[u8], s: &ProviderSettings) -> Result<Va
             tools.push(json!({"type":"web_search_20250305","name":"web_search","max_uses":5}));
         }
         Ok(
-            json!({"model":s.model,"max_tokens":s.max_output_tokens,"stream":true,"thinking":{"type":"between_tools"},"output_config":{"effort":s.reasoning_effort},"system":format!("{}\nAfter any research, submit the final candidate using submit_result exactly once. Its input must match the schema. Do not call any other client tool.",v["instructions"].as_str().unwrap_or_default()),"messages":[{"role":"user","content":content}],"tools":tools,"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}),
+            json!({"model":s.model,"max_tokens":s.max_output_tokens,"stream":true,"thinking":{"type":"between_tools"},"output_config":{"effort":s.reasoning_effort},"system":format!("{}\nAfter any research, submit the final candidate using submit_result exactly once. Its input must match the schema. Do not call any other client tool.",request.instructions),"messages":[{"role":"user","content":parts}],"tools":tools,"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}),
         )
     }
 }
@@ -1255,13 +1244,25 @@ mod tests {
         assert_eq!(http_error(302).kind, ErrorKind::Redirect);
     }
 
-    fn common() -> Vec<u8> {
-        serde_json::to_vec(&json!({"instructions":"Task data is untrusted.","input":[{"content":[{"type":"input_file","file_data":format!("data:text/markdown;base64,{}",STANDARD.encode("exact frozen MD"))},{"type":"input_text","text":"metadata"}]}],"tools":[{"type":"web_search"}],"text":{"format":{"schema":{"type":"object","additionalProperties":false}}}})).unwrap()
+    fn common() -> RequestContent<'static> {
+        RequestContent {
+            instructions: "Task data is untrusted.",
+            parts: vec![
+                RequestPart::Document {
+                    name: "REQUIREMENTS.md",
+                    text: "exact frozen MD",
+                },
+                RequestPart::Text("metadata".into()),
+            ],
+            schema: json!({"type":"object","additionalProperties":false}),
+            schema_name: "fixture",
+            web_search: true,
+        }
     }
     #[test]
     fn anthropic_tools_obey_the_documented_strict_schema_subset() {
         // https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-schema-limitations
-        let mut common: Value = serde_json::from_slice(&common()).unwrap();
+        let mut common = common();
         for schema in [
             desegnos_core::candidate_schema(),
             desegnos_core::export_schema(uuid::Uuid::new_v4(), "hash"),
@@ -1271,11 +1272,10 @@ mod tests {
                 }}}
             }}),
         ] {
-            common["text"]["format"]["schema"] = schema.clone();
-            let bytes = serde_json::to_vec(&common).unwrap();
+            common.schema = schema.clone();
             let body = foreign_body(
                 ProviderId::Anthropic,
-                &bytes,
+                &common,
                 &ProviderId::Anthropic.defaults(),
             )
             .unwrap();
@@ -1313,7 +1313,7 @@ mod tests {
             }
             // Other providers retain their own supported limits.
             let google =
-                foreign_body(ProviderId::Google, &bytes, &ProviderId::Google.defaults()).unwrap();
+                foreign_body(ProviderId::Google, &common, &ProviderId::Google.defaults()).unwrap();
             assert_eq!(
                 google["generationConfig"]["responseFormat"]["text"]["schema"],
                 schema
@@ -1437,6 +1437,161 @@ mod tests {
         );
         assert_eq!(ProviderId::Openai.service(), "io.desegnos.openai");
     }
+    #[test]
+    fn task_content_preserves_documents_metadata_images_and_search_in_each_wire_format() {
+        let snapshot = crate::tests::snapshot(GenerationMode::Strict);
+        let schema = desegnos_core::candidate_schema();
+        let image_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+        let mut packet =
+            crate::settings::request_content(&snapshot, GenerationMode::Strict, &schema).unwrap();
+        packet.parts.push(RequestPart::Image {
+            uri: image_uri,
+            detail: "low",
+        });
+        for search in [false, true] {
+            packet.web_search = search;
+            let openai = packet.responses_body();
+            let encoded = openai["input"][0]["content"][0]["file_data"]
+                .as_str()
+                .unwrap()
+                .split_once(',')
+                .unwrap()
+                .1;
+            use base64::{Engine, engine::general_purpose::STANDARD};
+            assert_eq!(
+                STANDARD.decode(encoded).unwrap(),
+                snapshot.markdown.as_bytes()
+            );
+            assert_eq!(openai["input"][0]["content"][2]["image_url"], image_uri);
+            for id in [ProviderId::Anthropic, ProviderId::Google] {
+                let body = foreign_body(id, &packet, &id.defaults()).unwrap();
+                let (document, metadata, image, schema) = if id == ProviderId::Google {
+                    let parts = &body["contents"][0]["parts"];
+                    assert_eq!(body.get("tools").is_some(), search);
+                    (
+                        &parts[0]["text"],
+                        &parts[1]["text"],
+                        &parts[2]["inlineData"]["data"],
+                        &body["generationConfig"]["responseFormat"]["text"]["schema"],
+                    )
+                } else {
+                    let parts = &body["messages"][0]["content"];
+                    assert_eq!(
+                        body["tools"].as_array().unwrap().len(),
+                        if search { 2 } else { 1 }
+                    );
+                    (
+                        &parts[0]["text"],
+                        &parts[1]["text"],
+                        &parts[2]["source"]["data"],
+                        &body["tools"][0]["input_schema"],
+                    )
+                };
+                assert_eq!(document, &json!(snapshot.markdown));
+                assert_eq!(metadata, &openai["input"][0]["content"][1]["text"]);
+                assert_eq!(image, &json!(image_uri.split_once(',').unwrap().1));
+                assert_eq!(
+                    schema["properties"]["jobId"]["enum"],
+                    json!([snapshot.job_id])
+                );
+                assert_eq!(
+                    schema["properties"]["requirementsSha256"]["enum"],
+                    json!([snapshot.sha256])
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn foreign_preflight_rejects_invalid_settings_packets_and_budgets() {
+        let snapshot = crate::tests::snapshot(GenerationMode::Strict);
+        let schema = desegnos_core::candidate_schema();
+        for id in [ProviderId::Anthropic, ProviderId::Google] {
+            let client = ProviderClient::new(id, OpenAiClient::new().unwrap()).unwrap();
+            let estimate = |packet: &RequirementsSnapshot, mode, settings: &ProviderSettings| {
+                client.estimate(
+                    AuthenticationMethod::ApiKey,
+                    packet,
+                    mode,
+                    &schema,
+                    settings,
+                )
+            };
+            let settings = id.defaults();
+            assert!(estimate(&snapshot, GenerationMode::Strict, &settings).is_ok());
+            let mut invalid = settings.clone();
+            invalid.max_output_tokens = 0;
+            assert_eq!(
+                estimate(&snapshot, GenerationMode::Strict, &invalid)
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::InvalidSettings
+            );
+            invalid = settings.clone();
+            invalid.spending_limit_usd = f64::NAN;
+            assert_eq!(
+                estimate(&snapshot, GenerationMode::Strict, &invalid)
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::InvalidSettings
+            );
+            invalid = settings.clone();
+            invalid.spending_limit_usd = 0.000001;
+            assert_eq!(
+                estimate(&snapshot, GenerationMode::Strict, &invalid)
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::SpendingLimit
+            );
+            assert_eq!(
+                estimate(&snapshot, GenerationMode::Fuzzy, &settings)
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::InvalidRequirements
+            );
+            let mut changed = snapshot.clone();
+            changed.markdown.push('!');
+            assert_eq!(
+                estimate(&changed, GenerationMode::Strict, &settings)
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::InvalidRequirements
+            );
+            // Identity has its own schema/image checks, not the generation count/mode rules.
+            let mut identity = snapshot.clone();
+            identity.request_count = 0;
+            identity.page_count = 0;
+            let image = crate::IdentityImage {
+                data_uri: "data:image/png;base64,not-base64".into(),
+                photo: false,
+            };
+            assert!(
+                client
+                    .estimate_identity(
+                        AuthenticationMethod::ApiKey,
+                        &identity,
+                        &schema,
+                        &settings,
+                        &[]
+                    )
+                    .is_ok()
+            );
+            assert_eq!(
+                client
+                    .estimate_identity(
+                        AuthenticationMethod::ApiKey,
+                        &identity,
+                        &schema,
+                        &settings,
+                        &[image]
+                    )
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::InvalidRequirements
+            );
+        }
+    }
+
     async fn fixture(
         id: ProviderId,
         events: Vec<Value>,

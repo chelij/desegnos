@@ -40,6 +40,5 @@ export function useProjectSession(initialView: WorkspaceView | undefined, setErr
     return promise;
   }, [queue, accept]);
   const settle = useCallback(async () => { await tail.current; }, []);
-  const synchronize = useCallback(async () => { await settle(); }, [settle]);
-  return { view, current, pending, accept, queue, mutate, settle, synchronize };
+  return { view, current, pending, accept, queue, mutate, settle };
 }

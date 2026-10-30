@@ -19,7 +19,7 @@ import {
   automaticLinks, boundaryAt, boundaryNear, canvasTargetKey, dotGrid, fitCamera, nearestEdgeAnchors, selectedPointers,
   textEditingCamera, viewportWorldRect, type Boundary, type CanvasTarget, type Point, type ReferenceBox, type RequestBox,
 } from '../projectCanvasGeometry';
-import type { Element, ElementPatch, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
+import type { Element, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
 import { onEditScope, type EditScope } from './selectionBar';
 import { elementBoxes, elementBoxesNow, pendingRequests, requestAreaContains } from './requests';
 import { shownReference } from './reference';
@@ -38,7 +38,7 @@ import { shortcutFor, viewSlot } from '../shortcuts';
 import { playIsActive } from './play';
 import {
   unionRects, createElement, createTextElement, forBackground, withPickedColours, elementChildrenOf,
-  elementPath, elementParents, findElementIn, drawRectWithKeys, rectFromPoints,
+  elementParents, findElementIn, drawRectWithKeys, rectFromPoints,
 } from './elementGeometry';
 import type { ForwardedRef } from 'react';
 
@@ -47,14 +47,14 @@ const EMPTY_RECTS: Record<string, Rect> = {};
 export function useProjectCanvas({
   editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
-  addRequest, updateRequest, selectRequest,
+  addRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
-  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview = null, onZoom, onLayout,
+  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview = null, onZoom, onLayout,
   play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, focusBehaviour,
 }: ProjectCanvasProps, ref: ForwardedRef<ProjectCanvasHandle>) {
 
   const {
-    requestTargetAt, requestEditorScreen, closeRequestArea, targetForSelection, startRequestOnSelection,
+    requestTargetAt, requestEditorScreen, closeRequestArea, startRequestOnSelection,
     startRequestFromShape, submitRequestDraft, cancelRequestDraft,
   } = createRequestTool(() => ({
     requestBoxes, project, movingItems, pointerWorldNow, camera, viewSize, boundaryUnder, elementScreenRect,
@@ -75,8 +75,8 @@ export function useProjectCanvas({
     selectBoundary,
   }));
   const {
-    startPan, beginMove, boxAtPoint, marqueeTargets, rememberRepeatMove, duplicateElementMove,
-    commitElementMove, startElementResize, startReferenceResize, persistMove, saveMoves, commitMove,
+    startPan, beginMove, marqueeTargets, rememberRepeatMove, duplicateElementMove,
+    commitElementMove, startElementResize, startReferenceResize, persistMove, commitMove,
   } = createMovingActions(() => ({
     beginPointerSession, drag, setPanning, project, surface, boundaryRect, camera, pageFor, duplicateRepeat,
     insertElements, selectTargets, boundaryUnder, elementToReference, moveElements, clearSelection, selection,
@@ -84,8 +84,8 @@ export function useProjectCanvas({
     updateReference,
   }));
   const {
-    copyElements, pasteTarget, pasteScreen, pasteEntries, pasteElements, confirmPaste, cloneChildren,
-    duplicateElements, createReference, referencePoint, pasteText, pasteImage, pasteClipboard, paste, dropText,
+    copyElements, pasteTarget, pasteElements, confirmPaste,
+    duplicateElements, pasteClipboard, paste, dropText,
   } = createPasteDrop(() => ({
     elementEntries, selection, clipboard, pasteCount, setPasteChoice, clipboardMark, project, boundaryRect,
     lastPointer, viewSize, camera, boundaryUnder, editingAllSizes, pasteLinked, selectTargets, insertElements,
@@ -93,9 +93,9 @@ export function useProjectCanvas({
     insertionPoint, selectElement, placeElement, createdElement, worldPoint, latest, attachToRequest,
   }));
   const {
-    escapeCanvas, selectAllSiblings, arrangeElements, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
+    escapeCanvas, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
     alignSelection, distributeSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
-    groupSelection, ungroupSelection, nudgeElements, focusElement, canRunCanvasAction, runCanvasAction,
+    canRunCanvasAction, runCanvasAction,
     keyDown,
   } = createKeyboardActions(() => ({
     editProject, createBoundary, drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
@@ -130,7 +130,6 @@ export function useProjectCanvas({
     set current(value: Drag | null) { dragValue.current = value; renderDrag(version => version + 1); },
   }), []);
   const busy = useRef(false);
-  const created = useRef<string | null>(null);
   const createdItem = useRef<string | null>(null);
   const createdPointer = useRef<string | null>(null);
   const createdElement = useRef<string | null>(null);
@@ -519,8 +518,6 @@ export function useProjectCanvas({
     if (!boundary) return null;
     return moving?.sizeId === sizeId ? moving.rect : boundary.rect;
   };
-  const boundaryOfPage = (pageId: string, sizeId?: string | null): Boundary | null =>
-    boundaries.find(item => item.pageId === pageId && (!sizeId || item.sizeId === sizeId)) ?? boundaries.find(item => item.pageId === pageId) ?? null;
   // Layers as the canvas draws them in one size: linked content resolved, then size overrides.
   const pageFor = (pageId: string, sizeId?: string | null): Page | null => {
     const page = project.pages.find(item => item.id === pageId);

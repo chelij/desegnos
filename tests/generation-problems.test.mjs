@@ -1,16 +1,10 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
 import test from 'node:test';
+import { compileModules } from './typescript.mjs';
 
-const temporary = await mkdtemp(new URL('../.problems-', import.meta.url));
+const modules = await compileModules(['src/generationProblems.ts']);
 try {
-  const compiler = new URL('bin/tsc', import.meta.resolve('typescript/package.json')).pathname;
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--outDir', temporary, 'src/generationProblems.ts'], { encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout);
-  const { areaProblems, placeCallouts, areaOutcome, jobOutcome, resolutionAction, staleResult, staleResultMessage } = await import(pathToFileURL(join(temporary, 'generationProblems.js')));
+  const { areaProblems, placeCallouts, areaOutcome, jobOutcome, resolutionAction, staleResult, staleResultMessage } = await modules.load('generationProblems.js');
   const rect = { x: 100, y: 200, width: 200, height: 80 };
   const other = { x: 110, y: 50, width: 200, height: 80 };
   const intersects = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -101,4 +95,4 @@ try {
     assert.equal(jobOutcome({ jobId: 'failed', status: 'failed', areas: [], candidate: null }).retryAll, true);
     assert.deepEqual(jobOutcome({ jobId: 'working', status: 'generating', areas: [], candidate: null }), { retryable: [], blocked: [], retryAll: false, retryBatches: false });
   });
-} finally { await rm(temporary, { recursive: true, force: true }); }
+} finally { await modules.cleanup(); }

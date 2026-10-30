@@ -45,11 +45,11 @@ fn website_starts_with_linked_desktop_tablet_and_phone_sizes() {
 }
 
 #[test]
-fn app_screen_and_social_image_are_single_fixed_screens() {
+fn app_template_creates_a_fixed_page_and_social_image_keeps_its_size() {
     let app = untitled(CanvasTemplate::AppScreen);
     assert_eq!(app.pages.len(), 1);
-    assert_eq!(app.pages[0].name, "Screen 1");
-    assert_eq!(app.pages[0].output, OutputType::AppScreen);
+    assert_eq!(app.pages[0].name, "Page 1");
+    assert_eq!(app.pages[0].output, OutputType::Webpage);
     assert_eq!(app.pages[0].base_size().width, 390);
     assert_eq!(app.pages[0].base_size().height, 844);
     assert_eq!(app.pages[0].base_size().kind, BoundaryKind::Screen);

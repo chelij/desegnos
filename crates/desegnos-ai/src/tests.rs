@@ -199,7 +199,7 @@ async fn read_request(socket: &mut TcpStream) -> Captured {
     }
 }
 
-fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
+pub(super) fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
     let job_id = Uuid::new_v4();
     let project_id = Uuid::new_v4();
     let format = desegnos_core::CURRENT_REQUIREMENTS_FORMAT;

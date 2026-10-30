@@ -125,6 +125,150 @@ fn saved_linked_picture_reopens_without_pruning_its_shared_image_bytes() {
 }
 
 #[test]
+fn generated_attachment_picture_survives_acceptance_save_reopen_and_export() {
+    use desegnos_core::{
+        AttachmentKind, GenerationCandidate, PendingRequest, RequestAttachment, RequestTarget,
+    };
+    use serde_json::{Value, json};
+    let directory = TempDir::new("generated-attachment");
+    let path = directory.path("picture.desegnos");
+    let uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    let mut project = project_with_element();
+    project.pages[0].elements[0].kind = ElementKind::Box;
+    let page = project.pages[0].id;
+    let element = project.pages[0].elements[0].id;
+    let request_id = Uuid::new_v4();
+    project.requests.push(PendingRequest {
+        id: request_id,
+        text: "Use my attached picture".into(),
+        attachments: vec![RequestAttachment {
+            id: "attached1".into(),
+            name: "my-picture.png".into(),
+            kind: AttachmentKind::Image,
+            data_uri: Some(uri.into()),
+            preview: None,
+            text: None,
+            url: None,
+        }],
+        targets: vec![RequestTarget::Element {
+            page,
+            size: None,
+            id: element,
+        }],
+        area: None,
+        requested_at: "2026-10-31T00:00:00Z".into(),
+    });
+    let snapshot = project.prepare_requirements().unwrap();
+    let packet = snapshot
+        .markdown
+        .split("```json\n")
+        .skip(1)
+        .filter_map(|block| serde_json::from_str::<Value>(block.split("\n```").next()?).ok())
+        .find(|block| block.get("requests").is_some())
+        .unwrap();
+    let picture_id: Uuid =
+        serde_json::from_value(packet["requests"][0]["attachments"][0]["pictureId"].clone())
+            .unwrap();
+    assert!(
+        !snapshot.markdown.contains(uri),
+        "original image bytes stay local"
+    );
+    assert!(
+        project.pictures.is_empty(),
+        "preparation does not edit the live project"
+    );
+    let reply = json!({
+        "jobId": snapshot.job_id, "requirementsSha256": snapshot.sha256, "summary": "Placed the attachment",
+        "requests": [{"requestId": request_id, "elementId": element, "status": "implemented", "explanation": "Used the original picture",
+            "operations": [{"kind":"replaceChildren", "children":[{
+                "kind":"image", "rect":{"x":0,"y":0,"width":20,"height":20}, "image":picture_id
+            }]}]}],
+        "images":[], "pointerClassifications":[], "decisionProposals":[], "criticism":[]
+    });
+    let mut unknown = reply.clone();
+    unknown["requests"][0]["operations"][0]["children"][0]["image"] = json!(Uuid::new_v4());
+    assert!(
+        GenerationCandidate::from_json(&unknown.to_string())
+            .unwrap()
+            .validate(&snapshot, &project)
+            .is_err()
+    );
+    let reply = GenerationCandidate::from_json(&reply.to_string()).unwrap();
+    reply.validate(&snapshot, &project).unwrap();
+    assert!(project.pictures.is_empty(), "validation is read-only");
+    let mut session = Session::new(project.clone()).unwrap();
+    session
+        .apply_generation(&snapshot, &reply, &[], &Default::default(), |_| Ok(()))
+        .unwrap();
+    let applied = session.project().clone();
+    assert_eq!(applied.pictures[&picture_id].as_ref(), uri);
+    assert_eq!(
+        applied.pages[0].elements[0].children[0].image,
+        Some(picture_id)
+    );
+    assert!(applied.requests.is_empty());
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pictures, project.pictures);
+    assert_eq!(session.project().requests, project.requests);
+    drop(ProjectDatabase::create(&path, &applied, now_millis()).unwrap());
+    let reopened = desegnos_storage::load_project(&path).unwrap();
+    assert_eq!(reopened.pictures[&picture_id].as_ref(), uri);
+    let bytes = reopened.picture_bytes(picture_id).unwrap().1;
+    let bundle = desegnos_core::direct_export_bundle(&reopened, &[]).unwrap();
+    assert!(
+        bundle.files.values().any(|file| file == &bytes),
+        "export includes the original attachment"
+    );
+}
+
+#[test]
+fn legacy_screen_project_keeps_sizes_content_history_and_web_export() {
+    let directory = TempDir::new("legacy-screen");
+    let path = directory.path("legacy.desegnos");
+    let mut old = project_with_element();
+    old.template = desegnos_core::CanvasTemplate::AppScreen;
+    old.pages[0].name = "Screen 1".into();
+    old.pages[0].output = desegnos_core::OutputType::AppScreen;
+    old.pages[0].sizes[0].kind = BoundaryKind::Screen;
+    old.pages[0].sizes[0].width = 390;
+    old.pages[0].sizes[0].height = 844;
+    // Use the persisted legacy spellings, not an automatic conversion on load.
+    let json = serde_json::to_string(&old).unwrap();
+    assert!(json.contains("\"output\":\"appScreen\""));
+    assert!(json.contains("\"kind\":\"screen\""));
+    let old: Project = serde_json::from_str(&json).unwrap();
+    let expected_parts = split_project(&old).unwrap();
+    let database = ProjectDatabase::create(&path, &old, now_millis() - 60_000).unwrap();
+    let original_version = database.load().unwrap().version;
+    drop(database);
+
+    let database = ProjectDatabase::open(&path).unwrap();
+    let loaded = database.load().unwrap().project;
+    assert_eq!(loaded, old);
+    assert_eq!(split_project(&loaded).unwrap(), expected_parts);
+    let legacy_export = desegnos_core::direct_export_bundle(&loaded, &[]).unwrap();
+    assert!(legacy_export.files.contains_key("index.html"));
+    let mut page = loaded.clone();
+    page.pages[0].output = desegnos_core::OutputType::Webpage;
+    let page_export = desegnos_core::direct_export_bundle(&page, &[]).unwrap();
+    assert_eq!(legacy_export.files, page_export.files);
+    assert!(
+        page_export
+            .files
+            .values()
+            .any(|bytes| String::from_utf8_lossy(bytes).contains("overflow:auto"))
+    );
+
+    let mut edited = loaded.clone();
+    edited.pages[0].elements[0].text = "Edited in the unified Page editor".into();
+    database.save(&edited, &[], Some("Edit page")).unwrap();
+    drop(database);
+    let database = ProjectDatabase::open(&path).unwrap();
+    assert_eq!(database.load().unwrap().project, edited);
+    assert_eq!(database.restore(original_version).unwrap(), old);
+}
+
+#[test]
 fn a_blank_untitled_canvas_saves_and_its_first_boundary_becomes_home() {
     let blank = Project::blank("Untitled project".into(), Appearance::Light).unwrap();
     assert!(blank.pages.is_empty());

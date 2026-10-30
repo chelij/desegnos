@@ -53,7 +53,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, showImport,
     setImportSource, setShowImport, travel, showHistory, setShowHistory, panels, panelActions, play,
     togglePlay, previewSelectedBoundary, showExport, openExportPanel, aiConnected, showAiSettings,
-    setShowAiSettings, generation, showLog, setShowLog, requestedAreas, pendingImages, working, generate,
+    setShowAiSettings, generation, showLog, setShowLog, requestedAreas, working, generate,
     error, setError, problemAction, openFailure, setNotice, setOpenFailure, updateResult, openRelease,
     setUpdateResult, updateError, setUpdateError, notices, setNotices, dismissedRecovery, setDismissedRecovery,
     loading, load, pending, newUntitled, open, appSettings, changeShowStartPage, recentProjects, openRecent,
@@ -67,15 +67,15 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     setCanvasTool, setInsertKind, reportCanvasZoom, selectCanvasElement, insertCanvasElements,
     updateCanvasElements, moveCanvasElements, groupCanvasElements, ungroupCanvasElements, linkCanvasElements,
     unlinkCanvasElements, pasteLinkedInstances, playElement, setPlay, preview, closePreview, refreshPreview,
-    showGenerationStatus, openImportDialog, setShowNotes, editGenerationRequest, requestEditorIsOpen,
-    openGeneration, draftCount, logFocus, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
+    showGenerationStatus, openImportDialog, setShowNotes, editGenerationRequest,
+    openGeneration, logFocus, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
     exportJob, exportSending, exportError, chooseExportDestination, runExport, sendExport, cancelExport,
     openExportFolder, openInBrowser, setShowExport, historyEpoch, accept, untitledSave, projectLocation,
     closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
     keepPointerComment, keepPointerCode, keepPointerThis, mergePointerClash,
     selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
     selectedElementTargets, renameCanvasElement, selectedElementRequest, setCanvasElementRequest,
-    updateCanvasElementContext, selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
+    selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
     addCanvasPageSize, renameProject, showDotGrid, changeGridFlags, save, canvasBoundaries,
     moveCanvasElementTo, removeLinkedDefinition, views, addNamedView, renameNamedView, removeNamedView,
     selectedBounds, clashPointers, selectNextPointerClash, zoomPercent, showGridSettings, setShowGridSettings,
@@ -123,7 +123,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const playingPage = playIsActive(play) && project ? project.pages.find(page => page.id === play.boundary) ?? null : null;
   const playingSize = playingPage ? playingPage.sizes.find(size => size.id === canvasFocusSize) ?? playingPage.sizes[0] ?? null : null;
   const playingLabel = playingPage && playingSize ? `${playingPage.name} · ${sizeLabel(playingSize.width)}` : null;
-  const nothingToGenerate = requestedAreas === 0 && pendingImages === 0;
+  const nothingToGenerate = requestedAreas === 0;
   const previewAvailable = !onStartPage && !!project && projectHasPreviewPages(project);
   return <div className={presenting ? 'application editor-shell presenting' : 'application editor-shell'}>
     {showPalette && <CommandPalette commands={paletteCommands} close={() => setShowPalette(false)} />}
@@ -192,15 +192,15 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <SurfaceHost place="canvas" />
       <NoticeHost />
       {playIsActive(play) && !presenting && playingLabel && <div className="play-pill" role="status"><span className="play-pill-label">Playing {playingLabel}</span><button type="button" onClick={() => setPlay(idlePlay)}>Stop</button></div>}
-      <ProjectCanvas ref={canvasRef} editProject={mutate} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} widthPreview={widthPreview} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} updateRequest={updateCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} focusBehaviour={focusCanvasBehaviour} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} requestShape={requestToolShape} onRequestShape={setRequestToolShape} onZoom={reportCanvasZoom} onLayout={ignoreCanvasLayout}
+      <ProjectCanvas ref={canvasRef} editProject={mutate} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} widthPreview={widthPreview} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} focusBehaviour={focusCanvasBehaviour} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} requestShape={requestToolShape} onZoom={reportCanvasZoom} onLayout={ignoreCanvasLayout}
         selectElement={selectCanvasElement} removeElements={items => removeCanvasSelection([], [], [], items)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
         linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
         play={play} onPlayBoundary={id => setPlay(current => ({ ...current, boundary: id }))} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
         preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} />
-      {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} requestEditorOpen={requestEditorIsOpen} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : draftCount > 0 && showsOpener({ available: true, open: showLog }) ? <Notice priority="result" message={`${draftCount} ${draftCount === 1 ? 'draft' : 'drafts'}`} action={{ label: 'Details', onClick: openGeneration }} /> : null}
+      {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : null}
       </div>
-      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} resultApplied={false} requestEditorOpen={requestEditorIsOpen} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} manageUsage={manageChatgptUsage} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => setShowLog(false)} />}
+      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => setShowLog(false)} />}
       <SurfaceHost place="panel" />
       </main>
       </div>
@@ -220,8 +220,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
           : undefined}
         properties={<>
           {selectedPointer
-          ? <PointerProperties pointer={selectedPointer} project={project} state={selectedPointerState} busy={pending > 0} rewriting={false}
-              aiConnected={aiConnected} connectAi={() => setShowAiSettings(true)}
+          ? <PointerProperties pointer={selectedPointer} project={project} state={selectedPointerState} busy={pending > 0}
+              aiConnected={aiConnected}
               change={comment => updateCanvasPointer(selectedPointer.id, { comment })}
               actions={clashActions(selectedPointer, selectedPointerState)} />
           : selectedReferenceItem
@@ -229,13 +229,13 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
           : selectedRequest
           ? <RequestProperties request={selectedRequest} project={project} busy={pending > 0} update={updateCanvasRequest} remove={() => removeCanvasSelection([], [], [selectedRequest.id])} attach={attachReferenceContext} />
           : selectedElements.length && selectedElementPageId
-            ? <ElementProperties styleCommand={mutate} project={project} page={project.pages.find(page => page.id === selectedElementPageId)!} pageId={selectedElementPageId} sizeId={selectedElementTargets[0].sizeId} elements={selectedElements} busy={pending > 0}
+            ? <ElementProperties styleCommand={mutate} project={project} page={project.pages.find(page => page.id === selectedElementPageId)!} sizeId={selectedElementTargets[0].sizeId} elements={selectedElements} busy={pending > 0}
                 update={patches => void updateCanvasElements(selectedElementPageId, patches)}
                 rename={name => renameCanvasElement(selectedElementPageId, selectedElements[0].id, name)}
                 link={() => canvasRef.current?.linkSelection()} unlink={() => canvasRef.current?.unlinkSelection()}
                 canLink={selectedElementTargets.length >= 2}
                 canUnlink={selectedElementTargets.length === 1 && (!!selectedElements[0]?.link || isNestedLayer(project, selectedElements[0]?.id ?? ''))}
-                request={selectedElementRequest} setRequest={data => setCanvasElementRequest(selectedElements[0].id, data)} updateContext={updateCanvasElementContext}
+                request={selectedElementRequest} setRequest={data => setCanvasElementRequest(selectedElements[0].id, data)}
                 generate={() => generate(selectedElements.map(element => element.id))} error={setError}
                 behaviour={elementBehaviourSource ? behaviourProps(elementBehaviourSource) : undefined} />
           : selectedBoundary

@@ -184,7 +184,7 @@ function CodeCard({ element }: { element: Element }) {
   </div>;
 }
 
-function ElementBody({ project, pageId, element, flow, editingId, movingRects }: { project: Project; pageId: string; element: Element; flow: boolean; editingId: string | null; movingRects?: Record<string, Rect> }) {
+function ElementBody({ project, pageId, element, editingId, movingRects }: { project: Project; pageId: string; element: Element; editingId: string | null; movingRects?: Record<string, Rect> }) {
   const children = element.children.length > 0 && element.kind !== 'group'
     ? <ElementChildren project={project} pageId={pageId} element={element} editingId={editingId} movingRects={movingRects} />
     : element.children.length > 0
@@ -240,7 +240,7 @@ export function ElementView({ project, pageId, element, flow, editingId, root, m
   if (!element.visible) return null;
   const data = { 'data-element': element.id, 'data-element-kind': element.kind, 'data-element-group': element.kind === 'group' ? 'true' : undefined, 'data-element-root': root ? 'true' : undefined };
   return <div {...data} style={wrapperStyle(element, flow, movingRects?.[element.id] ?? element.rect, parentLayout)} className={`canvas-element canvas-element-${element.kind}${element.locked ? ' locked' : ''}`}>
-    <ElementBody project={project} pageId={pageId} element={element} flow={flow} editingId={editingId} movingRects={movingRects} />
+    <ElementBody project={project} pageId={pageId} element={element} editingId={editingId} movingRects={movingRects} />
   </div>;
 }
 

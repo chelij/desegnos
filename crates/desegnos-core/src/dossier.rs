@@ -101,7 +101,10 @@ impl GenerationDossier {
             targets: snapshot
                 .target_ids()?
                 .into_iter()
-                .map(|(page_id, element_id)| DossierTarget { page_id, element_id })
+                .map(|(page_id, element_id)| DossierTarget {
+                    page_id,
+                    element_id,
+                })
                 .collect(),
             decision_proposals: candidate.decision_proposals.clone(),
             criticism,

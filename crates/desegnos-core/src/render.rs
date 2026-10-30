@@ -552,15 +552,17 @@ fn build_scene(project: &Project, page: &RenderPage<'_>) -> Scene {
     let mut fonts = FontSet::new();
     let mut items = Vec::new();
     for element in &page.elements {
-        let rect = sized_in(&mut fonts, element, Rect { x: 0.0, y: 0.0, width: page.width, height: page.height });
-        paint_element(
-            project,
-            &mut scene,
+        let rect = sized_in(
             &mut fonts,
             element,
-            rect,
-            &mut items,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: page.width,
+                height: page.height,
+            },
         );
+        paint_element(project, &mut scene, &mut fonts, element, rect, &mut items);
     }
     scene.items.push(Item::Group(Group {
         clip: Some(Clip {
@@ -646,13 +648,14 @@ fn paint_element(
         return;
     }
     let degrees = element.rotation % 360.0;
-    let transform = (degrees.abs() > 0.000_001 || element.style.flip_x || element.style.flip_y).then_some(LayerTransform {
-        sx: if element.style.flip_x { -1.0 } else { 1.0 },
-        sy: if element.style.flip_y { -1.0 } else { 1.0 },
-        degrees,
-        cx: at.x + at.width / 2.0,
-        cy: at.y + at.height / 2.0,
-    });
+    let transform = (degrees.abs() > 0.000_001 || element.style.flip_x || element.style.flip_y)
+        .then_some(LayerTransform {
+            sx: if element.style.flip_x { -1.0 } else { 1.0 },
+            sy: if element.style.flip_y { -1.0 } else { 1.0 },
+            degrees,
+            cx: at.x + at.width / 2.0,
+            cy: at.y + at.height / 2.0,
+        });
     out.push(Item::Group(Group {
         clip: None,
         transform,
@@ -672,7 +675,10 @@ fn layer_radius(element: &Element) -> f64 {
 
 /// Whether an element's own content is cut to its box, matching the canvas's `overflow` rule.
 fn clips_content(kind: &ElementKind) -> bool {
-    !matches!(kind, ElementKind::Box | ElementKind::Group | ElementKind::Line)
+    !matches!(
+        kind,
+        ElementKind::Box | ElementKind::Group | ElementKind::Line
+    )
 }
 
 fn shadow_of(style: &ElementStyle, kind: &ElementKind, at: Rect, radius: f64) -> Option<Item> {
@@ -1008,13 +1014,23 @@ fn effective_padding(element: &Element, fallback: f64) -> crate::ElementPadding 
 
 /// Space offered to children, including borders, layout padding and grid column widths.
 fn child_content_rect(element: &Element, at: Rect) -> Rect {
-    let content = inset(at, stroke_of(&element.style).map_or(0.0, |(_, width)| width));
+    let content = inset(
+        at,
+        stroke_of(&element.style).map_or(0.0, |(_, width)| width),
+    );
     match element.layout {
         ElementLayout::Free => content,
-        ElementLayout::Stack { padding, .. } => inset_sides(content, effective_padding(element, padding)),
-        ElementLayout::Grid { columns, gap, padding } => {
+        ElementLayout::Stack { padding, .. } => {
+            inset_sides(content, effective_padding(element, padding))
+        }
+        ElementLayout::Grid {
+            columns,
+            gap,
+            padding,
+        } => {
             let mut inner = inset_sides(content, effective_padding(element, padding));
-            inner.width = ((inner.width - gap * columns.saturating_sub(1) as f64) / columns as f64).max(0.0);
+            inner.width =
+                ((inner.width - gap * columns.saturating_sub(1) as f64) / columns as f64).max(0.0);
             inner
         }
     }
@@ -1127,7 +1143,10 @@ fn resolve_auto_size(
         }
         if at.height <= 0.0 || fit_height {
             let width = if fit_width {
-                let content = inset(at, stroke_of(&element.style).map_or(0.0, |(_, width)| width));
+                let content = inset(
+                    at,
+                    stroke_of(&element.style).map_or(0.0, |(_, width)| width),
+                );
                 text_box(element, content).0.width
             } else {
                 at.width
@@ -1142,7 +1161,12 @@ fn resolve_auto_size(
         // A Hug parent has no definite width yet: use its containing space rather than its
         // previous stored width, so edits can both grow and shrink the intrinsic content.
         let offered = if fit_width {
-            Rect { width: sizing.max_width.map_or(available_width, |max| max.min(available_width)), ..at }
+            Rect {
+                width: sizing
+                    .max_width
+                    .map_or(available_width, |max| max.min(available_width)),
+                ..at
+            }
         } else {
             at
         };
@@ -1152,7 +1176,11 @@ fn resolve_auto_size(
             .iter()
             .filter(|c| c.visible)
             .map(|c| {
-                let offset = if element.layout.is_free() { c.rect.x } else { 0.0 };
+                let offset = if element.layout.is_free() {
+                    c.rect.x
+                } else {
+                    0.0
+                };
                 resolve_auto_size(fonts, c, c.rect, (inner.width - offset).max(0.0))
             })
             .collect();
@@ -1264,7 +1292,12 @@ pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
                 sized_in(fonts, element, parent)
             };
             let inner = child_content_rect(element, rect);
-            measure_tree(fonts, &mut element.children, inner, !element.layout.is_free());
+            measure_tree(
+                fonts,
+                &mut element.children,
+                inner,
+                !element.layout.is_free(),
+            );
             // Children may have grown taller after wrapping; remeasure Hug parents afterwards.
             rect = resolve_auto_size(fonts, element, rect, available);
             if element.style.sizing.width == crate::SizingMode::Fit {
@@ -1315,29 +1348,64 @@ pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
             .iter()
             .map(|(id, definition)| {
                 let mut elements = crate::elements::resolve_elements(
-                    project, std::slice::from_ref(&definition.master),
+                    project,
+                    std::slice::from_ref(&definition.master),
                 );
                 crate::elements::resolve_shared_styles(project, &mut elements);
-                measure_tree(fonts, &mut elements, Rect { x: 0.0, y: 0.0, width: f64::INFINITY, height: f64::INFINITY }, false);
+                measure_tree(
+                    fonts,
+                    &mut elements,
+                    Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: f64::INFINITY,
+                        height: f64::INFINITY,
+                    },
+                    false,
+                );
                 (*id, elements)
             })
             .collect();
         for (id, elements) in definitions {
             if let Some(definition) = project.linked.get_mut(&id) {
-                write_tree(std::slice::from_mut(&mut definition.master), &elements, None);
+                write_tree(
+                    std::slice::from_mut(&mut definition.master),
+                    &elements,
+                    None,
+                );
             }
         }
         for index in 0..project.pages.len() {
             let page = &project.pages[index];
             let mut base = crate::elements::resolve_elements(project, &page.elements);
             crate::elements::resolve_shared_styles(project, &mut base);
-            measure_tree(fonts, &mut base, Rect { x: 0.0, y: 0.0, width: page.base_size().width as f64, height: page.base_size().height as f64 }, false);
+            measure_tree(
+                fonts,
+                &mut base,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: page.base_size().width as f64,
+                    height: page.base_size().height as f64,
+                },
+                false,
+            );
             let sizes: Vec<_> = page
                 .sizes
                 .iter()
                 .map(|size| {
                     let mut elements = crate::elements::resolve_for_size(project, page, size.id);
-                    measure_tree(fonts, &mut elements, Rect { x: 0.0, y: 0.0, width: size.width as f64, height: size.height as f64 }, false);
+                    measure_tree(
+                        fonts,
+                        &mut elements,
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: size.width as f64,
+                            height: size.height as f64,
+                        },
+                        false,
+                    );
                     (size.id, elements)
                 })
                 .collect();
@@ -1579,7 +1647,9 @@ fn resolve_font_uncached(family: &str, weight: u16, italic: bool) -> ResolvedFon
     // A missing serif or monospace family keeps its kind through the installed generic face,
     // the same kind the web export names as its fallback.
     let inferred = crate::export::generic_fallback(family);
-    let candidates = family.split(',').chain((inferred != "sans-serif").then_some(inferred));
+    let candidates = family
+        .split(',')
+        .chain((inferred != "sans-serif").then_some(inferred));
     for requested in candidates {
         let name = requested.trim().trim_matches(['"', '\'']).trim();
         if name.eq_ignore_ascii_case("Archivo") {
@@ -1628,14 +1698,52 @@ fn system_fonts() -> Database {
     let mut database = Database::new();
     database.load_system_fonts();
     let installed = |name: &str| {
-        database.faces().any(|face| face.families.iter().any(|(family, _)| family.eq_ignore_ascii_case(name)))
+        database.faces().any(|face| {
+            face.families
+                .iter()
+                .any(|(family, _)| family.eq_ignore_ascii_case(name))
+        })
     };
     let pick = |candidates: &[&str]| {
-        candidates.iter().find(|name| installed(name)).map_or("Desegnos no generic font", |name| *name).to_owned()
+        candidates
+            .iter()
+            .find(|name| installed(name))
+            .map_or("Desegnos no generic font", |name| *name)
+            .to_owned()
     };
-    let sans = pick(&["Arial", "Helvetica", "Liberation Sans", "Arimo", "DejaVu Sans", "Noto Sans", "Nimbus Sans", "Cantarell", "Roboto", "Ubuntu"]);
-    let serif = pick(&["Times New Roman", "Times", "Liberation Serif", "Tinos", "DejaVu Serif", "Noto Serif", "Nimbus Roman", "Georgia"]);
-    let mono = pick(&["Courier New", "Menlo", "Consolas", "Liberation Mono", "Cousine", "DejaVu Sans Mono", "Noto Sans Mono", "Nimbus Mono PS", "Ubuntu Mono"]);
+    let sans = pick(&[
+        "Arial",
+        "Helvetica",
+        "Liberation Sans",
+        "Arimo",
+        "DejaVu Sans",
+        "Noto Sans",
+        "Nimbus Sans",
+        "Cantarell",
+        "Roboto",
+        "Ubuntu",
+    ]);
+    let serif = pick(&[
+        "Times New Roman",
+        "Times",
+        "Liberation Serif",
+        "Tinos",
+        "DejaVu Serif",
+        "Noto Serif",
+        "Nimbus Roman",
+        "Georgia",
+    ]);
+    let mono = pick(&[
+        "Courier New",
+        "Menlo",
+        "Consolas",
+        "Liberation Mono",
+        "Cousine",
+        "DejaVu Sans Mono",
+        "Noto Sans Mono",
+        "Nimbus Mono PS",
+        "Ubuntu Mono",
+    ]);
     database.set_sans_serif_family(sans.clone());
     database.set_serif_family(serif);
     database.set_monospace_family(mono);
@@ -2113,8 +2221,15 @@ fn write_items(svg: &mut String, scene: &Scene, items: &[Item], ids: &mut SvgIds
                     let reflection = if transform.sx == 1.0 && transform.sy == 1.0 {
                         String::new()
                     } else {
-                        format!(" translate({:.3} {:.3}) scale({} {}) translate({:.3} {:.3})",
-                            transform.cx, transform.cy, transform.sx, transform.sy, -transform.cx, -transform.cy)
+                        format!(
+                            " translate({:.3} {:.3}) scale({} {}) translate({:.3} {:.3})",
+                            transform.cx,
+                            transform.cy,
+                            transform.sx,
+                            transform.sy,
+                            -transform.cx,
+                            -transform.cy
+                        )
                     };
                     attributes.push_str(&format!(
                         " transform=\"rotate({:.4} {:.3} {:.3}){}\"",
@@ -2139,7 +2254,15 @@ mod tests {
 
     #[test]
     fn boundary_background_is_painted_in_svg_png_and_pdf() {
-        let mut project = Project::new("Background".into(), crate::Viewport { width: 16, height: 16 }, crate::Appearance::Dark).unwrap();
+        let mut project = Project::new(
+            "Background".into(),
+            crate::Viewport {
+                width: 16,
+                height: 16,
+            },
+            crate::Appearance::Dark,
+        )
+        .unwrap();
         assert_eq!(project.pages[0].background, "#ffffff");
         project.pages[0].background = "#123456".into();
         let page = &project.pages[0];
@@ -2261,16 +2384,26 @@ mod tests {
     fn reflection_moves_a_child_about_the_layer_centre_in_svg_and_png() {
         let mut reflected = scene();
         let child = boxed(&mut reflected, rect(10.0, 10.0, 20.0, 20.0));
-        reflected.items.push(group(Some(LayerTransform {
-            sx: -1.0, sy: 1.0, degrees: 0.0, cx: 50.0, cy: 25.0,
-        }), 1.0, vec![child]));
+        reflected.items.push(group(
+            Some(LayerTransform {
+                sx: -1.0,
+                sy: 1.0,
+                degrees: 0.0,
+                cx: 50.0,
+                cy: 25.0,
+            }),
+            1.0,
+            vec![child],
+        ));
         let mut expected = scene();
         let child = boxed(&mut expected, rect(70.0, 10.0, 20.0, 20.0));
         expected.items.push(child);
         let svg = scene_svg(&reflected);
         assert!(svg.contains("scale(-1 1)"), "{svg}");
-        assert_eq!(rasterize(&svg, reflected.width, reflected.height).unwrap(),
-            rasterize(&scene_svg(&expected), expected.width, expected.height).unwrap());
+        assert_eq!(
+            rasterize(&svg, reflected.width, reflected.height).unwrap(),
+            rasterize(&scene_svg(&expected), expected.width, expected.height).unwrap()
+        );
     }
 
     #[test]
@@ -2336,7 +2469,10 @@ mod tests {
         let content = String::from_utf8_lossy(&pdf);
         assert!(content.contains("/ExtGState"), "opacity states are listed");
         assert!(content.contains(" cm\n"), "the rotation is a matrix");
-        assert!(content.contains("/Subtype /Image"), "the blurred shadow is embedded");
+        assert!(
+            content.contains("/Subtype /Image"),
+            "the blurred shadow is embedded"
+        );
         assert!(content.contains("/SMask"), "the blur has a soft alpha mask");
     }
 
@@ -2378,10 +2514,19 @@ mod tests {
     #[test]
     fn generic_families_resolve_to_faces_that_draw_latin_text() {
         // A symbol font maps the letter 'a' to its Greek alpha glyph.
-        for family in ["serif", "sans-serif", "monospace", "cursive", "fantasy", "Georgia, serif"] {
+        for family in [
+            "serif",
+            "sans-serif",
+            "monospace",
+            "cursive",
+            "fantasy",
+            "Georgia, serif",
+        ] {
             let resolved = resolve_font(family, 400, false);
             let face = Face::parse(&resolved.bytes, resolved.index).unwrap();
-            let glyph = face.glyph_index('a').unwrap_or_else(|| panic!("{family} has no glyph for 'a'"));
+            let glyph = face
+                .glyph_index('a')
+                .unwrap_or_else(|| panic!("{family} has no glyph for 'a'"));
             if let Some(name) = face.glyph_name(glyph) {
                 assert_eq!(name, "a", "{family} draws 'a' with the glyph {name}");
             }
@@ -2491,7 +2636,15 @@ mod tests {
 
     #[test]
     fn fit_text_wraps_at_boundary_and_syncs_the_painted_size() {
-        let mut project = Project::new("Phone".into(), crate::Viewport { width: 390, height: 844 }, crate::Appearance::Dark).unwrap();
+        let mut project = Project::new(
+            "Phone".into(),
+            crate::Viewport {
+                width: 390,
+                height: 844,
+            },
+            crate::Appearance::Dark,
+        )
+        .unwrap();
         let mut heading = text_element("Archivo");
         heading.rect = rect(104.0, 0.0, 800.0, 60.0);
         heading.text = "A heading that wraps inside the phone boundary".into();
@@ -2503,19 +2656,34 @@ mod tests {
         let heading = &project.pages[0].elements[0];
         assert_eq!(heading.rect.width, 286.0);
         let mut fonts = FontSet::new();
-        let lines = wrap_text(&mut fonts, &heading.text, &heading.style.text_style, 286.0, true);
+        let lines = wrap_text(
+            &mut fonts,
+            &heading.text,
+            &heading.style.text_style,
+            286.0,
+            true,
+        );
         assert!(lines.len() > 1);
-        assert_eq!(heading.rect.height, lines.len() as f64 * line_height(&heading.style.text_style));
+        assert_eq!(
+            heading.rect.height,
+            lines.len() as f64 * line_height(&heading.style.text_style)
+        );
         let painted = sized_in(&mut fonts, heading, rect(0.0, 0.0, 390.0, 844.0));
         assert_eq!(painted, heading.rect);
-        assert_eq!(resolve_auto_size(&mut fonts, heading, painted, painted.width), painted);
+        assert_eq!(
+            resolve_auto_size(&mut fonts, heading, painted, painted.width),
+            painted
+        );
         let page = &project.pages[0];
         let svg = boundary_svg(&project, page, page.base_size_id()).unwrap();
         let mut fixed_project = project.clone();
         fixed_project.pages[0].elements[0].style.sizing.width = crate::SizingMode::Fixed;
         fixed_project.pages[0].elements[0].style.sizing.height = crate::SizingMode::Fixed;
         let page = &fixed_project.pages[0];
-        assert_eq!(svg, boundary_svg(&fixed_project, page, page.base_size_id()).unwrap());
+        assert_eq!(
+            svg,
+            boundary_svg(&fixed_project, page, page.base_size_id()).unwrap()
+        );
         let before = project.pages[0].elements[0].rect;
         sync_fit_rects(&mut project);
         assert_eq!(project.pages[0].elements[0].rect, before);
@@ -2527,8 +2695,12 @@ mod tests {
         sync_fit_rects(&mut project);
         assert_eq!(project.pages[0].elements[0].children[0].rect.width, 136.0);
         project.pages[0].elements[0].layout = ElementLayout::Stack {
-            direction: crate::StackDirection::Column, gap: 0.0, padding: 20.0,
-            align: StackAlign::Start, justify: StackJustify::Start, wrap: false,
+            direction: crate::StackDirection::Column,
+            gap: 0.0,
+            padding: 20.0,
+            align: StackAlign::Start,
+            justify: StackJustify::Start,
+            wrap: false,
         };
         sync_fit_rects(&mut project);
         assert_eq!(project.pages[0].elements[0].children[0].rect.width, 200.0);
@@ -2542,7 +2714,13 @@ mod tests {
         assert_eq!(parent.children[0].rect.width, 120.0);
         assert_eq!(parent.rect.height, parent.children[0].rect.height + 40.0);
 
-        for kind in [ElementKind::Button, ElementKind::Link, ElementKind::Input { input_type: crate::InputType::Text }] {
+        for kind in [
+            ElementKind::Button,
+            ElementKind::Link,
+            ElementKind::Input {
+                input_type: crate::InputType::Text,
+            },
+        ] {
             let mut control = project.pages[0].elements[0].children[0].clone();
             control.kind = kind;
             let measured = sized_in(&mut fonts, &control, rect(0.0, 0.0, 390.0, 844.0));
@@ -2552,7 +2730,10 @@ mod tests {
         let mut fixed = project.pages[0].elements[0].children[0].clone();
         fixed.style.sizing.width = crate::SizingMode::Fixed;
         fixed.rect.width = 800.0;
-        assert_eq!(sized_in(&mut fonts, &fixed, rect(0.0, 0.0, 390.0, 844.0)).width, 800.0);
+        assert_eq!(
+            sized_in(&mut fonts, &fixed, rect(0.0, 0.0, 390.0, 844.0)).width,
+            800.0
+        );
     }
 
     #[test]
@@ -2570,7 +2751,14 @@ mod tests {
         parent.children.push(child);
         let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect, f64::INFINITY);
         assert_eq!((hugged.width, hugged.height), (60.0, 40.0));
-        parent.layout = ElementLayout::Stack { direction: crate::StackDirection::Row, gap: 8.0, padding: 4.0, align: StackAlign::Start, justify: StackJustify::Start, wrap: false };
+        parent.layout = ElementLayout::Stack {
+            direction: crate::StackDirection::Row,
+            gap: 8.0,
+            padding: 4.0,
+            align: StackAlign::Start,
+            justify: StackJustify::Start,
+            wrap: false,
+        };
         let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect, f64::INFINITY);
         assert_eq!((hugged.width, hugged.height), (48.0, 38.0));
     }

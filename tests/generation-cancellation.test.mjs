@@ -1,23 +1,15 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { compileModules } from './typescript.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-const temporary = await mkdtemp(join(root, '.generation-cancellation-'));
+const modules = await compileModules(['src/useGeneration.ts']);
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 try {
-  const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/useGeneration.ts'], { cwd: root, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
   // Drive the hook's async actions without a browser. Effects (polling and automatic
   // apply) are deliberately excluded; apply is invoked explicitly at the ready boundary.
-  const compiled = (await readFile(join(temporary, 'useGeneration.js'), 'utf8'))
+  await modules.rewrite('useGeneration.js', source => source
     .replace(/^import .* from 'react';$/m, 'const { useCallback, useEffect, useRef, useState } = globalThis.__generationCancellation.hooks;')
-    .replace(/^import .* from '\.\/api';$/m, 'const native = (...args) => globalThis.__generationCancellation.native(...args);');
-  await writeFile(join(temporary, 'controller.mjs'), compiled);
+    .replace(/^import .* from '\.\/api\.js';$/m, 'const native = (...args) => globalThis.__generationCancellation.native(...args);'));
   let slots = [], cursor = 0, nativeCalls = [];
   globalThis.__generationCancellation = {
     hooks: {
@@ -28,7 +20,7 @@ try {
     },
     async native(command, args) { nativeCalls.push({ command, args }); return { jobId: args.jobId, status: 'cancelled', attempts: [], candidate: null }; },
   };
-  const { useGeneration } = await import(pathToFileURL(join(temporary, 'controller.mjs')).href);
+  const { useGeneration } = await modules.load('useGeneration.js');
   function setup(call, applied = () => {}) {
     slots = []; nativeCalls = [];
     return () => { cursor = 0; return useGeneration('project', call, applied); };
@@ -121,5 +113,5 @@ try {
   });
 } finally {
   delete globalThis.__generationCancellation;
-  await rm(temporary, { recursive: true, force: true });
+  await modules.cleanup();
 }

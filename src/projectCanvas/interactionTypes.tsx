@@ -98,7 +98,6 @@ export type ProjectCanvasProps = {
   removeElements: (elements: { pageId: string; elementId: string }[]) => void;
   deleteBoundary: (pageId: string, sizeId: string | null) => void;
   addRequest: (request: PendingRequest) => Promise<void>;
-  updateRequest: (request: PendingRequest) => Promise<void>;
   selectRequest: (requestId: string) => void;
   addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>;
   updateReference: (itemId: string, patch: { rect?: Rect; text?: string; url?: string; title?: string; color?: string }) => void;
@@ -119,7 +118,7 @@ export type ProjectCanvasProps = {
   updatePointer: (pointerId: string, patch: { from?: PointerSource; to?: PointerTarget; comment?: string; kind?: Pointer['kind'] }) => Promise<unknown>;
   pointerStates: Record<string, PointerStateView>;
   tool: ProjectTool; insertKind: ElementKind | null; onTool: (tool: ProjectTool) => void;
-  boundaryKind: BoundaryToolKind; requestShape: RequestToolShape; onRequestShape: (shape: RequestToolShape) => void; focusedSize: string | null;
+  boundaryKind: BoundaryToolKind; requestShape: RequestToolShape; focusedSize: string | null;
   widthPreview?: { sizeId: string; width: number } | null;
   onZoom: (zoom: number) => void; onLayout: (boundaries: Boundary[]) => void;
   onPlayBoundary: (id: string) => void;

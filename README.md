@@ -12,7 +12,7 @@ Desegnos is a Tauri desktop app: React 19 and TypeScript for the editor, Rust fo
 
 ## What the app does
 
-**One canvas per project.** Boundaries are the outputs: a page, app screen, slide or image. Everything inside a boundary ships at export. Everything outside every boundary is reference for the AI and never ships. Boundaries sit side by side, never overlap, and linked sizes (phone, tablet, desktop) share their elements with per-size overrides.
+**One canvas per project.** Boundaries are the outputs: a page, slide or image. Pages cover websites and app layouts, with growing or fixed heights; Website and App screen remain starter templates. Everything inside a boundary ships at export. Everything outside every boundary is reference for the AI and never ships. Boundaries sit side by side, never overlap, and linked sizes (phone, tablet, desktop) share their elements with per-size overrides.
 
 **Elements, layers and requests.** Boxes, text, shapes, lines, images, buttons, links, form controls, video, embeds and code blocks are visual elements. A box can lay its children out freely, in a stack or in a grid. A layer is one element or a group, with its own AI request history and context. A request picks targets or covers an area; the AI returns editable elements.
 

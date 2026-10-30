@@ -5,7 +5,7 @@ import { useCanvasFont } from './fonts';
 import { ATTACHMENT_ACCEPT, readRequestAttachments } from '../requestAttachments';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
-import { CompactNumberField, CompactTextField } from '../CompactField';
+import { CompactNumberField, CompactTextField, fieldKeys, useFieldDraft } from '../CompactField';
 import { normalizeAngle } from '../numberExpression';
 import { ChoiceRow, PropsSection, BehaviourField, type BehaviourProperty } from '../EditorDock';
 import { Icon } from '../icons';
@@ -27,28 +27,6 @@ function stylePatches(elements: Element[], change: (style: ElementStyle) => void
     change(style);
     return { id: element.id, style };
   });
-}
-
-function useDraft(value: string) {
-  const [draft, setDraft] = useState(value);
-  const cancelled = useRef(false);
-  useEffect(() => { setDraft(value); }, [value]);
-  const settle = (commit: (draft: string) => void, valid?: (draft: string) => boolean) => {
-    if (cancelled.current) { cancelled.current = false; setDraft(value); return; }
-    if (draft === value) return;
-    if (!valid || valid(draft)) commit(draft); else setDraft(value);
-  };
-  return { draft, setDraft, settle, cancel: () => { cancelled.current = true; setDraft(value); } };
-}
-
-function keyDown(settle: () => void, cancel: () => void) {
-  return (event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && !(event.currentTarget instanceof HTMLTextAreaElement && event.shiftKey)) {
-      event.preventDefault(); settle(); event.currentTarget.blur();
-    } else if (event.key === 'Escape') {
-      event.preventDefault(); cancel(); event.currentTarget.blur();
-    }
-  };
 }
 
 /** Opacity reads as a percentage, stays stored as 0-1, and previews on a slim slider beside it. */
@@ -75,11 +53,11 @@ function OpacityField({ value, disabled, commit }: { value: number | undefined; 
 }
 
 function LongTextField({ label, placeholder, value, commit, rows }: { label: string; placeholder?: string; value: string; commit: (value: string) => void; rows?: number }) {
-  const state = useDraft(value);
+  const state = useFieldDraft(value, commit);
   return <textarea className="props-textarea" value={state.draft} rows={rows ?? 3} maxLength={16384} aria-label={label} placeholder={placeholder ?? label}
     onChange={event => state.setDraft(event.target.value)}
-    onBlur={() => state.settle(commit)}
-    onKeyDown={keyDown(() => state.settle(commit), state.cancel)} />;
+    onBlur={state.settle}
+    onKeyDown={fieldKeys(state.settle, state.cancel)} />;
 }
 
 function CodeField({ language, source, commit }: { language: string; source: string; commit: (source: string) => void }) {
@@ -195,16 +173,15 @@ function PaddingFields({ uniform, sides, disabled, change }: {
   </>;
 }
 
-export function ElementProperties({ project, page, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error, styleCommand, behaviour }: {
+export function ElementProperties({ project, page, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, generate, error, styleCommand, behaviour }: {
   styleCommand?: (command: import('../types').Command) => Promise<unknown>;
   behaviour?: BehaviourProperty;
-  project: Project; page: Page; pageId: string; sizeId: string | null; elements: Element[]; busy: boolean;
+  project: Project; page: Page; sizeId: string | null; elements: Element[]; busy: boolean;
   update: (patches: ElementPatch[]) => void;
   rename: (name: string | null) => Promise<void>;
   link: () => void; unlink: () => void; canLink: boolean; canUnlink: boolean;
   request: PendingRequest | null;
   setRequest: (data: { text: string; attachments: RequestAttachment[] } | null) => void;
-  updateContext: (elementId: string, context: RequestAttachment[]) => void;
   generate: () => void;
   error: (message: string) => void;
 }) {
@@ -470,4 +447,3 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
     {!single && <p className="dock-hint">{elements.map(element => elementKindLabel(element)).filter((label, index, all) => all.indexOf(label) === index).join(', ')}</p>}
   </div>;
 }
-

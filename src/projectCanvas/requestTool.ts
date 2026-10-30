@@ -155,7 +155,7 @@ export function createRequestTool(context: () => Context) {
   }
 
   return {
-    requestTargetAt, requestEditorScreen, closeRequestArea, targetForSelection, startRequestOnSelection,
+    requestTargetAt, requestEditorScreen, closeRequestArea, startRequestOnSelection,
     startRequestFromShape, submitRequestDraft, cancelRequestDraft,
   };
 }

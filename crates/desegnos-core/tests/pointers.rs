@@ -155,11 +155,19 @@ fn broken_detection_survives_deletion_and_reference_cards() {
     );
     let states = removed.pointer_states();
     assert_eq!(
-        states.iter().find(|state| state.id == pointer_id).unwrap().state,
+        states
+            .iter()
+            .find(|state| state.id == pointer_id)
+            .unwrap()
+            .state,
         PointerState::Broken
     );
     assert_eq!(
-        states.iter().find(|state| state.id == url_id).unwrap().state,
+        states
+            .iter()
+            .find(|state| state.id == url_id)
+            .unwrap()
+            .state,
         PointerState::Broken
     );
     assert_eq!(desegnos_core::broken_pointers(&removed).len(), 2);
@@ -244,7 +252,11 @@ fn pointers_from_one_source_with_different_comments_clash() {
         },
     );
     assert_eq!(resolved.pointers.len(), 1);
-    let kept = resolved.pointers.iter().find(|item| item.id == first).unwrap();
+    let kept = resolved
+        .pointers
+        .iter()
+        .find(|item| item.id == first)
+        .unwrap();
     assert_eq!(kept.comment, "Toggles the menu");
     assert!(
         resolved
@@ -265,7 +277,13 @@ fn states_distinguish_changed_code_changed_comments_and_wired_pointers() {
     let project = apply(
         &project,
         Command::AddPointer {
-            pointer: pointer(pointer_id, page, element_id, target.clone(), "Open the menu"),
+            pointer: pointer(
+                pointer_id,
+                page,
+                element_id,
+                target.clone(),
+                "Open the menu",
+            ),
         },
     );
     let fingerprint = "a".repeat(64);
@@ -301,10 +319,7 @@ fn states_distinguish_changed_code_changed_comments_and_wired_pointers() {
     };
     assert_eq!(state(&project, &BTreeMap::new()), PointerState::Wired);
     assert_eq!(
-        state(
-            &project,
-            &BTreeMap::from([(pointer_id, "b".repeat(64))])
-        ),
+        state(&project, &BTreeMap::from([(pointer_id, "b".repeat(64))])),
         PointerState::CodeChanged
     );
 

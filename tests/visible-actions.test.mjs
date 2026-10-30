@@ -1,33 +1,19 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { compileModules, root } from './typescript.mjs';
 
 // A control is left out of a surface when, in the current state, it cannot change what the
 // user sees. These checks cover the rule itself and each surface that applies it.
-const root = fileURLToPath(new URL('../', import.meta.url));
 const read = async name => name === 'App.tsx'
   ? (await Promise.all(['App.tsx', 'session/useEditor.tsx', 'session/projectCommands.ts', 'editorShortcuts.ts'].map(file => readFile(join(root, 'src', file), 'utf8')))).join('\n')
   : readFile(join(root, 'src', name), 'utf8');
-const temporary = await mkdtemp(join(root, '.visible-actions-'));
+const modules = await compileModules(['src/visibleActions.ts']);
 try {
-  const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022',
-    '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/visibleActions.ts'], { cwd: root, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { projectHasPreviewPages, requestEditorOpen, showsOpener } = await import(pathToFileURL(join(temporary, 'visibleActions.js')).href);
+  const { projectHasPreviewPages, showsOpener } = await modules.load('visibleActions.js');
 
-  await test('a request editor is open only for the selected layer that holds focus', () => {
-    const open = { selectedElementId: 'box-1', focusedElementId: 'box-1' };
-    assert.equal(requestEditorOpen('box-1', open), true);
-    assert.equal(requestEditorOpen('box-2', open), false, 'another selected layer is not being edited');
-    assert.equal(requestEditorOpen('box-1', { selectedElementId: 'box-1', focusedElementId: null }), false);
-    assert.equal(requestEditorOpen('box-1', { selectedElementId: 'box-2', focusedElementId: 'box-1' }), false);
-    assert.equal(requestEditorOpen(null, open), false);
-    assert.equal(requestEditorOpen(undefined, { selectedElementId: null, focusedElementId: null }), false);
-  });
+
 
   await test('an opener is shown only while the surface it opens is closed', () => {
     assert.equal(showsOpener({ available: true, open: false }), true);
@@ -53,7 +39,7 @@ try {
     assert.match(app, /showsOpener\(\{ available: !aiConnected, open: showAiSettings \}\)/);
     assert.match(app, /showsOpener\(\{ available: !onStartPage && !!project && !!\(generation\.job \|\| generation\.operation\), open: showLog \}\)/);
     assert.match(app, /showsOpener\(\{ available: true, open: showGridSettings \}\)/);
-    assert.ok((app.match(/showsOpener\(\{ available: true, open: showLog \}\)/g) ?? []).length >= 2, 'Details stands down while the log is open');
+    assert.match(app, /showsOpener\(\{ available: true, open: showLog \}\)/, 'Details stands down while the log is open');
     assert.doesNotMatch(app, /aria-pressed=\{showLog\}/);
   });
 
@@ -64,16 +50,7 @@ try {
     assert.match(app, /command === 'undo_project' \? workspace\?\.canUndo : workspace\?\.canRedo/);
   });
 
-  await test('the AI log and status bar leave out Change request for the open request', async () => {
-    const log = await read('GenerationLog.tsx');
-    assert.match(log, /requestEditorOpen\?: \(elementId: string\) => boolean/);
-    assert.match(log, /!requestEditorOpen\?\.\(item\.elementId\)/);
-    assert.match(log, />Change request<\/button>/);
-    const generation = await read('Generation.tsx');
-    assert.match(generation, /!requestEditorOpen\?\.\(blocked\.elementId\)/);
-    assert.match(generation, />Change request<\/button>/);
-    assert.match(await read('App.tsx'), /requestEditorOpen=\{requestEditorIsOpen\}/);
-  });
+
 
   await test('a notice that closes itself has no second close beside it', async () => {
     const banner = await read('ProblemBanner.tsx');
@@ -174,5 +151,5 @@ try {
     }
   });
 } finally {
-  await rm(temporary, { recursive: true, force: true });
+  await modules.cleanup();
 }

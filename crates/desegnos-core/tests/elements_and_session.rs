@@ -85,13 +85,15 @@ fn element_validation_rejects_bad_geometry_kind_content_and_duplicates() {
     broken.rect.width = f64::NAN;
     assert!(insert(&project, vec![broken]).is_err());
 
-    let image = element(Uuid::new_v4(), ElementKind::Image, rect(0.0, 0.0, 10.0, 10.0));
+    let image = element(
+        Uuid::new_v4(),
+        ElementKind::Image,
+        rect(0.0, 0.0, 10.0, 10.0),
+    );
     assert!(insert(&project, vec![image]).is_err());
 
     let mut text_with_child = text(Uuid::new_v4(), "parent");
-    text_with_child
-        .children
-        .push(text(Uuid::new_v4(), "child"));
+    text_with_child.children.push(text(Uuid::new_v4(), "child"));
     assert!(insert(&project, vec![text_with_child]).is_err());
 
     let select = element(
@@ -162,7 +164,10 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
         )
         .unwrap();
     assert_eq!(step(&session), before + 1);
-    assert_eq!(session.project().element(text_id).unwrap().1.text, "Changed");
+    assert_eq!(
+        session.project().element(text_id).unwrap().1.text,
+        "Changed"
+    );
     assert_eq!(session.project().element(text_id).unwrap().1.rect.x, 30.0);
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().element(text_id).unwrap().1.text, "Hello");
@@ -196,7 +201,15 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
     );
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().element(text_id).unwrap().1.rect.x, 10.0);
-    assert!(session.project().element(box_id).unwrap().1.children.is_empty());
+    assert!(
+        session
+            .project()
+            .element(box_id)
+            .unwrap()
+            .1
+            .children
+            .is_empty()
+    );
 
     // Remove one layer.
     let before = step(&session);
@@ -218,14 +231,24 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
 
 #[test]
 fn group_and_ungroup_are_one_undo_step_each() {
-    let mut session = Session::new(insert(
-        &project(),
-        vec![
-            element(Uuid::new_v4(), ElementKind::Box, rect(10.0, 10.0, 100.0, 80.0)),
-            element(Uuid::new_v4(), ElementKind::Box, rect(150.0, 50.0, 60.0, 60.0)),
-        ],
+    let mut session = Session::new(
+        insert(
+            &project(),
+            vec![
+                element(
+                    Uuid::new_v4(),
+                    ElementKind::Box,
+                    rect(10.0, 10.0, 100.0, 80.0),
+                ),
+                element(
+                    Uuid::new_v4(),
+                    ElementKind::Box,
+                    rect(150.0, 50.0, 60.0, 60.0),
+                ),
+            ],
+        )
+        .unwrap(),
     )
-    .unwrap())
     .unwrap();
     let page = page_id(session.project());
     let ids: Vec<Uuid> = session
@@ -361,17 +384,13 @@ fn linked_copies_resolve_one_definition_and_edit_together() {
     assert_eq!(resolved_right.children[0].text, "Shared");
     assert_eq!(resolved_left.rect.x, 0.0);
     assert_eq!(resolved_right.rect.x, 300.0);
-    assert_eq!(
-        resolved_left.children[0].id,
-        nested_element_id(left, &[0])
-    );
+    assert_eq!(resolved_left.children[0].id, nested_element_id(left, &[0]));
     assert_eq!(
         resolved_right.children[0].id,
         nested_element_id(right, &[0])
     );
     assert_ne!(
-        resolved_left.children[0].id,
-        resolved_right.children[0].id,
+        resolved_left.children[0].id, resolved_right.children[0].id,
         "each copy keeps its own nested ids"
     );
 
@@ -408,13 +427,7 @@ fn linked_copies_resolve_one_definition_and_edit_together() {
     assert!(next.element_subtree_ids(left).contains(&nested_id));
 
     // Unlinking one copy detaches it with the current content.
-    let unlinked = apply(
-        &next,
-        Command::UnlinkElements {
-            ids: vec![left],
-        },
-    )
-    .unwrap();
+    let unlinked = apply(&next, Command::UnlinkElements { ids: vec![left] }).unwrap();
     assert!(unlinked.element(left).unwrap().1.link.is_none());
     assert!(!unlinked.element(left).unwrap().1.children.is_empty());
     assert_eq!(
@@ -441,25 +454,15 @@ fn linked_copies_resolve_one_definition_and_edit_together() {
 
     let error = apply(
         &unlinked,
-        Command::RemoveLinkedDefinition {
-            id: definition.id,
-        },
+        Command::RemoveLinkedDefinition { id: definition.id },
     )
     .unwrap_err();
     assert!(error.to_string().contains("still used"));
 
-    let unlinked = apply(
-        &unlinked,
-        Command::UnlinkElements {
-            ids: vec![right],
-        },
-    )
-    .unwrap();
+    let unlinked = apply(&unlinked, Command::UnlinkElements { ids: vec![right] }).unwrap();
     apply(
         &unlinked,
-        Command::RemoveLinkedDefinition {
-            id: definition.id,
-        },
+        Command::RemoveLinkedDefinition { id: definition.id },
     )
     .unwrap();
 }
@@ -473,9 +476,11 @@ fn linking_creates_a_named_definition_when_unnamed() {
     start.pages[0]
         .elements
         .push(element(left, ElementKind::Box, rect(0.0, 0.0, 50.0, 50.0)));
-    start.pages[0]
-        .elements
-        .push(element(right, ElementKind::Box, rect(60.0, 0.0, 50.0, 50.0)));
+    start.pages[0].elements.push(element(
+        right,
+        ElementKind::Box,
+        rect(60.0, 0.0, 50.0, 50.0),
+    ));
     let project = apply(
         &start,
         Command::LinkElements {
@@ -619,9 +624,19 @@ fn new_layers_are_shared_and_can_still_be_hidden_per_size() {
         .into_iter()
         .find(|element| element.id == added)
         .unwrap();
-    assert!(base_element.visible, "new elements are shared with the base size");
+    assert!(
+        base_element.visible,
+        "new elements are shared with the base size"
+    );
     assert!(phone_element.visible);
-    assert!(!project.element(added).unwrap().1.overrides.contains_key(&base));
+    assert!(
+        !project
+            .element(added)
+            .unwrap()
+            .1
+            .overrides
+            .contains_key(&base)
+    );
 
     // Explicit This size edits can still hide the element in one size without a ghost.
     let mut dismiss = patch(added);
@@ -664,7 +679,12 @@ fn new_layers_are_shared_and_can_still_be_hidden_per_size() {
         .unwrap();
     assert!(phone_element.visible);
     assert!(
-        !included.element(added).unwrap().1.overrides.contains_key(&phone),
+        !included
+            .element(added)
+            .unwrap()
+            .1
+            .overrides
+            .contains_key(&phone),
         "including removed the empty override"
     );
 
@@ -703,13 +723,20 @@ fn new_layers_scale_x_and_only_shrink_width_when_narrower_sizes_need_it() {
             picture_data_uri: None,
             size_id: Some(base),
         },
-    ).unwrap();
+    )
+    .unwrap();
     let page_ref = project.page(page).unwrap();
     let desktop = resolve_for_size(&project, page_ref, base);
     let phone_tree = resolve_for_size(&project, page_ref, phone);
     let desktop_wide = desktop.iter().find(|element| element.id == wide).unwrap();
-    let phone_wide = phone_tree.iter().find(|element| element.id == wide).unwrap();
-    let phone_small = phone_tree.iter().find(|element| element.id == small).unwrap();
+    let phone_wide = phone_tree
+        .iter()
+        .find(|element| element.id == wide)
+        .unwrap();
+    let phone_small = phone_tree
+        .iter()
+        .find(|element| element.id == small)
+        .unwrap();
     assert_eq!(desktop_wide.rect, rect(400.0, 20.0, 300.0, 40.0));
     assert_eq!(phone_wide.rect, rect(195.0, 20.0, 195.0, 40.0));
     assert_eq!(phone_small.rect, rect(48.75, 80.0, 100.0, 40.0));
@@ -1000,20 +1027,38 @@ fn repeated_nudges_use_current_positions_and_share_one_undo_step() {
     let project = insert(&project, vec![layer]).unwrap();
     let mut session = Session::new(project).unwrap();
     for _ in 0..5 {
-        session.execute(session.project().revision, Command::NudgeElements {
-            moves: vec![ElementMove {
-                id, to_page_id: page, to_parent_id: None, index: 0,
-                rect: initial, size_id: None, all_sizes: true,
-            }],
-            dx: 1.0, dy: 0.0,
-        }, |_| Ok(())).unwrap();
+        session
+            .execute(
+                session.project().revision,
+                Command::NudgeElements {
+                    moves: vec![ElementMove {
+                        id,
+                        to_page_id: page,
+                        to_parent_id: None,
+                        index: 0,
+                        rect: initial,
+                        size_id: None,
+                        all_sizes: true,
+                    }],
+                    dx: 1.0,
+                    dy: 0.0,
+                },
+                |_| Ok(()),
+            )
+            .unwrap();
     }
-    assert_eq!(session.project().element(id).unwrap().1.rect.x, initial.x + 5.0);
+    assert_eq!(
+        session.project().element(id).unwrap().1.rect.x,
+        initial.x + 5.0
+    );
     assert_eq!(step(&session), 1);
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().element(id).unwrap().1.rect, initial);
     session.redo(|_| Ok(())).unwrap();
-    assert_eq!(session.project().element(id).unwrap().1.rect.x, initial.x + 5.0);
+    assert_eq!(
+        session.project().element(id).unwrap().1.rect.x,
+        initial.x + 5.0
+    );
 }
 
 #[test]
@@ -1023,15 +1068,43 @@ fn stack_wraps_a_single_text_layer_and_converts_a_box_in_place() {
     let layer = text(Uuid::new_v4(), "Stack");
     let id = layer.id;
     let project = insert(&project, vec![layer]).unwrap();
-    let wrapped = apply(&project, Command::StackElements { page_id: page, ids: vec![id] }).unwrap();
+    let wrapped = apply(
+        &project,
+        Command::StackElements {
+            page_id: page,
+            ids: vec![id],
+        },
+    )
+    .unwrap();
     let container = &wrapped.page(page).unwrap().elements[0];
     assert_eq!(container.kind, ElementKind::Box);
-    assert!(matches!(container.layout, desegnos_core::ElementLayout::Stack { .. }));
+    assert!(matches!(
+        container.layout,
+        desegnos_core::ElementLayout::Stack { .. }
+    ));
     assert_eq!(container.children[0].id, id);
     let box_id = Uuid::new_v4();
-    let project = insert(&project, vec![element(box_id, ElementKind::Box, rect(0.0, 0.0, 200.0, 100.0))]).unwrap();
-    let converted = apply(&project, Command::StackElements { page_id: page, ids: vec![box_id] }).unwrap();
+    let project = insert(
+        &project,
+        vec![element(
+            box_id,
+            ElementKind::Box,
+            rect(0.0, 0.0, 200.0, 100.0),
+        )],
+    )
+    .unwrap();
+    let converted = apply(
+        &project,
+        Command::StackElements {
+            page_id: page,
+            ids: vec![box_id],
+        },
+    )
+    .unwrap();
     let container = converted.element(box_id).unwrap().1;
     assert!(container.children.is_empty());
-    assert!(matches!(container.layout, desegnos_core::ElementLayout::Stack { .. }));
+    assert!(matches!(
+        container.layout,
+        desegnos_core::ElementLayout::Stack { .. }
+    ));
 }

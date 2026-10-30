@@ -13,7 +13,7 @@ One infinite canvas per project. Everything on it is visual: you place elements 
 | **Element** | Text, box, shape, line, image, control… | A visual item that can have children |
 | **Layer** | — | One element, or a collection of elements, with its own AI request history and context |
 | **Request** | A box with what you want in it | A box element the AI fills with visual elements |
-| **Boundary** | A rectangle on empty canvas | An output: a page, slide, image or app screen, with its own size and type |
+| **Boundary** | A rectangle on empty canvas | An output: a page, slide or image, with its own sizes |
 | **Pointer** | A line from an element or boundary to something else | Behaviour or reference, described by its comment |
 | **Reference** | Anything placed outside every boundary | Material the AI can read; never shipped |
 
@@ -86,10 +86,10 @@ For websites and app screens, export compiles the resolved element tree and link
 - Each screen size is its own boundary (phone, tablet, desktop), linked to the others and laid out side by side. Linked sizes share their elements; each size can override position, size and style.
 - Two editing modes on linked sizes, chosen with the **This size / All sizes** control on the selection bar and in the Properties header while the boundary has more than one linked size. **This size** edits that size only; **All sizes** edits every linked size together. The selection highlights in every size it affects. Double-click still enters a group or edits text.
 - New elements are shared and visible in every linked size. Narrower sizes scale the horizontal position and shrink the width only when needed to fit. This size edits can hide an element in an individual size; hidden elements show a faint dashed placeholder until dismissed.
-- Two kinds of boundary. **Screen** has a fixed size, like an app screen or one-screen page; content beyond it scrolls inside. **Page** has a fixed width and grows taller as elements are added.
+- **Page** is the boundary for websites and app layouts. Each linked size has a height setting: **Grow** grows with content; **Fixed** keeps its height and scrolls overflow in web exports. Website and App screen remain starter templates with their existing desktop/tablet/phone sizes. Existing Screen projects keep their names, sizes, content and height behaviour; the editor presents them as Pages.
 - Boundaries never overlap. Moving or growing one pushes its neighbours aside, so every element belongs to exactly one boundary.
 - Boundary **Background** uses the shared swatch and hex control, with white, off-white, light grey, dark grey, near-black and black presets. New boundaries start at `#ffffff`; new text and lines choose readable defaults from background luminance. The editor theme changes only the editor. Canvas and SVG/PNG/PDF/web exports use the boundary background.
-- The toolbar **Export** panel lists every boundary with Include, name, Web/App/Slide/Image and web/app Preview controls. Click a name to select its boundary; Preview also works for excluded web/app boundaries. Folder and export/send controls follow the list.
+- The toolbar **Export** panel lists every boundary with Include, name, Page/Slide/Image and Page Preview controls. Click a name to select its boundary; Preview also works for excluded web/app boundaries. Folder and export/send controls follow the list.
 - Any boundary can be deleted, including the first one drawn. The first remaining included boundary becomes the entry that export opens first and the editor focuses.
 
 ## Rendering, Play and Preview export
@@ -163,7 +163,7 @@ The active tool decides what a click does, as in Photoshop. Each tool has its ow
 | Rectangle / Ellipse / Line | Draw the shape | — |
 | Image | Place a picture | — |
 | Request | Pick targets (default), or draw a request area in the flyout's shape; then type what to make or change | — |
-| Boundary | Draw a Page or Screen boundary | — |
+| Boundary | Draw a Page, Slide or Image boundary | — |
 | Pointer | Drag from an element or boundary to its target | — |
 | Note | Place a reference note | — |
 | Pan | Drag the canvas (or middle-mouse drag from any tool) | — |
