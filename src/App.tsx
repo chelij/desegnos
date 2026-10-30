@@ -86,6 +86,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   } = useEditor({ initialView });
   // Presenting a deck gives the slide the whole window; Esc or Stop brings the editor back.
   const presenting = !onStartPage && !!project && playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
+  const nothingToGenerate = requestedAreas === 0 && pendingImages === 0;
   return <div className={presenting ? 'application editor-shell presenting' : 'application editor-shell'}>
     {showPalette && <CommandPalette commands={paletteCommands} close={() => setShowPalette(false)} />}
     {closeRequest && <ModalDialog title="Close Desegnos?" close={() => { closeRequest.resolve(false); setCloseRequest(null); }}><p>{closeRequest.message}</p><div className="form-actions"><button className="primary" onClick={() => { closeRequest.resolve(false); setCloseRequest(null); }}>Keep editing</button><button className="danger" onClick={() => { closeRequest.resolve(true); setCloseRequest(null); }}>Close Desegnos</button></div></ModalDialog>}
@@ -111,7 +112,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         {!onStartPage && project && <button type="button" className={showExport ? 'icon-button active' : 'icon-button'} aria-pressed={showExport} aria-label="Export" title={withShortcut('Export', 'export')} onClick={() => openExportPanel()}><Icon name="download" /></button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" className="icon-button" aria-label="AI log" title="AI conversation" onClick={() => setShowLog(true)}><Icon name="note" /></button>}
-        {!onStartPage && project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : requestedAreas === 0 && pendingImages === 0 ? 'Describe at least one request first.' : 'Generate the described changes'} disabled={!generation.canStop && ((requestedAreas === 0 && pendingImages === 0) || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : () => generate()}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
+        {!onStartPage && project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : nothingToGenerate ? 'Describe at least one request first.' : working ? 'Wait for the current generation to finish.' : !aiConnected ? 'Connect AI to generate' : 'Generate the described changes'} disabled={!generation.canStop && (nothingToGenerate || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : !aiConnected && !nothingToGenerate ? () => setShowAiSettings(true) : () => generate()}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
       </div>
     </header>
     <SurfaceHost place="banner" />

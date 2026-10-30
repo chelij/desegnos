@@ -114,9 +114,10 @@ try {
     assert.deepEqual(calls.at(-1), ['forget', '/home/design/Shop.desegnos']);
   });
 
-  await test('an empty Recent shows its header and nothing else', () => {
+  await test('an empty Recent is left off the page', () => {
     const html = renderToStaticMarkup(render({ recentProjects: [] }).tree);
-    assert.match(html, />Recent</);
+    assert.doesNotMatch(html, />Recent</);
+    assert.doesNotMatch(html, /start-recents/);
     assert.doesNotMatch(html, /start-recents-table/);
     assert.doesNotMatch(html, /class="start-recent(?: |")/);
     assert.doesNotMatch(html, /No recent projects/);

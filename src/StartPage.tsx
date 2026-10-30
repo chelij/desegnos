@@ -118,9 +118,9 @@ export function StartPage({ busy, create, openProject, recentProjects, openRecen
           <h2 className="start-section-title">Unsaved work</h2>
           {recovery}
         </section>}
-        <section className="start-section start-recents" aria-labelledby="start-recents-title">
+        {orderedRecents.length > 0 && <section className="start-section start-recents" aria-labelledby="start-recents-title">
           <h2 className="start-section-title" id="start-recents-title">Recent</h2>
-          {orderedRecents.length > 0 && <div className="start-table-wrap">
+          <div className="start-table-wrap">
             <table className="start-recents-table">
               <thead><tr>
                 <th scope="col">Name</th>
@@ -147,8 +147,8 @@ export function StartPage({ busy, create, openProject, recentProjects, openRecen
                 </tr>)}
               </tbody>
             </table>
-          </div>}
-        </section>
+          </div>
+        </section>}
       </div>
     </main>
   </div>;

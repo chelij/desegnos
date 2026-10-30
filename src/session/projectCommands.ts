@@ -186,13 +186,13 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function newUntitled(template: CanvasTemplate = 'blank') {
-    const { settle, queue, resolvedTheme, accept, setShowStartPage, setSelected, setCanvasSelection, setCanvasFocus, setNotice, setZoom, canvasRef } = context();
+    const { settle, queue, resolvedTheme, accept, setShowStartPage, setSelected, setCanvasSelection, setCanvasFocus, setZoom, canvasRef } = context();
     await settle();
     await queue(async () => {
       const next = await native<WorkspaceView>('new_untitled_project', { appearance: resolvedTheme, template });
       accept(next);
       setShowStartPage(false);
-      setSelected(null); setCanvasSelection([]); setCanvasFocus(null); setNotice('New untitled project.');
+      setSelected(null); setCanvasSelection([]); setCanvasFocus(null);
       if (next.project) setZoom(initialZoom(next.project.viewport.width, next.project.viewport.height));
       requestAnimationFrame(() => canvasRef.current?.fit());
     });
