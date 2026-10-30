@@ -4,6 +4,7 @@ import { Icon } from '../icons';
 import { POINTER_ARROW_PX, POINTER_BREAK_PX, POINTER_COMMENT_ZOOM, POINTER_HIT_PX, pointerRoute, pointerVisible, screenPoint, type AutoLink, type Boundary, type CanvasCamera, type PointerRoute, type PointerWorld } from '../projectCanvasGeometry';
 import type { Pointer, PointerStateView, Project, Rect } from '../types';
 import { elementBoxes } from './requests';
+import { isBehaviour, type BehaviourEntry } from './behaviours';
 
 export type PointerEntry = { pointer: Pointer; route: PointerRoute };
 
@@ -17,8 +18,10 @@ export function pointerWorld(project: Project, boundaries: Boundary[], moving: {
 }
 
 // Routes every pointer once; hidden ones are dropped unless selected, so editing never hides.
+// A behaviour points at its own layer, so it gets a badge instead of a line.
 export function pointerEntries(pointers: Pointer[], world: PointerWorld, selected: Set<string>, viewport: Rect): PointerEntry[] {
   return pointers.flatMap(pointer => {
+    if (isBehaviour(pointer)) return [];
     const route = pointerRoute(pointer, world);
     if (!route) return [];
     if (!selected.has(pointer.id) && !pointerVisible(route.source, route.target, viewport)) return [];
@@ -125,6 +128,29 @@ function PointerCommentEditor({ pointer, screen, autoFocus, change, changeKind, 
         flushDraft(); text.current?.blur(); close();
       }} />
   </div>;
+}
+
+// Screen pixels at the top-right corner of each layer or boundary that has a behaviour.
+export function BehaviourBadges({ entries, camera, viewport, pointerStates, enabled, onSelect }: {
+  entries: BehaviourEntry[]; camera: CanvasCamera; viewport: Rect;
+  pointerStates: Record<string, PointerStateView>; enabled: boolean; onSelect: (pointer: Pointer) => void;
+}) {
+  return <>
+    {entries.map(({ pointer, rect }) => {
+      if (!pointerVisible(rect, rect, viewport)) return null;
+      const point = screenPoint({ x: rect.x + rect.width, y: rect.y }, camera);
+      const visual = pointerVisual(pointer, pointerStates[pointer.id]);
+      const clash = visual.clash || visual.state === 'broken';
+      const text = pointer.comment.trim();
+      return <button key={pointer.id} type="button" data-behaviour-badge={pointer.id}
+        className={`behaviour-badge${visual.state === 'wired' ? ' built' : ''}${clash ? ' clash' : ''}`}
+        style={{ left: point.x - 4, top: point.y + 4 }} title={text || 'Behaviour'} aria-label={text || 'Behaviour'}
+        onPointerDown={event => event.stopPropagation()}
+        onClick={event => { event.stopPropagation(); if (enabled) onSelect(pointer); }}>
+        <Icon name="code" size={12} />
+      </button>;
+    })}
+  </>;
 }
 
 export function PointerHandles({ entries, camera, selectedId, armed, onStart }: {

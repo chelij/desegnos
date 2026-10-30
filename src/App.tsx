@@ -35,10 +35,11 @@ import { ImportContext } from './ImportContext';
 import { GenerationLog } from './GenerationLog';
 import { HistoryPanel } from './HistoryPanel';
 import { CommandPalette } from './CommandPalette';
-import type { WorkspaceView } from './types';
+import type { Pointer, PointerSource, PointerStateView, WorkspaceView } from './types';
 import { ExportPanel } from './projectCanvas/exportPanel';
 import { idlePlay, playIsActive } from './projectCanvas/play';
 import { sizeLabel } from './projectCanvas/sizes';
+import { behaviourCommand, behaviourFor, behaviourSourceKey } from './projectCanvas/behaviours';
 
 const ignoreCanvasLayout = () => {};
 
@@ -71,7 +72,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     exportJob, exportSending, exportError, chooseExportDestination, runExport, sendExport, cancelExport,
     openExportFolder, openInBrowser, setShowExport, historyEpoch, accept, untitledSave, projectLocation,
     closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
-    keepPointerComment, keepPointerCode, selectedPointerOther, keepPointerThis, mergePointerClash,
+    keepPointerComment, keepPointerCode, keepPointerThis, mergePointerClash,
     selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
     selectedElementTargets, renameCanvasElement, selectedElementRequest, setCanvasElementRequest,
     updateCanvasElementContext, selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
@@ -80,11 +81,43 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     selectedBounds, clashPointers, selectNextPointerClash, zoomPercent, showGridSettings, setShowGridSettings,
     showShortcuts, setShowShortcuts, recovery, showProjectLocation, setShowProjectLocation,
     changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext,
-    setCanvasSelection, setCanvasFocus, showStyleGuide,
+    setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, behaviourFocus, showStyleGuide,
     setShowStyleGuide, showNotes, changeBrief, showRename, setShowRename,
     saveConflict, chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
     refreshAiSettings, updateAiSettings, aiPollingError, compactHistory,
   } = useEditor({ initialView });
+  // Behaviours are ordinary pointers on one layer or boundary; the dock edits their comment.
+  function clashActions(pointer: Pointer, state: PointerStateView | null) {
+    const other = state?.clashWith.length ? (project?.pointers ?? []).find(item => item.id === state.clashWith[0]) ?? null : null;
+    return {
+      keepComment: () => ["codeChanged", "needsExporting"].includes(state?.state ?? '') ? forgetExportPointer(pointer.id) : keepPointerComment(pointer.id),
+      keepCode: () => run(() => keepPointerCode(pointer.id)),
+      keepThis: () => { if (other) keepPointerThis(pointer.id, other.id); },
+      merge: () => { if (other) mergePointerClash(pointer, other); },
+      reattach: () => canvasRef.current?.armPointer(pointer.id),
+      remove: () => removeCanvasSelection([], [pointer.id]),
+    };
+  }
+  function behaviourProps(source: PointerSource) {
+    const pointer = project ? behaviourFor(project, source) : null;
+    const state = pointer ? pointerStateMap[pointer.id] ?? null : null;
+    const key = behaviourSourceKey(source);
+    return {
+      project: project!,
+      pointer, state,
+      commit: (comment: string) => {
+        const command = behaviourCommand(pointer, source, comment);
+        if (command) void mutate(command).catch(() => {});
+      },
+      focusToken: behaviourFocus?.source === key ? behaviourFocus.token : null,
+      busy: pending > 0, aiConnected,
+      actions: pointer ? clashActions(pointer, state) : undefined,
+    };
+  }
+  const elementBehaviourSource = project && selectedElementPageId && selectedElements.length === 1
+    ? { kind: 'element' as const, pageId: selectedElementPageId, elementId: selectedElements[0].id }
+    : null;
+  const boundaryBehaviourSource = project && selectedBoundary ? { kind: 'boundary' as const, pageId: selectedBoundary.id } : null;
   // Presenting a deck gives the slide the whole window; Esc or Stop brings the editor back.
   const presenting = !onStartPage && !!project && playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
   const playingPage = playIsActive(play) && project ? project.pages.find(page => page.id === play.boundary) ?? null : null;
@@ -119,7 +152,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         {!onStartPage && project && <><button aria-label="Undo last change" type="button" className="icon-button" disabled={!view?.canUndo} title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}><Icon name="undo" /></button><button aria-label="Redo last change" type="button" className="icon-button" disabled={!view?.canRedo} title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}><Icon name="redo" /></button>
           <button type="button" className={showHistory ? 'icon-button active' : 'icon-button'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
         {!onStartPage && project && <button type="button" className={`icon-button labeled${playIsActive(play) ? ' active' : ''}`} aria-pressed={playIsActive(play)} aria-label={playIsActive(play) ? 'Stop Play' : 'Play'} title={withShortcut(playIsActive(play) ? 'Stop Play' : 'Play', 'play')} onClick={() => playIsActive(play) ? setPlay(idlePlay) : togglePlay()}><Icon name={playIsActive(play) ? 'stop' : 'play'} /><span className="button-label">{playIsActive(play) ? 'Stop' : 'Play'}</span></button>}
-        {previewAvailable && <button type="button" className="icon-button labeled" aria-label="Preview export" title={withShortcut('Preview export', 'preview')} onClick={previewSelectedBoundary}><Icon name="monitor" /><span className="button-label">Preview</span></button>}
+        {previewAvailable && <button type="button" className="icon-button labeled" aria-label="Preview export" title={withShortcut('Preview export', 'preview')} onClick={() => previewSelectedBoundary()}><Icon name="monitor" /><span className="button-label">Preview</span></button>}
         {!onStartPage && project && <button type="button" className={`icon-button labeled${showExport ? ' active' : ''}`} aria-pressed={showExport} aria-label="Export" title={withShortcut('Export', 'export')} onClick={() => openExportPanel()}><Icon name="download" /><span className="button-label">Export</span></button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" className="icon-button" aria-label="AI log" title="AI conversation" onClick={() => setShowLog(true)}><Icon name="note" /></button>}
@@ -159,7 +192,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <SurfaceHost place="canvas" />
       <NoticeHost />
       {playIsActive(play) && !presenting && playingLabel && <div className="play-pill" role="status"><span className="play-pill-label">Playing {playingLabel}</span><button type="button" onClick={() => setPlay(idlePlay)}>Stop</button></div>}
-      <ProjectCanvas ref={canvasRef} editProject={mutate} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} widthPreview={widthPreview} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} updateRequest={updateCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} requestShape={requestToolShape} onRequestShape={setRequestToolShape} onZoom={reportCanvasZoom} onLayout={ignoreCanvasLayout}
+      <ProjectCanvas ref={canvasRef} editProject={mutate} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} widthPreview={widthPreview} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} updateRequest={updateCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} focusBehaviour={focusCanvasBehaviour} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} requestShape={requestToolShape} onRequestShape={setRequestToolShape} onZoom={reportCanvasZoom} onLayout={ignoreCanvasLayout}
         selectElement={selectCanvasElement} removeElements={items => removeCanvasSelection([], [], [], items)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
         linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
@@ -190,11 +223,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
           ? <PointerProperties pointer={selectedPointer} project={project} state={selectedPointerState} busy={pending > 0} rewriting={false}
               aiConnected={aiConnected} connectAi={() => setShowAiSettings(true)}
               change={comment => updateCanvasPointer(selectedPointer.id, { comment })}
-              keepComment={() => ["codeChanged", "needsExporting"].includes(selectedPointerState?.state ?? '') ? forgetExportPointer(selectedPointer.id) : keepPointerComment(selectedPointer.id)}
-              keepCode={() => run(() => keepPointerCode(selectedPointer.id))}
-              keepThis={() => selectedPointerOther && keepPointerThis(selectedPointer.id, selectedPointerOther.id)}
-              merge={() => selectedPointerOther && mergePointerClash(selectedPointer, selectedPointerOther)}
-              reattach={() => canvasRef.current?.armPointer(selectedPointer.id)} remove={() => removeCanvasSelection([], [selectedPointer.id])} />
+              actions={clashActions(selectedPointer, selectedPointerState)} />
           : selectedReferenceItem
           ? <ReferenceProperties item={selectedReferenceItem} busy={pending > 0} update={patch => updateCanvasReference(selectedReferenceItem.id, patch)} remove={() => removeCanvasSelection([selectedReferenceItem.id])} />
           : selectedRequest
@@ -207,7 +236,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                 canLink={selectedElementTargets.length >= 2}
                 canUnlink={selectedElementTargets.length === 1 && (!!selectedElements[0]?.link || isNestedLayer(project, selectedElements[0]?.id ?? ''))}
                 request={selectedElementRequest} setRequest={data => setCanvasElementRequest(selectedElements[0].id, data)} updateContext={updateCanvasElementContext}
-                generate={() => generate(selectedElements.map(element => element.id))} error={setError} />
+                generate={() => generate(selectedElements.map(element => element.id))} error={setError}
+                behaviour={elementBehaviourSource ? behaviourProps(elementBehaviourSource) : undefined} />
           : selectedBoundary
             ? <BoundaryProperties page={selectedBoundary} selectedSizeId={canvasFocusSize} widthPreview={widthPreview} previewWidth={setWidthPreview} busy={pending > 0} commit={patch => updateCanvasPage(selectedBoundary.id, patch)}
                 updateSize={(sizeId, patch) => updateCanvasPageSize(selectedBoundary.id, sizeId, patch)}
@@ -217,7 +247,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                     .then(() => setNotice(`Removed the ${size.label} size.`, () => { void travel('undo_project').catch(() => {}); }))
                     .catch(() => {});
                 }}
-                remove={() => deleteBoundary(selectedBoundary.id, canvasFocusSize)} />
+                remove={() => deleteBoundary(selectedBoundary.id, canvasFocusSize)}
+                behaviour={boundaryBehaviourSource ? behaviourProps(boundaryBehaviourSource) : undefined} />
             : <ProjectProperties project={project} busy={pending > 0} rename={renameProject} setGrid={showDotGrid} setGridSettings={changeGridFlags}
                 save={view?.untitled ? () => run(() => save()) : undefined} />}
         </>}

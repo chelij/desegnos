@@ -10,6 +10,7 @@ import { nestedLayerIds } from './projectCanvas/links';
 import { ElementLayers, matchingLayerIds } from './projectCanvas/elementLayers';
 import { SIZE_PRESETS, resolveForSize, sizeLabel } from './projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from './projectCanvas/requests';
+import { behaviourStateLabel } from './projectCanvas/behaviours';
 import { PROJECT_NAME_MAX_LENGTH } from './editorShared';
 
 const DOCK_WIDTH_KEY = 'desegnos.dock-width';
@@ -272,7 +273,7 @@ export function ChoiceRow<T extends string>({ label, value, choices, choose, dis
 }
 
 /** Boundary properties: one rhythm — 8px rows inside a section, 16px between sections. */
-export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy, selectedSizeId, widthPreview, previewWidth }: {
+export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy, selectedSizeId, widthPreview, previewWidth, behaviour }: {
   page: Page;
   selectedSizeId?: string | null;
   widthPreview?: { sizeId: string; width: number } | null;
@@ -283,6 +284,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
   removeSize: (size: PageSize) => void;
   remove: () => void;
   busy: boolean;
+  behaviour?: BehaviourProperty;
 }) {
   // People make slides, pages, screens and images; 'boundary' is the app's word, not theirs.
   const kindWord = page.output === 'slide' ? 'Slide' : page.output === 'image' ? 'Image' : page.output === 'appScreen' ? 'Screen' : 'Page';
@@ -308,6 +310,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
       <CompactTextField label="Name" placeholder="Name" value={page.name} disabled={busy} valid={name => name.trim().length > 0} commit={name => commit({ name: name.trim() })} />
       {hasPath && <CompactTextField prefix="URL" label="Path" placeholder="/path" value={page.path} disabled={busy} valid={path => path.trim().startsWith('/')} commit={path => commit({ path: path.trim() })} />}
     </PropsSection>
+    {behaviour && <PropsSection id="props-behaviour" title="Behaviour"><BehaviourField {...behaviour} /></PropsSection>}
     {hasPath && minWidth < maxWidth && previewWidth && <PropsSection id="boundary-preview" title="Responsive preview">
       <div className="boundary-preview-heading"><label htmlFor={`preview-width-${selectedSize.id}`}>Width</label><output htmlFor={`preview-width-${selectedSize.id}`}>{shownWidth} px</output>{previewing && <button type="button" className="dock-action" onClick={() => previewWidth(null)}>Reset</button>}</div>
       <input id={`preview-width-${selectedSize.id}`} className="props-range boundary-preview-range" type="range" aria-label="Preview width" min={minWidth} max={maxWidth} step={1} value={shownWidth} disabled={busy}
@@ -476,10 +479,78 @@ export function RequestProperties({ request, project, busy, update, remove, atta
   </div>;
 }
 
-export function PointerProperties({ pointer, project, state, change, reattach, remove, keepComment, keepCode, keepThis, merge, connectAi, aiConnected, rewriting, busy }: {
+export type PointerClashActions = {
+  keepComment: () => void; keepCode: () => void; keepThis: () => void; merge: () => void; reattach: () => void; remove: () => void;
+};
+
+export type BehaviourProperty = {
+  project: Project; pointer: Pointer | null; state: PointerStateView | null;
+  commit: (comment: string) => void; focusToken: number | null;
+  busy: boolean; aiConnected: boolean; actions?: PointerClashActions;
+};
+
+/** The same clash wording and choices for a pointer's dock and a layer's behaviour. */
+function PointerClashNote({ pointer, project, state, busy, aiConnected, actions }: {
+  pointer: Pointer; project: Project; state: PointerStateView | null; busy: boolean; aiConnected: boolean; actions: PointerClashActions;
+}) {
+  if (pointerBroken(pointer, project)) return <div className="dock-pointer-broken" role="group" aria-label="Broken pointer">
+    <p>Its {pointerEndpointName(pointer.from, project, 'source').startsWith('Missing') ? 'start' : 'target'} no longer exists.</p>
+    <div className="form-actions">
+      <button type="button" className="dock-action" disabled={busy} onClick={actions.reattach}>Reattach</button>
+      <button type="button" className="dock-action danger" disabled={busy} onClick={actions.remove}>Remove</button>
+    </div>
+  </div>;
+  if (state?.state === 'codeChanged') return <div className="dock-pointer-clash" role="group" aria-label="Exported code changed">
+    <p>Its exported code changed outside the pointer.</p>
+    <div className="form-actions">
+      <button type="button" className="dock-action" disabled={busy} onClick={actions.keepComment}>Keep comment</button>
+      <button type="button" className="dock-action" disabled={busy || !aiConnected} title={aiConnected ? 'Ask the AI to rewrite the comment' : 'Connect AI first'} onClick={actions.keepCode}>Keep code</button>
+    </div>
+    {!aiConnected && <p className="muted">Connect AI to rewrite the comment from the code.</p>}
+  </div>;
+  if (state?.state === 'contradicts') return <div className="dock-pointer-clash" role="group" aria-label="Contradicting pointer">
+    <p>Another pointer from the same source says something different.</p>
+    <div className="form-actions">
+      <button type="button" className="dock-action" disabled={busy} onClick={actions.keepThis}>Keep this one</button>
+      <button type="button" className="dock-action" disabled={busy} onClick={actions.merge}>Merge</button>
+    </div>
+  </div>;
+  return null;
+}
+
+/** A layer's or boundary's behaviour: plain words, saved as its own change pointer. */
+export function BehaviourField({ project, pointer, state, commit, focusToken, busy, aiConnected, actions }: BehaviourProperty) {
+  const saved = pointer?.comment ?? '';
+  const [draft, setDraft] = useState(saved);
+  const field = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => { setDraft(saved); }, [saved, pointer?.id]);
+  useEffect(() => { if (focusToken !== null) field.current?.focus({ preventScroll: true }); }, [focusToken]);
+  function save() {
+    const text = draft.trim();
+    if (text === saved.trim()) { setDraft(saved); return; }
+    commit(text);
+  }
+  const clash = !!pointer && (pointerBroken(pointer, project) || state?.state === 'codeChanged' || state?.state === 'contradicts');
+  return <>
+    <label className="dock-field">Behaviour
+      <textarea ref={field} data-behaviour-field value={draft} rows={3} maxLength={16384} disabled={busy}
+        placeholder="Describe what it does, like follows the mouse"
+        onChange={event => setDraft(event.target.value)}
+        onBlur={save}
+        onKeyDown={event => {
+          if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) { event.preventDefault(); save(); }
+          else if (event.key === 'Escape') { event.preventDefault(); setDraft(saved); event.currentTarget.blur(); }
+        }} />
+    </label>
+    {pointer && (clash && actions
+      ? <PointerClashNote pointer={pointer} project={project} state={state} busy={busy} aiConnected={aiConnected} actions={actions} />
+      : <p className="dock-pointer-note">{behaviourStateLabel(state?.state ?? (pointer.wiring ? 'wired' : 'unwired'))}</p>)}
+  </>;
+}
+
+export function PointerProperties({ pointer, project, state, change, connectAi, aiConnected, rewriting, busy, actions }: {
   pointer: Pointer; project: Project; state: PointerStateView | null; change: (comment: string) => Promise<unknown>;
-  reattach: () => void; remove: () => void; keepComment: () => void; keepCode: () => void; keepThis: () => void; merge: () => void;
-  connectAi: () => void; aiConnected: boolean; rewriting: boolean; busy: boolean;
+  connectAi: () => void; aiConnected: boolean; rewriting: boolean; busy: boolean; actions: PointerClashActions;
 }) {
   const broken = pointerBroken(pointer, project);
   const [draft, changeDraft, flushDraft] = useDraftText(pointer.comment, (_value, latest) => Promise.resolve(change(latest())).then(() => latest()), 400);
@@ -496,28 +567,7 @@ export function PointerProperties({ pointer, project, state, change, reattach, r
     {!broken && state?.state === 'needsGenerating' && <p className="dock-pointer-note">Needs generating.</p>}
     {!broken && state?.state === 'needsExporting' && <p className="dock-pointer-note">Needs exporting. The next export rebuilds its code.</p>}
     {!broken && state?.state === 'wired' && <p className="dock-pointer-note">Wired to its generated code.</p>}
-    {!broken && state?.state === 'codeChanged' && <div className="dock-pointer-clash" role="group" aria-label="Exported code changed">
-      <p>Its exported code changed outside the pointer.</p>
-      <div className="form-actions">
-        <button type="button" className="dock-action" disabled={busy} onClick={keepComment}>Keep comment</button>
-        <button type="button" className="dock-action" disabled={busy || !aiConnected} title={aiConnected ? 'Ask the AI to rewrite the comment' : 'Connect AI first'} onClick={keepCode}>Keep code</button>
-      </div>
-      {!aiConnected && <p className="muted">Connect AI to rewrite the comment from the code.</p>}
-    </div>}
-    {!broken && state?.state === 'contradicts' && <div className="dock-pointer-clash" role="group" aria-label="Contradicting pointer">
-      <p>Another pointer from the same source says something different.</p>
-      <div className="form-actions">
-        <button type="button" className="dock-action" disabled={busy} onClick={keepThis}>Keep this one</button>
-        <button type="button" className="dock-action" disabled={busy} onClick={merge}>Merge</button>
-      </div>
-    </div>}
-    {broken && <div className="dock-pointer-broken" role="group" aria-label="Broken pointer">
-      <p>Its {pointerEndpointName(pointer.from, project, 'source').startsWith('Missing') ? 'start' : 'target'} no longer exists.</p>
-      <div className="form-actions">
-        <button type="button" className="dock-action" disabled={busy} onClick={reattach}>Reattach</button>
-        <button type="button" className="dock-action danger" disabled={busy} onClick={remove}>Remove</button>
-      </div>
-    </div>}
+    <PointerClashNote pointer={pointer} project={project} state={state} busy={busy} aiConnected={aiConnected} actions={actions} />
   </div>;
 }
 

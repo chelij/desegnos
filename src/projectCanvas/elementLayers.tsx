@@ -3,6 +3,7 @@ import { Icon, type IconName } from '../icons';
 import type { Element, ElementKind, ElementPatch, Project } from '../types';
 import { elementLabel, holdsChildren } from './elementGeometry';
 import { nestedLayerIds } from './links';
+import { behaviourLayerKeys } from './behaviours';
 
 const KIND_ICONS: Record<ElementKind, IconName> = {
   box: 'rectangle', group: 'group', text: 'text', ellipse: 'ellipse', line: 'line', image: 'image',
@@ -61,7 +62,7 @@ export function resolveLayerDrop(source: LayerDrag, target: ElementDropTarget): 
 }
 
 /** One 28px layer row: kind icon, name (double-click renames), then hover lock and eye toggles. */
-const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, parentId, index, selected, open, toggle, select, update, remove, movable, grab, depth, dropLine }: {
+const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, parentId, index, selected, open, toggle, select, update, remove, movable, grab, depth, dropLine, hasBehaviour }: {
   linkedName: string | null; pageId: string; sizeId: string; element: Element; parentId: string | null; index: number;
   selected: boolean; open: boolean; toggle: (id: string) => void;
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
@@ -69,6 +70,7 @@ const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, p
   remove: (pageId: string, sizeId: string, id: string) => void;
   movable: boolean; grab: (event: ReactPointerEvent<HTMLDivElement>, source: LayerDrag) => void;
   depth: number; dropLine: 'before' | 'after' | 'into' | null;
+  hasBehaviour: boolean;
 }) {
   const canContain = holdsChildren(element.kind);
   const hasChildren = canContain && element.children.length > 0;
@@ -113,6 +115,7 @@ const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, p
           onDoubleClick={renameable ? () => { editing.current = true; setDraft(element.name ?? ''); } : undefined}>
           <Icon name={linkedName !== null ? 'linked-copies' : KIND_ICONS[element.kind]} size={12} /><span className={element.name?.trim() ? undefined : 'muted'}>{label}</span>
         </button>}
+      {hasBehaviour && <span className="dock-row-badge" title="Has a behaviour" aria-label="Behaviour"><Icon name="code" size={12} /></span>}
       <button type="button" className="icon-button sm dock-row-toggle" aria-label={`${element.locked ? 'Unlock' : 'Lock'} ${elementLabel(element)}`} title={element.locked ? 'Unlock' : 'Lock'}
         aria-pressed={element.locked} onClick={() => update(pageId, sizeId, [{ id: element.id, locked: !element.locked }])}><Icon name={element.locked ? 'lock' : 'unlock'} size={13} /></button>
       <button type="button" className="icon-button sm dock-row-toggle" aria-label={`${element.visible ? 'Hide' : 'Show'} ${elementLabel(element)}`} title={element.visible ? 'Hide' : 'Show'}
@@ -180,6 +183,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
   const removeRow = useCallback((...args: Parameters<typeof remove>) => actions.current.remove(...args), []);
   const grabRow = useCallback((...args: Parameters<typeof startRowDrag>) => actions.current.grab(...args), []);
   const rows = useMemo(() => flattenLayers(elements, sizeId, collapsed, keep), [elements, sizeId, collapsed, keep]);
+  const behaviourIds = useMemo(() => behaviourLayerKeys(project.pointers ?? []), [project.pointers]);
   const selected = useMemo(() => new Set(selection), [selection]);
   const list = useRef<HTMLUListElement>(null);
   /** The layer row under the pointer, so a drop follows the cursor rather than the source row. */
@@ -362,7 +366,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
         <LayerRow linkedName={element.link ? project.linked?.[element.link]?.name ?? null : null}
         pageId={pageId} sizeId={sizeId} element={element} parentId={parentId} index={index} depth={depth} open={open}
         selected={selected.has(element.id)} toggle={toggle} select={selectRow} update={updateRow} remove={removeRow}
-        movable={!fixed.has(element.id)} dropLine={dropLine} grab={grabRow} />
+        movable={!fixed.has(element.id)} dropLine={dropLine} grab={grabRow} hasBehaviour={behaviourIds.has(`${pageId}:${element.id}`)} />
       </Fragment>;
     })}
     <li aria-hidden="true" style={{ height: (rows.length - previous - 1) * LAYER_ROW_HEIGHT }} />

@@ -24,6 +24,7 @@ import { onEditScope, type EditScope } from './selectionBar';
 import { elementBoxes, elementBoxesNow, pendingRequests, requestAreaContains } from './requests';
 import { shownReference } from './reference';
 import { pointerEntries, pointerWorld } from './pointers';
+import { behaviourEntries } from './behaviours';
 import { screenRect, useCanvasCamera, type NativeDrag, type ScreenRect } from './surface';
 import { contentFitsViewport, overviewRects } from './minimap';
 import { textEditorScreen } from './elements';
@@ -49,7 +50,7 @@ export function useProjectCanvas({
   addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
   addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview = null, onZoom, onLayout,
-  play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
+  play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, focusBehaviour,
 }: ProjectCanvasProps, ref: ForwardedRef<ProjectCanvasHandle>) {
 
   const {
@@ -118,7 +119,7 @@ export function useProjectCanvas({
     persistDraw, addReference, createdItem, boundaryRect, placeElement, createdElement, setEditing,
     setPendingImage, onTool, duplicateElementMove, commitElementMove, updateElements, moveElements,
     marqueeTargets, selectTargets, endpointAt, addPointer, createdPointer, setArmedPointer, selectPointer,
-    updatePointer, commitMove, updateReference,
+    updatePointer, commitMove, updateReference, focusBehaviour,
   }));
 
   const surface = useRef<HTMLDivElement>(null);
@@ -680,6 +681,7 @@ export function useProjectCanvas({
   const viewport: Rect = viewSize.width > 0 ? viewportWorldRect(camera, viewSize) : { x: -1e7, y: -1e7, width: 2e7, height: 2e7 };
   const selectedPointerIds = new Set(selectedPointers(selection));
   const entries = pointerEntries(pointers, pointerWorldNowValue, selectedPointerIds, viewport);
+  const behaviours = useMemo(() => behaviourEntries(pointers, pointerWorldNowValue), [pointers, pointerWorldNowValue]);
   const selectedPointerId = selection.length === 1 && selection[0].kind === 'pointer' ? selection[0].pointerId : null;
   const choosePointer = (pointerId: string) => { selectPointer(pointerId); surface.current?.focus({ preventScroll: true }); };
   const autoLinks = useMemo(() => automaticLinks(project, boundaries, elementBoxes(project, boundaries, moving)), [project, boundaries, moving]);
@@ -804,7 +806,7 @@ export function useProjectCanvas({
     pointerDown, keyDown, doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, focused,
     selection, moving, openPage, editing, movingElements, openPlaceholder, viewport, inverse, project,
     boundaries, requestDraft, draftArea, selectRequest, movingItems, draftNote, draft, boundaryKind,
-    draftElement, marquee, zoomRect, entries, autoLinks, pointerDraft, selectedPointerIds, pointerStates,
+    draftElement, marquee, zoomRect, entries, autoLinks, behaviours, pointerDraft, selectedPointerIds, pointerStates,
     choosePointer, updatePointer, createdPointer, selectionScreen, viewSize,
     selectionFill, selectionLinked, selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection, distributeSelection,
     setSelectionScope, startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements,

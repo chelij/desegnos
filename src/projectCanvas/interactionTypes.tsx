@@ -114,6 +114,8 @@ export type ProjectCanvasProps = {
   unlinkElements: (ids: string[]) => Promise<unknown>;
   pasteLinked: (items: LinkedPasteInstance[]) => Promise<unknown>;
   addPointer: (pointer: Pointer) => Promise<void>;
+  /** Selects the layer or boundary behind a behaviour and puts the caret in its Behaviour field. */
+  focusBehaviour: (source: PointerSource) => void;
   updatePointer: (pointerId: string, patch: { from?: PointerSource; to?: PointerTarget; comment?: string; kind?: Pointer['kind'] }) => Promise<unknown>;
   pointerStates: Record<string, PointerStateView>;
   tool: ProjectTool; insertKind: ElementKind | null; onTool: (tool: ProjectTool) => void;
