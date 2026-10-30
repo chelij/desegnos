@@ -19,9 +19,20 @@ use uuid::Uuid;
 /// the canvas reaches the audience, so the AI is told what it is making before it draws.
 fn content_guidance(outputs: &[crate::OutputType], web_search: bool) -> String {
     use crate::OutputType;
-    let mut md = String::from("\n## What you are making\n\nEach boundary in `pages` has an `output`: what it ships as. Draw for that audience.\n\n");
-    if outputs.iter().any(|o| matches!(o, OutputType::Webpage | OutputType::AppScreen)) {
-        md.push_str("- `webpage` (or `appScreen`): one page of the project's public website, built from this canvas at export. A `page` boundary scrolls and grows taller; a `screen` boundary is one fixed view, such as an app screen. Use the familiar parts the request implies (navigation, headings, sections, calls to action, footer), give pages of one site a consistent header and style, and keep text readable at every listed size.\n");
+    let mut md = String::from(
+        "\n## What you are making\n\nEach boundary in `pages` has an `output`: what it ships as. Draw for that audience.\n\n",
+    );
+    if outputs
+        .iter()
+        .any(|o| matches!(o, OutputType::Webpage | OutputType::AppScreen))
+    {
+        md.push_str("- `webpage` (or `appScreen`): one page of the project's public website, built from this canvas at export. A `page` boundary scrolls and grows taller; a `screen` boundary is one fixed view, such as an app screen. Keep text readable at every listed size.\n");
+    }
+    if outputs
+        .iter()
+        .any(|o| matches!(o, OutputType::Webpage | OutputType::AppScreen))
+    {
+        md.push_str("\n## Whole pages and pieces of pages\n\nBuild only what the request covers. A request on a layer or an area is one piece of the page: build it in place, match the style of the boundary outline around it, and add navigation, headers or footers only when the request asks for them. A request on a whole empty boundary is a whole page: give it the parts the request implies (navigation, sections, calls to action, footer) and the same header and style as the site's other pages. Link between pages with a Link element whose `url` is a path from `siteRoutes`.\n\n## Frames\n\nA frame shows other content inside a page. For a live external site, map or widget, use an Embed element with its https `url`; it exports as an iframe and only takes web addresses. To show a page of this project inside a frame, such as a device or browser mockup or a preview card, draw that page's design as layers grouped inside the frame box, and wrap it in a Link to its path when it should open the page. A request on a layer drawn as a frame changes what is inside it and keeps the frame itself unless the request asks otherwise.\n");
     }
     if outputs.contains(&OutputType::Slide) {
         md.push_str("- `slide`: one presentation slide in a fixed frame. One idea per slide: a short headline, a few words or bullets in large legible type, and a clear visual. No paragraphs, and nothing beyond the frame.\n");
@@ -196,7 +207,9 @@ pub(crate) fn project_notes(
 pub(crate) fn reference_element_value(element: &crate::Element) -> serde_json::Value {
     fn strip_context(element: &mut crate::Element) {
         element.meta = crate::ElementMeta::default();
-        for child in &mut element.children { strip_context(child); }
+        for child in &mut element.children {
+            strip_context(child);
+        }
     }
     let mut visual = element.clone();
     strip_context(&mut visual);
@@ -205,7 +218,9 @@ pub(crate) fn reference_element_value(element: &crate::Element) -> serde_json::V
 
 fn reference_value(kind: &crate::ReferenceKind) -> serde_json::Value {
     match kind {
-        crate::ReferenceKind::Element { element, .. } => serde_json::json!({"kind":"element","element":reference_element_value(element)}),
+        crate::ReferenceKind::Element { element, .. } => {
+            serde_json::json!({"kind":"element","element":reference_element_value(element)})
+        }
         crate::ReferenceKind::Note { text } => serde_json::json!({"kind":"note","text":text}),
         crate::ReferenceKind::Link { url, title } => {
             serde_json::json!({"kind":"link","url":url,"title":title})
@@ -549,8 +564,20 @@ impl Project {
                 }))
             })
             .collect::<Result<Vec<_>>>()?;
+        let site_routes: Vec<_> = self
+            .pages
+            .iter()
+            .filter(|page| {
+                page.included
+                    && matches!(
+                        page.output,
+                        crate::OutputType::Webpage | crate::OutputType::AppScreen
+                    )
+            })
+            .map(|page| serde_json::json!({"name": page.name, "path": page.path}))
+            .collect();
         md.push_str(&fenced_json(
-            &serde_json::json!({"pages": pages, "requests": request_rows}),
+            &serde_json::json!({"pages": pages, "siteRoutes": site_routes, "requests": request_rows}),
         )?);
 
         let classifying: Vec<_> = self
@@ -931,5 +958,7 @@ mod content_guidance_tests {
         assert!(site.contains("`webpage`") && site.contains("`image`"));
         assert!(site.contains("use web search"));
         assert!(site.contains("never on the canvas"));
+        assert!(site.contains("## Frames") && site.contains("siteRoutes"));
+        assert!(!slides.contains("## Frames"));
     }
 }
