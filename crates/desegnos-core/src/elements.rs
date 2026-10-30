@@ -621,12 +621,20 @@ impl Element {
                 // A link may point at another boundary in this project, stored as its page path.
                 validate_element_url(url)?;
             }
-            ElementKind::Video | ElementKind::Audio | ElementKind::Embed => {
+            ElementKind::Video | ElementKind::Audio => {
                 let url = self
                     .url
                     .as_deref()
                     .ok_or_else(|| Error("This element needs a web address.".into()))?;
                 validate_http_url(url)?;
+            }
+            ElementKind::Embed => {
+                let url = self
+                    .url
+                    .as_deref()
+                    .ok_or_else(|| Error("This element needs a web address or page path.".into()))?;
+                // A frame shows an external address or another boundary of this project.
+                validate_element_url(url)?;
             }
             ElementKind::Input { .. }
             | ElementKind::Textarea
@@ -2845,6 +2853,32 @@ mod tests {
         assert_eq!(resolved[0].style.text_style.color, "#abcdef");
         assert_eq!(resolved[0].style.references.text_colour, None);
         assert!(project.apply(project.revision, crate::Command::AddColourStyle { style: crate::ColourStyle { value: "red".into(), ..colour } }).is_err());
+    }
+
+    #[test]
+    fn an_embed_accepts_a_project_page_path_but_video_and_audio_stay_web_only() {
+        let project = Project::new(
+            "Frames".into(),
+            crate::Viewport { width: 800, height: 600 },
+            crate::Appearance::Light,
+        )
+        .unwrap();
+        let page_path = project.pages[0].path.clone();
+        let rect = Rect { x: 0.0, y: 0.0, width: 320.0, height: 240.0 };
+        let mut embed = empty_element(ElementKind::Embed, rect);
+        embed.url = Some(page_path.clone());
+        embed.validate(&project).unwrap();
+        embed.url = Some("https://example.com/map".into());
+        embed.validate(&project).unwrap();
+        embed.url = Some("javascript:alert(1)".into());
+        assert!(embed.validate(&project).is_err());
+        for kind in [ElementKind::Video, ElementKind::Audio] {
+            let mut media = empty_element(kind, rect);
+            media.url = Some(page_path.clone());
+            assert!(media.validate(&project).is_err());
+            media.url = Some("https://example.com/media".into());
+            media.validate(&project).unwrap();
+        }
     }
 
     #[test]

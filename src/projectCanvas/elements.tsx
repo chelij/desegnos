@@ -3,7 +3,7 @@ import type { Element, ElementKind, Project, Rect } from '../types';
 import type { Boundary, CanvasCamera, ElementTarget } from '../projectCanvasGeometry';
 import type { ElementCorner } from './elementGeometry';
 import { elementPadding, elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
-import { elementOrigin, resolveForSize } from './sizes';
+import { elementOrigin, resolveForSize, sizeAtWidth } from './sizes';
 import { canvasFont, useCanvasFont, useCanvasFontRevision } from './fonts';
 import { shortcutFor, type ShortcutAction } from '../shortcuts';
 import type { ScreenRect } from './surface';
@@ -184,11 +184,29 @@ function CodeCard({ element }: { element: Element }) {
   </div>;
 }
 
-function ElementBody({ project, pageId, element, flow, editingId, movingRects }: { project: Project; pageId: string; element: Element; flow: boolean; editingId: string | null; movingRects?: Record<string, Rect> }) {
+const EMBED_DEPTH = 3;
+
+/** An Embed frames one of this project's pages live, scaled and clipped to its box. */
+function EmbedBody({ project, element, stack }: { project: Project; element: Element; stack: string[] }) {
+  const page = element.url ? project.pages.find(item => item.path === element.url) : undefined;
+  // At most two nested frames, and never a page already on the stack; the card marks the limit.
+  if (!page || stack.length >= EMBED_DEPTH || stack.includes(page.id)) return <MediaCard element={element} />;
+  const size = sizeAtWidth(page, element.rect.width);
+  const elements = resolveForSize(project, page, size.id);
+  const scale = size.width > 0 ? element.rect.width / size.width : 1;
+  const next = [...stack, page.id];
+  return <div className="canvas-embed-page" style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none', userSelect: 'none', background: page.background }}>
+    <div style={{ position: 'absolute', left: 0, top: 0, width: size.width, height: size.height, transform: `scale(${scale})`, transformOrigin: 'top left' }}>
+      {elements.map(child => <ElementView key={child.id} project={project} pageId={page.id} element={child} flow={false} editingId={null} embedStack={next} embedded />)}
+    </div>
+  </div>;
+}
+
+function ElementBody({ project, pageId, element, flow, editingId, movingRects, embedStack, embedded }: { project: Project; pageId: string; element: Element; flow: boolean; editingId: string | null; movingRects?: Record<string, Rect>; embedStack: string[]; embedded?: boolean }) {
   const children = element.children.length > 0 && element.kind !== 'group'
-    ? <ElementChildren project={project} pageId={pageId} element={element} editingId={editingId} movingRects={movingRects} />
+    ? <ElementChildren project={project} pageId={pageId} element={element} editingId={editingId} movingRects={movingRects} embedStack={embedStack} embedded={embedded} />
     : element.children.length > 0
-      ? <>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow={false} editingId={editingId} movingRects={movingRects} />)}</>
+      ? <>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow={false} editingId={editingId} movingRects={movingRects} embedStack={embedStack} embedded={embedded} />)}</>
       : null;
   switch (element.kind) {
     case 'box':
@@ -220,27 +238,30 @@ function ElementBody({ project, pageId, element, flow, editingId, movingRects }:
       return <ControlText element={element} />;
     case 'video':
     case 'audio':
-    case 'embed':
       return <MediaCard element={element} />;
+    case 'embed':
+      return <EmbedBody project={project} element={element} stack={embedStack} />;
     case 'code':
       return <CodeCard element={element} />;
   }
 }
 
-function ElementChildren({ project, pageId, element, editingId, movingRects }: { project: Project; pageId: string; element: Element; editingId: string | null; movingRects?: Record<string, Rect> }) {
+function ElementChildren({ project, pageId, element, editingId, movingRects, embedStack, embedded }: { project: Project; pageId: string; element: Element; editingId: string | null; movingRects?: Record<string, Rect>; embedStack: string[]; embedded?: boolean }) {
   const style = childrenStyle(element);
-  if (!style) return <>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow={false} editingId={editingId} movingRects={movingRects} />)}</>;
-  return <div className="canvas-element-layout" style={style}>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow parentLayout={element.layout} editingId={editingId} movingRects={movingRects} />)}</div>;
+  if (!style) return <>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow={false} editingId={editingId} movingRects={movingRects} embedStack={embedStack} embedded={embedded} />)}</>;
+  return <div className="canvas-element-layout" style={style}>{element.children.map(child => <ElementView key={child.id} project={project} pageId={pageId} element={child} flow parentLayout={element.layout} editingId={editingId} movingRects={movingRects} embedStack={embedStack} embedded={embedded} />)}</div>;
 }
 
-export function ElementView({ project, pageId, element, flow, editingId, root, movingRects, parentLayout }: {
-  project: Project; pageId: string; element: Element; flow: boolean; editingId: string | null; root?: boolean; movingRects?: Record<string, Rect>; parentLayout?: Element['layout'];
+export function ElementView({ project, pageId, element, flow, editingId, root, movingRects, parentLayout, embedStack, embedded }: {
+  project: Project; pageId: string; element: Element; flow: boolean; editingId: string | null; root?: boolean; movingRects?: Record<string, Rect>; parentLayout?: Element['layout']; embedStack?: string[]; embedded?: boolean;
 }) {
   useCanvasFont(isTextKind(element.kind) ? element.style.textStyle : undefined);
   if (!element.visible) return null;
-  const data = { 'data-element': element.id, 'data-element-kind': element.kind, 'data-element-group': element.kind === 'group' ? 'true' : undefined, 'data-element-root': root ? 'true' : undefined };
+  const stack = embedStack ?? [pageId];
+  // Frames inside a frame draw the same way, but they never answer clicks or measurements.
+  const data = embedded ? {} : { 'data-element': element.id, 'data-element-kind': element.kind, 'data-element-group': element.kind === 'group' ? 'true' : undefined, 'data-element-root': root ? 'true' : undefined };
   return <div {...data} style={wrapperStyle(element, flow, movingRects?.[element.id] ?? element.rect, parentLayout)} className={`canvas-element canvas-element-${element.kind}${element.locked ? ' locked' : ''}`}>
-    <ElementBody project={project} pageId={pageId} element={element} flow={flow} editingId={editingId} movingRects={movingRects} />
+    <ElementBody project={project} pageId={pageId} element={element} flow={flow} editingId={editingId} movingRects={movingRects} embedStack={stack} embedded={embedded} />
   </div>;
 }
 
