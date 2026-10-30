@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Icon, type IconName } from '../icons';
 import type { Element, ElementKind, ElementPatch, Project } from '../types';
 import { elementLabel, holdsChildren } from './elementGeometry';
@@ -10,9 +10,12 @@ const KIND_ICONS: Record<ElementKind, IconName> = {
   checkbox: 'check', radio: 'ellipse', video: 'video', audio: 'audio', embed: 'external', code: 'code',
 };
 
-type DragState = { pageId: string; sizeId: string; id: string; parentId: string | null; index: number } | null;
+/** A grabbed layer row and its place in the model. */
+export type LayerDrag = { pageId: string; sizeId: string; id: string; parentId: string | null; index: number };
 export type ElementDropTarget = { pageId: string; sizeId: string; parentId: string | null; index: number };
 type DropHint = ElementDropTarget | null;
+/** Pixels the pointer must travel before a press on a layer row becomes a drag. */
+const DRAG_THRESHOLD = 4;
 
 /** The rows a layer search keeps: matches, their parents, and everything under a match. */
 export function matchingLayerIds(elements: Element[], query: string): Set<string> {
@@ -36,27 +39,35 @@ function sameTarget(first: DropHint, second: DropHint): boolean {
 }
 
 /** The layer a pointer sits over: before/after keep the parent, into makes it a child. */
-function dropPosition(element: Element, offset: number): 'before' | 'after' | 'into' {
+export function layerDropPosition(element: Element, offset: number): 'before' | 'after' | 'into' {
   if (holdsChildren(element.kind) && offset > 0.3 && offset < 0.7) return 'into';
   return offset < 0.5 ? 'before' : 'after';
 }
 
-function dropTarget(element: Element, position: 'before' | 'after' | 'into', pageId: string, sizeId: string, parentId: string | null, index: number): ElementDropTarget {
+/** The drop target a row offers when the pointer sits at `offset` (0–1) of its height. */
+export function layerDropTarget(element: Element, offset: number, pageId: string, sizeId: string, parentId: string | null, index: number): ElementDropTarget {
+  const position = layerDropPosition(element, offset);
   return position === 'into'
     ? { pageId, sizeId, parentId: element.id, index: element.children.length }
     : { pageId, sizeId, parentId, index: position === 'before' ? index + 1 : index };
 }
 
+/** Where a grabbed layer lands, or null when that row is not a valid new home for it. */
+export function resolveLayerDrop(source: LayerDrag, target: ElementDropTarget): { parentId: string | null; index: number } | null {
+  if (source.pageId !== target.pageId || source.sizeId !== target.sizeId || source.id === target.parentId) return null;
+  // Siblings count from the model index, and the grabbed layer still sits in the list.
+  const index = source.parentId === target.parentId && source.index < target.index ? target.index - 1 : target.index;
+  return { parentId: target.parentId, index };
+}
+
 /** One 28px layer row: kind icon, name (double-click renames), then hover lock and eye toggles. */
-const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, parentId, index, selected, open, toggle, select, update, remove, movable, setHint, onDragStart, onDragEnd, onDrop, depth, dropLine }: {
+const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, parentId, index, selected, open, toggle, select, update, remove, movable, grab, depth, dropLine }: {
   linkedName: string | null; pageId: string; sizeId: string; element: Element; parentId: string | null; index: number;
   selected: boolean; open: boolean; toggle: (id: string) => void;
   select: (pageId: string, id: string, sizeId: string, additive: boolean) => void;
   update: (pageId: string, sizeId: string, patches: ElementPatch[]) => void;
   remove: (pageId: string, sizeId: string, id: string) => void;
-  movable: boolean; setHint: (hint: DropHint) => void;
-  onDragStart: (state: DragState) => void; onDragEnd: () => void;
-  onDrop: (event: DragEvent, target: ElementDropTarget) => void;
+  movable: boolean; grab: (event: ReactPointerEvent<HTMLDivElement>, source: LayerDrag) => void;
   depth: number; dropLine: 'before' | 'after' | 'into' | null;
 }) {
   const canContain = holdsChildren(element.kind);
@@ -74,37 +85,16 @@ const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, p
     setDraft(null);
     if (name !== (element.name ?? '').trim()) update(pageId, sizeId, [{ id: element.id, name: name || null }]);
   }
-  function targetAt(offset: number) {
-    return dropTarget(element, dropPosition(element, offset), pageId, sizeId, parentId, index);
-  }
-  function offsetAt(event: DragEvent<HTMLElement>) {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    return (event.clientY - bounds.top) / Math.max(1, bounds.height);
-  }
   return <li style={{ paddingInlineStart: depth * 12, height: LAYER_ROW_HEIGHT }} className={`dock-tree-group element-row virtual-layer-row${element.visible ? '' : ' hidden-in-size'}`} data-drop={dropLine ?? undefined}>
-    <div className="dock-tree-row element-row-line" draggable={movable && draft === null}
+    <div className="dock-tree-row element-row-line" data-draggable={movable && draft === null ? 'true' : undefined}
       data-element-row={element.id}
       data-selected={selected || undefined}
       title={renameable ? `${label}${linkedName ? ` · linked as ${linkedName}` : ''} · double-click to rename`
         : linkedName ? `${label} · linked as ${linkedName}` : label}
-      onDragStart={event => {
-        if (!movable) { event.preventDefault(); return; }
-        event.stopPropagation();
-        onDragStart({ pageId, sizeId, id: element.id, parentId, index });
-        event.dataTransfer.effectAllowed = 'move';
-        event.dataTransfer.setData('text/plain', element.id);
-      }}
-      onDragEnd={() => onDragEnd()}
-      onDragOver={event => {
-        if (!movable) return;
-        event.preventDefault(); event.stopPropagation();
-        event.dataTransfer.dropEffect = 'move';
-        setHint(targetAt(offsetAt(event)));
-      }}
-      onDrop={event => {
-        if (!movable) { event.preventDefault(); event.stopPropagation(); return; }
-        event.preventDefault(); event.stopPropagation();
-        onDrop(event, targetAt(offsetAt(event)));
+      onPointerDown={event => {
+        // A press still selects, renames and toggles; only travel past the threshold drags.
+        if (!movable || draft !== null || event.button !== 0 || !event.isPrimary) return;
+        grab(event, { pageId, sizeId, id: element.id, parentId, index });
       }}>
       {hasChildren
         ? <button type="button" className="dock-tree-disclosure" aria-label={`${open ? 'Collapse' : 'Expand'} ${elementLabel(element)}`} aria-expanded={open} onClick={() => toggle(`${sizeId}:${element.id}`)}>
@@ -170,39 +160,117 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
 }) {
   const fixed = useMemo(() => fixedIds ?? nestedLayerIds(project), [fixedIds, project]);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
-  const dragging = useRef<DragState>(null);
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [hint, setHint] = useState<DropHint>(null);
   const updateHint = useCallback((next: DropHint) => setHint(current => sameTarget(current, next) ? current : next), []);
-  const endDrag = useCallback(() => { dragging.current = null; setDraggedId(null); setHint(null); }, []);
+  // A gesture outlives renders, so its window listeners are torn down through this handle.
+  const endGesture = useRef<(() => void) | null>(null);
+  useEffect(() => () => endGesture.current?.(), []);
   const toggle = useCallback((id: string) => setCollapsed(current => {
     const next = new Set(current);
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   }), []);
-  function drop(event: DragEvent, target: ElementDropTarget) {
-    event.preventDefault();
-    setHint(null);
-    setDraggedId(null);
-    if (!dragging.current || dragging.current.pageId !== target.pageId || dragging.current.sizeId !== target.sizeId || dragging.current.id === target.parentId) { dragging.current = null; return; }
-    let index = target.index;
-    if (dragging.current.parentId === target.parentId && dragging.current.index < index) index -= 1;
-    const id = dragging.current.id;
-    dragging.current = null;
-    move(target.pageId, target.sizeId, id, target.parentId, index);
-  }
   // Stable event delegates keep callback churn in the editor out of memoised rows.
-  const actions = useRef({ select, update, remove, drop });
-  useLayoutEffect(() => { actions.current = { select, update, remove, drop }; });
+  const actions = useRef({ select, update, remove, grab: startRowDrag });
+  useLayoutEffect(() => { actions.current = { select, update, remove, grab: startRowDrag }; });
   const selectRow = useCallback((...args: Parameters<typeof select>) => actions.current.select(...args), []);
   const updateRow = useCallback((...args: Parameters<typeof update>) => actions.current.update(...args), []);
   const removeRow = useCallback((...args: Parameters<typeof remove>) => actions.current.remove(...args), []);
-  const dropRow = useCallback((...args: Parameters<typeof drop>) => actions.current.drop(...args), []);
-  const startDrag = useCallback((state: DragState) => { dragging.current = state; setDraggedId(state?.id ?? null); }, []);
+  const grabRow = useCallback((...args: Parameters<typeof startRowDrag>) => actions.current.grab(...args), []);
   const rows = useMemo(() => flattenLayers(elements, sizeId, collapsed, keep), [elements, sizeId, collapsed, keep]);
   const selected = useMemo(() => new Set(selection), [selection]);
   const list = useRef<HTMLUListElement>(null);
+  /** The layer row under the pointer, so a drop follows the cursor rather than the source row. */
+  function targetUnder(clientX: number, clientY: number): ElementDropTarget | null {
+    const listNode = list.current;
+    if (!listNode) return null;
+    const bounds = listNode.getBoundingClientRect();
+    if (clientX < bounds.left || clientX > bounds.right || clientY < bounds.top || clientY > bounds.bottom) return null;
+    const targetFor = (node: HTMLElement, offset: number): ElementDropTarget | null => {
+      const row = rows.find(candidate => candidate.element.id === node.dataset.elementRow);
+      return row ? layerDropTarget(row.element, offset, pageId, sizeId, row.parentId, row.index) : null;
+    };
+    const hit = document.elementFromPoint(clientX, clientY)?.closest<HTMLElement>('[data-element-row]');
+    if (hit) {
+      const box = hit.getBoundingClientRect();
+      const target = targetFor(hit, (clientY - box.top) / Math.max(1, box.height));
+      if (target) return target;
+    }
+    // Spacer rows carry no layer; the nearest mounted row decides before or after.
+    const mounted = Array.from(listNode.querySelectorAll<HTMLElement>('[data-element-row]'))
+      .map(node => ({ node, box: node.getBoundingClientRect() }))
+      .sort((first, second) => first.box.top - second.box.top);
+    const above = mounted.filter(entry => entry.box.bottom <= clientY).at(-1);
+    if (above) {
+      // Below the last layer the panel's empty tail still drops at the end of the top-level list.
+      if (above.node.dataset.elementRow === rows.at(-1)?.element.id) return { pageId, sizeId, parentId: null, index: elements.length };
+      return targetFor(above.node, 1);
+    }
+    const below = mounted.find(entry => entry.box.top >= clientY);
+    return below ? targetFor(below.node, 0) : null;
+  }
+  /** Commit a finished gesture through the drop rules the panel has always used. */
+  function commitGesture(source: LayerDrag, target: ElementDropTarget) {
+    const drop = resolveLayerDrop(source, target);
+    if (drop) move(target.pageId, target.sizeId, source.id, drop.parentId, drop.index);
+  }
+  /** Track a press on a row: capture the pointer past the threshold, then drop at pointerup. */
+  function startRowDrag(event: ReactPointerEvent<HTMLDivElement>, source: LayerDrag) {
+    // A press always wins: a gesture whose pointerup was lost outside the window cannot wedge the panel.
+    endGesture.current?.();
+    const node = event.currentTarget;
+    const pointerId = event.pointerId;
+    const originX = event.clientX;
+    const originY = event.clientY;
+    let dragging = false;
+    const capture = (active: boolean) => {
+      try {
+        if (active) node.setPointerCapture(pointerId);
+        else if (node.hasPointerCapture(pointerId)) node.releasePointerCapture(pointerId);
+      } catch { /* WebKitGTK refuses capture for a pointer it already dropped. */ }
+    };
+    const finish = () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+      window.removeEventListener('pointercancel', handleCancel);
+      window.removeEventListener('keydown', handleKey, true);
+      capture(false);
+      endGesture.current = null;
+      setDraggedId(null);
+      setHint(null);
+    };
+    const handleMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) return;
+      if (!dragging) {
+        if (Math.hypot(moveEvent.clientX - originX, moveEvent.clientY - originY) < DRAG_THRESHOLD) return;
+        dragging = true;
+        capture(true);
+        setDraggedId(source.id);
+        window.getSelection()?.removeAllRanges();
+      }
+      moveEvent.preventDefault();
+      updateHint(targetUnder(moveEvent.clientX, moveEvent.clientY));
+    };
+    const handleUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) return;
+      const target = dragging ? targetUnder(upEvent.clientX, upEvent.clientY) : null;
+      finish();
+      if (target) commitGesture(source, target);
+    };
+    const handleCancel = (cancelEvent: PointerEvent) => { if (cancelEvent.pointerId === pointerId) finish(); };
+    const handleKey = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key !== 'Escape' || !dragging) return;
+      keyEvent.preventDefault(); keyEvent.stopPropagation();
+      finish();
+    };
+    endGesture.current = finish;
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    window.addEventListener('pointercancel', handleCancel);
+    window.addEventListener('keydown', handleKey, true);
+  }
   const [viewport, setViewport] = useState({ top: 0, height: 280 });
   useLayoutEffect(() => {
     const node = list.current, scroll = node?.closest<HTMLElement>('.dock-panel-body');
@@ -233,7 +301,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
   }, [selectedId, reveal]);
   const start = Math.min(rows.length, Math.max(0, Math.floor(viewport.top / LAYER_ROW_HEIGHT) - OVERSCAN));
   const end = Math.max(start, Math.min(rows.length, Math.ceil((viewport.top + viewport.height) / LAYER_ROW_HEIGHT) + OVERSCAN));
-  // Keep the focused editor and native drag source mounted when scrolling past them.
+  // Keep the focused editor and the grabbed row mounted when scrolling past them.
   const visible = new Set(Array.from({ length: end - start }, (_, index) => start + index));
   rows.forEach((row, index) => { if (row.element.id === focusedId || row.element.id === draggedId) visible.add(index); });
   const indices = [...visible].sort((a, b) => a - b);
@@ -280,8 +348,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
       const node = Array.from(nodes ?? []).find(node => node.dataset.elementRow === id);
       node?.querySelector<HTMLElement>('.dock-tree-select')?.focus({ preventScroll: true });
     });
-  }} onDragOver={event => { if (dragging.current) event.preventDefault(); }}
-    onDrop={event => { event.preventDefault(); if (dragging.current) move(pageId, sizeId, dragging.current.id, null, elements.length); endDrag(); }}>
+  }} data-dragging={draggedId === null ? undefined : 'true'}>
     {indices.map(rowIndex => {
       const { element, parentId, index, depth, open } = rows[rowIndex];
       const gap = rowIndex - previous - 1;
@@ -295,8 +362,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
         <LayerRow linkedName={element.link ? project.linked?.[element.link]?.name ?? null : null}
         pageId={pageId} sizeId={sizeId} element={element} parentId={parentId} index={index} depth={depth} open={open}
         selected={selected.has(element.id)} toggle={toggle} select={selectRow} update={updateRow} remove={removeRow}
-        movable={!fixed.has(element.id)} setHint={updateHint} dropLine={dropLine}
-        onDragStart={startDrag} onDragEnd={endDrag} onDrop={dropRow} />
+        movable={!fixed.has(element.id)} dropLine={dropLine} grab={grabRow} />
       </Fragment>;
     })}
     <li aria-hidden="true" style={{ height: (rows.length - previous - 1) * LAYER_ROW_HEIGHT }} />
